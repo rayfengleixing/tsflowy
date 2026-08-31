@@ -1,11 +1,11 @@
-import { CodeBlockLowlight } from "@tiptap/extension-code-block-lowlight";
+import { CodeBlock as CodeBlockBase } from "@tiptap/extension-code-block";
 import { ReactNodeViewRenderer } from "@tiptap/react";
-import { lowlight } from "@/lib/code-highlight";
 import { CodeBlockNodeView } from "./component";
 
-// 自定义代码块（项目说明书 8.2 codeBlock）：浅色底 + 语法高亮 + 语言标识 + 复制
-export const CodeBlock = CodeBlockLowlight.extend({
+// 自定义代码块（项目说明书 8.2 codeBlock）：单色文本 + 语言标识（可双击改）+ 复制
+// 不做多色语法高亮（lowlight decoration 会分色，故用基础 CodeBlock 保持统一颜色）
+export const CodeBlock = CodeBlockBase.extend({
   addNodeView() {
     return ReactNodeViewRenderer(CodeBlockNodeView);
   },
-}).configure({ lowlight, languageClassPrefix: "language-" });
+});
