@@ -4,7 +4,7 @@ import { viewApi, workspaceApi } from "@/lib/db";
 import { buildTree, flattenTree } from "@/lib/tree";
 import { useSettingsStore } from "./settings";
 
-export type Route = "workspace" | "trash";
+export type Route = "workspace" | "trash" | "search";
 
 interface WorkspaceState {
   ready: boolean;
@@ -16,6 +16,8 @@ interface WorkspaceState {
   tabs: View[]; // 当前空间打开的标签页（含顺序）
   currentViewId: string | null;
   route: Route;
+  /** 搜索结果页当前查询词 */
+  searchQuery: string;
   expanded: Set<string>;
   sidebarWidth: number;
 
@@ -43,6 +45,12 @@ interface WorkspaceState {
   newTab: () => Promise<void>;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   setRoute: (route: Route) => void;
+  /** 打开搜索结果页 */
+  openSearch: (query: string) => void;
+  /** Ctrl+K 命令面板开关 */
+  paletteOpen: boolean;
+  openPalette: () => void;
+  closePalette: () => void;
   toggleExpand: (id: string) => void;
   expand: (id: string) => void;
   setExpandedAll: (ids: Set<string>) => void;
@@ -79,6 +87,8 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     tabs: [],
     currentViewId: null,
     route: "workspace",
+    searchQuery: "",
+    paletteOpen: false,
     expanded: new Set<string>(),
     sidebarWidth: 268,
 
@@ -269,6 +279,11 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     },
 
     setRoute: (route: Route) => set({ route }),
+
+    openSearch: (query: string) => set({ route: "search", searchQuery: query, paletteOpen: false }),
+
+    openPalette: () => set({ paletteOpen: true }),
+    closePalette: () => set({ paletteOpen: false }),
 
     toggleExpand: (id: string) => {
       const expanded = new Set(get().expanded);

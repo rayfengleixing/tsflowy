@@ -13,7 +13,7 @@ const MAX_WIDTH = 560;
 
 /** 侧边栏（说明书 6.3 结构）：空间区 32px / 搜索 30px / 新建 30px / 页面树 / 底部模板+回收站 */
 export function Sidebar() {
-  const { sidebarWidth, setSidebarWidth, route, setRoute, favorites, openView } = useWorkspaceStore();
+  const { sidebarWidth, setSidebarWidth, route, setRoute, favorites, openView, openPalette } = useWorkspaceStore();
   const asideRef = useRef<HTMLElement>(null);
   const [resizing, setResizing] = useState(false);
 
@@ -44,11 +44,13 @@ export function Sidebar() {
       {/* 搜索框 */}
       <div className="px-2">
         <button
+          data-testid="sidebar-search"
           className="flex h-[30px] w-full items-center gap-1.5 rounded-md px-2 text-[13px] text-neutral-500 hover:bg-neutral-300/60"
-          onClick={() => toast(t("sidebar.searchSoon"))}
+          onClick={openPalette}
         >
           <Search className="h-3.5 w-3.5" />
-          {t("sidebar.search")}
+          <span className="flex-1 text-left">{t("sidebar.search")}</span>
+          <kbd className="rounded border border-neutral-300 bg-neutral-100 px-1 text-[10px] text-neutral-400">Ctrl K</kbd>
         </button>
       </div>
 
