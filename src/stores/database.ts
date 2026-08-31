@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { CellValue, DatabaseField, DatabaseRow, FieldOptions, FieldType } from "@/types/database";
 import { databaseApi } from "@/lib/database";
+import { newSelectOption, parseFieldOptions } from "@/lib/database-values";
 import { viewApi } from "@/lib/db";
 import type { FilterMode, FilterSpec, SortSpec } from "@/lib/database-query";
 import type { View } from "@/types/models";
@@ -34,6 +35,7 @@ interface DatabaseState {
   toggleFieldHidden: (id: string) => Promise<void>;
   reorderFields: (orderedIds: string[]) => Promise<void>;
   updateFieldOptions: (id: string, options: FieldOptions) => Promise<void>;
+  addSelectOption: (id: string, name: string) => Promise<string | null>;
 
   // 行
   addRow: () => Promise<DatabaseRow | null>;
@@ -146,6 +148,18 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
   updateFieldOptions: async (id, options) => {
     await databaseApi.updateFieldOptions(id, options);
     set({ fields: get().fields.map((f) => (f.id === id ? { ...f, options: JSON.stringify(options) } : f)) });
+  },
+
+  addSelectOption: async (id, name) => {
+    const field = get().fields.find((f) => f.id === id);
+    if (!field) return null;
+    const opts = parseFieldOptions(field.options);
+    if (opts.kind !== "select") return null;
+    const option = newSelectOption(name);
+    const next: FieldOptions = { ...opts, options: [...opts.options, option] };
+    await databaseApi.updateFieldOptions(id, next);
+    set({ fields: get().fields.map((f) => (f.id === id ? { ...f, options: JSON.stringify(next) } : f)) });
+    return option.id;
   },
 
   addRow: async () => {

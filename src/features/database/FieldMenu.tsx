@@ -21,13 +21,15 @@ export function FieldMenu(props: {
   fieldName: string;
   fieldType: FieldType;
   hidden: boolean;
+  /** 名称列（主列）：不可改类型/隐藏/删除 */
+  primary?: boolean;
   onRename: () => void;
   onChangeType: (type: FieldType) => void;
   onToggleHidden: () => void;
   onDelete: () => void;
   onOpenOptions: () => void;
 }) {
-  const { fieldName, fieldType, hidden, onRename, onChangeType, onToggleHidden, onDelete, onOpenOptions } = props;
+  const { fieldName, fieldType, hidden, primary = false, onRename, onChangeType, onToggleHidden, onDelete, onOpenOptions } = props;
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   return (
@@ -49,7 +51,7 @@ export function FieldMenu(props: {
             {t("field.rename")}
           </DropdownMenuItem>
           <DropdownMenuSub>
-            <DropdownMenuSubTrigger>{t("field.changeType")}</DropdownMenuSubTrigger>
+            <DropdownMenuSubTrigger disabled={primary}>{t("field.changeType")}</DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="max-h-72 overflow-y-auto">
               {FIELD_TYPES.map((type) => (
                 <DropdownMenuItem key={type} onSelect={() => onChangeType(type)} data-active={type === fieldType}>
@@ -64,12 +66,12 @@ export function FieldMenu(props: {
             <Settings2 className="mr-2 h-3.5 w-3.5" />
             {t("field.options")}
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={onToggleHidden}>
+          <DropdownMenuItem onSelect={onToggleHidden} disabled={primary}>
             {hidden ? <Eye className="mr-2 h-3.5 w-3.5" /> : <EyeOff className="mr-2 h-3.5 w-3.5" />}
             {hidden ? t("field.show") : t("field.hide")}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem variant="destructive" onSelect={() => setConfirmDelete(true)}>
+          <DropdownMenuItem variant="destructive" disabled={primary} onSelect={() => setConfirmDelete(true)}>
             <Trash2 className="mr-2 h-3.5 w-3.5" />
             {t("common.delete")}
           </DropdownMenuItem>

@@ -17,7 +17,7 @@ import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
 import { NewFieldDialog } from "./NewFieldDialog";
 import { FilterBar } from "./FilterBar";
-import { CheckboxCellEditor, DateCellEditor, MultiSelectCellEditor, NumberCellEditor, SelectCellEditor, TextCellEditor } from "./editors";
+import { CellEditorSlot } from "./editors";
 import { RowDetailPanel } from "./RowDetail";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -75,6 +75,8 @@ export function GridView({ view }: { view: View }) {
   }, [resizingField]);
 
   const visibleFields = useMemo(() => fields.filter((f) => f.is_hidden === 0), [fields]);
+  // 名称列（主列）：position 最小且不可隐藏，作为行详情入口
+  const primaryField = visibleFields[0] ?? null;
 
   const displayRows = useMemo(() => {
     const filtered = applyFilters(rows, cells, filters, fields, filterMode);
@@ -310,6 +312,7 @@ export function GridView({ view }: { view: View }) {
                         fieldName={field.name}
                         fieldType={field.field_type}
                         hidden={field.is_hidden === 1}
+                        primary={field.id === primaryField?.id}
                         onRename={() => setRenamingField(field.id)}
                         onChangeType={(type) => void store.changeFieldType(field.id, type)}
                         onToggleHidden={() => void store.toggleFieldHidden(field.id)}
@@ -376,6 +379,7 @@ export function GridView({ view }: { view: View }) {
                   </button>
                 </td>
                 {visibleFields.map((field) => {
+                  const isPrimary = field.id === primaryField?.id;
                   const isEditing = editing?.rowId === row.id && editing.fieldId === field.id;
                   return (
                     <td
@@ -383,8 +387,15 @@ export function GridView({ view }: { view: View }) {
                       className={cn(
                         "relative h-8 border-b border-r border-neutral-200 p-0 align-middle",
                         isEditing && "ring-1 ring-inset ring-brand-500",
+                        isPrimary && "cursor-pointer",
                       )}
+                      onDoubleClick={() => void openRowDetail(row, view)}
                       onClick={() => {
+                        if (isPrimary) {
+                          // 名称列：单击打开该行页面（说明书 5.1 行详情）
+                          void openRowDetail(row, view);
+                          return;
+                        }
                         if (isReadonlyType(field.field_type) || isEditing) return;
                         setEditing({ rowId: row.id, fieldId: field.id });
                       }}
@@ -395,9 +406,13 @@ export function GridView({ view }: { view: View }) {
                           value={cells[row.id]?.[field.id] ?? null}
                           onCommit={(v) => void commitCell(row.id, field.id, v)}
                           onCancel={() => setEditing(null)}
+                          onAddOption={(name) => {
+                            void store.addSelectOption(field.id, name);
+                            return null;
+                          }}
                         />
                       ) : (
-                        <CellDisplay field={field} value={cells[row.id]?.[field.id] ?? null} />
+                        <CellDisplay field={field} value={cells[row.id]?.[field.id] ?? null} primary={isPrimary} />
                       )}
                     </td>
                   );
@@ -488,7 +503,7 @@ function AddFieldButton() {
 }
 
 /** 单元格显示（非编辑态） */
-function CellDisplay({ field, value }: { field: DatabaseField; value: CellValue }) {
+function CellDisplay({ field, value, primary = false }: { field: DatabaseField; value: CellValue; primary?: boolean }) {
   const opts = parseFieldOptions(field.options);
   const text = formatCellValue(field.field_type, value, opts);
   if (field.field_type === "checkbox") {
@@ -499,32 +514,8 @@ function CellDisplay({ field, value }: { field: DatabaseField; value: CellValue 
     );
   }
   return (
-    <div className={cn("h-full w-full truncate px-2 text-[13px] leading-8", isReadonlyType(field.field_type) && "text-neutral-400")}>
+    <div className={cn("h-full w-full truncate px-2 text-[13px] leading-8", isReadonlyType(field.field_type) && "text-neutral-400", primary && "font-medium text-neutral-900")}>
       {text}
     </div>
   );
-}
-
-/** 编辑态按类型分派编辑器 */
-function CellEditorSlot(props: {
-  field: DatabaseField;
-  value: CellValue;
-  onCommit: (v: CellValue) => void;
-  onCancel: () => void;
-}) {
-  const { field, value, onCommit, onCancel } = props;
-  switch (field.field_type) {
-    case "number":
-      return <NumberCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
-    case "date":
-      return <DateCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
-    case "checkbox":
-      return <CheckboxCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
-    case "single_select":
-      return <SelectCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
-    case "multi_select":
-      return <MultiSelectCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
-    default:
-      return <TextCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
-  }
 }

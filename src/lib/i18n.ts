@@ -152,6 +152,11 @@ const zh = {
   "field.newFieldName": "字段名称",
   "field.newFieldType": "字段类型",
   "field.create": "创建",
+  "field.relationTarget": "关联目标表格",
+  "field.relationNone": "未选择",
+  "field.relationNoViews": "还没有其它表格可关联",
+  "rowDetail.empty": "空",
+  "field.addColumn": "添加一列",
 } as const;
 
 export type MessageKey = keyof typeof zh;
@@ -307,6 +312,11 @@ const en: Record<MessageKey, string> = {
   "field.newFieldName": "Field name",
   "field.newFieldType": "Field type",
   "field.create": "Create",
+  "field.relationTarget": "Related table",
+  "field.relationNone": "None",
+  "field.relationNoViews": "No other tables to relate to yet",
+  "rowDetail.empty": "empty",
+  "field.addColumn": "Add a column",
 };
 
 const dicts: Record<string, Record<MessageKey, string>> = {

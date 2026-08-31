@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, X } from "lucide-react";
+import { Check, ChevronDown, Plus, X } from "lucide-react";
 import type { CellValue, DatabaseField, SelectOption } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { parseFieldOptions } from "@/lib/database-values";
@@ -13,6 +13,35 @@ export interface CellEditorProps {
   value: CellValue;
   onCommit: (value: CellValue) => void;
   onCancel: () => void;
+  /** 在选项下拉里直接新建选项（单选/多选），返回新选项 id 供选中 */
+  onAddOption?: (name: string) => string | null;
+}
+
+/** 下拉内的"添加选项"输入 */
+function AddOptionInput({ onAdd }: { onAdd: (name: string) => string | null }) {
+  const [name, setName] = useState("");
+  return (
+    <form
+      className="flex items-center gap-1.5 px-2 py-1.5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const v = name.trim();
+        if (v) {
+          onAdd(v);
+          setName("");
+        }
+      }}
+    >
+      <Plus className="h-3.5 w-3.5 text-neutral-400" />
+      <input
+        className="flex-1 border-none bg-transparent text-[13px] outline-none placeholder:text-neutral-400"
+        placeholder="添加选项…"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onMouseDown={(e) => e.stopPropagation()}
+      />
+    </form>
+  );
 }
 
 function useAutoFocus<T extends HTMLInputElement>() {
@@ -117,7 +146,7 @@ export function DateCellEditor({ field, value, onCommit, onCancel }: CellEditorP
 }
 
 /** 单选（single_select）：Popover 选项列表 */
-export function SelectCellEditor({ field, value, onCommit, onCancel }: CellEditorProps) {
+export function SelectCellEditor({ field, value, onCommit, onCancel, onAddOption }: CellEditorProps) {
   const opts = parseFieldOptions(field.options);
   const options = opts.kind === "select" ? opts.options : [];
   const selected = typeof value === "string" ? value : null;
@@ -148,6 +177,11 @@ export function SelectCellEditor({ field, value, onCommit, onCancel }: CellEdito
           <X className="h-3.5 w-3.5" />
           清除
         </button>
+        {onAddOption && (
+          <div className="mt-0.5 border-t border-neutral-200 pt-0.5">
+            <AddOptionInput onAdd={onAddOption} />
+          </div>
+        )}
       </div>
       {/* 点击外部取消 */}
       <div className="fixed inset-0 z-10" onMouseDown={() => onCancel()} />
@@ -156,7 +190,7 @@ export function SelectCellEditor({ field, value, onCommit, onCancel }: CellEdito
 }
 
 /** 多选（multi_select）：Popover 勾选多个选项 */
-export function MultiSelectCellEditor({ field, value, onCommit }: CellEditorProps) {
+export function MultiSelectCellEditor({ field, value, onCommit, onAddOption }: CellEditorProps) {
   const opts = parseFieldOptions(field.options);
   const options = opts.kind === "select" ? opts.options : [];
   const selected = new Set(Array.isArray(value) ? value : []);
@@ -185,6 +219,11 @@ export function MultiSelectCellEditor({ field, value, onCommit }: CellEditorProp
             <span className="flex-1">{o.name}</span>
           </button>
         ))}
+        {onAddOption && (
+          <div className="mt-0.5 border-t border-neutral-200 pt-0.5">
+            <AddOptionInput onAdd={onAddOption} />
+          </div>
+        )}
       </div>
       <div className="fixed inset-0 z-10" onMouseDown={() => undefined} />
     </div>
@@ -217,6 +256,31 @@ export function OptionDot({ option }: { option: SelectOption }) {
     gray: "bg-neutral-400",
   };
   return <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", colors[option.color] ?? "bg-neutral-400")} />;
+}
+
+/** 按字段类型分派编辑器（GridView 单元格 + 行详情属性区共用） */
+export function CellEditorSlot(props: {
+  field: DatabaseField;
+  value: CellValue;
+  onCommit: (v: CellValue) => void;
+  onCancel: () => void;
+  onAddOption?: (name: string) => string | null;
+}) {
+  const { field, value, onCommit, onCancel, onAddOption } = props;
+  switch (field.field_type) {
+    case "number":
+      return <NumberCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
+    case "date":
+      return <DateCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
+    case "checkbox":
+      return <CheckboxCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
+    case "single_select":
+      return <SelectCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} onAddOption={onAddOption} />;
+    case "multi_select":
+      return <MultiSelectCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} onAddOption={onAddOption} />;
+    default:
+      return <TextCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
+  }
 }
 
 /** 只读时间（created_at / last_edited_at）显示用，无编辑器 */

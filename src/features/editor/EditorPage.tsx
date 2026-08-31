@@ -28,7 +28,7 @@ import { Image } from "./extensions/image/node";
 const AUTOSAVE_MS = 800;
 
 /** 文档编辑器页（项目说明书 8.1：读 content → 编辑 → 防抖 800ms 落库 → 切换/关闭前 flush） */
-export function EditorPage({ view }: { view: View }) {
+export function EditorPage({ view, hideTitle = false }: { view: View; hideTitle?: boolean }) {
   const renameView = useWorkspaceStore((s) => s.renameView);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(view.name);
@@ -195,7 +195,8 @@ export function EditorPage({ view }: { view: View }) {
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-white">
-      {/* 顶栏标题行（说明书 6.2：高 44px） */}
+      {/* 顶栏标题行（说明书 6.2：高 44px；行详情弹窗复用正文时可隐藏） */}
+      {!hideTitle && (
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-6">
         <span className="text-lg leading-none">{viewIcon(view)}</span>
         {editingTitle ? (
@@ -223,6 +224,7 @@ export function EditorPage({ view }: { view: View }) {
         )}
         <span className="shrink-0 text-[11px] text-neutral-400">{editor?.storage.characterCount.characters?.() ?? 0} chars</span>
       </div>
+      )}
 
       {/* 编辑区：内容最大宽约 800px 居中（说明书 6.1） */}
       <div className="min-h-0 flex-1 overflow-y-auto">
