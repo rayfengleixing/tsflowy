@@ -64,10 +64,11 @@ export const workspaceApi = {
 
 // ---------- 视图 ----------
 export const viewApi = {
+  // 排除行详情视图（说明书 12 节风险 7：extra 标记 {"row_detail":true}）
   async listByWorkspace(workspaceId: string): Promise<View[]> {
     const d = await getDb();
     return d.select<View[]>(
-      "SELECT * FROM views WHERE workspace_id = $1 AND is_trash = 0 ORDER BY position ASC",
+      "SELECT * FROM views WHERE workspace_id = $1 AND is_trash = 0 AND json_extract(extra, '$.row_detail') IS NOT 1 ORDER BY position ASC",
       [workspaceId],
     );
   },
@@ -75,7 +76,7 @@ export const viewApi = {
   async listTrash(workspaceId: string): Promise<View[]> {
     const d = await getDb();
     return d.select<View[]>(
-      "SELECT * FROM views WHERE workspace_id = $1 AND is_trash = 1 ORDER BY deleted_at DESC",
+      "SELECT * FROM views WHERE workspace_id = $1 AND is_trash = 1 AND json_extract(extra, '$.row_detail') IS NOT 1 ORDER BY deleted_at DESC",
       [workspaceId],
     );
   },
@@ -83,7 +84,7 @@ export const viewApi = {
   async listFavorites(workspaceId: string): Promise<View[]> {
     const d = await getDb();
     return d.select<View[]>(
-      "SELECT * FROM views WHERE workspace_id = $1 AND is_trash = 0 AND is_favorite = 1 ORDER BY position ASC",
+      "SELECT * FROM views WHERE workspace_id = $1 AND is_trash = 0 AND is_favorite = 1 AND json_extract(extra, '$.row_detail') IS NOT 1 ORDER BY position ASC",
       [workspaceId],
     );
   },
@@ -93,6 +94,7 @@ export const viewApi = {
     parent_id: string | null;
     name: string;
     layout: LayoutType;
+    extra?: string;
   }): Promise<View> {
     const d = await getDb();
     const id = newId();
@@ -102,10 +104,11 @@ export const viewApi = {
       [opts.workspace_id, opts.parent_id],
     );
     const position = rows[0]?.p ?? 0;
+    const extra = opts.extra ?? "{}";
     await d.execute(
-      `INSERT INTO views(id, workspace_id, parent_id, name, layout, position, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
-      [id, opts.workspace_id, opts.parent_id, opts.name, opts.layout, position, t],
+      `INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
+      [id, opts.workspace_id, opts.parent_id, opts.name, opts.layout, extra, position, t],
     );
     if (opts.layout === "document") {
       // 文档布局需预置空内容行（说明书 14 节：新建视图时须插入默认 content 行）
@@ -121,7 +124,7 @@ export const viewApi = {
       name: opts.name,
       icon: null,
       layout: opts.layout,
-      extra: "{}",
+      extra,
       position,
       is_favorite: 0,
       is_trash: 0,
@@ -129,6 +132,13 @@ export const viewApi = {
       created_at: t,
       updated_at: t,
     };
+  },
+
+  /** 按 id 读单个视图（行详情文档等） */
+  async get(id: string): Promise<View | null> {
+    const d = await getDb();
+    const rows = await d.select<View[]>("SELECT * FROM views WHERE id = $1", [id]);
+    return rows[0] ?? null;
   },
 
   async rename(id: string, name: string): Promise<void> {

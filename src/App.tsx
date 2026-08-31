@@ -4,6 +4,7 @@ import { TabBar } from "@/features/tabs/TabBar";
 import { TrashPage } from "@/features/trash/TrashPage";
 import { PlaceholderPage } from "@/features/placeholder/PlaceholderPage";
 import { EditorPage } from "@/features/editor/EditorPage";
+import { GridView } from "@/features/database/GridView";
 import { CommandPalette } from "@/features/search/CommandPalette";
 import { SearchResultsPage } from "@/features/search/SearchResultsPage";
 import { Toaster } from "@/components/ui/sonner";
@@ -62,6 +63,8 @@ function App() {
             <TabBar />
             {view && view.layout === "document" ? (
               <EditorPage key={view.id} view={view} />
+            ) : view && view.layout === "grid" ? (
+              <GridView key={view.id} view={view} />
             ) : (
               <PlaceholderPage />
             )}
