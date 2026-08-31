@@ -12,7 +12,7 @@ import { Table } from "@tiptap/extension-table";
 import { TableRow } from "@tiptap/extension-table-row";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { TableCell } from "@tiptap/extension-table-cell";
-import type { JSONContent } from "@tiptap/core";
+import { type JSONContent } from "@tiptap/core";
 import { Slice, Fragment, Node as PMNode } from "@tiptap/pm/model";
 import { toast } from "sonner";
 import { viewIcon } from "@/components/view-icon";
@@ -22,7 +22,6 @@ import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown"
 import { t } from "@/lib/i18n";
 import type { View } from "@/types/models";
 import { SlashMenu } from "./slash-menu";
-import { FloatingToolbar } from "./floating-menu";
 import { Image } from "./extensions/image/node";
 import { DatabaseView } from "./extensions/database-view/node";
 import { Attachment } from "./extensions/attachment/node";
@@ -30,6 +29,10 @@ import { CodeBlock } from "./extensions/code-block/index";
 import "highlight.js/styles/github.css";
 
 const AUTOSAVE_MS = 800;
+
+// Markdown 符号输入规则由内置扩展自带：**粗体** / *斜体* / ==高亮== / ~~删除线~~ / `代码`
+// （@tiptap/extension-bold·italic·strike·highlight·code 的 addInputRules 已注册，无需自定义）
+
 
 /** 文档编辑器页（项目说明书 8.1：读 content → 编辑 → 防抖 800ms 落库 → 切换/关闭前 flush） */
 export function EditorPage({ view, hideTitle = false, hideSlash = false }: { view: View; hideTitle?: boolean; hideSlash?: boolean }) {
@@ -118,6 +121,19 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
           flush();
           toast.success(t("editor.saved"));
           return true;
+        }
+        return false;
+      },
+      // 输入空格后清除存储 marks：高亮/粗体等格式不延续到后续输入
+      handleTextInput: (view, from, to, text) => {
+        if (text === " ") {
+          const stored = view.state.storedMarks;
+          if (stored && stored.length > 0) {
+            const tr = view.state.tr.insertText(" ", from, to);
+            for (const m of stored) tr.removeStoredMark(m);
+            view.dispatch(tr.scrollIntoView());
+            return true;
+          }
         }
         return false;
       },
@@ -245,7 +261,6 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
           <EditorContent editor={editor} />
         </div>
       </div>
-      {editor && <FloatingToolbar editor={editor} />}
     </div>
   );
 }
