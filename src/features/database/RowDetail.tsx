@@ -15,14 +15,14 @@ import {
   Link as LinkIcon,
   X,
 } from "lucide-react";
-import type { CellValue, DatabaseField, DatabaseRow, FieldType, SelectOption } from "@/types/database";
+import type { CellValue, DatabaseField, DatabaseRow, FieldType } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { useDatabaseStore } from "@/stores/database";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { cn } from "@/lib/utils";
 import type { View } from "@/types/models";
 import { EditorPage } from "@/features/editor/EditorPage";
-import { CellEditorSlot } from "./editors";
+import { CellEditorSlot, SelectChips } from "./editors";
 import { NewFieldDialog } from "./NewFieldDialog";
 import { t } from "@/lib/i18n";
 
@@ -43,45 +43,6 @@ function fieldIcon(type: FieldType): ReactNode {
     case "created_at": return <Clock className={cls} />;
     case "last_edited_at": return <History className={cls} />;
   }
-}
-
-const CHIP_COLORS: Record<string, string> = {
-  blue: "bg-brand-100 text-brand-600",
-  green: "bg-green-100 text-green-700",
-  orange: "bg-orange-100 text-orange-700",
-  purple: "bg-purple-100 text-purple-700",
-  red: "bg-red-100 text-red-700",
-  yellow: "bg-yellow-100 text-yellow-700",
-  gray: "bg-neutral-200 text-neutral-600",
-};
-
-/** 单选/多选值的彩色胶囊展示 */
-function SelectChips({ field, value }: { field: DatabaseField; value: CellValue }) {
-  const opts = parseFieldOptions(field.options);
-  if (opts.kind !== "select") return null;
-  if (field.field_type === "single_select") {
-    if (typeof value !== "string") return null;
-    const o = opts.options.find((x) => x.id === value);
-    return <Chip option={o} />;
-  }
-  const ids = Array.isArray(value) ? value : [];
-  return (
-    <span className="flex flex-wrap gap-1">
-      {ids.map((id) => {
-        const o = opts.options.find((x) => x.id === id);
-        return <Chip key={id} option={o} />;
-      })}
-    </span>
-  );
-}
-
-function Chip({ option }: { option?: SelectOption }) {
-  if (!option) return null;
-  return (
-    <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium", CHIP_COLORS[option.color] ?? "bg-neutral-200 text-neutral-600")}>
-      {option.name}
-    </span>
-  );
 }
 
 /** 行详情属性区：可编辑该行的全部字段值，样式对齐 AppFlowy（图标 + 字段名 + 值） */

@@ -156,7 +156,7 @@ export function SelectCellEditor({ field, value, onCommit, onCancel, onAddOption
   return (
     <div className="absolute inset-0 z-10" onMouseDown={(e) => e.stopPropagation()}>
       <div className="h-full w-full bg-white" />
-      <div className="absolute inset-x-0 top-full z-20 mt-0.5 max-h-56 overflow-y-auto rounded-lg border border-neutral-300 bg-white p-1 shadow-lg">
+      <div className="absolute inset-x-0 top-full z-20 mt-0.5 max-h-56 overflow-y-auto rounded-lg border border-neutral-300 bg-white p-1 shadow-lg [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
         {options.length === 0 && <div className="px-2 py-1.5 text-[12px] text-neutral-400">暂无选项</div>}
         {options.map((o) => (
           <button
@@ -218,7 +218,7 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
   return (
     <div className="absolute inset-0 z-10" onMouseDown={(e) => e.stopPropagation()}>
       <div className="h-full w-full bg-white" />
-      <div className="absolute inset-x-0 top-full z-20 mt-0.5 max-h-56 overflow-y-auto rounded-lg border border-neutral-300 bg-white p-1 shadow-lg">
+      <div className="absolute inset-x-0 top-full z-20 mt-0.5 max-h-56 overflow-y-auto rounded-lg border border-neutral-300 bg-white p-1 shadow-lg [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
         {options.length === 0 && <div className="px-2 py-1.5 text-[12px] text-neutral-400">暂无选项</div>}
         {options.map((o) => (
           <button
@@ -244,6 +244,16 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
             )}
           </button>
         ))}
+        {selected.size > 0 && (
+          <button
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-neutral-500 hover:bg-neutral-200/60"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => onCommit([])}
+          >
+            <X className="h-3.5 w-3.5" />
+            清除
+          </button>
+        )}
         {onAddOption && (
           <div className="mt-0.5 border-t border-neutral-200 pt-0.5">
             <AddOptionInput onAdd={onAddOption} />
@@ -362,5 +372,42 @@ export function RelationCellEditor({ field, value, onCommit }: CellEditorProps) 
       </div>
       <div className="fixed inset-0 z-10" onMouseDown={() => undefined} />
     </div>
+  );
+}
+
+/** 选项彩色胶囊（单元格显示单选/多选值，带背景色） */
+export function OptionChip({ option }: { option?: SelectOption }) {
+  if (!option) return null;
+  const colors: Record<string, string> = {
+    blue: "bg-brand-100 text-brand-600",
+    green: "bg-green-100 text-green-700",
+    orange: "bg-orange-100 text-orange-700",
+    purple: "bg-purple-100 text-purple-700",
+    red: "bg-red-100 text-red-700",
+    yellow: "bg-yellow-100 text-yellow-700",
+    gray: "bg-neutral-200 text-neutral-600",
+  };
+  return (
+    <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium", colors[option.color] ?? "bg-neutral-200 text-neutral-600")}>
+      {option.name}
+    </span>
+  );
+}
+
+/** 单选/多选单元格值 → 彩色胶囊展示 */
+export function SelectChips({ field, value }: { field: DatabaseField; value: CellValue }) {
+  const opts = parseFieldOptions(field.options);
+  if (opts.kind !== "select") return null;
+  if (field.field_type === "single_select") {
+    if (typeof value !== "string") return null;
+    return <OptionChip option={opts.options.find((x) => x.id === value)} />;
+  }
+  const ids = Array.isArray(value) ? value : [];
+  return (
+    <span className="flex flex-wrap gap-1">
+      {ids.map((id) => (
+        <OptionChip key={id} option={opts.options.find((x) => x.id === id)} />
+      ))}
+    </span>
   );
 }

@@ -17,7 +17,7 @@ import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
 import { NewFieldDialog } from "./NewFieldDialog";
 import { FilterBar } from "./FilterBar";
-import { CellEditorSlot } from "./editors";
+import { CellEditorSlot, SelectChips } from "./editors";
 import { RowDetailPanel } from "./RowDetail";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -415,7 +415,7 @@ export function GridView({ view }: { view: View }) {
                       }}
                     >
                       {isEditing ? (
-                        <div className="flex h-full items-center">
+                        <div className="group flex h-full items-center">
                           <div className="min-w-0 flex-1">
                             <CellEditorSlot
                               field={field}
@@ -433,7 +433,7 @@ export function GridView({ view }: { view: View }) {
                             <button
                               data-testid="open-row-detail"
                               title={t("rowDetail.open")}
-                              className="mx-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-brand-600"
+                              className="mx-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-neutral-400 opacity-0 transition-opacity hover:bg-neutral-200 hover:text-brand-600 group-hover:opacity-100"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setEditing(null);
@@ -538,7 +538,6 @@ function AddFieldButton() {
 /** 单元格显示（非编辑态） */
 function CellDisplay({ field, value, primary = false }: { field: DatabaseField; value: CellValue; primary?: boolean }) {
   const opts = parseFieldOptions(field.options);
-  const text = formatCellValue(field.field_type, value, opts);
   if (field.field_type === "checkbox") {
     return (
       <div className="flex h-full items-center justify-center text-[13px] text-brand-600">
@@ -546,6 +545,19 @@ function CellDisplay({ field, value, primary = false }: { field: DatabaseField; 
       </div>
     );
   }
+  if (field.field_type === "single_select" || field.field_type === "multi_select") {
+    // 选项值显示为带背景色的胶囊（需求：输入框里应有背景色）
+    return (
+      <div className="flex h-full w-full items-center truncate px-2">
+        {Array.isArray(value) && value.length === 0 ? (
+          <span className="text-neutral-300" />
+        ) : (
+          <SelectChips field={field} value={value} />
+        )}
+      </div>
+    );
+  }
+  const text = formatCellValue(field.field_type, value, opts);
   return (
     <div className={cn("h-full w-full truncate px-2 text-[13px] leading-8", isReadonlyType(field.field_type) && "text-neutral-400", primary && "font-medium text-neutral-900")}>
       {text}
