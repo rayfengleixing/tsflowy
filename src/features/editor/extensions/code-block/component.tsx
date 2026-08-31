@@ -31,12 +31,12 @@ export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
   };
 
   return (
-    <NodeViewWrapper data-drag-handle className={"relative my-3 overflow-hidden rounded-b-lg border border-neutral-200 " + (selected ? "ring-2 ring-brand-500" : "")}>
+    <NodeViewWrapper data-drag-handle className={"relative my-3 overflow-hidden border border-neutral-200 " + (selected ? "ring-2 ring-brand-500" : "")}>
       <div className="flex items-center justify-between border-b border-neutral-200 bg-[#F8FAFF] px-2 py-1">
         {editingLang ? (
           <input
             autoFocus
-            className="h-5 w-24 rounded border border-brand-500 bg-white px-1 text-[11px] text-neutral-700 outline-none"
+            className="h-5 w-24 border border-brand-500 bg-white px-1 text-[11px] text-neutral-700 outline-none"
             value={langDraft}
             onChange={(e) => setLangDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -47,7 +47,7 @@ export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
           />
         ) : (
           <span
-            className="cursor-text rounded px-1 text-[11px] font-medium text-neutral-600 hover:bg-neutral-200"
+            className="cursor-text px-1 text-[11px] font-medium text-neutral-600 hover:bg-neutral-200"
             title="双击修改语言"
             onDoubleClick={() => {
               setLangDraft(lang);
@@ -57,7 +57,7 @@ export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
             {lang}
           </span>
         )}
-        <button className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-neutral-500 hover:bg-neutral-200" onClick={copy}>
+        <button className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] text-neutral-500 hover:bg-neutral-200" onClick={copy}>
           {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
           {copied ? t("editor.copied") : t("editor.copy")}
         </button>
