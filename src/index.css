@@ -260,6 +260,8 @@
   padding: 6px 10px;
   vertical-align: top;
   position: relative;
+  /* 表格内容默认居中（单元格 align 属性渲染的 text-align 内联样式优先生效） */
+  text-align: center;
 }
 .tiptap th {
   background: #E4E8F5;

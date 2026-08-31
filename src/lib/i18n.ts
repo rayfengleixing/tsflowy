@@ -169,6 +169,13 @@ const zh = {
   "field.addColumn": "添加一列",
   "relation.noTarget": "请先在字段设置中选择关联目标表格",
   "relation.noRows": "目标表格暂无数据",
+  "table.addRowAbove": "在上方插入行",
+  "table.addRowBelow": "在下方插入行",
+  "table.addColumnLeft": "在左侧插入列",
+  "table.addColumnRight": "在右侧插入列",
+  "table.deleteRow": "删除行",
+  "table.deleteColumn": "删除列",
+  "table.deleteTable": "删除整个表格",
 } as const;
 
 export type MessageKey = keyof typeof zh;
@@ -341,6 +348,13 @@ const en: Record<MessageKey, string> = {
   "field.addColumn": "Add a column",
   "relation.noTarget": "Select a target table in field settings first",
   "relation.noRows": "Target table has no rows",
+  "table.addRowAbove": "Insert row above",
+  "table.addRowBelow": "Insert row below",
+  "table.addColumnLeft": "Insert column left",
+  "table.addColumnRight": "Insert column right",
+  "table.deleteRow": "Delete row",
+  "table.deleteColumn": "Delete column",
+  "table.deleteTable": "Delete entire table",
 };
 
 const dicts: Record<string, Record<MessageKey, string>> = {

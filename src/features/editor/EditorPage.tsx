@@ -22,6 +22,7 @@ import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown"
 import { t } from "@/lib/i18n";
 import type { View } from "@/types/models";
 import { SlashMenu } from "./slash-menu";
+import { TableContextMenu } from "./table-context-menu";
 import { Image } from "./extensions/image/node";
 import { DatabaseView } from "./extensions/database-view/node";
 import { Attachment } from "./extensions/attachment/node";
@@ -29,6 +30,28 @@ import { CodeBlock } from "./extensions/code-block/index";
 import "highlight.js/styles/github.css";
 
 const AUTOSAVE_MS = 800;
+
+// 表格单元格默认居中（tiptap v3 表格原生支持 align 属性，导出/粘贴可保留）
+const centeredCellAttrs = () => ({
+  align: {
+    default: "center",
+    parseHTML: (el: HTMLElement) => {
+      const v = (el.style?.textAlign || el.getAttribute("align") || "").trim().toLowerCase();
+      return v === "left" || v === "center" || v === "right" ? v : "center";
+    },
+    renderHTML: (attrs: Record<string, unknown>) => (attrs.align ? { style: `text-align: ${attrs.align}` } : {}),
+  },
+});
+const CenteredTableCell = TableCell.extend({
+  addAttributes() {
+    return { ...this.parent?.(), ...centeredCellAttrs() };
+  },
+});
+const CenteredTableHeader = TableHeader.extend({
+  addAttributes() {
+    return { ...this.parent?.(), ...centeredCellAttrs() };
+  },
+});
 
 // Markdown 符号输入规则由内置扩展自带：**粗体** / *斜体* / ==高亮== / ~~删除线~~ / `代码`
 // （@tiptap/extension-bold·italic·strike·highlight·code 的 addInputRules 已注册，无需自定义）
@@ -98,8 +121,8 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
       TaskItem.configure({ nested: true }),
       Table.configure({ resizable: true }),
       TableRow,
-      TableHeader,
-      TableCell,
+      CenteredTableHeader,
+      CenteredTableCell,
       Image,
       DatabaseView,
       Attachment,
@@ -124,13 +147,21 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
         }
         return false;
       },
-      // 输入空格后清除存储 marks：高亮/粗体等格式不延续到后续输入
+      // 输入空格后清除格式：粗体/高亮只作用于被选中的文字，后续输入不延续
+      // （storedMarks = 切换格式留下的存储 mark；$from.marks() = 光标紧邻格式化文本时的位置 mark，
+      //   两者任一存在都会让新输入的字符继承格式并合并进同一个 <strong> 等标签）
       handleTextInput: (view, from, to, text) => {
         if (text === " ") {
-          const stored = view.state.storedMarks;
-          if (stored && stored.length > 0) {
-            const tr = view.state.tr.insertText(" ", from, to);
-            for (const m of stored) tr.removeStoredMark(m);
+          const { state } = view;
+          const stored = state.storedMarks ?? [];
+          const active = state.selection.$from.marks();
+          const marks = [...new Set([...stored, ...active])];
+          if (marks.length > 0) {
+            const tr = state.tr.insertText(" ", from, to);
+            for (const m of marks) {
+              tr.removeMark(from, from + 1, m);
+              tr.removeStoredMark(m);
+            }
             view.dispatch(tr.scrollIntoView());
             return true;
           }
@@ -157,6 +188,14 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
       },
     },
     onUpdate: () => scheduleSave(),
+    // 选区塌缩后清除存储 marks：格式只作用于被选中的文字，不再延续到后续输入
+    // （TipTap 的 toggleMark/setMark 会同时设置 storedMarks，导致加粗/高亮后继续输入仍带格式）
+    onSelectionUpdate: ({ editor }) => {
+      const { selection, storedMarks } = editor.state;
+      if (selection.empty && storedMarks && storedMarks.length > 0) {
+        editor.view.dispatch(editor.state.tr.setStoredMarks([]));
+      }
+    },
   });
   editorRef.current = editor;
 
@@ -259,6 +298,7 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[800px] px-6 py-4">
           <EditorContent editor={editor} />
+          <TableContextMenu editor={editor} />
         </div>
       </div>
     </div>

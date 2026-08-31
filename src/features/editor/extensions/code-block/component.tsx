@@ -31,7 +31,7 @@ export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
   };
 
   return (
-    <NodeViewWrapper data-drag-handle className={"relative my-3 overflow-hidden rounded-lg border border-neutral-200 " + (selected ? "ring-2 ring-brand-500" : "")}>
+    <NodeViewWrapper data-drag-handle className={"relative my-3 overflow-hidden rounded-b-lg border border-neutral-200 " + (selected ? "ring-2 ring-brand-500" : "")}>
       <div className="flex items-center justify-between border-b border-neutral-200 bg-[#F8FAFF] px-2 py-1">
         {editingLang ? (
           <input
