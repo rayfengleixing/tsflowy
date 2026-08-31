@@ -131,6 +131,11 @@ export function defaultOptionsFor(type: FieldType): FieldOptions {
   }
 }
 
+/** 判断字段是否为附件类型（field_type=url 但 options 标记 attachment） */
+export function isAttachmentField(field: { options: string }): boolean {
+  return parseFieldOptions(field.options).kind === "attachment";
+}
+
 export function newSelectOption(name: string): SelectOption {
   const palette = ["blue", "green", "orange", "purple", "red", "yellow", "gray"];
   return { id: "opt_" + crypto.randomUUID().slice(0, 8), name, color: palette[Math.floor(Math.random() * palette.length)] };

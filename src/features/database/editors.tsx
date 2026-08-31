@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Plus, X } from "lucide-react";
+import { Check, ChevronDown, File as FileIcon, Plus, X } from "lucide-react";
 import type { CellValue, DatabaseField, SelectOption } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
-import { parseFieldOptions } from "@/lib/database-values";
+import { isAttachmentField, parseFieldOptions } from "@/lib/database-values";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
+import { open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
+import { resolveAssetUrl } from "@/lib/assets";
+import { toast } from "sonner";
 
 // 单元格内联编辑器（项目说明书 10-M4：每字段类型一个专用编辑器）
 // 交互约定：Enter 提交、Esc 取消、失焦提交；select 类用 Popover。
@@ -303,10 +307,15 @@ export function CellEditorSlot(props: {
   onDeleteOption?: (optionId: string) => void;
 }) {
   const { field, value, onCommit, onCancel, onAddOption, onDeleteOption } = props;
+  if (isAttachmentField(field)) {
+    return <AttachmentCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
+  }
   switch (field.field_type) {
     case "number":
       return <NumberCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
     case "date":
+    case "created_at":
+    case "last_edited_at":
       return <DateCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
     case "checkbox":
       return <CheckboxCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
@@ -409,5 +418,94 @@ export function SelectChips({ field, value }: { field: DatabaseField; value: Cel
         <OptionChip key={id} option={opts.options.find((x) => x.id === id)} />
       ))}
     </span>
+  );
+}
+
+/** 单个附件（文件/图片）展示：图片缩略或文件图标 */
+function AttachmentItem({ src, onRemove }: { src: string; onRemove?: () => void }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    let alive = true;
+    resolveAssetUrl(src)
+      .then((u) => alive && setUrl(u))
+      .catch((e) => console.error("resolve attachment failed", src, e));
+    return () => { alive = false; };
+  }, [src]);
+  const name = src.split("/").pop() ?? "附件";
+  const isImage = /.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(name);
+  return (
+    <span className="relative inline-flex items-center gap-1 rounded-md border border-neutral-200 bg-white px-1.5 py-0.5 text-[11px] text-neutral-700">
+      {isImage && url ? (
+        <img src={url} alt={name} className="h-5 w-5 rounded object-cover" onClick={() => url && window.open(url, "_blank")} />
+      ) : (
+        <FileIcon className="h-3.5 w-3.5 text-neutral-400" />
+      )}
+      <span className="max-w-[120px] truncate" onClick={() => url && window.open(url, "_blank")}>{name}</span>
+      {onRemove && (
+        <span className="flex h-4 w-4 items-center justify-center rounded text-neutral-300 hover:bg-neutral-200 hover:text-red-500" onClick={(e) => { e.stopPropagation(); onRemove(); }}>
+          <X className="h-3 w-3" />
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** 附件字段：单元格非编辑显示 */
+export function AttachmentDisplay({ value }: { value: CellValue }) {
+  const paths = Array.isArray(value) ? value : [];
+  if (paths.length === 0) return <span className="text-neutral-300" />;
+  return (
+    <div className="flex h-full w-full items-center gap-1 overflow-hidden px-2">
+      {paths.slice(0, 4).map((p) => (
+        <AttachmentItem key={p} src={p} />
+      ))}
+      {paths.length > 4 && <span className="text-[11px] text-neutral-400">+{paths.length - 4}</span>}
+    </div>
+  );
+}
+
+/** 附件字段编辑器：选文件上传（save_asset），存相对路径数组 */
+export function AttachmentCellEditor({ field: _field, value, onCommit }: CellEditorProps) {
+  const [paths, setPaths] = useState<string[]>(Array.isArray(value) ? value : []);
+  const addFiles = async () => {
+    try {
+      const sel = await open({ multiple: true });
+      if (!sel) return;
+      const arr = (Array.isArray(sel) ? sel : [sel]).filter((s): s is string => typeof s === "string");
+      const next = [...paths];
+      for (const p of arr) {
+        const rel = await invoke<string>("save_asset", { sourcePath: p });
+        next.push(rel);
+      }
+      setPaths(next);
+      onCommit(next);
+    } catch (e) {
+      console.error("upload attachment field failed", e);
+      toast.error(t("error.upload", { message: String(e) }));
+    }
+  };
+  return (
+    <div className="absolute inset-0 z-10 overflow-y-auto bg-white p-1.5">
+      <div className="mb-1 flex flex-wrap gap-1">
+        {paths.map((p) => (
+          <AttachmentItem
+            key={p}
+            src={p}
+            onRemove={() => {
+              const n = paths.filter((x) => x !== p);
+              setPaths(n);
+              onCommit(n);
+            }}
+          />
+        ))}
+      </div>
+      <button
+        className="flex items-center gap-1 rounded px-1.5 py-1 text-[12px] text-brand-600 hover:bg-brand-100"
+        onClick={addFiles}
+      >
+        <Plus className="h-3.5 w-3.5" />
+        {t("field.addFile")}
+      </button>
+    </div>
   );
 }

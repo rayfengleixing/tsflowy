@@ -30,8 +30,8 @@ export const FIELD_TYPES: FieldType[] = [
   "last_edited_at",
 ];
 
-/** 只读字段（由迁移 002 触发器维护，前端不可编辑） */
-export const READONLY_FIELD_TYPES: FieldType[] = ["created_at", "last_edited_at"];
+/** 时间戳字段（迁移 002 触发器维护默认值；允许用日历编辑——创建时间手动改会保留，最后编辑时间由触发器刷新） */
+export const READONLY_FIELD_TYPES: FieldType[] = [];
 
 export function isReadonlyType(t: FieldType): boolean {
   return READONLY_FIELD_TYPES.includes(t);
@@ -80,6 +80,7 @@ export type FieldOptions =
   | { kind: "number"; format: "integer" | "decimal" | "percent" | "currency"; precision: number; currency: string }
   | { kind: "date"; include_time: boolean }
   | { kind: "relation"; target_view_id: string | null }
+  | { kind: "attachment" } // 附件字段（无迁移：field_type 存 url，用 options 标记）
   | { kind: "none" };
 
 /** 行详情视图的 extra 标记（说明书 12 节风险 7：搜索/侧边栏过滤时排除） */

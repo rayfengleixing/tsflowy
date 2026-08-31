@@ -7,6 +7,7 @@ import { EditorPage } from "@/features/editor/EditorPage";
 import { GridView } from "@/features/database/GridView";
 import { CommandPalette } from "@/features/search/CommandPalette";
 import { SearchResultsPage } from "@/features/search/SearchResultsPage";
+import { DatabaseViewPicker } from "@/features/editor/DatabaseViewPicker";
 import { Toaster } from "@/components/ui/sonner";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { findNode } from "@/lib/tree";
@@ -72,6 +73,7 @@ function App() {
         )}
       </div>
       <CommandPalette />
+      <DatabaseViewPicker />
       <Toaster />
     </div>
   );

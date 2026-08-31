@@ -9,7 +9,7 @@ import { useDatabaseStore } from "@/stores/database";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { viewApi } from "@/lib/db";
 import { databaseApi } from "@/lib/database";
-import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
+import { formatCellValue, isAttachmentField, parseFieldOptions } from "@/lib/database-values";
 import { applyFilters, sortRows, type SortSpec } from "@/lib/database-query";
 import { buildCsvExport, csvValueToCell, parseCsv, planImport } from "@/lib/csv";
 import { viewIcon } from "@/components/view-icon";
@@ -17,7 +17,7 @@ import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
 import { NewFieldDialog } from "./NewFieldDialog";
 import { FilterBar } from "./FilterBar";
-import { CellEditorSlot, SelectChips } from "./editors";
+import { AttachmentDisplay, CellEditorSlot, SelectChips } from "./editors";
 import { RowDetailPanel } from "./RowDetail";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -523,7 +523,8 @@ function AddFieldButton() {
         onOpenChange={setOpen}
         onCreate={async (name, type) => {
           try {
-            await store.addField(type, name);
+            if (type === "attachment") await store.addAttachmentField(name);
+            else await store.addField(type, name);
             setOpen(false);
           } catch (e) {
             console.error("add field failed", e);
@@ -538,6 +539,9 @@ function AddFieldButton() {
 /** 单元格显示（非编辑态） */
 function CellDisplay({ field, value, primary = false }: { field: DatabaseField; value: CellValue; primary?: boolean }) {
   const opts = parseFieldOptions(field.options);
+  if (isAttachmentField(field)) {
+    return <AttachmentDisplay value={value} />;
+  }
   if (field.field_type === "checkbox") {
     return (
       <div className="flex h-full items-center justify-center text-[13px] text-brand-600">

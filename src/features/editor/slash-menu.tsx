@@ -17,6 +17,7 @@ import {
   ArrowRight,
   CheckSquare,
   Code2,
+  File as FileIcon,
   Heading1,
   Heading2,
   Heading3,
@@ -26,14 +27,31 @@ import {
   Minus,
   Quote,
   Table,
+  Table2,
   Type,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { t, type MessageKey } from "@/lib/i18n";
+import { INSERT_DATABASE_VIEW_EVENT } from "./DatabaseViewPicker";
 
 const slashMenuKey = new PluginKey("slashMenu");
+
+/** 附件上传：选文件 → save_asset 存 assets/ → 返回相对路径 */
+async function uploadAttachment(): Promise<string | null> {
+  try {
+    const selected = await open({
+      multiple: false,
+    });
+    if (typeof selected !== "string") return null;
+    return await invoke<string>("save_asset", { sourcePath: selected });
+  } catch (e) {
+    console.error("upload attachment failed", e);
+    toast.error(t("error.upload", { message: String(e) }));
+    return null;
+  }
+}
 
 export interface SlashItem {
   key: string;
@@ -80,6 +98,24 @@ export const slashItems: SlashItem[] = [
     key: "table",
     icon: <Table className="h-4 w-4" />,
     run: (e) => e.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
+  },
+  {
+    key: "databaseView",
+    icon: <Table2 className="h-4 w-4" />,
+    run: (e) => {
+      // 触发 App 级视图选择器
+      window.dispatchEvent(new CustomEvent(INSERT_DATABASE_VIEW_EVENT, { detail: { editor: e } }));
+    },
+  },
+  {
+    key: "attachment",
+    icon: <FileIcon className="h-4 w-4" />,
+    run: async (e) => {
+      const src = await uploadAttachment();
+      if (!src) return;
+      const name = src.split("/").pop() ?? "附件";
+      e.chain().focus().insertContent({ type: "attachment", attrs: { src, name } }).run();
+    },
   },
   { key: "paragraph", icon: <AlignLeft className="h-4 w-4" />, run: (e) => e.chain().focus().setParagraph().run() },
 ];

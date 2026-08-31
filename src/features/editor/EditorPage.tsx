@@ -24,6 +24,8 @@ import type { View } from "@/types/models";
 import { SlashMenu } from "./slash-menu";
 import { FloatingToolbar } from "./floating-menu";
 import { Image } from "./extensions/image/node";
+import { DatabaseView } from "./extensions/database-view/node";
+import { Attachment } from "./extensions/attachment/node";
 
 const AUTOSAVE_MS = 800;
 
@@ -89,6 +91,8 @@ export function EditorPage({ view, hideTitle = false }: { view: View; hideTitle?
       TableHeader,
       TableCell,
       Image,
+      DatabaseView,
+      Attachment,
       SlashMenu,
     ],
     [],
