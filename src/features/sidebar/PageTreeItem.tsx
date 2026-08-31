@@ -147,7 +147,9 @@ export function PageTreeItem({
         <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">{viewIcon(node)}</span>
         <span className="min-w-0 flex-1 truncate text-[13px] text-neutral-800">{node.name}</span>
 
-        <span className="hidden shrink-0 items-center group-hover:flex">
+        {/* 行尾操作按钮：hover 显示；菜单打开期间（trigger 带 data-state=open）保持可见，
+            否则 Floating UI 重算时按钮隐藏（rect 0）会把菜单定位到左上角 */}
+        <span className="hidden shrink-0 items-center group-hover:flex group-has-[[data-state=open]]:flex">
           <NewPageMenu parentId={node.id} align="end">
             <button
               data-testid="row-add"
