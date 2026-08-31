@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { NodeViewContent, NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import { t } from "@/lib/i18n";
@@ -7,11 +7,14 @@ import { t } from "@/lib/i18n";
 export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
   const { node, selected } = props;
   const [copied, setCopied] = useState(false);
+  const preRef = useRef<HTMLPreElement>(null);
   const lang = (node.attrs.language as string | undefined) || "text";
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(node.textContent ?? "");
+      // 用 DOM innerText：保留多行换行（node.textContent 可能丢失换行边界）
+      const text = preRef.current?.innerText ?? node.textContent ?? "";
+      await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch (e) {
@@ -28,7 +31,7 @@ export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
           {copied ? t("editor.copied") : t("editor.copy")}
         </button>
       </div>
-      <pre className="m-0 overflow-x-auto bg-[#F8FAFF] p-3 text-[12.5px] leading-1.6">
+      <pre ref={preRef} className="m-0 overflow-x-auto bg-[#F8FAFF] p-3 text-[12.5px] leading-1.6">
         <NodeViewContent className="hljs" />
       </pre>
     </NodeViewWrapper>

@@ -118,15 +118,16 @@ export function GridView({ view }: { view: View }) {
     }
   };
 
-  // 字段拖拽排序
+  // 字段拖拽排序（主列固定首位，只在其它列之间排序）
   const onFieldDrop = (targetId: string) => {
     if (!draggingField || draggingField === targetId) return;
-    const ids = visibleFields.map((f) => f.id);
-    const from = ids.indexOf(draggingField);
-    const to = ids.indexOf(targetId);
+    if (draggingField === primaryField?.id || targetId === primaryField?.id) return;
+    const sortable = visibleFields.filter((f) => f.id !== primaryField?.id).map((f) => f.id);
+    const from = sortable.indexOf(draggingField);
+    const to = sortable.indexOf(targetId);
     if (from < 0 || to < 0) return;
-    ids.splice(to, 0, ids.splice(from, 1)[0]);
-    void store.reorderFields(ids);
+    sortable.splice(to, 0, sortable.splice(from, 1)[0]);
+    void store.reorderFields([primaryField?.id, ...sortable].filter(Boolean) as string[]);
     setDraggingField(null);
   };
 
@@ -291,11 +292,13 @@ export function GridView({ view }: { view: View }) {
                 return (
                   <th key={field.id} className="group/head relative border-b border-r border-neutral-300 bg-neutral-200/70 px-1">
                     <div
-                      draggable
-                      onDragStart={() => setDraggingField(field.id)}
+                      draggable={field.id !== primaryField?.id}
+                      onDragStart={() => {
+                        if (field.id !== primaryField?.id) setDraggingField(field.id);
+                      }}
                       onDragEnd={() => setDraggingField(null)}
                       onDragOver={(e) => {
-                        if (draggingField && draggingField !== field.id) e.preventDefault();
+                        if (draggingField && draggingField !== field.id && field.id !== primaryField?.id) e.preventDefault();
                       }}
                       onDrop={(e) => {
                         e.preventDefault();
