@@ -405,8 +405,8 @@ export function GridView({ view }: { view: View }) {
               </tr>
             ))}
             <tr>
-              <td className="h-8 border-r border-neutral-200" />
-              <td className="h-8 border-r border-neutral-200 px-2">
+              {/* 新建行：跨整行底部，避免无字段时挤在窄列里 */}
+              <td colSpan={1 + visibleFields.length + 1} className="h-8 border-t border-neutral-200 px-2">
                 <button
                   data-testid="add-row"
                   className="flex h-6 items-center gap-1 rounded px-1.5 text-[12px] text-neutral-500 hover:bg-neutral-200/60"
@@ -416,7 +416,6 @@ export function GridView({ view }: { view: View }) {
                   {t("row.new")}
                 </button>
               </td>
-              <td colSpan={Math.max(visibleFields.length - 1, 1)} />
             </tr>
           </tbody>
         </table>
