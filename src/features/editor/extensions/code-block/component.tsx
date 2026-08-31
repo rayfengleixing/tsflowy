@@ -5,7 +5,7 @@ import { t } from "@/lib/i18n";
 
 // 代码块 NodeView：右上角语言标识 + 复制按钮；内容经 lowlight 动态高亮（decoration）
 export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
-  const { node, selected, updateAttributes } = props;
+  const { node, selected, updateAttributes, editor, getPos } = props;
   const [copied, setCopied] = useState(false);
   const [editingLang, setEditingLang] = useState(false);
   const [langDraft, setLangDraft] = useState("");
@@ -20,8 +20,16 @@ export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
 
   const copy = async () => {
     try {
-      // 用 DOM innerText：保留多行换行（node.textContent 可能丢失换行边界）
-      const text = preRef.current?.innerText ?? node.textContent ?? "";
+      // 用 editor.state.doc.textBetween 提取：保留块内换行（node.textContent 会丢失换行边界）
+      let text = "";
+      if (typeof getPos === "function" && editor) {
+        const pos = getPos();
+        if (typeof pos === "number") {
+          const n = editor.state.doc.nodeAt(pos);
+          if (n) text = n.textBetween(0, n.content.size, "\n");
+        }
+      }
+      if (!text) text = preRef.current?.innerText ?? node.textContent ?? "";
       await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
@@ -32,7 +40,7 @@ export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
 
   return (
     <NodeViewWrapper data-drag-handle className={"relative my-3 overflow-hidden rounded-lg border border-neutral-200 " + (selected ? "ring-2 ring-brand-500" : "")}>
-      <div className="flex items-center justify-between border-b border-neutral-200 bg-neutral-100/70 px-2 py-1">
+      <div className="flex items-center justify-between border-b border-neutral-200 bg-[#F8FAFF] px-2 py-1">
         {editingLang ? (
           <input
             autoFocus

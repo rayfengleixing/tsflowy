@@ -27,6 +27,7 @@ import { Image } from "./extensions/image/node";
 import { DatabaseView } from "./extensions/database-view/node";
 import { Attachment } from "./extensions/attachment/node";
 import { CodeBlock } from "./extensions/code-block/index";
+import "highlight.js/styles/github.css";
 
 const AUTOSAVE_MS = 800;
 
