@@ -145,6 +145,13 @@ const zh = {
   "csv.imported": "已导入 {count} 行",
   "csv.emptyFile": "CSV 文件为空",
   "error.csv": "CSV 操作失败：{message}",
+  "grid.defaultName": "名称",
+  "grid.defaultNumber": "数字",
+  "grid.defaultSelect": "单选",
+  "field.newTitle": "新建字段",
+  "field.newFieldName": "字段名称",
+  "field.newFieldType": "字段类型",
+  "field.create": "创建",
 } as const;
 
 export type MessageKey = keyof typeof zh;
@@ -293,6 +300,13 @@ const en: Record<MessageKey, string> = {
   "csv.imported": "Imported {count} rows",
   "csv.emptyFile": "CSV file is empty",
   "error.csv": "CSV error: {message}",
+  "grid.defaultName": "Name",
+  "grid.defaultNumber": "Number",
+  "grid.defaultSelect": "Select",
+  "field.newTitle": "New field",
+  "field.newFieldName": "Field name",
+  "field.newFieldType": "Field type",
+  "field.create": "Create",
 };
 
 const dicts: Record<string, Record<MessageKey, string>> = {

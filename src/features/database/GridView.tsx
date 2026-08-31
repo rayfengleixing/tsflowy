@@ -3,7 +3,7 @@ import { Download, FileUp, Filter, GripVertical, Plus, Trash2 } from "lucide-rea
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import type { CellValue, DatabaseField, FieldType } from "@/types/database";
+import type { CellValue, DatabaseField } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { useDatabaseStore } from "@/stores/database";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -15,6 +15,7 @@ import { buildCsvExport, csvValueToCell, parseCsv, planImport } from "@/lib/csv"
 import { viewIcon } from "@/components/view-icon";
 import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
+import { NewFieldDialog } from "./NewFieldDialog";
 import { FilterBar } from "./FilterBar";
 import { CheckboxCellEditor, DateCellEditor, MultiSelectCellEditor, NumberCellEditor, SelectCellEditor, TextCellEditor } from "./editors";
 import { RowDetailPanel } from "./RowDetail";
@@ -457,55 +458,32 @@ function RenameInput(props: { initial: string; onCommit: (name: string) => void;
 
 function AddFieldButton() {
   const store = useDatabaseStore();
-  const [draft, setDraft] = useState(false);
-  const [name, setName] = useState("");
-  const add = async (type: FieldType) => {
-    await store.addField(type, name.trim() || undefined);
-    setName("");
-    setDraft(false);
-  };
-  if (draft) {
-    return (
-      <div className="flex flex-col gap-1 p-1">
-        <input
-          autoFocus
-          className="h-7 w-36 rounded border border-brand-500 bg-white px-2 text-[12px] outline-none"
-          placeholder={t("field.newName")}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void add("text");
-            if (e.key === "Escape") setDraft(false);
-          }}
-          onBlur={() => {
-            if (name.trim()) void add("text");
-            else setDraft(false);
-          }}
-        />
-        <div className="flex gap-1">
-          {(["text", "number", "date", "checkbox", "single_select", "multi_select"] as FieldType[]).map((tp) => (
-            <button
-              key={tp}
-              className="flex-1 rounded border border-neutral-300 bg-white px-1 py-0.5 text-[10px] text-neutral-600 hover:bg-neutral-100"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => void add(tp)}
-            >
-              {t(`field.type.${tp}` as never)}
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  }
+  const [open, setOpen] = useState(false);
+
   return (
-    <button
-      data-testid="add-field"
-      className="flex h-8 w-8 items-center justify-center text-neutral-500 hover:bg-neutral-300/50"
-      title={t("field.new")}
-      onClick={() => setDraft(true)}
-    >
-      <Plus className="h-4 w-4" />
-    </button>
+    <>
+      <button
+        data-testid="add-field"
+        className="flex h-8 w-8 items-center justify-center text-neutral-500 hover:bg-neutral-300/50"
+        title={t("field.new")}
+        onClick={() => setOpen(true)}
+      >
+        <Plus className="h-4 w-4" />
+      </button>
+      <NewFieldDialog
+        open={open}
+        onOpenChange={setOpen}
+        onCreate={async (name, type) => {
+          try {
+            await store.addField(type, name);
+            setOpen(false);
+          } catch (e) {
+            console.error("add field failed", e);
+            toast.error(t("error.db", { message: String(e) }));
+          }
+        }}
+      />
+    </>
   );
 }
 

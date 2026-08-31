@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import type { LayoutType, View, ViewNode, Workspace } from "@/types/models";
 import { viewApi, workspaceApi } from "@/lib/db";
+import { databaseApi } from "@/lib/database";
+import { newSelectOption } from "@/lib/database-values";
 import { buildTree, flattenTree } from "@/lib/tree";
 import { useSettingsStore } from "./settings";
 
@@ -184,6 +186,14 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
         name,
         layout,
       });
+      if (layout === "grid") {
+        // Grid 预置默认字段（名称/数字/单选）+ 一个空行（项目说明书 5.1）
+        try {
+          await seedGridFields(view.id, lang);
+        } catch (e) {
+          console.error("seed grid fields failed", view.id, e);
+        }
+      }
       await get().reload();
       set({ expanded: new Set(get().expanded).add(parentId ?? "") });
       get().openView(view.id);
@@ -303,6 +313,19 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     setSidebarWidth: (w: number) => set({ sidebarWidth: w }),
   };
 });
+
+/** Grid 默认字段 + 空行（名称/数字/单选；单选预置两个选项） */
+async function seedGridFields(viewId: string, lang: "zh-CN" | "en-US"): Promise<void> {
+  const text = await databaseApi.createField(viewId, "text", lang === "zh-CN" ? "名称" : "Name");
+  await databaseApi.createField(viewId, "number", lang === "zh-CN" ? "数字" : "Number");
+  const select = await databaseApi.createField(viewId, "single_select", lang === "zh-CN" ? "单选" : "Select");
+  await databaseApi.updateFieldOptions(select.id, {
+    kind: "select",
+    options: [newSelectOption("选项 1"), newSelectOption("选项 2")],
+  });
+  await databaseApi.createRow(viewId);
+  void text;
+}
 
 function findInTree(nodes: ViewNode[], id: string): ViewNode | null {
   for (const n of nodes) {
