@@ -2,12 +2,16 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "@fontsource/poppins/400.css";
+@import "@fontsource/poppins/500.css";
+@import "@fontsource/poppins/600.css";
+@import "@fontsource/poppins/700.css";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
     --font-heading: var(--font-sans);
-    --font-sans: 'Geist Variable', sans-serif;
+    --font-sans: 'Poppins', 'Geist Variable', system-ui, sans-serif;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -48,6 +52,23 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* AppFlowy 品牌色与中性色阶（项目说明书 6.5 节） */
+@theme {
+    --color-brand-100: #E3F6FF;
+    --color-brand-500: #00B5FF;
+    --color-brand-600: #0092D6;
+    --color-neutral-100: #F8FAFF;
+    --color-neutral-200: #E4E8F5;
+    --color-neutral-300: #CED3E6;
+    --color-neutral-400: #B5BBD3;
+    --color-neutral-500: #989EB7;
+    --color-neutral-600: #6F748C;
+    --color-neutral-800: #3D404F;
+    --color-neutral-850: #32343F;
+    --color-neutral-900: #272930;
+    --color-neutral-1000: #21232A;
+}
+
 :root {
     --background: oklch(1 0 0);
     --foreground: oklch(0.145 0 0);
@@ -55,8 +76,9 @@
     --card-foreground: oklch(0.145 0 0);
     --popover: oklch(1 0 0);
     --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
+    /* 主按钮/选中态/链接/焦点边框：brand blue500 */
+    --primary: #00B5FF;
+    --primary-foreground: #FFFFFF;
     --secondary: oklch(0.97 0 0);
     --secondary-foreground: oklch(0.205 0 0);
     --muted: oklch(0.97 0 0);
@@ -66,21 +88,23 @@
     --destructive: oklch(0.577 0.245 27.325);
     --border: oklch(0.922 0 0);
     --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
+    --ring: #00B5FF;
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    /* 圆角基 12px：对话框=lg 12、输入框 md≈10、按钮 sm≈7（6.5 节） */
+    --radius: 0.75rem;
+    /* 侧边栏：neutral200 底、neutral800 字、neutral300 边框（6.5 节） */
+    --sidebar: #E4E8F5;
+    --sidebar-foreground: #3D404F;
+    --sidebar-primary: #00B5FF;
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent: #CED3E6;
+    --sidebar-accent-foreground: #3D404F;
+    --sidebar-border: #CED3E6;
+    --sidebar-ring: #00B5FF;
 }
 
 .dark {

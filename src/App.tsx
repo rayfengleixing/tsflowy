@@ -1,42 +1,46 @@
-import { useEffect, useState } from "react";
-import { getDb } from "./lib/db";
+import { useEffect } from "react";
+import { Sidebar } from "@/features/sidebar/Sidebar";
+import { TabBar } from "@/features/tabs/TabBar";
+import { TrashPage } from "@/features/trash/TrashPage";
+import { PlaceholderPage } from "@/features/placeholder/PlaceholderPage";
+import { Toaster } from "@/components/ui/sonner";
+import { useWorkspaceStore } from "@/stores/workspace";
+import { toast } from "sonner";
+import { t } from "@/lib/i18n";
 
-// M1 冒烟测试：建表成功 → 插入一条记录 → 读回；已存在则直接读回（验证重启持久化）。
 function App() {
-  const [status, setStatus] = useState("connecting to database...");
-  const [stored, setStored] = useState("");
+  const ready = useWorkspaceStore((s) => s.ready);
+  const route = useWorkspaceStore((s) => s.route);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const db = await getDb();
-        const rows = await db.select<{ value: string }[]>(
-          "SELECT value FROM app_settings WHERE key = 'm1_test'",
-        );
-        if (rows.length > 0) {
-          setStored(rows[0].value);
-          setStatus("Hello from AppFlowy TS (M1) - record read back from previous run, data persisted");
-        } else {
-          await db.execute(
-            "INSERT INTO app_settings(key, value) VALUES ('m1_test', 'hello-from-run-1')",
-          );
-          const back = await db.select<{ value: string }[]>(
-            "SELECT value FROM app_settings WHERE key = 'm1_test'",
-          );
-          setStored(back[0]?.value ?? "?");
-          setStatus("Hello from AppFlowy TS (M1) - inserted test record and read it back");
-        }
-      } catch (e) {
-        console.error("M1 db smoke test failed", e);
-        setStatus("DB ERROR: " + String(e));
-      }
-    })();
+    useWorkspaceStore
+      .getState()
+      .init()
+      .catch((e) => {
+        console.error("app init failed", e);
+        toast.error(t("error.db", { message: String(e) }));
+        useWorkspaceStore.setState({ ready: true }); // 退出加载态，避免无限转圈
+      });
   }, []);
 
+  if (!ready) {
+    return <div className="flex h-screen items-center justify-center text-sm text-neutral-500">{t("app.loading")}</div>;
+  }
+
   return (
-    <div style={{ padding: 32, fontFamily: "system-ui, sans-serif" }}>
-      <h1>{status}</h1>
-      <p>Stored value: {stored}</p>
+    <div className="flex h-screen overflow-hidden">
+      <Sidebar />
+      <div className="flex min-w-0 flex-1 flex-col">
+        {route === "trash" ? (
+          <TrashPage />
+        ) : (
+          <>
+            <TabBar />
+            <PlaceholderPage />
+          </>
+        )}
+      </div>
+      <Toaster />
     </div>
   );
 }
