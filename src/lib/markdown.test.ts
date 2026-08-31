@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownToJson, parseInline } from "./markdown";
+import { looksLikeMarkdown, markdownToJson, parseInline, textToBlocks } from "./markdown";
 
 describe("parseInline", () => {
   it("parses bold, italic, strike, code, link and image", () => {
@@ -102,5 +102,24 @@ describe("markdownToJson", () => {
   it("returns empty doc for empty input", () => {
     expect(markdownToJson("")).toEqual({ type: "doc", content: [] });
     expect(markdownToJson("\n\n")).toEqual({ type: "doc", content: [] });
+  });
+});
+
+describe("looksLikeMarkdown / textToBlocks", () => {
+  it("detects markdown structures", () => {
+    expect(looksLikeMarkdown("# 标题")).toBe(true);
+    expect(looksLikeMarkdown("- 列表项")).toBe(true);
+    expect(looksLikeMarkdown("> 引用")).toBe(true);
+    expect(looksLikeMarkdown("```js\ncode\n```")).toBe(true);
+    expect(looksLikeMarkdown("---")).toBe(true);
+    expect(looksLikeMarkdown("普通文本第一行\n第二行")).toBe(false);
+  });
+
+  it("splits plain text lines into paragraphs preserving newlines", () => {
+    const json = textToBlocks("print(\"hello\")\nprint(\"你好\")");
+    expect(json.content).toEqual([
+      { type: "paragraph", content: [{ type: "text", text: 'print("hello")' }] },
+      { type: "paragraph", content: [{ type: "text", text: 'print("你好")' }] },
+    ]);
   });
 });

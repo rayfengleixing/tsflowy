@@ -18,7 +18,7 @@ import { toast } from "sonner";
 import { viewIcon } from "@/components/view-icon";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { documentApi } from "@/lib/documents";
-import { markdownToJson } from "@/lib/markdown";
+import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown";
 import { t } from "@/lib/i18n";
 import type { View } from "@/types/models";
 import { SlashMenu } from "./slash-menu";
@@ -128,7 +128,8 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
         const text = event.clipboardData?.getData("text/plain");
         if (!text) return false;
         try {
-          const json = markdownToJson(text);
+          // 无 markdown 结构的纯文本：按行拆段落保留换行；有 markdown 语法才转换
+          const json = looksLikeMarkdown(text) ? markdownToJson(text) : textToBlocks(text);
           const nodes = (json.content ?? []).map((b) => PMNode.fromJSON(view.state.schema, b));
           const slice = new Slice(Fragment.fromArray(nodes), 0, 0);
           view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView());

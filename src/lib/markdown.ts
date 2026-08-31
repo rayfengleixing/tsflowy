@@ -57,6 +57,29 @@ export function parseInline(text: string): JSONContent[] {
   return out;
 }
 
+/** 判断文本是否含 markdown 结构（粘贴时决定走 markdown 转换还是纯文本分行） */
+export function looksLikeMarkdown(text: string): boolean {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  return lines.some((line) => {
+    const l = line.trim();
+    return (
+      /^(#{1,3})\s+/.test(l) ||
+      /^[-*+]\s+\[[ xX]\]/.test(l) ||
+      /^[-*+]\s+/.test(l) ||
+      /^\d+[.)]\s+/.test(l) ||
+      /^>\s?/.test(l) ||
+      /^```/.test(l) ||
+      /^(-{3,}|\*{3,}|_{3,})$/.test(l)
+    );
+  });
+}
+
+/** 纯文本按行拆成多个段落（保留换行粘贴语义，避免合并成一行） */
+export function textToBlocks(text: string): JSONContent {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  return { type: "doc", content: lines.map((line) => ({ type: "paragraph", content: parseInline(line) })) };
+}
+
 /** Markdown 文本 → TipTap doc JSON（覆盖 M3 基础块：标题/列表/任务/引用/代码/分割线/图片/表格行外） */
 export function markdownToJson(md: string): JSONContent {
   const lines = md.replace(/\r\n/g, "\n").split("\n");
