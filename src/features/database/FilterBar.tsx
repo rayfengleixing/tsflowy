@@ -99,7 +99,7 @@ export function FilterBar(props: {
   const fieldById = (id: string) => visibleFields.find((f) => f.id === id);
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-neutral-200 bg-neutral-100/60 px-4 py-2">
+    <div data-testid="filter-bar" className="flex flex-wrap items-center gap-2 border-b border-neutral-200 bg-neutral-100/60 px-4 py-2">
       <div className="flex items-center gap-1 text-[12px]">
         <button
           className={cn("rounded px-1.5 py-0.5 font-medium", mode === "and" ? "bg-brand-500 text-white" : "text-neutral-500 hover:bg-neutral-200")}

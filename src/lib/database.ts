@@ -104,6 +104,13 @@ export const databaseApi = {
     return { id, database_view_id: viewId, position, document_id: null, created_at: t, updated_at: t };
   },
 
+  /** 按 id 读单个行（行详情重开时需要最新 document_id） */
+  async getRow(rowId: string): Promise<DatabaseRow | null> {
+    const d = await getDb();
+    const rows = await d.select<DatabaseRow[]>("SELECT * FROM database_rows WHERE id = $1", [rowId]);
+    return rows[0] ?? null;
+  },
+
   /** 绑定行详情文档 view（首次打开行详情时创建） */
   async setRowDocumentId(rowId: string, documentId: string): Promise<void> {
     const d = await getDb();

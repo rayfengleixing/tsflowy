@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Download, FileUp, Filter, GripVertical, Plus, Trash2 } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -30,6 +30,8 @@ export function GridView({ view }: { view: View }) {
   const { openRowDetail, closeRowDetail } = store;
 
   const [editing, setEditing] = useState<{ rowId: string; fieldId: string } | null>(null);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(view.name);
   const [renamingField, setRenamingField] = useState<string | null>(null);
   const [optionsEditorFor, setOptionsEditorFor] = useState<DatabaseField | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -42,19 +44,29 @@ export function GridView({ view }: { view: View }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.id]);
 
-  // 列宽拖拽
+  // 列宽拖拽（基于 clientX 差值，比 movementX 稳健）
+  const resizeStartRef = useRef<{ x: number; width: number } | null>(null);
   useEffect(() => {
     if (!resizingField) return;
-    const onMove = (e: MouseEvent) => {
+    const onDown = (e: MouseEvent) => {
       const field = store.fields.find((f) => f.id === resizingField);
-      if (!field) return;
-      const width = Math.max(60, Math.min(600, field.width + e.movementX));
+      if (field) resizeStartRef.current = { x: e.clientX, width: field.width };
+    };
+    const onMove = (e: MouseEvent) => {
+      const start = resizeStartRef.current;
+      if (!start) return;
+      const width = Math.max(60, Math.min(600, start.width + (e.clientX - start.x)));
       void store.setFieldWidth(resizingField, width);
     };
-    const onUp = () => setResizingField(null);
+    const onUp = () => {
+      resizeStartRef.current = null;
+      setResizingField(null);
+    };
+    window.addEventListener("mousemove", onDown, { once: true });
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     return () => {
+      window.removeEventListener("mousemove", onDown);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
@@ -201,7 +213,33 @@ export function GridView({ view }: { view: View }) {
       {/* 顶栏标题行（说明书 6.2：高 44px） */}
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-6">
         <span className="text-lg leading-none">{viewIcon(view)}</span>
-        <h1 className="min-w-0 flex-1 truncate text-[15px] font-medium text-neutral-800">{view.name}</h1>
+        {editingTitle ? (
+          <input
+            autoFocus
+            className="min-w-0 flex-1 rounded border border-neutral-300 px-1.5 text-[15px] font-medium text-neutral-800 outline-none focus:border-brand-500"
+            value={titleDraft}
+            onChange={(e) => setTitleDraft(e.target.value)}
+            onBlur={() => {
+              const name = titleDraft.trim();
+              setEditingTitle(false);
+              if (name && name !== view.name) void useWorkspaceStore.getState().renameView(view.id, name);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") setEditingTitle(false);
+            }}
+          />
+        ) : (
+          <h1
+            className="min-w-0 flex-1 truncate text-[15px] font-medium text-neutral-800"
+            onDoubleClick={() => {
+              setTitleDraft(view.name);
+              setEditingTitle(true);
+            }}
+          >
+            {view.name}
+          </h1>
+        )}
         <div className="flex shrink-0 items-center gap-1">
           <Button variant="ghost" size="sm" onClick={() => setFilterOpen((v) => !v)} className={cn(filterOpen && "bg-brand-100 text-brand-600")}>
             <Filter className="h-3.5 w-3.5" />
@@ -513,4 +551,3 @@ function CellEditorSlot(props: {
       return <TextCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
   }
 }
-

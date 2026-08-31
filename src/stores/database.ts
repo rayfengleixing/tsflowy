@@ -177,6 +177,10 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
 
   openRowDetail: async (row, dbView) => {
     try {
+      // 用最新行数据（document_id 可能已被之前会话更新，store 里是旧副本）
+      const fresh = await databaseApi.getRow(row.id);
+      if (!fresh) throw new Error("row missing: " + row.id);
+      row = fresh;
       if (!row.document_id) {
         // 首次打开：创建行详情文档 view（extra 标记 row_detail，说明书 12 节风险 7）
         const name = "行 " + (row.position + 1);
@@ -188,7 +192,9 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
           extra: JSON.stringify({ row_detail: true }),
         });
         await databaseApi.setRowDocumentId(row.id, view.id);
-        set({ rowDetail: { row: { ...row, document_id: view.id }, view } });
+        // 同步 store 里的行（document_id 绑定）
+        const bound = { ...row, document_id: view.id };
+        set({ rows: get().rows.map((r) => (r.id === bound.id ? bound : r)), rowDetail: { row: bound, view } });
       } else {
         // 已有文档：从库中读回 view（含名称等）
         const view = await viewApi.get(row.document_id);
