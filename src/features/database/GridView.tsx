@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Download, FileUp, Filter, GripVertical, Plus, Trash2 } from "lucide-react";
+import { Download, ExternalLink, FileUp, Filter, GripVertical, Plus, Trash2 } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -401,26 +401,49 @@ export function GridView({ view }: { view: View }) {
                       onDoubleClick={() => void openRowDetail(row, view)}
                       onClick={() => {
                         if (isPrimary) {
-                          // 名称列：单击打开该行页面（说明书 5.1 行详情）
-                          void openRowDetail(row, view);
+                          // 名称列：单击编辑值（编辑框后的"打开"图标/双击打开所属页面）
+                          setEditing({ rowId: row.id, fieldId: field.id });
                           return;
                         }
                         if (isReadonlyType(field.field_type) || isEditing) return;
+                        if (field.field_type === "checkbox") {
+                          // 复选框：单击直接切换勾选
+                          void commitCell(row.id, field.id, cells[row.id]?.[field.id] !== true);
+                          return;
+                        }
                         setEditing({ rowId: row.id, fieldId: field.id });
                       }}
                     >
                       {isEditing ? (
-                        <CellEditorSlot
-                          field={field}
-                          value={cells[row.id]?.[field.id] ?? null}
-                          onCommit={(v) => void commitCell(row.id, field.id, v)}
-                          onCancel={() => setEditing(null)}
-                          onAddOption={(name) => {
-                            void store.addSelectOption(field.id, name);
-                            return null;
-                          }}
-                          onDeleteOption={(optId) => void store.removeSelectOption(field.id, optId)}
-                        />
+                        <div className="flex h-full items-center">
+                          <div className="min-w-0 flex-1">
+                            <CellEditorSlot
+                              field={field}
+                              value={cells[row.id]?.[field.id] ?? null}
+                              onCommit={(v) => void commitCell(row.id, field.id, v)}
+                              onCancel={() => setEditing(null)}
+                              onAddOption={(name) => {
+                                void store.addSelectOption(field.id, name);
+                                return null;
+                              }}
+                              onDeleteOption={(optId) => void store.removeSelectOption(field.id, optId)}
+                            />
+                          </div>
+                          {isPrimary && (
+                            <button
+                              data-testid="open-row-detail"
+                              title={t("rowDetail.open")}
+                              className="mx-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-brand-600"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditing(null);
+                                void openRowDetail(row, view);
+                              }}
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
                       ) : (
                         <CellDisplay field={field} value={cells[row.id]?.[field.id] ?? null} primary={isPrimary} />
                       )}
