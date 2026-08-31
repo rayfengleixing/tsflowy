@@ -125,6 +125,7 @@ function RowPropertyField({ field, row }: { field: DatabaseField; row: DatabaseR
               void store.addSelectOption(field.id, name);
               return null;
             }}
+            onDeleteOption={(optId) => void store.removeSelectOption(field.id, optId)}
           />
         ) : (
           display

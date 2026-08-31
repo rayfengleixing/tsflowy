@@ -35,6 +35,7 @@ export function GridView({ view }: { view: View }) {
   const [titleDraft, setTitleDraft] = useState(view.name);
   const [renamingField, setRenamingField] = useState<string | null>(null);
   const [optionsEditorFor, setOptionsEditorFor] = useState<DatabaseField | null>(null);
+  const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [draggingField, setDraggingField] = useState<string | null>(null);
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
@@ -302,6 +303,10 @@ export function GridView({ view }: { view: View }) {
                       }}
                       className={cn("flex h-8 cursor-pointer items-center gap-1", draggingField === field.id && "opacity-40")}
                       onClick={() => cycleSort(field.id)}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        setMenuOpenFor(field.id);
+                      }}
                     >
                       <GripVertical className="h-3 w-3 shrink-0 cursor-grab text-neutral-300" />
                       <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-neutral-800">{field.name}</span>
@@ -313,11 +318,15 @@ export function GridView({ view }: { view: View }) {
                         fieldType={field.field_type}
                         hidden={field.is_hidden === 1}
                         primary={field.id === primaryField?.id}
-                        onRename={() => setRenamingField(field.id)}
-                        onChangeType={(type) => void store.changeFieldType(field.id, type)}
-                        onToggleHidden={() => void store.toggleFieldHidden(field.id)}
-                        onDelete={() => void store.removeField(field.id)}
-                        onOpenOptions={() => setOptionsEditorFor(field)}
+                        open={menuOpenFor === field.id}
+                        onOpenChange={(open) => {
+                          setMenuOpenFor(open ? field.id : null);
+                        }}
+                        onRename={() => { setMenuOpenFor(null); setRenamingField(field.id); }}
+                        onChangeType={(type) => { setMenuOpenFor(null); void store.changeFieldType(field.id, type); }}
+                        onToggleHidden={() => { setMenuOpenFor(null); void store.toggleFieldHidden(field.id); }}
+                        onDelete={() => { setMenuOpenFor(null); void store.removeField(field.id); }}
+                        onOpenOptions={() => { setMenuOpenFor(null); setOptionsEditorFor(field); }}
                       />
                     </div>
                     {/* 重命名输入 */}
@@ -410,6 +419,7 @@ export function GridView({ view }: { view: View }) {
                             void store.addSelectOption(field.id, name);
                             return null;
                           }}
+                          onDeleteOption={(optId) => void store.removeSelectOption(field.id, optId)}
                         />
                       ) : (
                         <CellDisplay field={field} value={cells[row.id]?.[field.id] ?? null} primary={isPrimary} />

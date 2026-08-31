@@ -36,6 +36,7 @@ interface DatabaseState {
   reorderFields: (orderedIds: string[]) => Promise<void>;
   updateFieldOptions: (id: string, options: FieldOptions) => Promise<void>;
   addSelectOption: (id: string, name: string) => Promise<string | null>;
+  removeSelectOption: (id: string, optionId: string) => Promise<void>;
 
   // 行
   addRow: () => Promise<DatabaseRow | null>;
@@ -160,6 +161,33 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
     await databaseApi.updateFieldOptions(id, next);
     set({ fields: get().fields.map((f) => (f.id === id ? { ...f, options: JSON.stringify(next) } : f)) });
     return option.id;
+  },
+
+  /** 删除选项：从字段 options 移除，并清除引用了该选项的单元格值 */
+  removeSelectOption: async (id, optionId) => {
+    const field = get().fields.find((f) => f.id === id);
+    if (!field) return;
+    const opts = parseFieldOptions(field.options);
+    if (opts.kind !== "select") return;
+    const next: FieldOptions = { ...opts, options: opts.options.filter((o) => o.id !== optionId) };
+    await databaseApi.updateFieldOptions(id, next);
+    // 清除/更新引用了该选项的单元格
+    const cells = { ...get().cells };
+    const changed: { rowId: string; value: CellValue }[] = [];
+    for (const [rowId, rowCells] of Object.entries(cells)) {
+      if (!(id in rowCells)) continue;
+      if (rowCells[id] === optionId) {
+        rowCells[id] = null;
+        changed.push({ rowId, value: null });
+      } else if (Array.isArray(rowCells[id]) && rowCells[id].includes(optionId)) {
+        rowCells[id] = rowCells[id].filter((v) => v !== optionId);
+        changed.push({ rowId, value: rowCells[id] });
+      }
+    }
+    set({ fields: get().fields.map((f) => (f.id === id ? { ...f, options: JSON.stringify(next) } : f)), cells });
+    for (const c of changed) {
+      await databaseApi.setCell(c.rowId, id, c.value);
+    }
   },
 
   addRow: async () => {

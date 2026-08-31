@@ -23,18 +23,20 @@ export function FieldMenu(props: {
   hidden: boolean;
   /** 名称列（主列）：不可改类型/隐藏/删除 */
   primary?: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   onRename: () => void;
   onChangeType: (type: FieldType) => void;
   onToggleHidden: () => void;
   onDelete: () => void;
   onOpenOptions: () => void;
 }) {
-  const { fieldName, fieldType, hidden, primary = false, onRename, onChangeType, onToggleHidden, onDelete, onOpenOptions } = props;
+  const { fieldName, fieldType, hidden, primary = false, open, onOpenChange, onRename, onChangeType, onToggleHidden, onDelete, onOpenOptions } = props;
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu open={open} onOpenChange={onOpenChange}>
         <DropdownMenuTrigger asChild>
           <button
             data-testid="field-menu"
@@ -77,7 +79,6 @@ export function FieldMenu(props: {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-
       <ConfirmDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}

@@ -157,6 +157,8 @@ const zh = {
   "field.relationNoViews": "还没有其它表格可关联",
   "rowDetail.empty": "空",
   "field.addColumn": "添加一列",
+  "relation.noTarget": "请先在字段设置中选择关联目标表格",
+  "relation.noRows": "目标表格暂无数据",
 } as const;
 
 export type MessageKey = keyof typeof zh;
@@ -317,6 +319,8 @@ const en: Record<MessageKey, string> = {
   "field.relationNoViews": "No other tables to relate to yet",
   "rowDetail.empty": "empty",
   "field.addColumn": "Add a column",
+  "relation.noTarget": "Select a target table in field settings first",
+  "relation.noRows": "Target table has no rows",
 };
 
 const dicts: Record<string, Record<MessageKey, string>> = {
