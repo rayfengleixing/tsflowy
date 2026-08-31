@@ -210,8 +210,7 @@
 .tiptap pre {
   background: #F8FAFF;
   color: #3D404F;
-  border: 1px solid #CED3E6;
-  border-radius: 8px;
+  /* 无边框无圆角：与上方语法标识栏融为一体，外层边框由 NodeView 包装盒提供 */
   padding: 12px 14px;
   font-family: "Roboto Mono", ui-monospace, monospace;
   font-size: 12.5px;
