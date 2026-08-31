@@ -217,6 +217,7 @@
   font-size: 12.5px;
   line-height: 1.6;
   overflow-x: auto;
+  white-space: pre; /* 保留代码换行，避免 innerText/复制丢失 \n */
 }
 .tiptap code {
   background: #E4E8F5;

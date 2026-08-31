@@ -5,7 +5,7 @@ import { t } from "@/lib/i18n";
 
 // 代码块 NodeView：右上角语言标识 + 复制按钮；内容经 lowlight 动态高亮（decoration）
 export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
-  const { node, selected, updateAttributes, editor, getPos } = props;
+  const { node, selected, updateAttributes } = props;
   const [copied, setCopied] = useState(false);
   const [editingLang, setEditingLang] = useState(false);
   const [langDraft, setLangDraft] = useState("");
@@ -20,16 +20,8 @@ export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
 
   const copy = async () => {
     try {
-      // 用 editor.state.doc.textBetween 提取：保留块内换行（node.textContent 会丢失换行边界）
-      let text = "";
-      if (typeof getPos === "function" && editor) {
-        const pos = getPos();
-        if (typeof pos === "number") {
-          const n = editor.state.doc.nodeAt(pos);
-          if (n) text = n.textBetween(0, n.content.size, "\n");
-        }
-      }
-      if (!text) text = preRef.current?.innerText ?? node.textContent ?? "";
+      // 用 DOM innerText（pre 设了 white-space: pre，保留多行换行）；textBetween 不可靠只返回首行
+      const text = preRef.current?.innerText ?? node.textContent ?? "";
       await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
@@ -70,7 +62,7 @@ export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
           {copied ? t("editor.copied") : t("editor.copy")}
         </button>
       </div>
-      <pre ref={preRef} className="m-0 overflow-x-auto bg-[#F8FAFF] p-3 text-[12.5px] leading-1.6 text-neutral-700">
+      <pre ref={preRef} className="m-0 overflow-x-auto whitespace-pre bg-[#F8FAFF] p-3 text-[12.5px] leading-1.6 text-neutral-700">
         <NodeViewContent />
       </pre>
     </NodeViewWrapper>
