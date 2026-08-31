@@ -208,8 +208,9 @@
   color: #6F748C;
 }
 .tiptap pre {
-  background: #272930;
-  color: #E4E8F5;
+  background: #F8FAFF;
+  color: #3D404F;
+  border: 1px solid #CED3E6;
   border-radius: 8px;
   padding: 12px 14px;
   font-family: "Roboto Mono", ui-monospace, monospace;
@@ -225,8 +226,9 @@
   font-family: "Roboto Mono", ui-monospace, monospace;
   font-size: 0.88em;
 }
-.tiptap pre code {
-  background: none;
+.tiptap pre code,
+.tiptap pre code.hljs {
+  background: transparent;
   color: inherit;
   padding: 0;
   font-size: inherit;
@@ -306,3 +308,22 @@ em {
   color: #0092D6;
   border-radius: 2px;
 }
+
+/* 代码块 hljs 浅色高亮（配合 github.css；若未加载则兜底基础色） */
+.tiptap pre code .hljs-keyword,
+.tiptap pre code .hljs-selector-tag,
+.tiptap pre code .hljs-attr { color: #a626a4; }
+.tiptap pre code .hljs-string,
+.tiptap pre code .hljs-attr,
+.tiptap pre code .hljs-template-tag { color: #50a14f; }
+.tiptap pre code .hljs-number,
+.tiptap pre code .hljs-literal { color: #986801; }
+.tiptap pre code .hljs-comment,
+.tiptap pre code .hljs-quote { color: #a0a1a7; font-style: italic; }
+.tiptap pre code .hljs-title,
+.tiptap pre code .hljs-function .hljs-title,
+.tiptap pre code .hljs-title.function_ { color: #4078f2; }
+.tiptap pre code .hljs-variable,
+.tiptap pre code .hljs-params { color: #383a42; }
+.tiptap pre code .hljs-built_in,
+.tiptap pre code .hljs-type { color: #c18401; }

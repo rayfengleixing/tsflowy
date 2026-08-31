@@ -26,6 +26,8 @@ import { FloatingToolbar } from "./floating-menu";
 import { Image } from "./extensions/image/node";
 import { DatabaseView } from "./extensions/database-view/node";
 import { Attachment } from "./extensions/attachment/node";
+import { CodeBlock } from "./extensions/code-block/index";
+import "highlight.js/styles/github.css";
 
 const AUTOSAVE_MS = 800;
 
@@ -71,12 +73,17 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
     () => [
       StarterKit.configure({
         link: { openOnClick: false, autolink: true },
-        codeBlock: {},
+        codeBlock: false,
         heading: { levels: [1, 2, 3] },
       }),
+      CodeBlock,
       Placeholder.configure({
         placeholder: ({ node }) =>
-          node.type.name === "heading" ? t("editor.placeholderHeading") : t("editor.placeholder"),
+          node.type.name === "heading"
+            ? t("editor.placeholderHeading")
+            : hideSlash
+              ? t("editor.placeholderNoSlash")
+              : t("editor.placeholder"),
         emptyEditorClass: "is-editor-empty",
         emptyNodeClass: "is-empty",
       }),
