@@ -15,6 +15,7 @@ export type FieldType =
   | "created_at"
   | "last_edited_at";
 
+// 字段类型可选列表（已移除"关联"；类型定义仍含 relation 以兼容历史数据）
 export const FIELD_TYPES: FieldType[] = [
   "text",
   "number",
@@ -25,7 +26,6 @@ export const FIELD_TYPES: FieldType[] = [
   "url",
   "phone",
   "email",
-  "relation",
   "created_at",
   "last_edited_at",
 ];

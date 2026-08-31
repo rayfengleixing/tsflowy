@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Download, ExternalLink, FileUp, Filter, GripVertical, Plus, Trash2 } from "lucide-react";
+import { Download, FileUp, Filter, GripVertical, Plus, Trash2 } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -415,7 +415,7 @@ export function GridView({ view }: { view: View }) {
                       }}
                     >
                       {isEditing ? (
-                        <div className="group flex h-full items-center">
+                        <div className="flex h-full items-center">
                           <div className="min-w-0 flex-1">
                             <CellEditorSlot
                               field={field}
@@ -429,20 +429,6 @@ export function GridView({ view }: { view: View }) {
                               onDeleteOption={(optId) => void store.removeSelectOption(field.id, optId)}
                             />
                           </div>
-                          {isPrimary && (
-                            <button
-                              data-testid="open-row-detail"
-                              title={t("rowDetail.open")}
-                              className="mx-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-neutral-400 opacity-0 transition-opacity hover:bg-neutral-200 hover:text-brand-600 group-hover:opacity-100"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setEditing(null);
-                                void openRowDetail(row, view);
-                              }}
-                            >
-                              <ExternalLink className="h-3.5 w-3.5" />
-                            </button>
-                          )}
                         </div>
                       ) : (
                         <CellDisplay field={field} value={cells[row.id]?.[field.id] ?? null} primary={isPrimary} />

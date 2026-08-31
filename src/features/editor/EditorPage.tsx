@@ -30,7 +30,7 @@ import { Attachment } from "./extensions/attachment/node";
 const AUTOSAVE_MS = 800;
 
 /** 文档编辑器页（项目说明书 8.1：读 content → 编辑 → 防抖 800ms 落库 → 切换/关闭前 flush） */
-export function EditorPage({ view, hideTitle = false }: { view: View; hideTitle?: boolean }) {
+export function EditorPage({ view, hideTitle = false, hideSlash = false }: { view: View; hideTitle?: boolean; hideSlash?: boolean }) {
   const renameView = useWorkspaceStore((s) => s.renameView);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(view.name);
@@ -93,9 +93,10 @@ export function EditorPage({ view, hideTitle = false }: { view: View; hideTitle?
       Image,
       DatabaseView,
       Attachment,
-      SlashMenu,
+      ...(hideSlash ? [] : [SlashMenu]),
     ],
-    [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hideSlash],
   );
 
   const editor = useEditor({
