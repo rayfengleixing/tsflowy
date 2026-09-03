@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { LayoutTemplate, Search, Settings, Star, Trash2 } from "lucide-react";
+import { Search, Settings, Star, Trash2 } from "lucide-react";
 import { SpaceSwitcher } from "./SpaceSwitcher";
 import { NewPageMenu } from "./NewPageMenu";
 import { PageTree } from "./PageTree";
 import { viewIcon } from "@/components/view-icon";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { toast } from "sonner";
 import { t } from "@/lib/i18n";
 
 const MIN_WIDTH = 268;
@@ -83,16 +82,8 @@ export function Sidebar() {
       {/* 页面树 */}
       <PageTree />
 
-      {/* 底部固定区：模板 / 回收站 / 设置 */}
+      {/* 底部固定区：回收站 / 设置（模板功能尚未实现，已按要求移除入口） */}
       <div className="flex h-[60px] shrink-0 items-stretch border-t border-neutral-300">
-        <button
-          className="flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] text-neutral-600 hover:bg-neutral-300/50"
-          onClick={() => toast(t("sidebar.templatesSoon"))}
-        >
-          <LayoutTemplate className="h-4 w-4" />
-          {t("sidebar.templates")}
-        </button>
-        <div className="w-px self-stretch bg-neutral-300" />
         <button
           data-testid="trash-button"
           className={

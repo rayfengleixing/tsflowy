@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Download, FileUp, Filter, GripVertical, Plus, Trash2 } from "lucide-react";
+import { Download, ExternalLink, FileUp, Filter, GripVertical, Plus, Trash2 } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -421,7 +421,7 @@ export function GridView({ view }: { view: View }) {
                       }}
                     >
                       {isEditing ? (
-                        <div className="flex h-full items-center">
+                        <div className="flex h-full items-center pr-1">
                           <div className="min-w-0 flex-1">
                             <CellEditorSlot
                               field={field}
@@ -435,9 +435,30 @@ export function GridView({ view }: { view: View }) {
                               onDeleteOption={(optId) => void store.removeSelectOption(field.id, optId)}
                             />
                           </div>
+                          {isPrimary && (
+                            <button
+                              type="button"
+                              className="ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-brand-600"
+                              title={t("row.openDetail")}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditing(null);
+                                void openRowDetail(row, view);
+                              }}
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                         </div>
                       ) : (
-                        <CellDisplay field={field} value={cells[row.id]?.[field.id] ?? null} primary={isPrimary} />
+                        <CellDisplay
+                          field={field}
+                          value={cells[row.id]?.[field.id] ?? null}
+                          primary={isPrimary}
+                          onChipRemove={(newVal) => void store.setCell(row.id, field.id, newVal)}
+                          onOpenRowDetail={() => void openRowDetail(row, view)}
+                        />
                       )}
                     </td>
                   );
@@ -528,7 +549,19 @@ function AddFieldButton() {
 }
 
 /** 单元格显示（非编辑态） */
-function CellDisplay({ field, value, primary = false }: { field: DatabaseField; value: CellValue; primary?: boolean }) {
+function CellDisplay({
+  field,
+  value,
+  primary = false,
+  onChipRemove,
+  onOpenRowDetail,
+}: {
+  field: DatabaseField;
+  value: CellValue;
+  primary?: boolean;
+  onChipRemove?: (newValue: CellValue) => void;
+  onOpenRowDetail?: () => void;
+}) {
   const opts = parseFieldOptions(field.options);
   if (isAttachmentField(field)) {
     return <AttachmentDisplay value={value} />;
@@ -541,21 +574,38 @@ function CellDisplay({ field, value, primary = false }: { field: DatabaseField; 
     );
   }
   if (field.field_type === "single_select" || field.field_type === "multi_select") {
-    // 选项值显示为带背景色的胶囊（需求：输入框里应有背景色）
     return (
       <div className="flex h-full w-full items-center truncate px-2">
         {Array.isArray(value) && value.length === 0 ? (
           <span className="text-neutral-300" />
         ) : (
-          <SelectChips field={field} value={value} />
+          <SelectChips field={field} value={value} onRemove={onChipRemove} />
         )}
       </div>
     );
   }
   const text = formatCellValue(field.field_type, value, opts);
   return (
-    <div className={cn("h-full w-full truncate px-2 text-[13px] leading-8", isReadonlyType(field.field_type) && "text-neutral-400", primary && "font-medium text-neutral-900")}>
-      {text}
+    <div className={cn(
+      "flex h-full w-full items-center gap-1 truncate px-2 text-[13px] leading-8",
+      isReadonlyType(field.field_type) && "text-neutral-400",
+      primary && "font-medium text-neutral-900",
+    )}>
+      <span className="min-w-0 flex-1 truncate">{text}</span>
+      {primary && onOpenRowDetail && (
+        <button
+          type="button"
+          className="invisible group-hover/row:visible h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-brand-600 inline-flex"
+          title={t("row.openDetail")}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenRowDetail();
+          }}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </button>
+      )}
     </div>
   );
 }

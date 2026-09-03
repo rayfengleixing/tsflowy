@@ -208,32 +208,53 @@ export function SelectCellEditor({ field, value, onCommit, onCancel, onAddOption
   );
 }
 
-/** 多选（multi_select）：Popover 勾选多个选项 */
+/** 多选（multi_select）：Popover 勾选多个选项；"连点不关闭"——用 draftSet 跟踪，outside-click 或"完成"按钮才 commit */
 export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onDeleteOption }: CellEditorProps) {
   const opts = parseFieldOptions(field.options);
   const options = opts.kind === "select" ? opts.options : [];
-  const selected = new Set(Array.isArray(value) ? value : []);
+  // 使用本地 draft：切换时不立即 commit，直到 outside-click / 完成按钮
+  const [draft, setDraft] = useState<Set<string>>(() => new Set(Array.isArray(value) ? value : []));
+
   const toggle = (id: string) => {
-    const next = new Set(selected);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    onCommit([...next]);
+    setDraft((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
+
+  const commit = () => onCommit([...draft]);
+
   return (
     <div className="absolute inset-0 z-10" onMouseDown={(e) => e.stopPropagation()}>
       <div className="h-full w-full bg-white" />
-      <div className="absolute inset-x-0 top-full z-20 mt-0.5 max-h-56 overflow-y-auto rounded-lg border border-neutral-300 bg-white p-1 shadow-lg [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
+      <div className="absolute inset-x-0 top-full z-20 mt-0.5 max-h-64 overflow-y-auto rounded-lg border border-neutral-300 bg-white p-1 shadow-lg [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
+        {/* 顶部已选胶囊预览（方便用户看到改动；点击胶囊 X 也可移除） */}
+        {draft.size > 0 && (
+          <div className="mb-1 flex flex-wrap items-center gap-1 rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5">
+            <span className="mr-1 text-[11px] text-neutral-400">{t("field.selected")} {draft.size}</span>
+            {[...draft].map((id) => {
+              const o = options.find((x) => x.id === id);
+              if (!o) return null;
+              return (
+                <OptionChip key={id} option={o} compact onRemove={() => toggle(id)} />
+              );
+            })}
+          </div>
+        )}
         {options.length === 0 && <div className="px-2 py-1.5 text-[12px] text-neutral-400">暂无选项</div>}
         {options.map((o) => (
           <button
             key={o.id}
-            className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-neutral-200/60", selected.has(o.id) && "bg-brand-100")}
+            type="button"
+            className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-neutral-200/60", draft.has(o.id) && "bg-brand-100")}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => toggle(o.id)}
           >
             <OptionDot option={o} />
             <span className="flex-1">{o.name}</span>
-            {selected.has(o.id) && <Check className="h-3.5 w-3.5 text-brand-600" />}
+            {draft.has(o.id) && <Check className="h-3.5 w-3.5 text-brand-600" />}
             {onDeleteOption && (
               <span
                 className="flex h-4 w-4 items-center justify-center rounded text-neutral-300 hover:bg-neutral-200 hover:text-red-500"
@@ -248,23 +269,40 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
             )}
           </button>
         ))}
-        {selected.size > 0 && (
+        {draft.size > 0 && (
           <button
+            type="button"
             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-neutral-500 hover:bg-neutral-200/60"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => onCommit([])}
+            onClick={() => setDraft(new Set())}
           >
             <X className="h-3.5 w-3.5" />
-            清除
+            清除全部
           </button>
         )}
         {onAddOption && (
           <div className="mt-0.5 border-t border-neutral-200 pt-0.5">
-            <AddOptionInput onAdd={onAddOption} />
+            <AddOptionInput onAdd={(name) => {
+              const newId = onAddOption(name);
+              if (newId) setDraft((prev) => new Set([...prev, newId]));
+              return newId;
+            }} />
           </div>
         )}
+        <div className="mt-1 flex justify-end border-t border-neutral-200 pt-1 px-1">
+          <button
+            type="button"
+            className="flex items-center gap-1 rounded-md bg-brand-500 px-2 py-1 text-[12px] text-white hover:bg-brand-600"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={commit}
+          >
+            <Check className="h-3.5 w-3.5" />
+            {t("common.confirm")}
+          </button>
+        </div>
       </div>
-      <div className="fixed inset-0 z-10" onMouseDown={() => undefined} />
+      {/* 点击外部：提交当前 draft 并关闭 */}
+      <div className="fixed inset-0 z-10" onMouseDown={() => commit()} />
     </div>
   );
 }
@@ -384,8 +422,8 @@ export function RelationCellEditor({ field, value, onCommit }: CellEditorProps) 
   );
 }
 
-/** 选项彩色胶囊（单元格显示单选/多选值，带背景色）；compact 用于卡片内紧凑显示 */
-export function OptionChip({ option, compact = false }: { option?: SelectOption; compact?: boolean }) {
+/** 选项彩色胶囊（单元格显示单选/多选值，带背景色）；compact 用于卡片内紧凑显示；onRemove 提供"输入框中胶囊点 X 删除" */
+export function OptionChip({ option, compact = false, onRemove }: { option?: SelectOption; compact?: boolean; onRemove?: () => void }) {
   if (!option) return null;
   const colors: Record<string, string> = {
     blue: "bg-brand-100 text-brand-600",
@@ -400,25 +438,64 @@ export function OptionChip({ option, compact = false }: { option?: SelectOption;
     ? "px-1 py-[1px] text-[10px]"
     : "px-2 py-0.5 text-[11px]";
   return (
-    <span className={cn("inline-flex items-center gap-1 rounded-full font-medium", size, colors[option.color] ?? "bg-neutral-200 text-neutral-600")}>
-      {option.name}
+    <span className={cn("inline-flex items-center gap-1 rounded-full font-medium group/chip", size, colors[option.color] ?? "bg-neutral-200 text-neutral-600")}>
+      <span className="max-w-[180px] truncate">{option.name}</span>
+      {onRemove && (
+        <button
+          type="button"
+          className="ml-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full text-current/70 hover:bg-black/10 hover:text-current"
+          title={t("field.removeOption")}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+        >
+          <X className="h-2.5 w-2.5" />
+        </button>
+      )}
     </span>
   );
 }
 
-/** 单选/多选单元格值 → 彩色胶囊展示；compact 用于卡片内紧凑显示 */
-export function SelectChips({ field, value, compact = false }: { field: DatabaseField; value: CellValue; compact?: boolean }) {
+/** 单选/多选单元格值 → 彩色胶囊展示；compact 用于卡片内紧凑显示；onRemove 启用胶囊 X 删除按钮 */
+export function SelectChips({
+  field,
+  value,
+  compact = false,
+  onRemove,
+}: {
+  field: DatabaseField;
+  value: CellValue;
+  compact?: boolean;
+  onRemove?: (newValue: CellValue) => void;
+}) {
   const opts = parseFieldOptions(field.options);
   if (opts.kind !== "select") return null;
   if (field.field_type === "single_select") {
     if (typeof value !== "string") return null;
-    return <OptionChip option={opts.options.find((x) => x.id === value)} compact={compact} />;
+    return (
+      <OptionChip
+        option={opts.options.find((x) => x.id === value)}
+        compact={compact}
+        onRemove={onRemove ? () => onRemove(null) : undefined}
+      />
+    );
   }
   const ids = Array.isArray(value) ? value : [];
   return (
     <span className={cn("flex flex-wrap", compact ? "gap-0.5" : "gap-1")}>
       {ids.map((id) => (
-        <OptionChip key={id} option={opts.options.find((x) => x.id === id)} compact={compact} />
+        <OptionChip
+          key={id}
+          option={opts.options.find((x) => x.id === id)}
+          compact={compact}
+          onRemove={
+            onRemove
+              ? () => onRemove(ids.filter((x) => x !== id))
+              : undefined
+          }
+        />
       ))}
     </span>
   );
