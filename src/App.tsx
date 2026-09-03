@@ -5,6 +5,8 @@ import { TrashPage } from "@/features/trash/TrashPage";
 import { PlaceholderPage } from "@/features/placeholder/PlaceholderPage";
 import { EditorPage } from "@/features/editor/EditorPage";
 import { GridView } from "@/features/database/GridView";
+import { BoardView } from "@/features/database/BoardView";
+import { CalendarView } from "@/features/database/CalendarView";
 import { CommandPalette } from "@/features/search/CommandPalette";
 import { SearchResultsPage } from "@/features/search/SearchResultsPage";
 import { DatabaseViewPicker } from "@/features/editor/DatabaseViewPicker";
@@ -68,6 +70,10 @@ function App() {
               <EditorPage key={view.id} view={view} />
             ) : view && view.layout === "grid" ? (
               <GridView key={view.id} view={view} />
+            ) : view && view.layout === "board" ? (
+              <BoardView key={view.id} view={view} />
+            ) : view && view.layout === "calendar" ? (
+              <CalendarView key={view.id} view={view} />
             ) : (
               <PlaceholderPage />
             )}

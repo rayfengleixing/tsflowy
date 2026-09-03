@@ -384,8 +384,8 @@ export function RelationCellEditor({ field, value, onCommit }: CellEditorProps) 
   );
 }
 
-/** 选项彩色胶囊（单元格显示单选/多选值，带背景色） */
-export function OptionChip({ option }: { option?: SelectOption }) {
+/** 选项彩色胶囊（单元格显示单选/多选值，带背景色）；compact 用于卡片内紧凑显示 */
+export function OptionChip({ option, compact = false }: { option?: SelectOption; compact?: boolean }) {
   if (!option) return null;
   const colors: Record<string, string> = {
     blue: "bg-brand-100 text-brand-600",
@@ -396,26 +396,29 @@ export function OptionChip({ option }: { option?: SelectOption }) {
     yellow: "bg-yellow-100 text-yellow-700",
     gray: "bg-neutral-200 text-neutral-600",
   };
+  const size = compact
+    ? "px-1 py-[1px] text-[10px]"
+    : "px-2 py-0.5 text-[11px]";
   return (
-    <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium", colors[option.color] ?? "bg-neutral-200 text-neutral-600")}>
+    <span className={cn("inline-flex items-center gap-1 rounded-full font-medium", size, colors[option.color] ?? "bg-neutral-200 text-neutral-600")}>
       {option.name}
     </span>
   );
 }
 
-/** 单选/多选单元格值 → 彩色胶囊展示 */
-export function SelectChips({ field, value }: { field: DatabaseField; value: CellValue }) {
+/** 单选/多选单元格值 → 彩色胶囊展示；compact 用于卡片内紧凑显示 */
+export function SelectChips({ field, value, compact = false }: { field: DatabaseField; value: CellValue; compact?: boolean }) {
   const opts = parseFieldOptions(field.options);
   if (opts.kind !== "select") return null;
   if (field.field_type === "single_select") {
     if (typeof value !== "string") return null;
-    return <OptionChip option={opts.options.find((x) => x.id === value)} />;
+    return <OptionChip option={opts.options.find((x) => x.id === value)} compact={compact} />;
   }
   const ids = Array.isArray(value) ? value : [];
   return (
-    <span className="flex flex-wrap gap-1">
+    <span className={cn("flex flex-wrap", compact ? "gap-0.5" : "gap-1")}>
       {ids.map((id) => (
-        <OptionChip key={id} option={opts.options.find((x) => x.id === id)} />
+        <OptionChip key={id} option={opts.options.find((x) => x.id === id)} compact={compact} />
       ))}
     </span>
   );
