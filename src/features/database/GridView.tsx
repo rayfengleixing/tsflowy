@@ -284,13 +284,13 @@ export function GridView({ view }: { view: View }) {
           </colgroup>
           <thead>
             <tr>
-              <th className="border-b border-r border-neutral-300 bg-neutral-200/70 px-2 text-[11px] font-normal text-neutral-500">
+              <th className="border-b border-r border-neutral-200 bg-neutral-100 px-2 text-[11px] font-normal text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400">
                 #
               </th>
               {visibleFields.map((field) => {
                 const sort = sorts.find((s) => s.field_id === field.id);
                 return (
-                  <th key={field.id} className="group/head relative border-b border-r border-neutral-300 bg-neutral-200/70 px-1">
+                  <th key={field.id} className="group/head relative border-b border-r border-neutral-200 bg-neutral-100 px-1 dark:border-neutral-700 dark:bg-neutral-800">
                     <div
                       draggable={field.id !== primaryField?.id}
                       onDragStart={() => {
@@ -311,9 +311,9 @@ export function GridView({ view }: { view: View }) {
                         setMenuOpenFor(field.id);
                       }}
                     >
-                      <GripVertical className="h-3 w-3 shrink-0 cursor-grab text-neutral-300" />
-                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-neutral-800">{field.name}</span>
-                      <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[10px] text-brand-600">
+                      <GripVertical className="h-3 w-3 shrink-0 cursor-grab text-neutral-300 dark:text-neutral-600" />
+                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-neutral-800 dark:text-neutral-100">{field.name}</span>
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[10px] text-brand-600 dark:text-brand-500">
                         {sort ? (sort.dir === "asc" ? "↑" : "↓") : ""}
                       </span>
                       <FieldMenu
@@ -355,7 +355,7 @@ export function GridView({ view }: { view: View }) {
                   </th>
                 );
               })}
-              <th className="border-b border-neutral-300 bg-neutral-200/70">
+              <th className="border-b border-neutral-200 bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-800">
                 <AddFieldButton />
               </th>
             </tr>
@@ -374,16 +374,19 @@ export function GridView({ view }: { view: View }) {
                   e.preventDefault();
                   onRowDrop(row.id);
                 }}
-                className={cn("group/row hover:bg-neutral-100/80", draggingRow === row.id && "opacity-40")}
+                className={cn(
+                  "group/row hover:bg-neutral-100 dark:hover:bg-neutral-800/60",
+                  draggingRow === row.id && "opacity-40",
+                )}
                 onDoubleClick={() => void openRowDetail(row, view)}
               >
-                <td className="relative border-b border-r border-neutral-200 px-2 text-center text-[11px] text-neutral-400">
+                <td className="relative border-b border-r border-neutral-200 px-2 text-center text-[11px] text-neutral-400 dark:border-neutral-700 dark:text-neutral-500">
                   <span className="flex items-center justify-center gap-1">
-                    <GripVertical className="h-3 w-3 cursor-grab text-neutral-200 group-hover/row:text-neutral-400" />
+                    <GripVertical className="h-3 w-3 cursor-grab text-neutral-200 group-hover/row:text-neutral-400 dark:text-neutral-700 dark:group-hover/row:text-neutral-500" />
                     {row.position + 1}
                   </span>
                   <button
-                    className="absolute right-0.5 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-neutral-400 hover:bg-red-100 hover:text-red-500 group-hover/row:flex"
+                    className="absolute right-0.5 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-neutral-400 hover:bg-red-100 hover:text-red-500 group-hover/row:flex dark:hover:bg-red-500/10"
                     title={t("row.delete")}
                     onClick={() => void store.removeRow(row.id)}
                   >
@@ -397,8 +400,8 @@ export function GridView({ view }: { view: View }) {
                     <td
                       key={field.id}
                       className={cn(
-                        "relative h-8 border-b border-r border-neutral-200 p-0 align-middle",
-                        isEditing && "ring-1 ring-inset ring-brand-500",
+                        "relative h-8 border-b border-r border-neutral-200 p-0 align-middle dark:border-neutral-700",
+                        isEditing && "ring-1 ring-inset ring-brand-500 dark:ring-brand-500",
                         isPrimary && "cursor-pointer",
                       )}
                       onDoubleClick={() => void openRowDetail(row, view)}
@@ -439,15 +442,15 @@ export function GridView({ view }: { view: View }) {
                     </td>
                   );
                 })}
-                <td className="border-b border-neutral-200" />
+                <td className="border-b border-neutral-200 dark:border-neutral-700" />
               </tr>
             ))}
             <tr>
               {/* 新建行：跨整行底部，避免无字段时挤在窄列里 */}
-              <td colSpan={1 + visibleFields.length + 1} className="h-8 border-t border-neutral-200 px-2">
+              <td colSpan={1 + visibleFields.length + 1} className="h-8 border-t border-neutral-200 px-2 dark:border-neutral-700">
                 <button
                   data-testid="add-row"
-                  className="flex h-6 items-center gap-1 rounded px-1.5 text-[12px] text-neutral-500 hover:bg-neutral-200/60"
+                  className="flex h-6 items-center gap-1 rounded px-1.5 text-[12px] text-neutral-500 hover:bg-neutral-200/60 dark:text-neutral-400 dark:hover:bg-neutral-800"
                   onClick={addRow}
                 >
                   <Plus className="h-3.5 w-3.5" />

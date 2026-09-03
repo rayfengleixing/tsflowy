@@ -29,7 +29,7 @@ export function TabBar() {
   };
 
   return (
-    <div className="flex h-10 shrink-0 items-stretch border-b border-neutral-300 bg-neutral-100">
+    <div className="flex h-9 shrink-0 items-stretch border-b border-neutral-300 bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-800">
       {tabs.map((v: View, index: number) => {
         const active = v.id === currentViewId;
         return (

@@ -6,7 +6,7 @@ import { newSelectOption } from "@/lib/database-values";
 import { buildTree, flattenTree } from "@/lib/tree";
 import { useSettingsStore } from "./settings";
 
-export type Route = "workspace" | "trash" | "search";
+export type Route = "workspace" | "trash" | "search" | "settings";
 
 interface WorkspaceState {
   ready: boolean;
@@ -61,6 +61,28 @@ interface WorkspaceState {
 
 let initPromise: Promise<void> | null = null;
 
+/** 30 天回收站自动清空定时器：全局只建一次；每小时扫一次，跨空间清理 */
+let autoPurgeTimer: ReturnType<typeof setInterval> | null = null;
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+const HOURLY_MS = 60 * 60 * 1000;
+
+const purgeAllExpiredTrash = async (): Promise<void> => {
+  const workspaces = useWorkspaceStore.getState().workspaces;
+  if (workspaces.length === 0) return;
+  const now = Date.now();
+  const deadline = now - THIRTY_DAYS_MS;
+  for (const ws of workspaces) {
+    try {
+      await viewApi.purgeExpiredTrash(ws.id, deadline);
+    } catch (e) {
+      console.error("auto purge expired trash failed", ws.id, e);
+    }
+  }
+  // 如果当前 workspace 的 trash 列表在 store，重新 reload 刷新 UI
+  const ws = useWorkspaceStore.getState().currentWorkspaceId;
+  if (ws) await useWorkspaceStore.getState().reload();
+};
+
 export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
   const patchTree = async (): Promise<void> => {
     const { currentWorkspaceId } = get();
@@ -92,7 +114,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     searchQuery: "",
     paletteOpen: false,
     expanded: new Set<string>(),
-    sidebarWidth: 268,
+    sidebarWidth: 240,
 
     init: async () => {
       if (initPromise) return initPromise;
@@ -121,6 +143,13 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
           await get().reload();
           // 首次启动展开根级页面
           set({ expanded: new Set(get().tree.filter((n) => n.children.length > 0).map((n) => n.id)) });
+          // 30 天回收站自动清空：启动立即扫一次，然后每小时轮询
+          if (autoPurgeTimer === null) {
+            void purgeAllExpiredTrash();
+            autoPurgeTimer = setInterval(() => {
+              void purgeAllExpiredTrash();
+            }, HOURLY_MS);
+          }
         } catch (e) {
           console.error("workspace init failed", e);
           throw e;

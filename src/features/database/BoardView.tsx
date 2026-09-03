@@ -279,7 +279,7 @@ export function BoardView({ view }: { view: View }) {
                       {t("board.collapseAll")}: {group.rows.length}
                     </div>
                   ) : (
-                    <div className="flex flex-1 flex-col gap-1.5 overflow-y-auto px-2 py-2">
+                    <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-2 py-2">
                       {group.rows.map((row) => (
                         <BoardCard
                           key={row.id}
@@ -386,12 +386,12 @@ function BoardCard(props: {
       onDragEnd={props.onDragEnd}
       onDoubleClick={props.onDoubleClick}
       className={cn(
-        "cursor-grab rounded-md border bg-white p-2 shadow-sm transition active:cursor-grabbing",
-        dragging ? "opacity-40 ring-1 ring-brand-500" : "border-neutral-200 hover:border-neutral-300 hover:shadow",
+        "cursor-grab rounded-md border bg-white p-2 shadow-sm transition active:cursor-grabbing dark:bg-neutral-800",
+        dragging ? "opacity-40 ring-1 ring-brand-500" : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 hover:shadow",
       )}
     >
-      <div className="min-h-[1.25rem] break-words text-[13px] font-medium leading-snug text-neutral-800">
-        {title || <span className="text-neutral-300">{t("board.cardNamePlaceholder")}</span>}
+      <div className="min-h-[1.25rem] break-words text-[13px] font-medium leading-snug text-neutral-800 dark:text-neutral-100">
+        {title || <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>}
       </div>
       {subs.length > 0 && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1">

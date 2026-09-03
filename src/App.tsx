@@ -7,6 +7,7 @@ import { EditorPage } from "@/features/editor/EditorPage";
 import { GridView } from "@/features/database/GridView";
 import { BoardView } from "@/features/database/BoardView";
 import { CalendarView } from "@/features/database/CalendarView";
+import { SettingsPage } from "@/features/settings/SettingsPage";
 import { CommandPalette } from "@/features/search/CommandPalette";
 import { SearchResultsPage } from "@/features/search/SearchResultsPage";
 import { DatabaseViewPicker } from "@/features/editor/DatabaseViewPicker";
@@ -14,6 +15,7 @@ import { EmojiPickerDialog } from "@/features/editor/EmojiPickerDialog";
 import { SubPagePicker } from "@/features/editor/SubPagePicker";
 import { Toaster } from "@/components/ui/sonner";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { bootstrapVisualSettings } from "@/stores/settings";
 import { findNode } from "@/lib/tree";
 import { toast } from "sonner";
 import { t } from "@/lib/i18n";
@@ -23,6 +25,12 @@ function App() {
   const route = useWorkspaceStore((s) => s.route);
   const currentViewId = useWorkspaceStore((s) => s.currentViewId);
   const tree = useWorkspaceStore((s) => s.tree);
+
+  // 应用设置（主题/强调色/字体）：启动立即写一次，返回 unsubscribe（system 模式下监听 matchMedia）
+  useEffect(() => {
+    const cleanupTheme = bootstrapVisualSettings();
+    return cleanupTheme;
+  }, []);
 
   useEffect(() => {
     useWorkspaceStore
@@ -63,6 +71,8 @@ function App() {
           <TrashPage />
         ) : route === "search" ? (
           <SearchResultsPage />
+        ) : route === "settings" ? (
+          <SettingsPage />
         ) : (
           <>
             <TabBar />

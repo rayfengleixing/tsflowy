@@ -225,13 +225,13 @@ export function CalendarView({ view }: { view: View }) {
         <div className="min-h-0 flex-1 overflow-auto">
           <div className="flex h-full min-h-full flex-col">
             {/* 周标题行 */}
-            <div className="grid grid-cols-7 border-b border-neutral-200 bg-neutral-100/60 text-[11px] text-neutral-500">
-              <div className="border-r border-neutral-200 px-2 py-1 text-right">{t("calendar.wMon")}</div>
-              <div className="border-r border-neutral-200 px-2 py-1 text-right">{t("calendar.wTue")}</div>
-              <div className="border-r border-neutral-200 px-2 py-1 text-right">{t("calendar.wWed")}</div>
-              <div className="border-r border-neutral-200 px-2 py-1 text-right">{t("calendar.wThu")}</div>
-              <div className="border-r border-neutral-200 px-2 py-1 text-right">{t("calendar.wFri")}</div>
-              <div className="border-r border-neutral-200 px-2 py-1 text-right">{t("calendar.wSat")}</div>
+            <div className="grid grid-cols-7 border-b border-neutral-200 bg-neutral-100/60 text-[11px] text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800/40 dark:text-neutral-400">
+              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">{t("calendar.wMon")}</div>
+              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">{t("calendar.wTue")}</div>
+              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">{t("calendar.wWed")}</div>
+              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">{t("calendar.wThu")}</div>
+              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">{t("calendar.wFri")}</div>
+              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">{t("calendar.wSat")}</div>
               <div className="px-2 py-1 text-right">{t("calendar.wSun")}</div>
             </div>
 
@@ -245,10 +245,11 @@ export function CalendarView({ view }: { view: View }) {
                   <div
                     key={i}
                     className={cn(
-                      "relative flex min-h-[120px] flex-col border-b border-r border-neutral-200 bg-white transition",
-                      isWeekend && "bg-neutral-50/60",
-                      d.day === null && "bg-neutral-50/30",
-                      overThis && "bg-brand-50 ring-1 ring-inset ring-brand-500",
+                      "group/row relative flex min-h-[120px] flex-col border-b border-r border-neutral-200 bg-white transition dark:border-neutral-700 dark:bg-neutral-900",
+                      isWeekend && "bg-neutral-50/60 dark:bg-neutral-800/30",
+                      d.day === null && "bg-neutral-50/30 dark:bg-neutral-900",
+                      isToday && "ring-1 ring-inset ring-brand-500",
+                      overThis && "bg-brand-50 ring-1 ring-inset ring-brand-500 dark:bg-brand-600/10",
                     )}
                     onDragOver={(e) => {
                       if (draggingRow && d.date) {
@@ -277,8 +278,8 @@ export function CalendarView({ view }: { view: View }) {
                             isToday
                               ? "bg-brand-500 font-semibold text-white"
                               : isWeekend
-                                ? "text-neutral-400"
-                                : "text-neutral-700",
+                                ? "text-neutral-400 dark:text-neutral-500"
+                                : "text-neutral-700 dark:text-neutral-200",
                           )}
                         >
                           {d.day}
@@ -286,7 +287,7 @@ export function CalendarView({ view }: { view: View }) {
                       )}
                       {d.date && (
                         <button
-                          className="hidden rounded p-0.5 text-neutral-400 hover:bg-neutral-200 hover:text-neutral-600 group-hover/row:inline-flex"
+                          className="hidden rounded p-0.5 text-neutral-400 hover:bg-neutral-200 hover:text-neutral-600 group-hover/row:inline-flex dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
                           onClick={() => addRowAtDate(d.date!)}
                           title={t("calendar.addRow")}
                         >
@@ -316,7 +317,7 @@ export function CalendarView({ view }: { view: View }) {
 
                     {d.date && d.rows.length < 3 && (
                       <button
-                        className="absolute inset-x-1 bottom-1 hidden rounded px-1 py-0.5 text-[10px] text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 group-hover/row:block"
+                        className="absolute inset-x-1 bottom-1 hidden rounded px-1 py-0.5 text-[10px] text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 group-hover/row:block dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
                         onClick={() => addRowAtDate(d.date!)}
                       >
                         + {t("calendar.addRow")}
@@ -371,15 +372,15 @@ function CalCard(props: {
       onDragEnd={props.onDragEnd}
       onDoubleClick={props.onDoubleClick}
       className={cn(
-        "group/card cursor-grab overflow-hidden rounded border bg-white text-[11px] leading-tight shadow-sm transition active:cursor-grabbing",
-        dragging ? "opacity-40 ring-1 ring-brand-500" : "border-neutral-200 hover:border-neutral-300 hover:shadow-sm",
+        "group/card cursor-grab overflow-hidden rounded border bg-white text-[11px] leading-tight shadow-sm transition active:cursor-grabbing dark:bg-neutral-800",
+        dragging ? "opacity-40 ring-1 ring-brand-500" : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 hover:shadow-sm",
       )}
     >
-      <div className="truncate px-1.5 py-1 font-medium text-neutral-800">
-        {title || <span className="text-neutral-300">{t("board.cardNamePlaceholder")}</span>}
+      <div className="truncate px-1.5 py-1 font-medium text-neutral-800 dark:text-neutral-100">
+        {title || <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>}
       </div>
       {sub && (
-        <div className="border-t border-neutral-100 px-1.5 py-0.5">
+        <div className="border-t border-neutral-100 px-1.5 py-0.5 dark:border-neutral-700">
           <CalSub field={sub.field} value={sub.value} />
         </div>
       )}

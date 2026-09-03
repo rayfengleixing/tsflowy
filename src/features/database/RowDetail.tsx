@@ -99,18 +99,29 @@ function RowPropertyField({ field, row }: { field: DatabaseField; row: DatabaseR
   );
 }
 
-/** 行详情弹窗（居中大弹窗，样式对齐 AppFlowy：行名 + 属性区 + 正文），复用 M3 编辑器 */
+/** 行详情右侧滑出面板（说明书 6.1：宽 400px，右侧滑入 + 遮罩 + 滑入动画），复用 M3 编辑器 */
 export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view: View; onClose: () => void }) {
   const store = useDatabaseStore();
   const visibleFields = store.fields.filter((f) => f.is_hidden === 0);
   const [newFieldOpen, setNewFieldOpen] = useState(false);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-      <div className="absolute inset-0 bg-black/20" onClick={onClose} />
-      <div className="relative flex h-[min(88vh,760px)] w-[min(860px,94vw)] flex-col rounded-xl bg-white shadow-2xl">
+    <div className="fixed inset-0 z-50">
+      {/* 遮罩：淡入动画（说明书 6.1：半透明黑） */}
+      <div
+        className="absolute inset-0 animate-in fade-in bg-black/20 duration-200"
+        onClick={onClose}
+      />
+      {/* 右侧 400px 面板：滑入动画 */}
+      <div
+        className={
+          "absolute right-0 top-0 flex h-full w-[400px] flex-col bg-white shadow-2xl " +
+          "animate-in slide-in-from-right duration-300 ease-out " +
+          "border-l border-neutral-200 dark:border-neutral-700"
+        }
+      >
         {/* 顶部：行名 + 关闭 */}
-        <div className="flex h-12 shrink-0 items-center gap-2 px-5">
+        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-neutral-200 px-4 dark:border-neutral-700">
           <span className="min-w-0 flex-1 truncate text-[16px] font-medium text-neutral-900">
             {view.name}
           </span>

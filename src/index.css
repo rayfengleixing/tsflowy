@@ -43,17 +43,18 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
-    --radius-sm: calc(var(--radius) * 0.6);
-    --radius-md: calc(var(--radius) * 0.8);
-    --radius-lg: var(--radius);
-    --radius-xl: calc(var(--radius) * 1.4);
-    --radius-2xl: calc(var(--radius) * 1.8);
-    --radius-3xl: calc(var(--radius) * 2.2);
-    --radius-4xl: calc(var(--radius) * 2.6);
+    --radius-sm: 6px;            /* 小按钮 6px（6.7 规范） */
+    --radius-md: 8px;            /* 默认按钮/输入框 8px */
+    --radius-lg: 12px;           /* 面板/对话框/卡片 12px（6.6 规范） */
+    --radius-xl: 16px;
+    --radius-2xl: 20px;
+    --radius-3xl: 24px;
+    --radius-4xl: 28px;
 }
 
 /* AppFlowy 品牌色与中性色阶（项目说明书 6.5 节） */
 @theme {
+    --color-brand-50:  #F4FAFF;
     --color-brand-100: #E3F6FF;
     --color-brand-500: #00B5FF;
     --color-brand-600: #0092D6;
@@ -94,8 +95,8 @@
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    /* 圆角基 12px：对话框=lg 12、输入框 md≈10、按钮 sm≈7（6.5 节） */
-    --radius: 0.75rem;
+    /* 圆角基 8px：sm=6 / md=8 / lg=12（6.6/6.7 规范） */
+    --radius: 8px;
     /* 侧边栏：neutral200 底、neutral800 字、neutral300 边框（6.5 节） */
     --sidebar: #E4E8F5;
     --sidebar-foreground: #3D404F;
@@ -139,6 +140,45 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
+
+    /* — M6 6.8 深色自动兜底：解决 40 处写死 `bg-white/border-neutral/text-neutral` 的组件在深色模式下对比度不足（经验 796923 级联覆盖） — */
+    /* 白底 → 面板/卡片/弹层 → 深色统一 neutral-900 / 950 */
+    .bg-white { background-color: var(--color-neutral-900, #272930) !important; }
+    /* 边框 200/300 → 深色统一 neutral-700 */
+    .border-neutral-200 { border-color: var(--color-neutral-700, #54596E) !important; }
+    .border-neutral-300 { border-color: var(--color-neutral-700, #54596E) !important; }
+    /* 分隔底/顶 中性边框 */
+    .border-b-neutral-200,
+    .border-t-neutral-200,
+    .border-r-neutral-200,
+    .border-l-neutral-200 { border-color: var(--color-neutral-700, #54596E) !important; }
+    .border-b-neutral-300,
+    .border-t-neutral-300,
+    .border-r-neutral-300,
+    .border-l-neutral-300 { border-color: var(--color-neutral-700, #54596E) !important; }
+    /* 深色文字：800→主文字、700→正文、600/500/400/300→次级，统一浅色 */
+    .text-neutral-800 { color: var(--foreground) !important; }
+    .text-neutral-700 { color: var(--foreground) !important; }
+    .text-neutral-600 { color: var(--muted-foreground) !important; }
+    .text-neutral-500 { color: var(--muted-foreground) !important; }
+    .text-neutral-400 { color: color-mix(in srgb, var(--muted-foreground) 85%, transparent) !important; }
+    .text-neutral-300 { color: color-mix(in srgb, var(--muted-foreground) 55%, transparent) !important; }
+    /* hover 浅底（bg-neutral-100/200）→ 深色对应深灰，优先级高过其他 hover:xxx */
+    .hover\:bg-neutral-100:hover { background-color: var(--color-neutral-800, #3D404F) !important; }
+    .hover\:bg-neutral-200\/60:hover,
+    .hover\:bg-neutral-200:hover { background-color: var(--color-neutral-800, #3D404F) !important; }
+    .hover\:bg-neutral-300\/50:hover,
+    .hover\:bg-neutral-300\/40:hover,
+    .hover\:bg-neutral-300\/60:hover { background-color: var(--color-neutral-800, #3D404F) !important; }
+    .bg-neutral-100 { background-color: var(--color-neutral-800, #3D404F) !important; }
+    .bg-neutral-200 { background-color: var(--color-neutral-800, #3D404F) !important; }
+    .bg-neutral-100\/50,
+    .bg-neutral-100\/60,
+    .bg-neutral-200\/50,
+    .bg-neutral-200\/60,
+    .bg-neutral-200\/70 { background-color: color-mix(in srgb, var(--color-neutral-800, #3D404F) 60%, transparent) !important; }
+    .bg-neutral-50\/30,
+    .bg-neutral-50\/60 { background-color: color-mix(in srgb, var(--color-neutral-850, #32343F) 40%, transparent) !important; }
 }
 
 @layer base {
@@ -159,6 +199,9 @@
   line-height: 1.75;
   color: #3D404F;
 }
+.dark .tiptap {
+  color: var(--foreground);
+}
 .tiptap > * + * {
   margin-top: 0.5em;
 }
@@ -170,6 +213,9 @@
   font-weight: 600;
   color: #3D404F;
   line-height: 1.3;
+}
+.dark .tiptap h1, .dark .tiptap h2, .dark .tiptap h3 {
+  color: var(--foreground);
 }
 .tiptap h1 { font-size: 24px; }
 .tiptap h2 { font-size: 20px; }
@@ -218,13 +264,14 @@
   opacity: 0.6;
 }
 .tiptap blockquote {
-  border-left: 3px solid #00B5FF;
+  border-left: 3px solid var(--color-brand-500, #00B5FF);
   margin: 0.6em 0;
   padding: 0.2em 0 0.2em 0.8em;
   color: #6F748C;
 }
+.dark .tiptap blockquote { color: var(--muted-foreground); }
 .tiptap pre {
-  background: #F8FAFF;
+  background: var(--color-neutral-100, #F8FAFF);
   color: #3D404F;
   /* 无边框无圆角：与上方语法标识栏融为一体，外层边框由 NodeView 包装盒提供 */
   padding: 12px 14px;
@@ -234,13 +281,21 @@
   overflow-x: auto;
   white-space: pre; /* 保留代码换行，避免 innerText/复制丢失 \n */
 }
+.dark .tiptap pre {
+  background: var(--color-neutral-900, #272930);
+  color: var(--foreground);
+}
 .tiptap code {
-  background: #E4E8F5;
+  background: var(--color-neutral-200, #E4E8F5);
   color: #3D404F;
   border-radius: 4px;
   padding: 0.1em 0.35em;
   font-family: "Roboto Mono", ui-monospace, monospace;
   font-size: 0.88em;
+}
+.dark .tiptap code {
+  background: var(--color-neutral-800, #3D404F);
+  color: var(--foreground);
 }
 .tiptap pre code,
 .tiptap pre code.hljs {
@@ -251,16 +306,16 @@
 }
 .tiptap hr {
   border: none;
-  border-top: 1px solid #CED3E6;
+  border-top: 1px solid var(--color-neutral-300, #CED3E6);
   margin: 1em 0;
 }
 .tiptap a {
-  color: #00B5FF;
+  color: var(--color-brand-500, #00B5FF);
   text-decoration: underline;
   cursor: pointer;
 }
 .tiptap mark {
-  background: #E3F6FF;
+  background: var(--color-brand-100, #E3F6FF);
   border-radius: 2px;
   padding: 0 0.15em;
 }
@@ -271,22 +326,28 @@
   margin: 0.8em 0;
 }
 .tiptap th, .tiptap td {
-  border: 1px solid #CED3E6;
+  border: 1px solid var(--color-neutral-300, #CED3E6);
   padding: 6px 10px;
   vertical-align: top;
   position: relative;
   /* 表格内容默认居中（单元格 align 属性渲染的 text-align 内联样式优先生效） */
   text-align: center;
 }
+.dark .tiptap th, .dark .tiptap td {
+  border-color: var(--color-neutral-700, #54596E);
+}
 .tiptap th {
-  background: #E4E8F5;
+  background: var(--color-neutral-200, #E4E8F5);
   font-weight: 500;
+}
+.dark .tiptap th {
+  background: var(--color-neutral-800, #3D404F);
 }
 .tiptap .selectedCell::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: rgba(0, 181, 255, 0.12);
+  background: color-mix(in srgb, var(--color-brand-500, #00B5FF) 12%, transparent);
   pointer-events: none;
 }
 .tiptap .column-resize-handle {
@@ -295,28 +356,29 @@
   top: 0;
   width: 4px;
   height: 100%;
-  background: #00B5FF;
+  background: var(--color-brand-500, #00B5FF);
   cursor: col-resize;
 }
 .tiptap p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
   height: 0;
-  color: #989EB7;
+  color: var(--color-neutral-500, #989EB7);
   pointer-events: none;
 }
 .tiptap p.is-empty::before {
   content: attr(data-placeholder);
   float: left;
   height: 0;
-  color: #989EB7;
+  color: var(--color-neutral-500, #989EB7);
   pointer-events: none;
 }
 .tiptap img {
   max-width: 100%;
+  border-radius: var(--radius-md, 8px);
 }
 .tiptap ::selection {
-  background: rgba(0, 181, 255, 0.25);
+  background: color-mix(in srgb, var(--color-brand-500, #00B5FF) 25%, transparent);
 }
 
 /* 搜索结果 em 标记 */

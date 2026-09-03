@@ -215,6 +215,18 @@ export const viewApi = {
     await d.execute("DELETE FROM views WHERE workspace_id = $1 AND is_trash = 1", [workspaceId]);
   },
 
+  /** 永久删除回收站中 deleted_at 早于 deadline_ms（毫秒时间戳）的视图，用于 30 天自动清空 */
+  async purgeExpiredTrash(workspaceId: string, deadline_ms: number): Promise<number> {
+    const d = await getDb();
+    const result = await d.execute(
+      "DELETE FROM views WHERE workspace_id = $1 AND is_trash = 1 AND deleted_at IS NOT NULL AND deleted_at < $2",
+      [workspaceId, deadline_ms],
+    );
+    const affected = (result as unknown as { rowsAffected?: number; rows_affected?: number }).rowsAffected
+      ?? (result as unknown as { rows_affected?: number }).rows_affected;
+    return affected ?? 0;
+  },
+
   /**
    * 移动视图：重设父级并按目标位置重排两侧兄弟。
    * 防呆：目标不能是自身的后代（UI 已拦截，此处兜底）。
