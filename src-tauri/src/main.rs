@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    appflowy_ts_lib::run()
+    tsflowy_lib::run()
 }

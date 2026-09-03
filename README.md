@@ -1,8 +1,8 @@
-# AppFlowy TS
+# TsFlowy
 
 用 **Tauri 2 + React 19 + TypeScript + TipTap + SQLite** 从零重写的 Windows 桌面笔记/知识管理应用（功能对标 AppFlowy 桌面版）。
 
-> **唯一权威项目说明**：`AppFlowy-TS-项目说明书.md`（位于项目上级目录，与本仓库同级）。所有功能范围、数据模型、UI 规范、里程碑与验收标准均以该文档为准。任何与代码行为的偏差，以"修改该文档 + 同步代码"为唯一更新路径。
+> **唯一权威项目说明**：`TsFlowy-项目说明书.md`（位于项目上级目录，与本仓库同级）。所有功能范围、数据模型、UI 规范、里程碑与验收标准均以该文档为准。任何与代码行为的偏差，以"修改该文档 + 同步代码"为唯一更新路径。
 
 ## 环境要求
 
@@ -21,7 +21,7 @@ npm install
 npm run tauri dev
 ```
 
-- 数据目录（运行时自动创建）：`%APPDATA%\com.appflowy-ts.app\`，内含 `appflowy.db`（SQLite）与 `assets/`。
+- 数据目录（运行时自动创建）：`%APPDATA%\com.tsflowy.app\`，内含 `appflowy.db`（SQLite）与 `assets/`。
 - 首次编译需 5-10 分钟（Rust 依赖多），之后增量编译秒级。
 - SQL 迁移文件在 `migrations/`，按序号递增，禁止修改已应用的迁移。
 

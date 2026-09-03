@@ -140,3 +140,6 @@ export function newSelectOption(name: string): SelectOption {
   const palette = ["blue", "green", "orange", "purple", "red", "yellow", "gray"];
   return { id: "opt_" + crypto.randomUUID().slice(0, 8), name, color: palette[Math.floor(Math.random() * palette.length)] };
 }
+
+/** 看板/日历分组展示用的选项形态（board-calendar 纯逻辑层避免依赖完整字段） */
+export type SelectOptionLike = SelectOption;
