@@ -16,25 +16,36 @@ import {
   AlignLeft,
   ArrowRight,
   CheckSquare,
+  ChevronDown,
   Code2,
+  Columns3,
   File as FileIcon,
+  FolderKanban,
+  FunctionSquare,
   Heading1,
   Heading2,
   Heading3,
   Image as ImageIcon,
+  Images,
+  Lightbulb,
   List,
   ListOrdered,
+  ListTree,
   Minus,
   Quote,
+  Smile,
   Table,
   Table2,
   Type,
+  AtSign,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { t, type MessageKey } from "@/lib/i18n";
 import { INSERT_DATABASE_VIEW_EVENT } from "./DatabaseViewPicker";
+import { INSERT_EMOJI_EVENT } from "./EmojiPickerDialog";
+import { INSERT_SUB_PAGE_EVENT } from "./SubPagePicker";
 
 const slashMenuKey = new PluginKey("slashMenu");
 
@@ -118,6 +129,116 @@ export const slashItems: SlashItem[] = [
     },
   },
   { key: "paragraph", icon: <AlignLeft className="h-4 w-4" />, run: (e) => e.chain().focus().setParagraph().run() },
+  // — M3 高级块入口（不在白名单里的自然禁止在 table 内使用）—
+  {
+    key: "math",
+    icon: <FunctionSquare className="h-4 w-4" />,
+    run: (e) => e.chain().focus().insertContent({ type: "math", attrs: { tex: "" } }).run(),
+  },
+  {
+    key: "callout",
+    icon: <Lightbulb className="h-4 w-4" />,
+    run: (e) =>
+      e
+        .chain()
+        .focus()
+        .insertContent({
+          type: "callout",
+          attrs: { emoji: "💡", color: "blue" },
+          content: [{ type: "paragraph" }],
+        })
+        .run(),
+  },
+  {
+    key: "toggle",
+    icon: <ChevronDown className="h-4 w-4" />,
+    run: (e) =>
+      e
+        .chain()
+        .focus()
+        .insertContent({
+          type: "toggle",
+          attrs: { collapsed: false },
+          content: [{ type: "paragraph" }],
+        })
+        .run(),
+  },
+  {
+    key: "outline",
+    icon: <ListTree className="h-4 w-4" />,
+    run: (e) => e.chain().focus().insertContent({ type: "outline" }).run(),
+  },
+  {
+    key: "mention",
+    icon: <AtSign className="h-4 w-4" />,
+    run: (e) => e.chain().focus().insertContent({ type: "text", text: "@" }).run(),
+  },
+  {
+    key: "subPage",
+    icon: <FolderKanban className="h-4 w-4" />,
+    run: (e) => window.dispatchEvent(new CustomEvent(INSERT_SUB_PAGE_EVENT, { detail: { editor: e } })),
+  },
+  {
+    key: "emoji",
+    icon: <Smile className="h-4 w-4" />,
+    run: (e) => window.dispatchEvent(new CustomEvent(INSERT_EMOJI_EVENT, { detail: { editor: e } })),
+  },
+  {
+    key: "columns2",
+    icon: <Columns3 className="h-4 w-4" />,
+    run: (e) =>
+      e
+        .chain()
+        .focus()
+        .insertContent({
+          type: "columns",
+          content: [
+            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
+            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
+          ],
+        })
+        .run(),
+  },
+  {
+    key: "columns3",
+    icon: <Columns3 className="h-4 w-4" />,
+    run: (e) =>
+      e
+        .chain()
+        .focus()
+        .insertContent({
+          type: "columns",
+          content: [
+            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
+            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
+            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
+          ],
+        })
+        .run(),
+  },
+  {
+    key: "columns4",
+    icon: <Columns3 className="h-4 w-4" />,
+    run: (e) =>
+      e
+        .chain()
+        .focus()
+        .insertContent({
+          type: "columns",
+          content: [
+            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
+            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
+            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
+            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
+          ],
+        })
+        .run(),
+  },
+  {
+    key: "imageGallery",
+    icon: <Images className="h-4 w-4" />,
+    run: (e) => e.chain().focus().insertContent({ type: "imageGallery" }).run(),
+  },
 ];
 
 /** 过滤 + 上下文限制（suggestion items 回调签名：({ query, editor })） */

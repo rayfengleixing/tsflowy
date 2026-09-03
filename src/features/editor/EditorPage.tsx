@@ -23,10 +23,22 @@ import { t } from "@/lib/i18n";
 import type { View } from "@/types/models";
 import { SlashMenu } from "./slash-menu";
 import { TableContextMenu } from "./table-context-menu";
+import { FloatingMenu } from "./floating-menu";
 import { Image } from "./extensions/image/node";
 import { DatabaseView } from "./extensions/database-view/node";
 import { Attachment } from "./extensions/attachment/node";
 import { CodeBlock } from "./extensions/code-block/index";
+// — M3 高级块（按步骤逐个引入，见实现计划）—
+import { Math } from "./extensions/math/node";
+import { Callout } from "./extensions/callout/node";
+import { Toggle } from "./extensions/toggle/node";
+import { Outline } from "./extensions/outline/node";
+import { SubPage } from "./extensions/sub-page/node";
+import { Columns, Column } from "./extensions/columns/node";
+import { ImageGallery } from "./extensions/image-gallery/node";
+import Mention from "@tiptap/extension-mention";
+import { buildMentionSuggestion } from "./extensions/mention/suggestion";
+// — M3 高级块结束 —
 import "highlight.js/styles/github.css";
 
 const AUTOSAVE_MS = 800;
@@ -126,6 +138,20 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
       Image,
       DatabaseView,
       Attachment,
+      // — M3 高级块（注册顺序不敏感，mention 是 mark，其余是 node）—
+      Math,
+      Callout,
+      Toggle,
+      Outline,
+      SubPage,
+      Columns,
+      Column,
+      ImageGallery,
+      Mention.configure({
+        HTMLAttributes: { class: "mention cursor-pointer underline decoration-dotted underline-offset-2 text-brand-600 hover:text-brand-700" },
+        suggestion: buildMentionSuggestion(),
+      }),
+      // — M3 高级块结束 —
       ...(hideSlash ? [] : [SlashMenu]),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -253,6 +279,54 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
     return () => window.removeEventListener("keydown", onKey);
   }, [flush]);
 
+  // 点击 mention mark 跳转到对应页面（通过 posAtCoords + resolve 读 mark attrs.id，避免修改 renderHTML）
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const host = editor.view.dom as HTMLElement;
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const nodeEl = target.closest<HTMLElement>(".mention");
+      if (!nodeEl) return;
+      // 通过 ProseMirror 坐标反推 position，再解析 position 的所有 mark 找到 mention
+      const rect = nodeEl.getBoundingClientRect();
+      const center = {
+        left: rect.left + rect.width / 2,
+        top:  rect.top  + rect.height / 2,
+      };
+      const posResult = editor.view.posAtCoords(center);
+      if (!posResult) return;
+      const pos = posResult.pos;
+      const $pos = editor.state.doc.resolve(pos);
+      const around = $pos.marks().concat(editor.state.doc.nodeAt(pos)?.marks ?? []);
+      // 也尝试 pos-1 / pos+1 附近（点击边界可能 miss）
+      let found: string | null = null;
+      const candidates = [$pos.marks(), around];
+      for (const markList of candidates) {
+        const m = markList.find((mk) => mk.type.name === "mention");
+        if (m) { found = m.attrs.id as string; break; }
+      }
+      if (!found) {
+        // 回退：在 pos±2 的 span 内扫描 marks
+        for (let off = -2; off <= 2 && !found; off++) {
+          const p = pos + off;
+          if (p < 0 || p > editor.state.doc.content.size) continue;
+          const $ = editor.state.doc.resolve(p);
+          const m = $.marks().find((mk) => mk.type.name === "mention");
+          if (m) found = m.attrs.id as string;
+        }
+      }
+      if (found) {
+        e.preventDefault();
+        const open = useWorkspaceStore.getState().openView;
+        open(found);
+      }
+    };
+    host.addEventListener("click", onClick);
+    return () => host.removeEventListener("click", onClick);
+  }, [editor?.view]);
+
   const commitTitle = () => {
     const name = titleDraft.trim();
     setEditingTitle(false);
@@ -298,6 +372,7 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[800px] px-6 py-4">
           <EditorContent editor={editor} />
+          <FloatingMenu editor={editor ?? undefined} />
           <TableContextMenu editor={editor} />
         </div>
       </div>

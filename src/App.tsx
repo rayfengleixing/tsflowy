@@ -8,6 +8,8 @@ import { GridView } from "@/features/database/GridView";
 import { CommandPalette } from "@/features/search/CommandPalette";
 import { SearchResultsPage } from "@/features/search/SearchResultsPage";
 import { DatabaseViewPicker } from "@/features/editor/DatabaseViewPicker";
+import { EmojiPickerDialog } from "@/features/editor/EmojiPickerDialog";
+import { SubPagePicker } from "@/features/editor/SubPagePicker";
 import { Toaster } from "@/components/ui/sonner";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { findNode } from "@/lib/tree";
@@ -74,6 +76,8 @@ function App() {
       </div>
       <CommandPalette />
       <DatabaseViewPicker />
+      <EmojiPickerDialog />
+      <SubPagePicker />
       <Toaster />
     </div>
   );
