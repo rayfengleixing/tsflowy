@@ -1,21 +1,21 @@
 import { useState } from "react";
 import type { FieldType } from "@/types/database";
 import { FIELD_TYPES } from "@/types/database";
-/** 虚拟"附件"类型：创建时走 url + options 标记 attachment */
-type DialogFieldType = FieldType | "attachment";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { t } from "@/lib/i18n";
 
-/** 新建字段对话框（项目说明书 5.1：字段新增；输入名称 + 选择类型） */
+/** 新建字段对话框（项目说明书 5.1：字段新增；输入名称 + 选择类型）
+ *  M6 修复 4：attachment 已加入 FieldType/FIELD_TYPES，成为一等字段类型，不再需要虚拟 DialogFieldType hack。
+ */
 export function NewFieldDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreate: (name: string | undefined, type: FieldType | "attachment") => Promise<void>;
+  onCreate: (name: string | undefined, type: FieldType) => Promise<void>;
 }) {
   const { open, onOpenChange, onCreate } = props;
   const [name, setName] = useState("");
-  const [type, setType] = useState<DialogFieldType>("text");
+  const [type, setType] = useState<FieldType>("text");
   const [saving, setSaving] = useState(false);
 
   const handleOpenChange = (next: boolean) => {
@@ -30,11 +30,7 @@ export function NewFieldDialog(props: {
     if (saving) return;
     setSaving(true);
     try {
-      if (type === "attachment") {
-        await onCreate(name.trim() || undefined, "attachment");
-      } else {
-        await onCreate(name.trim() || undefined, type);
-      }
+      await onCreate(name.trim() || undefined, type);
       onOpenChange(false);
     } finally {
       setSaving(false);
@@ -67,14 +63,13 @@ export function NewFieldDialog(props: {
             <select
               className="h-8 rounded-md border border-neutral-300 bg-white px-2 text-[13px] outline-none focus:border-brand-500"
               value={type}
-              onChange={(e) => setType(e.target.value as DialogFieldType)}
+              onChange={(e) => setType(e.target.value as FieldType)}
             >
               {FIELD_TYPES.map((tp) => (
                 <option key={tp} value={tp}>
                   {t(`field.type.${tp}` as never)}
                 </option>
               ))}
-              <option value="attachment">{t("field.type.attachment")}</option>
             </select>
           </label>
         </div>

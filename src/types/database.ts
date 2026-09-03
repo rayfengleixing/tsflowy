@@ -11,6 +11,7 @@ export type FieldType =
   | "url"
   | "phone"
   | "email"
+  | "attachment"
   | "relation"
   | "created_at"
   | "last_edited_at";
@@ -26,6 +27,7 @@ export const FIELD_TYPES: FieldType[] = [
   "url",
   "phone",
   "email",
+  "attachment",
   "created_at",
   "last_edited_at",
 ];

@@ -4,6 +4,7 @@ import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import Highlight from "@tiptap/extension-highlight";
 import TextAlign from "@tiptap/extension-text-align";
+import { TextStyle } from "@tiptap/extension-text-style";
 import Color from "@tiptap/extension-color";
 import CharacterCount from "@tiptap/extension-character-count";
 import TaskList from "@tiptap/extension-task-list";
@@ -33,7 +34,6 @@ import { Math } from "./extensions/math/node";
 import { Callout } from "./extensions/callout/node";
 import { Toggle } from "./extensions/toggle/node";
 import { Outline } from "./extensions/outline/node";
-import { SubPage } from "./extensions/sub-page/node";
 import { Columns, Column } from "./extensions/columns/node";
 import { ImageGallery } from "./extensions/image-gallery/node";
 import Mention from "@tiptap/extension-mention";
@@ -125,8 +125,9 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
         emptyEditorClass: "is-editor-empty",
         emptyNodeClass: "is-empty",
       }),
-      Highlight.configure({ multicolor: false }),
+      Highlight.configure({ multicolor: true }),
       TextAlign.configure({ types: ["heading", "paragraph"] }),
+      TextStyle,
       Color,
       CharacterCount,
       TaskList,
@@ -143,7 +144,6 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
       Callout,
       Toggle,
       Outline,
-      SubPage,
       Columns,
       Column,
       ImageGallery,
@@ -164,11 +164,32 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
     editorProps: {
       attributes: { class: "tiptap focus:outline-none" },
       handleKeyDown: (_view, event) => {
-        // Ctrl+S 手动保存
-        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        const metaOrCtrl = event.ctrlKey || event.metaKey;
+        // — 快捷键 1：Ctrl+S 手动保存 —
+        if (metaOrCtrl && event.key.toLowerCase() === "s") {
           event.preventDefault();
           flush();
           toast.success(t("editor.saved"));
+          return true;
+        }
+        // — M6 修复 5：Ctrl+T 插入 3×3 表格（带表头）—
+        if (metaOrCtrl && event.key.toLowerCase() === "t") {
+          event.preventDefault();
+          if (editorRef.current && !editorRef.current.isDestroyed) {
+            editorRef.current
+              .chain()
+              .focus()
+              .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+              .run();
+          }
+          return true;
+        }
+        // — M6 修复 5：Ctrl+L 切换任务列表（段落↔任务项）—
+        if (metaOrCtrl && event.key.toLowerCase() === "l") {
+          event.preventDefault();
+          if (editorRef.current && !editorRef.current.isDestroyed) {
+            editorRef.current.chain().focus().toggleTaskList().run();
+          }
           return true;
         }
         return false;

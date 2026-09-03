@@ -20,7 +20,6 @@ import {
   Code2,
   Columns3,
   File as FileIcon,
-  FolderKanban,
   FunctionSquare,
   Heading1,
   Heading2,
@@ -45,7 +44,6 @@ import { toast } from "sonner";
 import { t, type MessageKey } from "@/lib/i18n";
 import { INSERT_DATABASE_VIEW_EVENT } from "./DatabaseViewPicker";
 import { INSERT_EMOJI_EVENT } from "./EmojiPickerDialog";
-import { INSERT_SUB_PAGE_EVENT } from "./SubPagePicker";
 
 const slashMenuKey = new PluginKey("slashMenu");
 
@@ -172,11 +170,6 @@ export const slashItems: SlashItem[] = [
     key: "mention",
     icon: <AtSign className="h-4 w-4" />,
     run: (e) => e.chain().focus().insertContent({ type: "text", text: "@" }).run(),
-  },
-  {
-    key: "subPage",
-    icon: <FolderKanban className="h-4 w-4" />,
-    run: (e) => window.dispatchEvent(new CustomEvent(INSERT_SUB_PAGE_EVENT, { detail: { editor: e } })),
   },
   {
     key: "emoji",

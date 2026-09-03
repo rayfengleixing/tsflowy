@@ -103,15 +103,9 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
     return field;
   },
 
-  /** 附件字段：field_type 存 url 但 options 标记 attachment（免迁移） */
+  /** 附件字段：现 attachment 已是一等 FieldType，直接 addField。保留函数以便老代码调用。 */
   addAttachmentField: async (name) => {
-    const viewId = get().viewId;
-    if (!viewId) return null;
-    const field = await databaseApi.createField(viewId, "url", name);
-    await databaseApi.updateFieldOptions(field.id, { kind: "attachment" });
-    const updated = { ...field, options: JSON.stringify({ kind: "attachment" }) };
-    set({ fields: [...get().fields.map((f) => (f.id === field.id ? updated : f))] });
-    return updated;
+    return get().addField("attachment", name);
   },
 
   renameField: async (id, name) => {

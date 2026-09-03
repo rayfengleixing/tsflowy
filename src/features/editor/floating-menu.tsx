@@ -145,7 +145,14 @@ function LinkPopover(props: {
           if (e.key === "Escape") props.onClose();
         }}
       />
-      <IconBtn title={t("common.cancel")} onClick={props.onClose}>
+      {/* 语义：已有链接时 = 取消链接；无链接时 = 关闭（取消输入） */}
+      <IconBtn
+        title={props.current ? t("float.unlink") : t("common.cancel")}
+        onClick={() => {
+          if (props.current) props.onSubmit(null);
+          else props.onClose();
+        }}
+      >
         {props.current ? <Unlink className="h-3.5 w-3.5" /> : <Eraser className="h-3.5 w-3.5" />}
       </IconBtn>
       <IconBtn title={t("common.confirm")} onClick={() => props.onSubmit(value.trim() || null)}>
@@ -299,7 +306,7 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
           )}
         </div>
         <div className="relative">
-          <IconBtn title={t("float.link")} active={!!currentLink} onClick={() => { setLinkOpen((v) => !v); closeAll(); setLinkOpen(!linkOpen); }}>
+          <IconBtn title={t("float.link")} active={!!currentLink} onClick={() => { closeAll(); setLinkOpen(!linkOpen); }}>
             <Link2 className="h-4 w-4" />
           </IconBtn>
           {linkOpen && (
@@ -314,6 +321,11 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
             />
           )}
         </div>
+        {!!currentLink && (
+          <IconBtn title={t("float.unlink")} onClick={() => editor.chain().focus().unsetLink().run()}>
+            <Unlink className="h-4 w-4" />
+          </IconBtn>
+        )}
         <Divider />
         <IconBtn title={t("float.code")} active={editor.isActive("code")} onClick={() => editor.chain().focus().toggleCode().run()}>
           <Code className="h-4 w-4" />

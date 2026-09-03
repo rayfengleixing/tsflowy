@@ -515,8 +515,7 @@ function AddFieldButton() {
         onOpenChange={setOpen}
         onCreate={async (name, type) => {
           try {
-            if (type === "attachment") await store.addAttachmentField(name);
-            else await store.addField(type, name);
+            await store.addField(type, name);
             setOpen(false);
           } catch (e) {
             console.error("add field failed", e);

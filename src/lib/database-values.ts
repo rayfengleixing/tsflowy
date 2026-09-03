@@ -47,6 +47,7 @@ export function validateCellValue(type: FieldType, value: CellValue): boolean {
       return typeof value === "boolean";
     case "multi_select":
     case "relation":
+    case "attachment":
       return Array.isArray(value) && value.every((v) => typeof v === "string");
   }
 }
@@ -126,6 +127,8 @@ export function defaultOptionsFor(type: FieldType): FieldOptions {
       return { kind: "date", include_time: false };
     case "relation":
       return { kind: "relation", target_view_id: null };
+    case "attachment":
+      return { kind: "attachment" };
     default:
       return { kind: "none" };
   }
