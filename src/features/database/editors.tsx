@@ -399,7 +399,8 @@ export function RelationCellEditor({ field, value, onCommit }: CellEditorProps) 
           </button>
         ))}
       </div>
-      <div className="fixed inset-0 z-10" onMouseDown={() => undefined} />
+      {/* 点击外部：提交当前选中并关闭编辑器（否则遮罩挡死整个页面无法操作） */}
+      <div className="fixed inset-0 z-10" onMouseDown={() => onCommit([...selected])} />
     </div>
   );
 }

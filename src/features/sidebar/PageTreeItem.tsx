@@ -6,6 +6,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ChevronRight, MoreHorizontal, Pencil, Plus, Star, Trash2, Download } from "lucide-react";
+import { toast } from "sonner";
 import type { ViewNode } from "@/types/models";
 import { viewIcon } from "@/components/view-icon";
 import { NewPageMenu } from "./NewPageMenu";
@@ -101,7 +102,8 @@ export function PageTreeItem({
     try {
       await renameView(node.id, name);
     } catch (e) {
-      console.error("rename view failed", e);
+      // DB 写失败（如 database is locked）：回退输入框 + toast 提示，避免静默丢名
+      toast.error(t("error.renameView", { message: String(e) }));
     }
   };
 

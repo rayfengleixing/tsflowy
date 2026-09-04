@@ -10,14 +10,22 @@ let db: Database | null = null;
  * 全局写锁：tauri-plugin-sql 内部使用连接池，每条 execute 可能走不同连接。
  * 若 BEGIN 在连接 A、INSERT 在连接 B，B 拿不到写锁 → SQLITE_BUSY (code 5)。
  * 用 Promise 链序列化所有写操作，确保同一时刻只有一个写操作在执行。
+ *
+ * 可重入：documents.saveNow 在 withWriteLock 内调用 mentions.rebuildFor，
+ * 后者走 runInTransaction → withWriteLock。若不可重入会死锁
+ * （内层等外层 fn 完成，外层 fn 等内层完成）。检测到已在写锁内则直接执行不再排队。
  */
 let _writeChain: Promise<unknown> = Promise.resolve();
+let _writeDepth = 0;
 
 export function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  // 可重入：已在写锁内（同一次调用栈）则直接执行，避免嵌套死锁
+  if (_writeDepth > 0) return fn();
   const prev = _writeChain;
   let release: () => void = () => {};
   _writeChain = new Promise<void>((r) => { release = r; });
-  return prev.then(() => fn()).finally(() => release());
+  _writeDepth++;
+  return prev.then(() => fn()).finally(() => { _writeDepth--; release(); });
 }
 
 export async function getDb(): Promise<Database> {
@@ -166,8 +174,10 @@ export const viewApi = {
 
   /** 标记视图为"最近被打开"：openView 时调用，驱动 Recent Tab 列表 */
   async touchVisited(id: string): Promise<void> {
-    const d = await getDb();
-    await d.execute("UPDATE views SET visited_at = $1 WHERE id = $2", [now(), id]);
+    return withWriteLock(async () => {
+      const d = await getDb();
+      await d.execute("UPDATE views SET visited_at = $1 WHERE id = $2", [now(), id]);
+    });
   },
 
   async create(opts: {
@@ -177,53 +187,55 @@ export const viewApi = {
     layout: LayoutType;
     extra?: string;
   }): Promise<View> {
-    const d = await getDb();
-    const id = newId();
-    const t = now();
-    const rows = await d.select<{ p: number }[]>(
-      "SELECT COALESCE(MAX(position), -1) + 1 AS p FROM views WHERE workspace_id = $1 AND parent_id IS $2",
-      [opts.workspace_id, opts.parent_id],
-    );
-    const position = rows[0]?.p ?? 0;
-    const extra = opts.extra ?? "{}";
-    await d.execute(
-      `INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
-      [id, opts.workspace_id, opts.parent_id, opts.name, opts.layout, extra, position, t],
-    );
-    if (opts.layout === "document") {
-      // 文档布局需预置内容行：默认第一行 H1 标题 = 文档名（需求3）
-      const defaultContent = JSON.stringify({
-        type: "doc",
-        content: [
-          {
-            type: "heading",
-            attrs: { level: 1 },
-            content: [{ type: "text", text: opts.name }],
-          },
-        ],
-      });
-      await d.execute(
-        'INSERT INTO documents(view_id, content, updated_at) VALUES ($1, $2, $3)',
-        [id, defaultContent, t],
+    return withWriteLock(async () => {
+      const d = await getDb();
+      const id = newId();
+      const t = now();
+      const rows = await d.select<{ p: number }[]>(
+        "SELECT COALESCE(MAX(position), -1) + 1 AS p FROM views WHERE workspace_id = $1 AND parent_id IS $2",
+        [opts.workspace_id, opts.parent_id],
       );
-    }
-    return {
-      id,
-      workspace_id: opts.workspace_id,
-      parent_id: opts.parent_id,
-      name: opts.name,
-      icon: null,
-      layout: opts.layout,
-      extra,
-      position,
-      is_favorite: 0,
-      is_trash: 0,
-      deleted_at: null,
-      created_at: t,
-      updated_at: t,
-      visited_at: null,
-    };
+      const position = rows[0]?.p ?? 0;
+      const extra = opts.extra ?? "{}";
+      await d.execute(
+        `INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
+        [id, opts.workspace_id, opts.parent_id, opts.name, opts.layout, extra, position, t],
+      );
+      if (opts.layout === "document") {
+        // 文档布局需预置内容行：默认第一行 H1 标题 = 文档名（需求3）
+        const defaultContent = JSON.stringify({
+          type: "doc",
+          content: [
+            {
+              type: "heading",
+              attrs: { level: 1 },
+              content: [{ type: "text", text: opts.name }],
+            },
+          ],
+        });
+        await d.execute(
+          'INSERT INTO documents(view_id, content, updated_at) VALUES ($1, $2, $3)',
+          [id, defaultContent, t],
+        );
+      }
+      return {
+        id,
+        workspace_id: opts.workspace_id,
+        parent_id: opts.parent_id,
+        name: opts.name,
+        icon: null,
+        layout: opts.layout,
+        extra,
+        position,
+        is_favorite: 0,
+        is_trash: 0,
+        deleted_at: null,
+        created_at: t,
+        updated_at: t,
+        visited_at: null,
+      };
+    });
   },
 
   /** 按 id 读单个视图（行详情文档等） */
@@ -234,89 +246,105 @@ export const viewApi = {
   },
 
   async rename(id: string, name: string): Promise<void> {
-    const d = await getDb();
-    await d.execute("UPDATE views SET name = $1, updated_at = $2 WHERE id = $3", [
-      name,
-      now(),
-      id,
-    ]);
+    return withWriteLock(async () => {
+      const d = await getDb();
+      await d.execute("UPDATE views SET name = $1, updated_at = $2 WHERE id = $3", [
+        name,
+        now(),
+        id,
+      ]);
+    });
   },
 
   async setIcon(id: string, icon: string | null): Promise<void> {
-    const d = await getDb();
-    await d.execute("UPDATE views SET icon = $1, updated_at = $2 WHERE id = $3", [
-      icon,
-      now(),
-      id,
-    ]);
+    return withWriteLock(async () => {
+      const d = await getDb();
+      await d.execute("UPDATE views SET icon = $1, updated_at = $2 WHERE id = $3", [
+        icon,
+        now(),
+        id,
+      ]);
+    });
   },
 
   async setFavorite(id: string, favorite: boolean): Promise<void> {
-    const d = await getDb();
-    await d.execute("UPDATE views SET is_favorite = $1, updated_at = $2 WHERE id = $3", [
-      favorite ? 1 : 0,
-      now(),
-      id,
-    ]);
+    return withWriteLock(async () => {
+      const d = await getDb();
+      await d.execute("UPDATE views SET is_favorite = $1, updated_at = $2 WHERE id = $3", [
+        favorite ? 1 : 0,
+        now(),
+        id,
+      ]);
+    });
   },
 
   /** 软删：视图及其整个子树进回收站 */
   async softDelete(id: string): Promise<void> {
-    const d = await getDb();
-    await d.execute(
-      `WITH RECURSIVE sub(id) AS (
-         SELECT id FROM views WHERE id = $1
-         UNION ALL
-         SELECT v.id FROM views v JOIN sub ON v.parent_id = sub.id
-       )
-       UPDATE views SET is_trash = 1, deleted_at = $2 WHERE id IN (SELECT id FROM sub)`,
-      [id, now()],
-    );
+    return withWriteLock(async () => {
+      const d = await getDb();
+      await d.execute(
+        `WITH RECURSIVE sub(id) AS (
+           SELECT id FROM views WHERE id = $1
+           UNION ALL
+           SELECT v.id FROM views v JOIN sub ON v.parent_id = sub.id
+         )
+         UPDATE views SET is_trash = 1, deleted_at = $2 WHERE id IN (SELECT id FROM sub)`,
+        [id, now()],
+      );
+    });
   },
 
   /** 恢复：视图及其子树移出回收站 */
   async restore(id: string): Promise<void> {
-    const d = await getDb();
-    await d.execute(
-      `WITH RECURSIVE sub(id) AS (
-         SELECT id FROM views WHERE id = $1
-         UNION ALL
-         SELECT v.id FROM views v JOIN sub ON v.parent_id = sub.id
-       )
-       UPDATE views SET is_trash = 0, deleted_at = NULL WHERE id IN (SELECT id FROM sub)`,
-      [id],
-    );
+    return withWriteLock(async () => {
+      const d = await getDb();
+      await d.execute(
+        `WITH RECURSIVE sub(id) AS (
+           SELECT id FROM views WHERE id = $1
+           UNION ALL
+           SELECT v.id FROM views v JOIN sub ON v.parent_id = sub.id
+         )
+         UPDATE views SET is_trash = 0, deleted_at = NULL WHERE id IN (SELECT id FROM sub)`,
+        [id],
+      );
+    });
   },
 
   /** 彻底删除：子树递归硬删（documents/database_* 经 FK 级联） */
   async purge(id: string): Promise<void> {
-    const d = await getDb();
-    await d.execute(
-      `WITH RECURSIVE sub(id) AS (
-         SELECT id FROM views WHERE id = $1
-         UNION ALL
-         SELECT v.id FROM views v JOIN sub ON v.parent_id = sub.id
-       )
-       DELETE FROM views WHERE id IN (SELECT id FROM sub)`,
-      [id],
-    );
+    return withWriteLock(async () => {
+      const d = await getDb();
+      await d.execute(
+        `WITH RECURSIVE sub(id) AS (
+           SELECT id FROM views WHERE id = $1
+           UNION ALL
+           SELECT v.id FROM views v JOIN sub ON v.parent_id = sub.id
+         )
+         DELETE FROM views WHERE id IN (SELECT id FROM sub)`,
+        [id],
+      );
+    });
   },
 
   async purgeTrash(workspaceId: string): Promise<void> {
-    const d = await getDb();
-    await d.execute("DELETE FROM views WHERE workspace_id = $1 AND is_trash = 1", [workspaceId]);
+    return withWriteLock(async () => {
+      const d = await getDb();
+      await d.execute("DELETE FROM views WHERE workspace_id = $1 AND is_trash = 1", [workspaceId]);
+    });
   },
 
   /** 永久删除回收站中 deleted_at 早于 deadline_ms（毫秒时间戳）的视图，用于 30 天自动清空 */
   async purgeExpiredTrash(workspaceId: string, deadline_ms: number): Promise<number> {
-    const d = await getDb();
-    const result = await d.execute(
-      "DELETE FROM views WHERE workspace_id = $1 AND is_trash = 1 AND deleted_at IS NOT NULL AND deleted_at < $2",
-      [workspaceId, deadline_ms],
-    );
-    const affected = (result as unknown as { rowsAffected?: number; rows_affected?: number }).rowsAffected
-      ?? (result as unknown as { rows_affected?: number }).rows_affected;
-    return affected ?? 0;
+    return withWriteLock(async () => {
+      const d = await getDb();
+      const result = await d.execute(
+        "DELETE FROM views WHERE workspace_id = $1 AND is_trash = 1 AND deleted_at IS NOT NULL AND deleted_at < $2",
+        [workspaceId, deadline_ms],
+      );
+      const affected = (result as unknown as { rowsAffected?: number; rows_affected?: number }).rowsAffected
+        ?? (result as unknown as { rows_affected?: number }).rows_affected;
+      return affected ?? 0;
+    });
   },
 
   /**
