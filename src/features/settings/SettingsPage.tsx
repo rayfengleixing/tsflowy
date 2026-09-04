@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FolderOpen, Upload, Download, Settings2, RefreshCw } from "lucide-react";
+import { FolderOpen, Upload, Download, Settings2, RefreshCw, FolderInput } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -15,7 +15,9 @@ import {
   type FontSize,
   type LineHeight,
 } from "@/stores/settings";
+import { useWorkspaceStore } from "@/stores/workspace";
 import { Button } from "@/components/ui/button";
+import { importMarkdownFolder } from "@/lib/import-folder";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -53,6 +55,8 @@ export function SettingsPage() {
   const [dataDir, setDataDir] = useState<string>("");
   const [busyExport, setBusyExport] = useState(false);
   const [busyImport, setBusyImport] = useState(false);
+  const [busyImportFolder, setBusyImportFolder] = useState(false);
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
 
   useEffect(() => {
     invoke<string>("data_dir_path")
@@ -116,6 +120,26 @@ export function SettingsPage() {
       toast.error(t("error.db", { message: String(e) }));
     } finally {
       setBusyImport(false);
+    }
+  };
+
+  // 导入 Markdown 文件夹：遍历 .md → 按目录层级建页 → reload 刷树
+  const importFolder = async () => {
+    if (!currentWorkspaceId) return;
+    setBusyImportFolder(true);
+    try {
+      const result = await importMarkdownFolder(currentWorkspaceId);
+      if (result.total === 0) {
+        toast.info(t("settings.importFolderEmpty"));
+      } else {
+        if (result.created > 0) toast.success(t("settings.importedFolder", { n: result.created }));
+        if (result.failed > 0) toast.warning(t("settings.importFolderFailed", { n: result.failed }));
+        await useWorkspaceStore.getState().reload();
+      }
+    } catch (e) {
+      toast.error(t("error.db", { message: String(e) }));
+    } finally {
+      setBusyImportFolder(false);
     }
   };
 
@@ -265,6 +289,14 @@ export function SettingsPage() {
                 <Upload className="mr-1 h-3.5 w-3.5" />
               )}
               {t("settings.importBackup")}
+            </Button>
+            <Button size="sm" variant="outline" onClick={importFolder} disabled={busyImportFolder}>
+              {busyImportFolder ? (
+                <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FolderInput className="mr-1 h-3.5 w-3.5" />
+              )}
+              {t("settings.importFolder")}
             </Button>
           </div>
         </Section>
