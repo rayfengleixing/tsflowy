@@ -46,7 +46,6 @@
         "installerIcon": "icons/icon.ico",
         "uninstallerIcon": "icons/icon.ico",
         "displayLanguageSelector": false,
-        "installerPattern": "${productName}-${version}-${arch}-setup",
         "languages": [
           "SimpChinese"
         ]
