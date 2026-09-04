@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -16,14 +16,18 @@ import { TableCell } from "@tiptap/extension-table-cell";
 import { type JSONContent } from "@tiptap/core";
 import { Slice, Fragment, Node as PMNode } from "@tiptap/pm/model";
 import { toast } from "sonner";
+import { Link2, ChevronDown, ChevronUp } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { documentApi } from "@/lib/documents";
+import { mentionsApi, type MentionRow } from "@/lib/mentions";
+import { viewApi } from "@/lib/db";
 import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown";
 import { t } from "@/lib/i18n";
 import type { View } from "@/types/models";
 import { SlashMenu } from "./slash-menu";
 import { TableContextMenu } from "./table-context-menu";
 import { FloatingMenu } from "./floating-menu";
+import { PageProperties } from "./PageProperties";
 import { Image } from "./extensions/image/node";
 import { DatabaseView } from "./extensions/database-view/node";
 import { Attachment } from "./extensions/attachment/node";
@@ -40,6 +44,7 @@ import { buildMentionSuggestion } from "./extensions/mention/suggestion";
 // — M3 高级块结束 —
 import "highlight.js/styles/github.css";
 import { FirstHeadingLock } from "./extensions/first-heading-lock";
+import { BlockDrag } from "./extensions/block-drag";
 
 const AUTOSAVE_MS = 800;
 
@@ -68,12 +73,18 @@ const CenteredTableHeader = TableHeader.extend({
 // Markdown 符号输入规则由内置扩展自带：**粗体** / *斜体* / ==高亮== / ~~删除线~~ / `代码`
 // （@tiptap/extension-bold·italic·strike·highlight·code 的 addInputRules 已注册，无需自定义）
 
-
 /** 文档编辑器页（项目说明书 8.1：读 content → 编辑 → 防抖 800ms 落库 → 切换/关闭前 flush） */
 export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?: boolean }) {
   const editorRef = useRef<ReturnType<typeof useEditor>>(null);
   const dirtyRef = useRef(false);
   const saveTimer = useRef<number | null>(null);
+  const [backlinks, setBacklinks] = useState<MentionRow[]>([]);
+  const [backlinkViews, setBacklinkViews] = useState<Map<string, View>>(new Map());
+  const [backlinksOpen, setBacklinksOpen] = useState(true);
+  // mention hover 预览：当前 hover 的 mention 目标 id + 预览内容（前几行纯文本）
+  const [hoverMention, setHoverMention] = useState<{ id: string; rect: DOMRect; text: string } | null>(null);
+  const hoverTimerRef = useRef<number | null>(null);
+  const hoverCacheRef = useRef<Map<string, string>>(new Map());
   const latestJsonRef = useRef<JSONContent | null>(null);
 
   const flush = useCallback(() => {
@@ -144,14 +155,18 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       Column,
       ImageGallery,
       Mention.configure({
-        HTMLAttributes: { class: "mention cursor-pointer underline decoration-dotted underline-offset-2 text-brand-600 hover:text-brand-700" },
+        HTMLAttributes: {
+          class:
+            "mention cursor-pointer underline decoration-dotted underline-offset-2 text-brand-600 hover:text-brand-700",
+        },
         suggestion: buildMentionSuggestion(),
       }),
       // — M3 高级块结束 —
       ...(hideSlash ? [] : [SlashMenu]),
       FirstHeadingLock.configure({ viewId: view.id }),
+      BlockDrag,
     ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
     [hideSlash, view.id],
   );
 
@@ -173,11 +188,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         if (metaOrCtrl && event.key.toLowerCase() === "t") {
           event.preventDefault();
           if (editorRef.current && !editorRef.current.isDestroyed) {
-            editorRef.current
-              .chain()
-              .focus()
-              .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
-              .run();
+            editorRef.current.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
           }
           return true;
         }
@@ -213,6 +224,40 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         return false;
       },
       handlePaste: (view, event) => {
+        // 图片粘贴上传：检测 clipboard 中的图片文件
+        const items = event.clipboardData?.items;
+        if (items) {
+          for (const item of items) {
+            if (item.type.startsWith("image/")) {
+              const file = item.getAsFile();
+              if (file) {
+                event.preventDefault();
+                const reader = new FileReader();
+                reader.onload = async () => {
+                  const buf = reader.result;
+                  if (buf instanceof ArrayBuffer) {
+                    const bytes = new Uint8Array(buf);
+                    const ext = file.type.split("/")[1] || "png";
+                    const filename = `paste-${Date.now()}.${ext}`;
+                    try {
+                      const { invoke } = await import("@tauri-apps/api/core");
+                      const assetPath = await invoke<string>("save_asset_bytes", {
+                        bytes: Array.from(bytes),
+                        filename,
+                      });
+                      const node = view.state.schema.nodes.image.create({ src: assetPath });
+                      view.dispatch(view.state.tr.replaceSelectionWith(node).scrollIntoView());
+                    } catch (e) {
+                      toast.error(t("editor.imageUploadFailed"));
+                    }
+                  }
+                };
+                reader.readAsArrayBuffer(file);
+                return true;
+              }
+            }
+          }
+        }
         // 有富文本 HTML 时交给默认处理；纯文本按 Markdown 解析转块
         const html = event.clipboardData?.getData("text/html");
         if (html && /<[a-z][\s\S]*>/i.test(html)) return false;
@@ -297,11 +342,117 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     return () => window.removeEventListener("keydown", onKey);
   }, [flush]);
 
+  // 反链面板：view.id 变化或文档保存后刷新（mentions 表在 scheduleSave→rebuildFor 时已更新）。
+  // 切页时先清空旧数据，避免上一个文档的反链短暂残留。
+  useEffect(() => {
+    let alive = true;
+    setBacklinks([]);
+    setBacklinkViews(new Map());
+    if (!view.id) return;
+    void mentionsApi.listBacklinks(view.id).then(async (rows) => {
+      if (!alive) return;
+      setBacklinks(rows);
+      // 批量取来源视图名（一次一个；反链数量通常 < 20）
+      const m = new Map<string, View>();
+      for (const r of rows) {
+        if (m.has(r.src_view_id)) continue;
+        const v = await viewApi.get(r.src_view_id);
+        if (v) m.set(r.src_view_id, v);
+      }
+      if (alive) setBacklinkViews(m);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [view.id]);
+
+  // mention hover 预览：mouseenter/mouseleave + 300ms 延迟，避免快速划过频繁拉取
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const host = editor.view.dom;
+
+    const resolveMentionId = (target: HTMLElement): string | null => {
+      const nodeEl = target.closest<HTMLElement>(".mention");
+      if (!nodeEl) return null;
+      const rect = nodeEl.getBoundingClientRect();
+      const center = { left: rect.left + rect.width / 2, top: rect.top + rect.height / 2 };
+      const posResult = editor.view.posAtCoords(center);
+      if (!posResult) return null;
+      const pos = posResult.pos;
+      const $pos = editor.state.doc.resolve(pos);
+      let found: string | null = null;
+      const m = $pos.marks().find((mk) => mk.type.name === "mention");
+      if (m) found = m.attrs.id as string;
+      if (!found) {
+        for (let off = -2; off <= 2 && !found; off++) {
+          const p = pos + off;
+          if (p < 0 || p > editor.state.doc.content.size) continue;
+          const $ = editor.state.doc.resolve(p);
+          const mk = $.marks().find((k) => k.type.name === "mention");
+          if (mk) found = mk.attrs.id as string;
+        }
+      }
+      return found;
+    };
+
+    const fetchPreview = async (id: string, rect: DOMRect) => {
+      const cached = hoverCacheRef.current.get(id);
+      if (cached) {
+        setHoverMention({ id, rect, text: cached });
+        return;
+      }
+      // 拉文档前几行纯文本作预览（避免渲染富文本，简化实现）
+      try {
+        const raw = await documentApi.get(id);
+        if (!raw) {
+          setHoverMention({ id, rect, text: t("mention.previewEmpty") });
+          return;
+        }
+        const json = JSON.parse(raw) as JSONContent;
+        const text = extractPlainText(json).slice(0, 200);
+        hoverCacheRef.current.set(id, text);
+        setHoverMention({ id, rect, text });
+      } catch {
+        setHoverMention({ id, rect, text: t("mention.previewEmpty") });
+      }
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const id = resolveMentionId(target);
+      if (id) {
+        const nodeEl = target.closest<HTMLElement>(".mention")!;
+        const rect = nodeEl.getBoundingClientRect();
+        if (hoverTimerRef.current !== null) {
+          window.clearTimeout(hoverTimerRef.current);
+        }
+        hoverTimerRef.current = window.setTimeout(() => fetchPreview(id, rect), 300);
+        return;
+      }
+      if (hoverTimerRef.current !== null) {
+        window.clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+      setHoverMention(null);
+    };
+
+    host.addEventListener("mousemove", onMouseMove);
+    return () => {
+      host.removeEventListener("mousemove", onMouseMove);
+      if (hoverTimerRef.current !== null) {
+        window.clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+    };
+  }, [editor?.view]);
+
   // 点击 mention mark 跳转到对应页面（通过 posAtCoords + resolve 读 mark attrs.id，避免修改 renderHTML）
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
-    const host = editor.view.dom as HTMLElement;
+    const host = editor.view.dom;
     const onClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       if (!target) return;
@@ -311,7 +462,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       const rect = nodeEl.getBoundingClientRect();
       const center = {
         left: rect.left + rect.width / 2,
-        top:  rect.top  + rect.height / 2,
+        top: rect.top + rect.height / 2,
       };
       const posResult = editor.view.posAtCoords(center);
       if (!posResult) return;
@@ -323,7 +474,10 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       const candidates = [$pos.marks(), around];
       for (const markList of candidates) {
         const m = markList.find((mk) => mk.type.name === "mention");
-        if (m) { found = m.attrs.id as string; break; }
+        if (m) {
+          found = m.attrs.id as string;
+          break;
+        }
       }
       if (!found) {
         // 回退：在 pos±2 的 span 内扫描 marks
@@ -345,8 +499,22 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     return () => host.removeEventListener("click", onClick);
   }, [editor?.view]);
 
+  // 反链按来源分组：src_view_id → MentionRow[]
+  const groupedBacklinks = useMemo(() => {
+    const m = new Map<string, MentionRow[]>();
+    for (const r of backlinks) {
+      const arr = m.get(r.src_view_id) ?? [];
+      arr.push(r);
+      m.set(r.src_view_id, arr);
+    }
+    return m;
+  }, [backlinks]);
+
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-white">
+    <div className="relative flex h-full flex-col overflow-hidden bg-white">
+      {/* 页面属性：标题下方横排 chip，不占太多高度 */}
+      <PageProperties view={view} />
+
       {/* 编辑区：内容最大宽约 800px 居中（说明书 6.1） */}
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[800px] px-6 py-4">
@@ -355,6 +523,88 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
           <TableContextMenu editor={editor ?? undefined} />
         </div>
       </div>
+
+      {/* 反链面板：底部固定，可收起 */}
+      {backlinks.length > 0 && (
+        <div className="shrink-0 border-t border-neutral-200 bg-neutral-50/60">
+          <button
+            type="button"
+            onClick={() => setBacklinksOpen((v) => !v)}
+            className="flex w-full items-center gap-1.5 px-4 py-1.5 text-left text-[11px] font-semibold text-neutral-600 hover:bg-neutral-100"
+          >
+            <Link2 className="h-3 w-3" />
+            {t("backlinks.title", { n: groupedBacklinks.size })}
+            {backlinksOpen ? <ChevronUp className="ml-auto h-3 w-3" /> : <ChevronDown className="ml-auto h-3 w-3" />}
+          </button>
+          {backlinksOpen && (
+            <div className="max-h-[160px] overflow-y-auto px-4 pb-2">
+              {Array.from(groupedBacklinks.entries()).map(([srcId, rows]) => {
+                const srcView = backlinkViews.get(srcId);
+                const name = srcView?.name ?? srcId;
+                return (
+                  <div key={srcId} className="mb-1.5 last:mb-0">
+                    <div className="flex items-center gap-1 text-[11px] text-neutral-500">
+                      <button
+                        type="button"
+                        className="font-medium text-brand-600 hover:underline"
+                        onClick={() => useWorkspaceStore.getState().openView(srcId)}
+                        title={t("backlinks.openSource")}
+                      >
+                        {name}
+                      </button>
+                      <span className="text-neutral-400">· {rows.length}</span>
+                    </div>
+                    <ul className="ml-2 mt-0.5 space-y-0.5">
+                      {rows.slice(0, 3).map((r) => (
+                        <li
+                          key={r.id}
+                          className="cursor-pointer rounded px-1.5 py-0.5 text-[12px] text-neutral-600 hover:bg-neutral-100"
+                          onClick={() => useWorkspaceStore.getState().openView(srcId)}
+                          title={t("backlinks.contextLabel")}
+                        >
+                          {r.context_text ?? ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 字数统计：右下角浮层 */}
+      {editor && (
+        <div className="pointer-events-none absolute bottom-2 right-4 text-[11px] text-neutral-400">
+          {editor.storage.characterCount?.characters?.() ?? 0} {t("editor.chars")}
+        </div>
+      )}
+
+      {/* mention hover 预览浮层：定位到 mention 节点下方 */}
+      {hoverMention && (
+        <div
+          className="pointer-events-none absolute z-50 max-w-[320px] rounded-md border border-neutral-200 bg-white p-2 text-[12px] text-neutral-700 shadow-lg"
+          style={{
+            left: globalThis.Math.min(hoverMention.rect.left, window.innerWidth - 340),
+            top: hoverMention.rect.bottom + 4,
+          }}
+        >
+          <div className="mb-1 truncate text-[11px] font-medium text-brand-600">
+            {backlinkViews.get(hoverMention.id)?.name ?? hoverMention.id}
+          </div>
+          <div className="max-h-[120px] overflow-y-auto whitespace-pre-wrap break-words text-neutral-600">
+            {hoverMention.text}
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+/** 递归提取 TipTap JSON 的纯文本（用于 mention hover 预览 / 反链 context 兜底） */
+function extractPlainText(node: JSONContent): string {
+  if (typeof node.text === "string") return node.text;
+  if (!node.content) return "";
+  return node.content.map(extractPlainText).join("");
 }

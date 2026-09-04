@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { TabBar } from "@/features/tabs/TabBar";
-import { Breadcrumb } from "@/features/tabs/Breadcrumb";
 import { TrashPage } from "@/features/trash/TrashPage";
 import { PlaceholderPage } from "@/features/placeholder/PlaceholderPage";
 import { EditorPage } from "@/features/editor/EditorPage";
@@ -113,7 +112,6 @@ function App() {
         ) : (
           <>
             <TabBar />
-            <Breadcrumb />
             {view && view.layout === "document" ? (
               <EditorPage key={view.id} view={view} />
             ) : view && (view.layout === "grid" || view.layout === "board" || view.layout === "calendar") ? (

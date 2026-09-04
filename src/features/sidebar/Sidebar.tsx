@@ -3,6 +3,7 @@ import { Search, Settings, Trash2, Star, Layers, Hash } from "lucide-react";
 import { SpaceSwitcher } from "./SpaceSwitcher";
 import { NewPageMenu } from "./NewPageMenu";
 import { PageTree } from "./PageTree";
+import { DocCalendar } from "./DocCalendar";
 import { DocumentOutline, getSidebarTab, setSidebarTab } from "@/features/editor/Outline";
 import { viewIcon } from "@/components/view-icon";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -13,7 +14,8 @@ const MAX_WIDTH = 560;
 
 /** 侧边栏（说明书 6.3 结构）：页面树 / 大纲 / 收藏 三 Tab 切换 */
 export function Sidebar() {
-  const { sidebarWidth, setSidebarWidth, route, setRoute, favorites, openView, openPalette, toggleFavorite } = useWorkspaceStore();
+  const { sidebarWidth, setSidebarWidth, route, setRoute, favorites, openView, openPalette, toggleFavorite } =
+    useWorkspaceStore();
   const asideRef = useRef<HTMLElement>(null);
   const [resizing, setResizing] = useState(false);
   const [mainTab, setMainTab] = useState<"tree" | "outline" | "favorites">(getSidebarTab());
@@ -56,7 +58,9 @@ export function Sidebar() {
         >
           <Search className="h-3.5 w-3.5" />
           <span className="flex-1 text-left">{t("sidebar.search")}</span>
-          <kbd className="rounded border border-neutral-300 bg-neutral-100 px-1 text-[10px] text-neutral-400">Ctrl K</kbd>
+          <kbd className="rounded border border-neutral-300 bg-neutral-100 px-1 text-[10px] text-neutral-400">
+            Ctrl K
+          </kbd>
         </button>
       </div>
 
@@ -67,7 +71,9 @@ export function Sidebar() {
           onClick={() => switchTab("tree")}
           className={
             "flex flex-1 items-center justify-center gap-1 py-1.5 " +
-            (mainTab === "tree" ? "bg-white text-brand-600 border-b-2 border-brand-500" : "text-neutral-500 hover:bg-neutral-200/60")
+            (mainTab === "tree"
+              ? "bg-white text-brand-600 border-b-2 border-brand-500"
+              : "text-neutral-500 hover:bg-neutral-200/60")
           }
         >
           <Layers className="h-3 w-3" />
@@ -78,7 +84,9 @@ export function Sidebar() {
           onClick={() => switchTab("outline")}
           className={
             "flex flex-1 items-center justify-center gap-1 py-1.5 " +
-            (mainTab === "outline" ? "bg-white text-brand-600 border-b-2 border-brand-500" : "text-neutral-500 hover:bg-neutral-200/60")
+            (mainTab === "outline"
+              ? "bg-white text-brand-600 border-b-2 border-brand-500"
+              : "text-neutral-500 hover:bg-neutral-200/60")
           }
         >
           <Hash className="h-3 w-3" />
@@ -89,7 +97,9 @@ export function Sidebar() {
           onClick={() => switchTab("favorites")}
           className={
             "flex flex-1 items-center justify-center gap-1 py-1.5 " +
-            (mainTab === "favorites" ? "bg-white text-brand-600 border-b-2 border-brand-500" : "text-neutral-500 hover:bg-neutral-200/60")
+            (mainTab === "favorites"
+              ? "bg-white text-brand-600 border-b-2 border-brand-500"
+              : "text-neutral-500 hover:bg-neutral-200/60")
           }
         >
           <Star className="h-3 w-3" />
@@ -117,7 +127,9 @@ export function Sidebar() {
                     className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] text-neutral-800"
                     onClick={() => openView(v.id)}
                   >
-                    <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">{viewIcon(v)}</span>
+                    <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">
+                      {viewIcon(v)}
+                    </span>
                     <span className="min-w-0 flex-1 truncate text-left">{v.name}</span>
                   </button>
                   <button
@@ -133,6 +145,9 @@ export function Sidebar() {
           </div>
         )}
       </div>
+
+      {/* 文档日历：默认折叠，展开后按月聚合显示最近编辑的文档 */}
+      <DocCalendar />
 
       {/* 底部固定区：新建页面 / 回收站 / 设置 */}
       <div className="flex h-[100px] shrink-0 flex-col border-t border-neutral-300">

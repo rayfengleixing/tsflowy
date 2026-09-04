@@ -4,7 +4,17 @@ import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 
-import { useSettingsStore, ACCENT_PRESETS, type ThemeMode, type AccentColor, type FontFamily } from "@/stores/settings";
+import {
+  useSettingsStore,
+  ACCENT_PRESETS,
+  FONT_SIZE_PRESETS,
+  LINE_HEIGHT_PRESETS,
+  type ThemeMode,
+  type AccentColor,
+  type FontFamily,
+  type FontSize,
+  type LineHeight,
+} from "@/stores/settings";
 import { Button } from "@/components/ui/button";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -18,13 +28,26 @@ const ACCENT_HEX: Record<AccentColor, string> = {
   yellow: "#ca8a04",
 };
 
-type ShortcutGroup = { titleKey: string; items: { label: string; key: string }[] };
+interface ShortcutGroup {
+  titleKey: string;
+  items: { label: string; key: string }[];
+}
 
 /** 设置页（M6）：外观/语言/数据目录/备份/快捷键 */
 export function SettingsPage() {
   const {
-    theme, accent, font, lang,
-    setTheme, setAccent, setFont, setLang,
+    theme,
+    accent,
+    font,
+    lang,
+    fontSize,
+    lineHeight,
+    setTheme,
+    setAccent,
+    setFont,
+    setLang,
+    setFontSize,
+    setLineHeight,
   } = useSettingsStore();
 
   const [dataDir, setDataDir] = useState<string>("");
@@ -78,9 +101,7 @@ export function SettingsPage() {
   };
 
   const importBackup = async () => {
-    const ok = window.confirm(
-      `${t("settings.confirmImportTitle")}\n\n${t("settings.confirmImportDesc")}`,
-    );
+    const ok = window.confirm(`${t("settings.confirmImportTitle")}\n\n${t("settings.confirmImportDesc")}`);
     if (!ok) return;
     setBusyImport(true);
     try {
@@ -149,6 +170,53 @@ export function SettingsPage() {
               <option value="serif">{t("settings.fontSerif")}</option>
               <option value="mono">{t("settings.fontMono")}</option>
             </select>
+          </Row>
+          <Row label={t("settings.fontSize")}>
+            <div className="inline-flex overflow-hidden rounded-md border border-neutral-300 p-0.5">
+              {FONT_SIZE_PRESETS.map((s) => {
+                const labels: Record<FontSize, string> = {
+                  sm: t("settings.fontSizeSm"),
+                  md: t("settings.fontSizeMd"),
+                  lg: t("settings.fontSizeLg"),
+                  xl: t("settings.fontSizeXl"),
+                };
+                return (
+                  <button
+                    key={s}
+                    onClick={() => setFontSize(s)}
+                    className={cn(
+                      "rounded px-3 py-1 text-xs font-medium transition",
+                      fontSize === s ? "bg-brand-500 text-white shadow" : "text-neutral-600 hover:bg-neutral-100",
+                    )}
+                  >
+                    {labels[s]}
+                  </button>
+                );
+              })}
+            </div>
+          </Row>
+          <Row label={t("settings.lineHeight")}>
+            <div className="inline-flex overflow-hidden rounded-md border border-neutral-300 p-0.5">
+              {LINE_HEIGHT_PRESETS.map((lh) => {
+                const labels: Record<LineHeight, string> = {
+                  compact: t("settings.lineHeightCompact"),
+                  normal: t("settings.lineHeightNormal"),
+                  loose: t("settings.lineHeightLoose"),
+                };
+                return (
+                  <button
+                    key={lh}
+                    onClick={() => setLineHeight(lh)}
+                    className={cn(
+                      "rounded px-3 py-1 text-xs font-medium transition",
+                      lineHeight === lh ? "bg-brand-500 text-white shadow" : "text-neutral-600 hover:bg-neutral-100",
+                    )}
+                  >
+                    {labels[lh]}
+                  </button>
+                );
+              })}
+            </div>
           </Row>
           <Row label={t("settings.language")}>
             <select
@@ -229,9 +297,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <section className="mb-8">
       <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">{title}</h2>
-      <div className="space-y-4 rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">
-        {children}
-      </div>
+      <div className="space-y-4 rounded-xl border border-neutral-200 bg-white p-5 shadow-sm">{children}</div>
     </section>
   );
 }
@@ -247,8 +313,8 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 function ThemeGroup({ value, onChange }: { value: ThemeMode; onChange: (v: ThemeMode) => void }) {
   const options: { id: ThemeMode; label: string }[] = [
-    { id: "light",  label: t("settings.themeLight") },
-    { id: "dark",   label: t("settings.themeDark") },
+    { id: "light", label: t("settings.themeLight") },
+    { id: "dark", label: t("settings.themeDark") },
     { id: "system", label: t("settings.themeSystem") },
   ];
   return (
@@ -259,9 +325,7 @@ function ThemeGroup({ value, onChange }: { value: ThemeMode; onChange: (v: Theme
           onClick={() => onChange(o.id)}
           className={cn(
             "rounded px-3 py-1 text-xs font-medium transition",
-            value === o.id
-              ? "bg-brand-500 text-white shadow"
-              : "text-neutral-600 hover:bg-neutral-100",
+            value === o.id ? "bg-brand-500 text-white shadow" : "text-neutral-600 hover:bg-neutral-100",
           )}
         >
           {o.label}
