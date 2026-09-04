@@ -360,7 +360,7 @@ function BoardCard(props: {
       || (s.field.field_type === "date" && s.value)
       || (s.field.field_type === "checkbox" && s.value === true)
       || (s.field.field_type === "number" && s.value !== null && s.value !== undefined)
-      || (s.field.field_type !== "created_at" && s.field.field_type !== "last_edited_at" && s.field.field_type !== "relation" && s.value && String(s.value).length > 0),
+      || (s.field.field_type !== "created_at" && s.field.field_type !== "last_edited_at" && s.value && String(s.value).length > 0),
     ).slice(0, 3);
 
   return (

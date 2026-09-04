@@ -6,7 +6,6 @@ import {
   Clock,
   Hash,
   History,
-  Link2,
   ListChecks,
   Mail,
   Phone,
@@ -39,7 +38,6 @@ function fieldIcon(type: FieldType): ReactNode {
     case "url": return <LinkIcon className={cls} />;
     case "phone": return <Phone className={cls} />;
     case "email": return <Mail className={cls} />;
-    case "relation": return <Link2 className={cls} />;
     case "created_at": return <Clock className={cls} />;
     case "last_edited_at": return <History className={cls} />;
   }

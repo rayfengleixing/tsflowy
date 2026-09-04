@@ -17,21 +17,23 @@ const running = new Map<string, Promise<void>>();
 const mailboxes = new Map<string, string>();
 
 async function saveNow(viewId: string, content: string): Promise<void> {
-  return withWriteLock(async () => {
+  // 文档落库：withWriteLock 串行化，避免并发写触发 SQLITE_BUSY
+  await withWriteLock(async () => {
     const d = await getDb();
     await d.execute(
       `INSERT INTO documents(view_id, content, updated_at) VALUES ($1, $2, $3)
        ON CONFLICT(view_id) DO UPDATE SET content = $2, updated_at = $3`,
       [viewId, content, Date.now()],
     );
-    // 同步重建 mentions 索引（Phase 2.1）。失败仅 warn 不阻断保存。
-    try {
-      const json = JSON.parse(content);
-      await mentionsApi.rebuildFor(viewId, json);
-    } catch (e) {
-      logger.warn("documents.save", "mentions rebuild skipped", viewId, e);
-    }
   });
+  // mentions 重建：移出 withWriteLock 块，避免嵌套调用 runInTransaction → withWriteLock 死锁。
+  // rebuildFor 内部自己加锁，派生索引允许短暂异步滞后于文档内容。
+  try {
+    const json = JSON.parse(content);
+    await mentionsApi.rebuildFor(viewId, json);
+  } catch (e) {
+    logger.warn("documents.save", "mentions rebuild skipped", viewId, e);
+  }
 }
 
 /**

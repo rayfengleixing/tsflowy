@@ -343,8 +343,6 @@ export function CellEditorSlot(props: {
       return <SelectCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} onAddOption={onAddOption} onDeleteOption={onDeleteOption} />;
     case "multi_select":
       return <MultiSelectCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} onAddOption={onAddOption} onDeleteOption={onDeleteOption} />;
-    case "relation":
-      return <RelationCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
     default:
       return <TextCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
   }
@@ -353,57 +351,6 @@ export function CellEditorSlot(props: {
 /** 只读时间（created_at / last_edited_at）显示用，无编辑器 */
 export { isReadonlyType };
 export { ChevronDown };
-
-/** 关联字段编辑器：从目标表格选对端行（多选），存对端 row_id 数组 */
-export function RelationCellEditor({ field, value, onCommit }: CellEditorProps) {
-  const opts = parseFieldOptions(field.options);
-  const targetViewId = opts.kind === "relation" ? opts.target_view_id : null;
-  const [rows, setRows] = useState<{ id: string; label: string }[]>([]);
-  const selected = new Set(Array.isArray(value) ? value : []);
-
-  useEffect(() => {
-    let alive = true;
-    if (!targetViewId) return;
-    import("@/lib/relation").then(({ getTargetRows }) =>
-      getTargetRows(targetViewId as string).then((r) => {
-        if (alive) setRows(r);
-      }),
-    );
-    return () => {
-      alive = false;
-    };
-  }, [targetViewId]);
-
-  const toggle = (id: string) => {
-    const next = new Set(selected);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    onCommit([...next]);
-  };
-
-  return (
-    <div className="absolute inset-0 z-10" onMouseDown={(e) => e.stopPropagation()}>
-      <div className="h-full w-full bg-white" />
-      <div className="absolute inset-x-0 top-full z-20 mt-0.5 max-h-56 overflow-y-auto rounded-lg border border-neutral-300 bg-white p-1 shadow-lg">
-        {!targetViewId && <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("relation.noTarget")}</div>}
-        {targetViewId && rows.length === 0 && <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("relation.noRows")}</div>}
-        {rows.map((r) => (
-          <button
-            key={r.id}
-            className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-neutral-200/60", selected.has(r.id) && "bg-brand-100")}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => toggle(r.id)}
-          >
-            <span className="flex-1 truncate">{r.label}</span>
-            {selected.has(r.id) && <Check className="h-3.5 w-3.5 text-brand-600" />}
-          </button>
-        ))}
-      </div>
-      {/* 点击外部：提交当前选中并关闭编辑器（否则遮罩挡死整个页面无法操作） */}
-      <div className="fixed inset-0 z-10" onMouseDown={() => onCommit([...selected])} />
-    </div>
-  );
-}
 
 /** 选项彩色胶囊（单元格显示单选/多选值，带背景色）；compact 用于卡片内紧凑显示；onRemove 提供"输入框中胶囊点 X 删除" */
 export function OptionChip({ option, compact = false, onRemove }: { option?: SelectOption; compact?: boolean; onRemove?: () => void }) {

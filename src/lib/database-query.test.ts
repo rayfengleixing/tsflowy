@@ -123,8 +123,8 @@ describe("evaluateFilter", () => {
     expect(evaluateFilter("multi_select", ["a"], "not_contains", "z")).toBe(true);
   });
 
-  it("evaluates relation contains", () => {
-    expect(evaluateFilter("relation", ["row_1"], "contains", "row_1")).toBe(true);
+  it("evaluates multi_select contains", () => {
+    expect(evaluateFilter("multi_select", ["opt_1"], "contains", "opt_1")).toBe(true);
   });
 });
 
@@ -167,7 +167,6 @@ describe("opsForType / defaultOperand", () => {
   it("provides per-type operator sets", () => {
     expect(opsForType("checkbox")).toEqual(["checked", "unchecked"]);
     expect(opsForType("multi_select")).toContain("contains");
-    expect(opsForType("relation")).toEqual(["is_empty", "is_not_empty"]);
     expect(opsForType("number")).toContain("gt");
     expect(opsForType("text")).toContain("contains");
     expect(opsForType("single_select")).not.toContain("gt");

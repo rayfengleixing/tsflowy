@@ -29,7 +29,6 @@ describe("defaultValue", () => {
   it("returns typed defaults per field type", () => {
     expect(defaultValue("checkbox")).toBe(false);
     expect(defaultValue("multi_select")).toEqual([]);
-    expect(defaultValue("relation")).toEqual([]);
     expect(defaultValue("text")).toBeNull();
     expect(defaultValue("number")).toBeNull();
     expect(defaultValue("single_select")).toBeNull();
@@ -49,11 +48,10 @@ describe("validateCellValue", () => {
     expect(validateCellValue("multi_select", [1] as never)).toBe(false);
     expect(validateCellValue("single_select", "opt_1")).toBe(true);
     expect(validateCellValue("date", "2026-08-31")).toBe(true);
-    expect(validateCellValue("relation", ["row_1"])).toBe(true);
   });
 
   it("accepts null for every type", () => {
-    for (const type of ["text", "number", "date", "checkbox", "multi_select", "relation"] as const) {
+    for (const type of ["text", "number", "date", "checkbox", "multi_select"] as const) {
       expect(validateCellValue(type, null)).toBe(true);
     }
   });
@@ -75,7 +73,6 @@ describe("formatCellValue", () => {
     expect(formatCellValue("checkbox", false)).toBe("");
     expect(formatCellValue("multi_select", ["a", "b"])).toBe("a, b");
     expect(formatCellValue("multi_select", [])).toBe("");
-    expect(formatCellValue("relation", ["r1"])).toBe("1 项");
   });
 
   it("formats date with and without time", () => {
@@ -107,7 +104,6 @@ describe("parseFieldOptions / defaultOptionsFor", () => {
     expect(defaultOptionsFor("single_select")).toEqual({ kind: "select", options: [] });
     expect(defaultOptionsFor("number")).toEqual({ kind: "number", format: "decimal", precision: 2, currency: "CNY" });
     expect(defaultOptionsFor("date")).toEqual({ kind: "date", include_time: false });
-    expect(defaultOptionsFor("relation")).toEqual({ kind: "relation", target_view_id: null });
     expect(defaultOptionsFor("text")).toEqual({ kind: "none" });
   });
 

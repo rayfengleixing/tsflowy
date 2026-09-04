@@ -11,21 +11,18 @@ let db: Database | null = null;
  * 若 BEGIN 在连接 A、INSERT 在连接 B，B 拿不到写锁 → SQLITE_BUSY (code 5)。
  * 用 Promise 链序列化所有写操作，确保同一时刻只有一个写操作在执行。
  *
- * 可重入：documents.saveNow 在 withWriteLock 内调用 mentions.rebuildFor，
- * 后者走 runInTransaction → withWriteLock。若不可重入会死锁
- * （内层等外层 fn 完成，外层 fn 等内层完成）。检测到已在写锁内则直接执行不再排队。
+ * 不可重入：JS 模块级变量无法区分"同一调用栈嵌套"与"不同操作并发"，
+ * 若用 _writeDepth 做可重入，A 在 await 期间让出后 B 会误判可重入直接执行 → 并发写 → SQLITE_BUSY。
+ * 避免嵌套死锁的正确做法：不在 withWriteLock 内再调用走 withWriteLock 的函数
+ * （见 documents.saveNow：rebuildFor 已移出锁块）。
  */
 let _writeChain: Promise<unknown> = Promise.resolve();
-let _writeDepth = 0;
 
 export function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-  // 可重入：已在写锁内（同一次调用栈）则直接执行，避免嵌套死锁
-  if (_writeDepth > 0) return fn();
   const prev = _writeChain;
   let release: () => void = () => {};
   _writeChain = new Promise<void>((r) => { release = r; });
-  _writeDepth++;
-  return prev.then(() => fn()).finally(() => { _writeDepth--; release(); });
+  return prev.then(() => fn()).finally(() => release());
 }
 
 export async function getDb(): Promise<Database> {

@@ -11,12 +11,11 @@ export type FieldType =
   | "url"
   | "phone"
   | "email"
-  | "relation"
   | "created_at"
   | "last_edited_at";
 
 // 字段类型可选列表（附件字段完整上传/落库功能未实现，保留在 FieldType 中兼容历史数据；
-// created_at / last_edited_at 由触发器自动维护（READONLY_FIELD_TYPES），relation 关联字段需 UI 另行处理。
+// created_at / last_edited_at 由触发器自动维护（READONLY_FIELD_TYPES）。
 export const FIELD_TYPES: FieldType[] = [
   "text",
   "number",
@@ -27,7 +26,6 @@ export const FIELD_TYPES: FieldType[] = [
   "url",
   "phone",
   "email",
-  "relation",
   "created_at",
   "last_edited_at",
 ];
@@ -64,7 +62,7 @@ export interface DatabaseRow {
  * - text/url/phone/email/date/single_select → string
  * - number → number
  * - checkbox → boolean
- * - multi_select/relation → string[]
+ * - multi_select → string[]
  * - 空单元格 → null
  */
 export type CellValue = string | number | boolean | string[] | null;
@@ -81,7 +79,6 @@ export type FieldOptions =
   | { kind: "select"; options: SelectOption[] } // single_select / multi_select
   | { kind: "number"; format: "integer" | "decimal" | "percent" | "currency"; precision: number; currency: string }
   | { kind: "date"; include_time: boolean }
-  | { kind: "relation"; target_view_id: string | null }
   | { kind: "none" };
 
 /** 行详情视图的 extra 标记（说明书 12 节风险 7：搜索/侧边栏过滤时排除） */

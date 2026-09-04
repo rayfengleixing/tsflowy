@@ -21,7 +21,6 @@ export function defaultValue(type: FieldType): CellValue {
     case "checkbox":
       return false;
     case "multi_select":
-    case "relation":
       return [];
     default:
       return null;
@@ -46,7 +45,6 @@ export function validateCellValue(type: FieldType, value: CellValue): boolean {
     case "checkbox":
       return typeof value === "boolean";
     case "multi_select":
-    case "relation":
       return Array.isArray(value) && value.every((v) => typeof v === "string");
   }
 }
@@ -78,8 +76,6 @@ export function formatCellValue(type: FieldType, value: CellValue, options?: Fie
       return value ? "✓" : "";
     case "multi_select":
       return Array.isArray(value) ? value.join(", ") : "";
-    case "relation":
-      return Array.isArray(value) ? value.length + " 项" : "";
     case "date":
     case "created_at":
     case "last_edited_at": {
@@ -124,8 +120,6 @@ export function defaultOptionsFor(type: FieldType): FieldOptions {
       return { kind: "number", format: "decimal", precision: 2, currency: "CNY" };
     case "date":
       return { kind: "date", include_time: false };
-    case "relation":
-      return { kind: "relation", target_view_id: null };
     default:
       return { kind: "none" };
   }

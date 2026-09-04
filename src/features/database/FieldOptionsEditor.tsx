@@ -3,8 +3,6 @@ import { Plus, Trash2 } from "lucide-react";
 import type { DatabaseField, FieldOptions, SelectOption } from "@/types/database";
 import { newSelectOption, parseFieldOptions } from "@/lib/database-values";
 import { Button } from "@/components/ui/button";
-import { useWorkspaceStore } from "@/stores/workspace";
-import { flattenTree } from "@/lib/tree";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { OptionDot } from "./editors";
 import { t } from "@/lib/i18n";
@@ -165,12 +163,6 @@ export function FieldOptionsEditor(props: {
             />
             {t("field.includeTime")}
           </label>
-        ) : field.field_type === "relation" ? (
-          <RelationTargetPicker
-            currentViewId={field.database_view_id}
-            value={options.kind === "relation" ? options.target_view_id : null}
-            onChange={(vid) => setOptions({ kind: "relation", target_view_id: vid })}
-          />
         ) : (
           <p className="text-[13px] text-neutral-400">{t("field.noOptionsForType")}</p>
         )}
@@ -183,30 +175,5 @@ export function FieldOptionsEditor(props: {
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-/** 关联字段目标库选择（列出同工作区其它表格视图） */
-function RelationTargetPicker(props: { currentViewId: string | null; value: string | null; onChange: (viewId: string | null) => void }) {
-  const { currentViewId, value, onChange } = props;
-  const tree = useWorkspaceStore((s) => s.tree);
-  const gridViews = flattenTree(tree).filter((v) => v.layout === "grid" && v.id !== currentViewId);
-  return (
-    <label className="flex flex-col gap-1 text-[12px] text-neutral-500">
-      {t("field.relationTarget")}
-      <select
-        className="h-8 rounded-md border border-neutral-300 bg-white px-2 text-[13px] outline-none focus:border-brand-500"
-        value={value ?? ""}
-        onChange={(e) => onChange(e.target.value || null)}
-      >
-        <option value="">— {t("field.relationNone")} —</option>
-        {gridViews.map((v) => (
-          <option key={v.id} value={v.id}>
-            {v.name}
-          </option>
-        ))}
-      </select>
-      {gridViews.length === 0 && <span className="text-[11px] text-neutral-400">{t("field.relationNoViews")}</span>}
-    </label>
   );
 }
