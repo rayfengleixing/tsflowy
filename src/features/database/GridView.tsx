@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Download, ExternalLink, FileUp, Filter, GripVertical, Plus, Trash2 } from "lucide-react";
+import { Download, ExternalLink, FileUp, Filter, GripVertical, Plus, Trash2, Table2, LayoutGrid, Calendar } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -9,26 +9,63 @@ import { useDatabaseStore } from "@/stores/database";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { viewApi } from "@/lib/db";
 import { databaseApi } from "@/lib/database";
-import { formatCellValue, isAttachmentField, parseFieldOptions } from "@/lib/database-values";
+import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { applyFilters, sortRows, type SortSpec } from "@/lib/database-query";
 import { buildCsvExport, csvValueToCell, parseCsv, planImport } from "@/lib/csv";
-import { viewIcon } from "@/components/view-icon";
 import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
 import { NewFieldDialog } from "./NewFieldDialog";
 import { FilterBar } from "./FilterBar";
-import { AttachmentDisplay, CellEditorSlot, SelectChips } from "./editors";
+import { CellEditorSlot, SelectChips } from "./editors";
 import { RowDetailPanel } from "./RowDetail";
+import { BoardView } from "./BoardView";
+import { CalendarView } from "./CalendarView";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import type { View } from "@/types/models";
 
+type ViewMode = "grid" | "board" | "calendar";
+
+/** 视图模式切换标签（Grid/Board/Calendar 共用） */
+export function ViewModeTabs({ mode, onChange }: { mode: ViewMode; onChange: (m: ViewMode) => void }) {
+  const tabs: { key: ViewMode; icon: React.ReactNode; label: string }[] = [
+    { key: "grid", icon: <Table2 className="h-3.5 w-3.5" />, label: t("dbViewMode.grid") },
+    { key: "board", icon: <LayoutGrid className="h-3.5 w-3.5" />, label: t("dbViewMode.board") },
+    { key: "calendar", icon: <Calendar className="h-3.5 w-3.5" />, label: t("dbViewMode.calendar") },
+  ];
+  return (
+    <div className="flex items-center gap-0.5 rounded-md border border-neutral-300 bg-white text-xs">
+      {tabs.map((tab) => (
+        <button
+          key={tab.key}
+          className={cn(
+            "flex items-center gap-1 px-2 py-1 rounded transition",
+            mode === tab.key ? "bg-brand-100 text-brand-700 font-medium" : "text-neutral-600 hover:bg-neutral-100",
+          )}
+          onClick={() => onChange(tab.key)}
+        >
+          {tab.icon}
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** Grid 数据库视图（说明书 10-M4）：表头 32px / 行 32px / 单元格聚焦蓝框（6.6 节） */
-export function GridView({ view }: { view: View }) {
+export function GridView({ view, viewMode = "grid", onViewModeChange }: { view: View; viewMode?: ViewMode; onViewModeChange?: (m: ViewMode) => void }) {
   const store = useDatabaseStore();
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
+
+  // 嵌入式视图模式切换（当从 GridView 内切换到 Board/Calendar 时）
+  if (viewMode === "board" && onViewModeChange) {
+    return <BoardView view={view} viewMode="board" onViewModeChange={onViewModeChange} />;
+  }
+  if (viewMode === "calendar" && onViewModeChange) {
+    return <CalendarView view={view} viewMode="calendar" onViewModeChange={onViewModeChange} />;
+  }
 
   const [editing, setEditing] = useState<{ rowId: string; fieldId: string } | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -217,7 +254,6 @@ export function GridView({ view }: { view: View }) {
     <div className="relative flex h-full flex-col overflow-hidden bg-white">
       {/* 顶栏标题行（说明书 6.2：高 44px） */}
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-6">
-        <span className="text-lg leading-none">{viewIcon(view)}</span>
         {editingTitle ? (
           <input
             autoFocus
@@ -259,6 +295,7 @@ export function GridView({ view }: { view: View }) {
             <Download className="h-3.5 w-3.5" />
             {t("csv.export")}
           </Button>
+          {onViewModeChange && <ViewModeTabs mode={viewMode} onChange={onViewModeChange} />}
         </div>
       </div>
 
@@ -378,7 +415,6 @@ export function GridView({ view }: { view: View }) {
                   "group/row hover:bg-neutral-100 dark:hover:bg-neutral-800/60",
                   draggingRow === row.id && "opacity-40",
                 )}
-                onDoubleClick={() => void openRowDetail(row, view)}
               >
                 <td className="relative border-b border-r border-neutral-200 px-2 text-center text-[11px] text-neutral-400 dark:border-neutral-700 dark:text-neutral-500">
                   <span className="flex items-center justify-center gap-1">
@@ -404,7 +440,6 @@ export function GridView({ view }: { view: View }) {
                         isEditing && "ring-1 ring-inset ring-brand-500 dark:ring-brand-500",
                         isPrimary && "cursor-pointer",
                       )}
-                      onDoubleClick={() => void openRowDetail(row, view)}
                       onClick={() => {
                         if (isPrimary) {
                           // 名称列：单击编辑值（编辑框后的"打开"图标/双击打开所属页面）
@@ -563,9 +598,6 @@ function CellDisplay({
   onOpenRowDetail?: () => void;
 }) {
   const opts = parseFieldOptions(field.options);
-  if (isAttachmentField(field)) {
-    return <AttachmentDisplay value={value} />;
-  }
   if (field.field_type === "checkbox") {
     return (
       <div className="flex h-full items-center justify-center text-[13px] text-brand-600">
@@ -595,7 +627,7 @@ function CellDisplay({
       {primary && onOpenRowDetail && (
         <button
           type="button"
-          className="invisible group-hover/row:visible h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-brand-600 inline-flex"
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-brand-600"
           title={t("row.openDetail")}
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {

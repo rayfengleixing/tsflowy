@@ -23,6 +23,7 @@ const v = (id: string, parent_id: string | null, position: number): View => ({
   deleted_at: null,
   created_at: 0,
   updated_at: 0,
+  visited_at: null,
 });
 
 const views = [

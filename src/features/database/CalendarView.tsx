@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Plus, Table2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { useDatabaseStore } from "@/stores/database";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -10,17 +10,19 @@ import {
   defaultCalendarField,
 } from "@/lib/board-calendar";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
-import { viewIcon } from "@/components/view-icon";
 import { Button } from "@/components/ui/button";
 import { SelectChips } from "./editors";
 import { RowDetailPanel } from "./RowDetail";
+import { ViewModeTabs } from "./GridView";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import type { CellValue, DatabaseField } from "@/types/database";
 import type { View } from "@/types/models";
 
+type ViewMode = "grid" | "board" | "calendar";
+
 /** Calendar 日历视图（说明书 11 节 M5）：月视图（周一起）+ 卡片拖拽改日期 */
-export function CalendarView({ view }: { view: View }) {
+export function CalendarView({ view, viewMode = "calendar", onViewModeChange }: { view: View; viewMode?: ViewMode; onViewModeChange?: (m: ViewMode) => void }) {
   const store = useDatabaseStore();
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
@@ -118,21 +120,6 @@ export function CalendarView({ view }: { view: View }) {
     setMonth(d.getMonth() + 1);
   };
 
-  const openGrid = () => {
-    const tree = useWorkspaceStore.getState().tree;
-    const views: View[] = [];
-    const walk = (nodes: View[]) => {
-      for (const n of nodes) {
-        views.push(n);
-        // @ts-expect-error tree 带 children
-        if (Array.isArray(n.children)) walk(n.children as View[]);
-      }
-    };
-    walk(tree);
-    const grid = views.find((v) => v.layout === "grid" && v.workspace_id === view.workspace_id);
-    if (grid) useWorkspaceStore.getState().openView(grid.id);
-  };
-
   if (loading && fields.length === 0) {
     return <div className="flex h-full items-center justify-center text-sm text-neutral-500">{t("app.loading")}</div>;
   }
@@ -141,7 +128,6 @@ export function CalendarView({ view }: { view: View }) {
     <div className="relative flex h-full flex-col overflow-hidden bg-white">
       {/* 顶栏 44px */}
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-6">
-        <span className="text-lg leading-none">{viewIcon(view)}</span>
         {editingTitle ? (
           <input
             autoFocus
@@ -205,9 +191,7 @@ export function CalendarView({ view }: { view: View }) {
             {t("calendar.today")}
           </Button>
 
-          <Button variant="ghost" size="sm" onClick={openGrid} title={t("board.goGrid")}>
-            <Table2 className="h-3.5 w-3.5" />
-          </Button>
+          {onViewModeChange && <ViewModeTabs mode={viewMode} onChange={onViewModeChange} />}
         </div>
       </div>
 
@@ -216,10 +200,11 @@ export function CalendarView({ view }: { view: View }) {
           <div className="text-4xl">📅</div>
           <h2 className="text-base font-semibold text-neutral-800">{t("calendar.noField")}</h2>
           <p className="max-w-md text-sm text-neutral-500">{t("calendar.noFieldDesc")}</p>
-          <Button size="sm" onClick={openGrid}>
-            <Table2 className="mr-1 h-3.5 w-3.5" />
-            {t("board.goGrid")}
-          </Button>
+          {onViewModeChange && (
+            <Button size="sm" onClick={() => onViewModeChange("grid")}>
+              {t("board.goGrid")}
+            </Button>
+          )}
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
@@ -310,7 +295,7 @@ export function CalendarView({ view }: { view: View }) {
                             if (draggingRow === row.id) setDraggingRow(null);
                             if (dragOverDate === d.date) setDragOverDate(null);
                           }}
-                          onDoubleClick={() => void openRowDetail(row, view)}
+                          onOpenDetail={() => void openRowDetail(row, view)}
                         />
                       ))}
                     </div>
@@ -348,7 +333,7 @@ function CalCard(props: {
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
-  onDoubleClick: () => void;
+  onOpenDetail: () => void;
 }) {
   const { row, primaryField, visibleFields, cells, dragging } = props;
   const value = primaryField ? cells[row.id]?.[primaryField.id] ?? null : null;
@@ -370,14 +355,27 @@ function CalCard(props: {
       draggable
       onDragStart={props.onDragStart}
       onDragEnd={props.onDragEnd}
-      onDoubleClick={props.onDoubleClick}
       className={cn(
         "group/card cursor-grab overflow-hidden rounded border bg-white text-[11px] leading-tight shadow-sm transition active:cursor-grabbing dark:bg-neutral-800",
         dragging ? "opacity-40 ring-1 ring-brand-500" : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 hover:shadow-sm",
       )}
     >
-      <div className="truncate px-1.5 py-1 font-medium text-neutral-800 dark:text-neutral-100">
-        {title || <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>}
+      <div className="flex items-center justify-between gap-0.5 px-1.5 py-1">
+        <span className="min-w-0 flex-1 truncate font-medium text-neutral-800 dark:text-neutral-100">
+          {title || <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>}
+        </span>
+        <button
+          type="button"
+          className="shrink-0 rounded p-0.5 text-neutral-400 opacity-0 transition group-hover/card:opacity-100 hover:bg-neutral-200 hover:text-brand-600"
+          title={t("row.openDetail")}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation();
+            props.onOpenDetail();
+          }}
+        >
+          <ExternalLink className="h-2.5 w-2.5" />
+        </button>
       </div>
       {sub && (
         <div className="border-t border-neutral-100 px-1.5 py-0.5 dark:border-neutral-700">

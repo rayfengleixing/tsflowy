@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { t } from "@/lib/i18n";
 
 /** 新建字段对话框（项目说明书 5.1：字段新增；输入名称 + 选择类型）
- *  M6 修复 4：attachment 已加入 FieldType/FIELD_TYPES，成为一等字段类型，不再需要虚拟 DialogFieldType hack。
+ *  —— 附件字段完整上传/落库功能未实现，已全部移除（FIELD_TYPES 中无 attachment）。
  */
 export function NewFieldDialog(props: {
   open: boolean;

@@ -112,8 +112,15 @@ export const slashItems: SlashItem[] = [
     key: "databaseView",
     icon: <Table2 className="h-4 w-4" />,
     run: (e) => {
-      // 触发 App 级视图选择器
-      window.dispatchEvent(new CustomEvent(INSERT_DATABASE_VIEW_EVENT, { detail: { editor: e } }));
+      // 把当前 editor + 插入位置（此时 selection 尚未被 slash 关闭改写）一并传给 handler
+      window.dispatchEvent(
+        new CustomEvent(INSERT_DATABASE_VIEW_EVENT, {
+          detail: {
+            editor: e,
+            insertPos: e.state.selection.from,
+          },
+        }),
+      );
     },
   },
   {

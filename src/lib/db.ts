@@ -8,9 +8,59 @@ let db: Database | null = null;
 
 export async function getDb(): Promise<Database> {
   if (!db) {
-    db = await Database.load("sqlite:appflowy.db");
+    const inst = await Database.load("sqlite:appflowy.db");
+
+    // Phase 4 优化 · P0 #2：启用 SQLite 最佳实践
+    // 顺序：journal_mode → 其余 pragma（synchronous 依赖 journal_mode 生效）
+    const pragmas: Array<[string, unknown[]?]> = [
+      // WAL = 写入并发 + 崩溃安全；断电风险极低的桌面程序首选
+      ["PRAGMA journal_mode=WAL"],
+      // NORMAL 在 WAL 下兼顾性能与 ACID（崩溃丢最多最近一次事务写入，足够）
+      ["PRAGMA synchronous=NORMAL"],
+      // 并发写等待 5s 而非直接返回 SQLITE_BUSY
+      ["PRAGMA busy_timeout=5000"],
+      // 临时表/排序放内存（不占磁盘 I/O，仅对大 ORDER BY 生效）
+      ["PRAGMA temp_store=MEMORY"],
+      // 启用外键（tauri-plugin-sql 有的连接默认关闭；迁移里 001 已在事务里打开，但每条连接都要强制）
+      ["PRAGMA foreign_keys=ON"],
+      // cache_size = 页（通常 4KB）× 10000 ≈ 40 MB，足够 500MB 数据库热页命中
+      ["PRAGMA cache_size=-10000"],
+    ];
+    for (const [p, args] of pragmas) {
+      try {
+        // tauri-plugin-sql: Database 只有 select/execute，pragma 用 select 可带回结果。
+        // 对 journal_mode 我们不校验（Tauri + rusqlite 在某些 Windows 下会返回 memory 也 OK）
+        if (args?.length) await inst.select(p, args);
+        else await inst.select(p);
+      } catch (e) {
+        // PRAGMA 失败不致命；但至少 warn 一下
+        console.warn("[db] pragma apply failed", p, e);
+      }
+    }
+    db = inst;
   }
   return db;
+}
+
+/**
+ * SQLite 简易事务 helper：BEGIN → 运行 fn → COMMIT；fn 抛异常则 ROLLBACK。
+ * 警告：tauri-plugin-sql 每条 execute 自动 commit（它内部用的是 rusqlite 的 auto-commit 连接），
+ * 所以需要显式 BEGIN/COMMIT 包裹；嵌套调用会失败（SQLite 不支持真实嵌套事务），
+ * 调用方应避免嵌套 runInTransaction。
+ */
+export async function runInTransaction<T>(
+  fn: (d: Database) => Promise<T>,
+): Promise<T> {
+  const d = await getDb();
+  await d.execute("BEGIN");
+  try {
+    const result = await fn(d);
+    await d.execute("COMMIT");
+    return result;
+  } catch (e) {
+    try { await d.execute("ROLLBACK"); } catch { /* ignore rollback failure */ }
+    throw e;
+  }
 }
 
 const now = () => Date.now();
@@ -89,6 +139,21 @@ export const viewApi = {
     );
   },
 
+  /** 最近访问视图：按 visited_at 倒序，排除回收站/行详情（Phase 3.2 - Recent Tab） */
+  async listRecent(workspaceId: string, limit = 30): Promise<View[]> {
+    const d = await getDb();
+    return d.select<View[]>(
+      "SELECT * FROM views WHERE workspace_id = $1 AND is_trash = 0 AND visited_at IS NOT NULL AND json_extract(extra, '$.row_detail') IS NOT 1 ORDER BY visited_at DESC LIMIT $2",
+      [workspaceId, limit],
+    );
+  },
+
+  /** 标记视图为"最近被打开"：openView 时调用，驱动 Recent Tab 列表 */
+  async touchVisited(id: string): Promise<void> {
+    const d = await getDb();
+    await d.execute("UPDATE views SET visited_at = $1 WHERE id = $2", [now(), id]);
+  },
+
   async create(opts: {
     workspace_id: string;
     parent_id: string | null;
@@ -111,10 +176,20 @@ export const viewApi = {
       [id, opts.workspace_id, opts.parent_id, opts.name, opts.layout, extra, position, t],
     );
     if (opts.layout === "document") {
-      // 文档布局需预置空内容行（说明书 14 节：新建视图时须插入默认 content 行）
+      // 文档布局需预置内容行：默认第一行 H1 标题 = 文档名（需求3）
+      const defaultContent = JSON.stringify({
+        type: "doc",
+        content: [
+          {
+            type: "heading",
+            attrs: { level: 1 },
+            content: [{ type: "text", text: opts.name }],
+          },
+        ],
+      });
       await d.execute(
-        'INSERT INTO documents(view_id, content, updated_at) VALUES ($1, \'{"type":"doc","content":[]}\', $2)',
-        [id, t],
+        'INSERT INTO documents(view_id, content, updated_at) VALUES ($1, $2, $3)',
+        [id, defaultContent, t],
       );
     }
     return {
@@ -131,6 +206,7 @@ export const viewApi = {
       deleted_at: null,
       created_at: t,
       updated_at: t,
+      visited_at: null,
     };
   },
 
@@ -247,14 +323,18 @@ export const viewApi = {
     }
     const updates = computeRenumber(views, viewId, newParentId, index);
     if (updates.length === 0) return;
-    for (const u of updates) {
-      await d.execute("UPDATE views SET parent_id = $1, position = $2, updated_at = $3 WHERE id = $4", [
-        u.parent_id,
-        u.position,
-        now(),
-        u.id,
-      ]);
-    }
+    const t = now();
+    // Phase 4 优化 · P2#6：批量重排必须原子，避免崩溃出现父子关系刷新一半
+    await runInTransaction(async (tx) => {
+      for (const u of updates) {
+        await tx.execute("UPDATE views SET parent_id = $1, position = $2, updated_at = $3 WHERE id = $4", [
+          u.parent_id,
+          u.position,
+          t,
+          u.id,
+        ]);
+      }
+    });
   },
 
   /** 获取当前应用的工作区标识（app_settings 键值，供 store 恢复） */

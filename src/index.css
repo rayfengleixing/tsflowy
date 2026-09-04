@@ -195,8 +195,10 @@
 /* ---------- TipTap 编辑器块样式（M3，对齐说明书 6.5 字体/色板） ---------- */
 .tiptap {
   min-height: 200px;
-  font-size: 14px;
-  line-height: 1.75;
+  /* 默认 16px（旧 14px → M6 升级）；可由设置页字号档位通过 --tiptap-font-size 覆盖 */
+  font-size: var(--tiptap-font-size, 16px);
+  /* 默认 1.75（与原硬编码一致）；可由设置页行距档位通过 --tiptap-line-height 覆盖 */
+  line-height: var(--tiptap-line-height, 1.75);
   color: #3D404F;
 }
 .dark .tiptap {
@@ -217,9 +219,11 @@
 .dark .tiptap h1, .dark .tiptap h2, .dark .tiptap h3 {
   color: var(--foreground);
 }
-.tiptap h1 { font-size: 24px; }
-.tiptap h2 { font-size: 20px; }
-.tiptap h3 { font-size: 16px; }
+/* 标题用 em 跟随正文 --tiptap-font-size 联动缩放：
+   sm(14px) 档下 ≈ 24/20/16px（与原版像素值一致），md/lg/xl 档按比例放大 */
+.tiptap h1 { font-size: 1.7em; }
+.tiptap h2 { font-size: 1.4em; }
+.tiptap h3 { font-size: 1.15em; }
 .tiptap ul, .tiptap ol {
   padding-left: 1.4em;
   margin: 0;
@@ -249,12 +253,27 @@
 }
 .tiptap ul[data-type="taskList"] li {
   display: flex;
-  align-items: flex-start;
+  align-items: first baseline;
   gap: 0.5em;
 }
 .tiptap ul[data-type="taskList"] li > label {
-  margin-top: 0.3em;
+  /* 让 checkbox 与第一行文字的 baseline 对齐（需求1） */
   user-select: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  /* 抵消 checkbox 自身 baseline 偏移：将 label 盒子略下沉，使 checkbox center ≈ 文字 x-height 基线 */
+  height: 1.5em;
+  transform: translateY(0.12em);
+}
+.tiptap ul[data-type="taskList"] li > label input[type="checkbox"] {
+  margin: 0;
+  width: 1em;
+  height: 1em;
+  display: block;
+  cursor: pointer;
+  accent-color: var(--color-brand-500, #00B5FF);
 }
 .tiptap ul[data-type="taskList"] li > div {
   flex: 1;
@@ -398,4 +417,26 @@ html, body, #root {
   height: 100%;
   width: 100%;
   overflow: auto;
+}
+
+/* — @mention 双链样式（视觉上必须像 Notion "蓝色下划线可点击胶囊"，不依赖 Tailwind JIT） — */
+.mention {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  margin: 0 1px;
+  border-radius: 4px;
+  color: #0092D6 !important;         /* 蓝 brand-600 */
+  background: #E3F6FF;                /* brand-50 浅蓝底 */
+  text-decoration: underline dotted #00B5FF 1px;
+  text-underline-offset: 3px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+  user-select: none;
+}
+.mention:hover {
+  background: #BDEBFF;
+  color: #006EAA !important;
+  text-decoration-style: solid;
 }

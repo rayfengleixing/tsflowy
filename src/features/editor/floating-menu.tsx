@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/core";
+import type { Selection } from "@tiptap/pm/state";
 import {
   Bold,
   Italic,
@@ -174,12 +175,35 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
 
   useEffect(() => {
     if (!editor) return;
+    /** 判断是否是真正的"字符范围选择"（TextSelection 且 from!==to），排除 NodeSelection/AllSelection
+     *  —— 防止打开页面/加载文档时因 ProseMirror 内部 NodeSelection 初始化事件触发工具栏默认显示（需求2彻底修复）
+     */
+    const isCharSelection = (sel: Selection): boolean => {
+      if (!sel || sel.empty) return false;
+      const name = sel.constructor?.name as string | undefined;
+      if (name) {
+        if (name !== "TextSelection") return false; // NodeSelection/AllSelection/GapSelection etc 一律不显示
+      } else {
+        // Fallback：没有 constructor name 就通过"起点/终点都在 inline 文本块中"判断
+        try {
+          const { $from, $to } = sel;
+          if (!$from.parent.isTextblock || !$to.parent.isTextblock) return false;
+        } catch {
+          return false;
+        }
+      }
+      if (typeof sel.from !== "number" || typeof sel.to !== "number") return false;
+      if (sel.from >= sel.to) return false;
+      return true;
+    };
+
     const update = () => {
       forceUpdate((x) => x + 1);
       const sel = editor.state.selection;
-      if (sel.empty) { setVisible(false); return; }
+      // 需求2（严格门）：必须是字符范围选择
+      if (!isCharSelection(sel)) { setVisible(false); return; }
       // 跳过图片/代码块/表格/数据库/其他 atom 容器节点
-      const forbidden = ["image", "codeBlock", "table", "math", "databaseView", "attachment", "callout", "toggle", "columns", "imageGallery", "outline", "subPage"];
+      const forbidden = ["image", "codeBlock", "table", "math", "databaseView", "attachment", "callout", "toggle", "columns", "imageGallery", "outline"];
       for (const name of forbidden) {
         if (editor.isActive(name)) { setVisible(false); return; }
       }
@@ -220,7 +244,16 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
     return () => window.removeEventListener("scroll", onScroll, true);
   }, [visible]);
 
-  if (!editor || !visible) return null;
+  // 需求2：渲染级再兜一层 —— 只有 TextSelection（字符范围）选中才渲染
+  const selection = editor?.state.selection;
+  const isCharSelection =
+    !!selection &&
+    !selection.empty &&
+    typeof selection.from === "number" &&
+    typeof selection.to === "number" &&
+    selection.from < selection.to &&
+    selection.constructor?.name === "TextSelection";
+  if (!editor || !visible || !isCharSelection) return null;
 
   const closeAll = () => {
     setColorOpen(false);

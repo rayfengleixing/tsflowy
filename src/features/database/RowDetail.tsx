@@ -18,11 +18,11 @@ import {
 import type { CellValue, DatabaseField, DatabaseRow, FieldType } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { useDatabaseStore } from "@/stores/database";
-import { formatCellValue, isAttachmentField, parseFieldOptions } from "@/lib/database-values";
+import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { cn } from "@/lib/utils";
 import type { View } from "@/types/models";
 import { EditorPage } from "@/features/editor/EditorPage";
-import { AttachmentDisplay, CellEditorSlot, SelectChips } from "./editors";
+import { CellEditorSlot, SelectChips } from "./editors";
 import { NewFieldDialog } from "./NewFieldDialog";
 import { t } from "@/lib/i18n";
 
@@ -57,9 +57,6 @@ function RowPropertyField({ field, row }: { field: DatabaseField; row: DatabaseR
   };
 
   const display = (() => {
-    if (isAttachmentField(field)) {
-      return <AttachmentDisplay value={value} />;
-    }
     if (field.field_type === "single_select" || field.field_type === "multi_select") {
       return <SelectChips field={field} value={value} />;
     }
@@ -153,8 +150,7 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
       </div>
       <NewFieldDialog open={newFieldOpen} onOpenChange={setNewFieldOpen} onCreate={async (name, type) => {
         try {
-          if (type === "attachment") await store.addAttachmentField(name);
-          else await store.addField(type, name);
+          await store.addField(type, name);
           setNewFieldOpen(false);
         } catch (e) {
           console.error("add field failed", e);

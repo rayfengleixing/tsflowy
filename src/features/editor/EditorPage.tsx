@@ -16,7 +16,6 @@ import { TableCell } from "@tiptap/extension-table-cell";
 import { type JSONContent } from "@tiptap/core";
 import { Slice, Fragment, Node as PMNode } from "@tiptap/pm/model";
 import { toast } from "sonner";
-import { viewIcon } from "@/components/view-icon";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { documentApi } from "@/lib/documents";
 import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown";
@@ -40,6 +39,8 @@ import Mention from "@tiptap/extension-mention";
 import { buildMentionSuggestion } from "./extensions/mention/suggestion";
 // — M3 高级块结束 —
 import "highlight.js/styles/github.css";
+import { FirstHeadingLock } from "./extensions/first-heading-lock";
+import { SubPagePicker } from "./SubPagePicker";
 
 const AUTOSAVE_MS = 800;
 
@@ -74,6 +75,7 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
   const renameView = useWorkspaceStore((s) => s.renameView);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(view.name);
+  const [subPickerOpen, setSubPickerOpen] = useState(false);
 
   const editorRef = useRef<ReturnType<typeof useEditor>>(null);
   const dirtyRef = useRef(false);
@@ -153,9 +155,10 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
       }),
       // — M3 高级块结束 —
       ...(hideSlash ? [] : [SlashMenu]),
+      FirstHeadingLock.configure({ viewId: view.id }),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [hideSlash],
+    [hideSlash, view.id],
   );
 
   const editor = useEditor({
@@ -361,7 +364,6 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
       {/* 顶栏标题行（说明书 6.2：高 44px；行详情弹窗复用正文时可隐藏） */}
       {!hideTitle && (
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-6">
-        <span className="text-lg leading-none">{viewIcon(view)}</span>
         {editingTitle ? (
           <input
             autoFocus
@@ -385,6 +387,14 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
             {view.name}
           </h1>
         )}
+        <button
+          type="button"
+          onClick={() => setSubPickerOpen(true)}
+          className="shrink-0 rounded px-2 py-0.5 text-[11px] text-neutral-500 hover:bg-neutral-100 hover:text-brand-600"
+          title={t("subPage.insertBtn")}
+        >
+          + {t("subPage.insert")}
+        </button>
         <span className="shrink-0 text-[11px] text-neutral-400">{editor?.storage.characterCount.characters?.() ?? 0} chars</span>
       </div>
       )}
@@ -394,9 +404,23 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
         <div className="mx-auto max-w-[800px] px-6 py-4">
           <EditorContent editor={editor} />
           <FloatingMenu editor={editor ?? undefined} />
-          <TableContextMenu editor={editor} />
+          <TableContextMenu editor={editor ?? undefined} />
         </div>
       </div>
+
+      <SubPagePicker
+        open={subPickerOpen}
+        onClose={() => setSubPickerOpen(false)}
+        onPick={(viewId, _name) => {
+          if (editorRef.current && !editorRef.current.isDestroyed) {
+            editorRef.current.chain().focus().insertContent({
+              type: "subPage",
+              attrs: { viewId },
+            }).run();
+          }
+          setSubPickerOpen(false);
+        }}
+      />
     </div>
   );
 }

@@ -1,0 +1,12 @@
+dist
+node_modules
+src-tauri
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+*.woff
+*.woff2
+*.ttf
+*.mp4

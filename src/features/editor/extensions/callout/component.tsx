@@ -1,5 +1,5 @@
 import { NodeViewContent, NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
-import { Palette, X } from "lucide-react";
+import { X } from "lucide-react";
 import type { CalloutColor } from "./node";
 import { EMOJIS } from "@/components/emoji-picker";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -18,10 +18,10 @@ const COLOR_TOKENS: Record<CalloutColor, { bar: string; bg: string; border: stri
 const COLORS = Object.keys(COLOR_TOKENS) as CalloutColor[];
 
 /**
- * Callout 组件重写（M6 修复 2）：
- *  - emoji 选择：用 shadcn Popover（内部 createPortal 到 body），绝对不会撑开 callout
- *  - 颜色选择：由"左侧竖排 6 个圆点 inline"改为 1 个 Palette 按钮 → Popover 浮层选色（不占 callout 垂直高度）
- *  - 避免经验 1508571 的问题：Popover 内部 outside-click 已做 trigger+content 的白名单，不会点选即关闭
+ * Callout（提示框）组件：
+ *  - emoji 与内容：第一行 inline-flex，emoji 大小与文字（~16px/24px行高）匹配，vertical center 对齐
+ *  - 颜色选择：合并进 emoji 选择菜单中（菜单底部横排 6 色圆点），整体 1 个 Popover 触发按钮
+ *  - Popover 使用 createPortal，绝不会撑开 callout 本身高度
  */
 export function CalloutNodeView(props: ReactNodeViewProps<HTMLElement>) {
   const { node, updateAttributes, deleteNode, selected } = props;
@@ -33,83 +33,77 @@ export function CalloutNodeView(props: ReactNodeViewProps<HTMLElement>) {
     <NodeViewWrapper
       data-drag-handle
       className={cn(
-        "group/callout relative my-3 flex gap-2 rounded-lg border p-3",
+        "group/callout relative my-3 rounded-lg border p-3",
         tokens.bg,
         tokens.border,
         selected && "ring-2 ring-brand-500",
       )}
     >
-      <div className={cn("w-1 shrink-0 rounded-full", tokens.bar)} />
-      {/* 左侧 1 列：emoji + palette 两个工具按钮（Popover 弹出，本身只占 h-8 两行） */}
-      <div className="flex shrink-0 flex-col items-center gap-1 pt-1">
+      <div className="flex items-start gap-3">
+        {/* 左侧竖条 + emoji + 选择按钮（一行内，大小与正文第一行文字一致） */}
+        <div className={cn("w-1 shrink-0 self-stretch rounded-full", tokens.bar)} />
         <Popover>
           <PopoverTrigger asChild>
             <button
-              className="flex h-8 w-8 items-center justify-center rounded text-2xl hover:bg-white/70"
+              className="-my-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-base leading-none hover:bg-white/70"
               title={t("callout.changeIcon")}
               onMouseDown={(e) => e.preventDefault()}
+              style={{ fontSize: "18px", lineHeight: 1 }}
             >
               {emoji}
             </button>
           </PopoverTrigger>
-          <PopoverContent align="end" side="right" sideOffset={6} className="w-auto p-2">
-            <div className="grid grid-cols-6 gap-1">
-              {EMOJIS.map((e) => (
-                <button
-                  key={e}
-                  type="button"
-                  className={cn(
-                    "flex h-7 w-7 items-center justify-center rounded text-lg hover:bg-neutral-200",
-                    emoji === e && "bg-brand-50 ring-1 ring-brand-500",
-                  )}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    updateAttributes({ emoji: e });
-                  }}
-                >
-                  {e}
-                </button>
-              ))}
+          <PopoverContent align="start" side="right" sideOffset={6} className="w-auto p-2">
+            {/* 上半部分：emoji 选择 */}
+            <div className="mb-1.5 border-b border-neutral-200 pb-1.5">
+              <div className="mb-1 px-0.5 text-[11px] uppercase tracking-wide text-neutral-400">{t("callout.changeIcon")}</div>
+              <div className="grid grid-cols-6 gap-1">
+                {EMOJIS.map((e) => (
+                  <button
+                    key={e}
+                    type="button"
+                    className={cn(
+                      "flex h-7 w-7 items-center justify-center rounded text-lg hover:bg-neutral-200",
+                      emoji === e && "bg-brand-50 ring-1 ring-brand-500",
+                    )}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      updateAttributes({ emoji: e });
+                    }}
+                  >
+                    {e}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* 下半部分：颜色圆点横排（与 emoji 共用菜单） */}
+            <div>
+              <div className="mb-1 px-0.5 text-[11px] uppercase tracking-wide text-neutral-400">{t("callout.changeColor")}</div>
+              <div className="flex items-center gap-1.5 px-1">
+                {COLORS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    title={COLOR_TOKENS[c].name}
+                    className={cn(
+                      "h-6 w-6 rounded-full border border-neutral-200 hover:scale-110 transition",
+                      COLOR_TOKENS[c].dot,
+                      color === c && "ring-2 ring-brand-500 ring-offset-1",
+                    )}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      updateAttributes({ color: c });
+                    }}
+                  />
+                ))}
+              </div>
             </div>
           </PopoverContent>
         </Popover>
 
-        {/* 6 个主题色切换：1 个 Palette 按钮 → Popover 浮层横排 6 色 dot（绝对不占 callout 内高度） */}
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              className="flex h-7 w-7 items-center justify-center rounded text-neutral-600 hover:bg-white/70"
-              title={t("callout.changeColor")}
-              onMouseDown={(e) => e.preventDefault()}
-            >
-              <Palette className="h-3.5 w-3.5" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent align="end" side="right" sideOffset={6} className="w-auto p-2">
-            <div className="flex items-center gap-1.5">
-              {COLORS.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  title={COLOR_TOKENS[c].name}
-                  className={cn(
-                    "h-6 w-6 rounded-full border border-neutral-200 hover:scale-110 transition",
-                    COLOR_TOKENS[c].dot,
-                    color === c && "ring-2 ring-brand-500 ring-offset-1",
-                  )}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    updateAttributes({ color: c });
-                  }}
-                />
-              ))}
-            </div>
-          </PopoverContent>
-        </Popover>
-      </div>
-
-      <div className="min-w-0 flex-1">
-        <NodeViewContent className="ProseMirror-callout-content" />
+        <div className="min-w-0 flex-1 pt-0">
+          <NodeViewContent className="ProseMirror-callout-content [&>p:first-child]:leading-6 [&>p:first-child]:py-0 [&>p:first-child]:my-0 [&>p:first-child]:text-[15px]" />
+        </div>
       </div>
       <button
         className="absolute right-2 top-2 hidden h-7 w-7 items-center justify-center rounded-md bg-neutral-900/70 text-white hover:bg-neutral-900 group-hover/callout:flex"

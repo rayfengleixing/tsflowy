@@ -8,7 +8,14 @@
     "opener:default",
     "sql:default",
     "sql:allow-execute",
-    "fs:default",
+    "fs:allow-read-dir",
+    "fs:allow-read-text-file",
+    "fs:allow-appdata-write-recursive",
+    "fs:allow-appconfig-write-recursive",
+    "fs:allow-appcache-write-recursive",
+    "fs:allow-home-read",
+    "dialog:allow-open",
+    "dialog:allow-save",
     "dialog:default"
   ]
 }

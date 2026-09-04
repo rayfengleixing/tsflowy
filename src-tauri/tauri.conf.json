@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self' asset: ipc: http://asset.localhost; img-src 'self' asset: https: http: data: blob:; media-src 'self' asset: https: http: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data: blob:; connect-src 'self' ipc: http://asset.localhost;",
       "assetProtocol": {
         "enable": true,
         "scope": [
@@ -40,6 +40,17 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "displayLanguageSelector": false,
+        "installerPattern": "${productName}-${version}-${arch}-setup",
+        "languages": [
+          "SimpChinese"
+        ]
+      }
+    }
   }
 }

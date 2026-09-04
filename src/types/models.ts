@@ -24,6 +24,8 @@ export interface View {
   deleted_at: number | null;
   created_at: number;
   updated_at: number;
+  /** 最近一次被用户打开（openView）的时间戳；NULL=从未访问（Phase 3.2 Recent Tab） */
+  visited_at: number | null;
 }
 
 export interface ViewNode extends View {

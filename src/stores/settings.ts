@@ -3,17 +3,63 @@ import { create } from "zustand";
 export type ThemeMode = "light" | "dark" | "system";
 export type AccentColor = "blue" | "green" | "orange" | "purple" | "red" | "yellow";
 export type FontFamily = "sans" | "serif" | "mono";
+/** 编辑器正文字号档位：sm 14 / md 16（默认）/ lg 18 / xl 20 */
+export type FontSize = "sm" | "md" | "lg" | "xl";
+
+export const FONT_SIZE_PX: Record<FontSize, number> = {
+  sm: 14,
+  md: 16,
+  lg: 18,
+  xl: 20,
+};
+export const FONT_SIZE_PRESETS: FontSize[] = ["sm", "md", "lg", "xl"];
+
+const FONT_SIZE_KEY = "tsflowy-font-size";
+
+function loadFontSize(): FontSize {
+  try {
+    const v = localStorage.getItem(FONT_SIZE_KEY);
+    return v === "sm" || v === "md" || v === "lg" || v === "xl" ? v : "md";
+  } catch {
+    return "md";
+  }
+}
+
+/** 编辑器正文行距档位：紧凑 1.5 / 正常 1.75（默认，与原硬编码一致）/ 宽松 2.0 */
+export type LineHeight = "compact" | "normal" | "loose";
+
+export const LINE_HEIGHT_VALUE: Record<LineHeight, number> = {
+  compact: 1.5,
+  normal: 1.75,
+  loose: 2.0,
+};
+export const LINE_HEIGHT_PRESETS: LineHeight[] = ["compact", "normal", "loose"];
+
+const LINE_HEIGHT_KEY = "tsflowy-line-height";
+
+function loadLineHeight(): LineHeight {
+  try {
+    const v = localStorage.getItem(LINE_HEIGHT_KEY);
+    return v === "compact" || v === "normal" || v === "loose" ? v : "normal";
+  } catch {
+    return "normal";
+  }
+}
 
 interface SettingsState {
   lang: "zh-CN" | "en-US";
   theme: ThemeMode;
   accent: AccentColor;
   font: FontFamily;
+  fontSize: FontSize;
+  lineHeight: LineHeight;
 
   setLang: (lang: "zh-CN" | "en-US") => void;
   setTheme: (t: ThemeMode) => void;
   setAccent: (a: AccentColor) => void;
   setFont: (f: FontFamily) => void;
+  setFontSize: (s: FontSize) => void;
+  setLineHeight: (l: LineHeight) => void;
 }
 
 const ACCENT_CLASS_BY_COLOR: Record<AccentColor, { brand: string; palette: Record<50|100|500|600, string> }> = {
@@ -75,11 +121,23 @@ export function applyFontToDocument(font: FontFamily) {
   body.classList.add(FONT_CLASS[font]);
 }
 
+/** 把正文字号写到 <html> 的 --tiptap-font-size CSS 变量，由 .tiptap 读取（默认 16px 兜底） */
+export function applyFontSizeToDocument(size: FontSize) {
+  document.documentElement.style.setProperty("--tiptap-font-size", `${FONT_SIZE_PX[size]}px`);
+}
+
+/** 把正文行距写到 <html> 的 --tiptap-line-height CSS 变量，由 .tiptap 读取（默认 1.75 兜底） */
+export function applyLineHeightToDocument(lh: LineHeight) {
+  document.documentElement.style.setProperty("--tiptap-line-height", `${LINE_HEIGHT_VALUE[lh]}`);
+}
+
 export const useSettingsStore = create<SettingsState>()((set) => ({
   lang: "zh-CN",
   theme: "light",
   accent: "blue",
   font: "sans",
+  fontSize: loadFontSize(),
+  lineHeight: loadLineHeight(),
 
   setLang: (lang) => set({ lang }),
   setTheme: (theme) => {
@@ -94,6 +152,24 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     set({ font });
     applyFontToDocument(font);
   },
+  setFontSize: (fontSize) => {
+    set({ fontSize });
+    try {
+      localStorage.setItem(FONT_SIZE_KEY, fontSize);
+    } catch {
+      /* localStorage 不可用时静默降级 */
+    }
+    applyFontSizeToDocument(fontSize);
+  },
+  setLineHeight: (lineHeight) => {
+    set({ lineHeight });
+    try {
+      localStorage.setItem(LINE_HEIGHT_KEY, lineHeight);
+    } catch {
+      /* localStorage 不可用时静默降级 */
+    }
+    applyLineHeightToDocument(lineHeight);
+  },
 }));
 
 /** App 启动时用 settings 存储当前值立即写一次（避免第一次进入才有效果） */
@@ -101,6 +177,8 @@ export function bootstrapVisualSettings() {
   const s = useSettingsStore.getState();
   applyAccentToDocument(s.accent);
   applyFontToDocument(s.font);
+  applyFontSizeToDocument(s.fontSize);
+  applyLineHeightToDocument(s.lineHeight);
   return applyThemeToDocument(s.theme);
 }
 

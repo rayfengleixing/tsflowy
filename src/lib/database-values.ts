@@ -47,7 +47,6 @@ export function validateCellValue(type: FieldType, value: CellValue): boolean {
       return typeof value === "boolean";
     case "multi_select":
     case "relation":
-    case "attachment":
       return Array.isArray(value) && value.every((v) => typeof v === "string");
   }
 }
@@ -127,16 +126,9 @@ export function defaultOptionsFor(type: FieldType): FieldOptions {
       return { kind: "date", include_time: false };
     case "relation":
       return { kind: "relation", target_view_id: null };
-    case "attachment":
-      return { kind: "attachment" };
     default:
       return { kind: "none" };
   }
-}
-
-/** 判断字段是否为附件类型（field_type=url 但 options 标记 attachment） */
-export function isAttachmentField(field: { options: string }): boolean {
-  return parseFieldOptions(field.options).kind === "attachment";
 }
 
 export function newSelectOption(name: string): SelectOption {

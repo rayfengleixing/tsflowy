@@ -42,7 +42,7 @@ export function NewPageMenu({ parentId = null, align = "start", triggerClassName
         )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align={align} className="w-44">
-        {LAYOUTS.map((layout) => (
+        {LAYOUTS.filter((l) => l === "document" || l === "grid").map((layout) => (
           <DropdownMenuItem key={layout} onSelect={() => handleCreate(layout)}>
             <span className="mr-2 text-neutral-500">{layoutMeta(layout).icon}</span>
             {layoutMeta(layout).label}

@@ -5,6 +5,7 @@ import { databaseApi } from "@/lib/database";
 import { newSelectOption } from "@/lib/database-values";
 import { buildTree, flattenTree } from "@/lib/tree";
 import { useSettingsStore } from "./settings";
+import { logger } from "@/lib/logger";
 
 export type Route = "workspace" | "trash" | "search" | "settings";
 
@@ -57,6 +58,8 @@ interface WorkspaceState {
   expand: (id: string) => void;
   setExpandedAll: (ids: Set<string>) => void;
   setSidebarWidth: (w: number) => void;
+  /** Phase 4.4：打开（或新建）指定日期的 Daily Note，日期格式 YYYY-MM-DD（默认今天），命名空间工作区根级。 */
+  openDailyNote: (date?: Date) => Promise<void>;
 }
 
 let initPromise: Promise<void> | null = null;
@@ -65,6 +68,67 @@ let initPromise: Promise<void> | null = null;
 let autoPurgeTimer: ReturnType<typeof setInterval> | null = null;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 const HOURLY_MS = 60 * 60 * 1000;
+
+const TABS_KEY = (wsId: string) => `ui:tabs:${wsId}`;
+const CURRENT_KEY = (wsId: string) => `ui:current_view:${wsId}`;
+
+/** 标签页/当前视图写回 app_settings 的 300ms 去抖（避免每次 closeTab/reorderTabs 写 DB） */
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistPendingWs: string | null = null;
+let persistPendingTabs: string[] | null = null;
+let persistPendingCurrent: string | null | undefined = undefined; // undefined=未变化；null=清空
+
+function schedulePersistUi(wsId: string, tabIds: string[], currentViewId: string | null) {
+  persistPendingWs = wsId;
+  persistPendingTabs = tabIds;
+  persistPendingCurrent = currentViewId;
+  if (persistTimer !== null) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    const wsId2 = persistPendingWs;
+    const tabs2 = persistPendingTabs;
+    const cur2 = persistPendingCurrent;
+    persistTimer = null;
+    persistPendingWs = null;
+    persistPendingTabs = null;
+    persistPendingCurrent = undefined;
+    if (!wsId2 || !tabs2) return;
+    void (async () => {
+      try {
+        await viewApi.setSetting(TABS_KEY(wsId2), JSON.stringify(tabs2));
+        if (cur2 !== undefined) {
+          if (cur2 === null) {
+            await viewApi.setSetting(CURRENT_KEY(wsId2), "");
+          } else {
+            await viewApi.setSetting(CURRENT_KEY(wsId2), cur2);
+          }
+        }
+      } catch (e) {
+        logger.warn("WorkspaceStore", "persist tabs failed", wsId2, e);
+      }
+    })();
+  }, 300);
+}
+
+async function loadTabsForWs(wsId: string, tree: ViewNode[]): Promise<{ tabs: View[]; currentViewId: string | null }> {
+  try {
+    const [tabsRaw, curRaw] = await Promise.all([
+      viewApi.getSetting(TABS_KEY(wsId)),
+      viewApi.getSetting(CURRENT_KEY(wsId)),
+    ]);
+    const ids: string[] = tabsRaw ? JSON.parse(tabsRaw) as string[] : [];
+    const byId = new Map<string, ViewNode>();
+    for (const n of flattenTree(tree)) byId.set(n.id, n);
+    const tabs = ids.map((i) => byId.get(i)).filter(Boolean) as ViewNode[];
+    let currentViewId = curRaw ?? null;
+    if (currentViewId && !byId.has(currentViewId)) currentViewId = null;
+    // 若持久化中没有 current，但 tabs 有，默认第一个
+    if (!currentViewId && tabs.length > 0) currentViewId = tabs[0].id;
+    return { tabs, currentViewId };
+  } catch (e) {
+    logger.warn("WorkspaceStore", "load tabs failed", wsId, e);
+    return { tabs: [], currentViewId: null };
+  }
+}
 
 const purgeAllExpiredTrash = async (): Promise<void> => {
   const workspaces = useWorkspaceStore.getState().workspaces;
@@ -75,7 +139,7 @@ const purgeAllExpiredTrash = async (): Promise<void> => {
     try {
       await viewApi.purgeExpiredTrash(ws.id, deadline);
     } catch (e) {
-      console.error("auto purge expired trash failed", ws.id, e);
+      logger.error("WorkspaceStore", "auto purge expired trash failed", ws.id, e);
     }
   }
   // 如果当前 workspace 的 trash 列表在 store，重新 reload 刷新 UI
@@ -83,7 +147,54 @@ const purgeAllExpiredTrash = async (): Promise<void> => {
   if (ws) await useWorkspaceStore.getState().reload();
 };
 
-export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
+/** 递归更新树中某个节点的 icon（避免全量 reload，提升响应速度） */
+function patchTreeIcon(tree: ViewNode[], id: string, icon: string | null): ViewNode[] {
+  return tree.map((node) => {
+    if (node.id === id) return { ...node, icon };
+    if (node.children.length > 0) return { ...node, children: patchTreeIcon(node.children, id, icon) };
+    return node;
+  });
+}
+
+/** 递归更新树中某个节点的 name */
+function patchTreeName(tree: ViewNode[], id: string, name: string): ViewNode[] {
+  return tree.map((node) => {
+    if (node.id === id) return { ...node, name };
+    if (node.children.length > 0) return { ...node, children: patchTreeName(node.children, id, name) };
+    return node;
+  });
+}
+
+type EqualityFn<T> = (a: T, b: T) => boolean;
+
+/**
+ * 扩展版 hook 类型：zustand v5 默认删除了第二参数（equalityFn）重载，
+ * 项目沿用 v4 风格，这里显式声明三个调用重载 + StoreApi 静态方法，
+ * 保证 selector 内 `s` 的 WorkspaceState 类型推断正常。
+ */
+interface UseWorkspaceStoreHook {
+  (): WorkspaceState;
+  <U>(selector: (s: WorkspaceState) => U): U;
+  <U>(selector: (s: WorkspaceState) => U, equalityFn: EqualityFn<U>): U;
+  getState: () => WorkspaceState;
+  getInitialState: () => WorkspaceState;
+  setState: (
+    partial:
+      | Partial<WorkspaceState>
+      | ((state: WorkspaceState) => Partial<WorkspaceState> | WorkspaceState),
+    replace?: boolean,
+  ) => void;
+  subscribe: (listener: (state: WorkspaceState, prevState: WorkspaceState) => void) => () => void;
+}
+
+const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
+  // 把 tabs + current 状态根据 ids 计算并 schedule 持久化（所有状态变更都走这个 helper 统一）
+  const persistNow = () => {
+    const { currentWorkspaceId, tabs, currentViewId } = get();
+    if (!currentWorkspaceId) return;
+    schedulePersistUi(currentWorkspaceId, tabs.map((v) => v.id), currentViewId);
+  };
+
   const patchTree = async (): Promise<void> => {
     const { currentWorkspaceId } = get();
     if (!currentWorkspaceId) return;
@@ -93,12 +204,31 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       viewApi.listTrash(currentWorkspaceId),
     ]);
     const tree = buildTree(views);
-    set({
-      tree,
-      favorites,
-      trash,
-      tabs: get().tabs.filter((v) => v.workspace_id === currentWorkspaceId),
-    });
+    // 只保留 tree 中真实存在（未被删/移走）的 tabs，按原顺序
+    const byId = new Map<string, ViewNode>();
+    for (const n of flattenTree(tree)) byId.set(n.id, n);
+    const tabs = get().tabs
+      .map((v) => byId.get(v.id))
+      .filter(Boolean) as ViewNode[];
+    let currentViewId = get().currentViewId;
+    if (currentViewId && !byId.has(currentViewId)) currentViewId = tabs[0]?.id ?? null;
+    set({ tree, favorites, trash, tabs, currentViewId });
+    persistNow();
+  };
+
+  // patchTree 的变体：调用 loadTabsForWs 从 app_settings 恢复（首次进入 workspace）
+  const patchTreeAndRestoreTabs = async (): Promise<void> => {
+    const { currentWorkspaceId } = get();
+    if (!currentWorkspaceId) return;
+    const [views, favorites, trash] = await Promise.all([
+      viewApi.listByWorkspace(currentWorkspaceId),
+      viewApi.listFavorites(currentWorkspaceId),
+      viewApi.listTrash(currentWorkspaceId),
+    ]);
+    const tree = buildTree(views);
+    const { tabs, currentViewId } = await loadTabsForWs(currentWorkspaceId, tree);
+    set({ tree, favorites, trash, tabs, currentViewId });
+    persistNow();
   };
 
   return {
@@ -140,7 +270,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
             current = workspaces[0].id;
           }
           set({ workspaces, currentWorkspaceId: current, ready: true });
-          await get().reload();
+          await patchTreeAndRestoreTabs();
           // 首次启动展开根级页面
           set({ expanded: new Set(get().tree.filter((n) => n.children.length > 0).map((n) => n.id)) });
           // 30 天回收站自动清空：启动立即扫一次，然后每小时轮询
@@ -151,7 +281,11 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
             }, HOURLY_MS);
           }
         } catch (e) {
-          console.error("workspace init failed", e);
+          logger.error("WorkspaceStore.init", "workspace init failed", e);
+          // 修复 App 死循环：init 失败时**由 store 内部**最终保证 ready=true，
+          // 避免 App.catch 外部再写一份 setState 引发 zustand selector 重判定触发 React 19 开发模式的快照检查。
+          // ready 相同值短路（zustand 默认比较对象是整 state，这里字段本身已 true 时不会额外 emit）。
+          if (!get().ready) set({ ready: true });
           throw e;
         }
       })();
@@ -164,9 +298,21 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
 
     switchWorkspace: async (id: string) => {
       if (id === get().currentWorkspaceId) return;
+      // 切换前立即把旧空间的 tabs 持久化（不等 300ms，避免丢失）
+      if (persistTimer !== null) { clearTimeout(persistTimer); persistTimer = null; }
+      if (persistPendingWs && persistPendingTabs) {
+        try {
+          await viewApi.setSetting(TABS_KEY(persistPendingWs), JSON.stringify(persistPendingTabs));
+          if (persistPendingCurrent !== undefined) {
+            await viewApi.setSetting(CURRENT_KEY(persistPendingWs), persistPendingCurrent ?? "");
+          }
+        } catch { /* ignore */ }
+      }
+      persistPendingWs = null; persistPendingTabs = null; persistPendingCurrent = undefined;
+
       set({ currentWorkspaceId: id, tabs: [], currentViewId: null });
       await viewApi.setSetting("last_workspace_id", id);
-      await get().reload();
+      await patchTreeAndRestoreTabs();
       // 展开新空间根级页面
       set({ expanded: new Set(get().tree.filter((n) => n.children.length > 0).map((n) => n.id)) });
     },
@@ -220,7 +366,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
         try {
           await seedGridFields(view.id, lang);
         } catch (e) {
-          console.error("seed grid fields failed", view.id, e);
+          logger.error("WorkspaceStore.createView", "seed grid fields failed", view.id, e);
         }
       }
       await get().reload();
@@ -231,18 +377,18 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
 
     renameView: async (id: string, name: string) => {
       await viewApi.rename(id, name);
-      set({
-        tabs: get().tabs.map((v) => (v.id === id ? { ...v, name } : v)),
-      });
-      await get().reload();
+      set((state) => ({
+        tabs: state.tabs.map((v) => (v.id === id ? { ...v, name } : v)),
+        tree: patchTreeName(state.tree, id, name),
+      }));
     },
 
     setViewIcon: async (id: string, icon: string | null) => {
       await viewApi.setIcon(id, icon);
-      set({
-        tabs: get().tabs.map((v) => (v.id === id ? { ...v, icon } : v)),
-      });
-      await get().reload();
+      set((state) => ({
+        tabs: state.tabs.map((v) => (v.id === id ? { ...v, icon } : v)),
+        tree: patchTreeIcon(state.tree, id, icon),
+      }));
     },
 
     toggleFavorite: async (id: string) => {
@@ -290,10 +436,21 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       const { tree, tabs } = get();
       const node = findInTree(tree, id);
       if (!node) return;
+      let changed = false;
+      let nextTabs = tabs;
       if (!tabs.some((v) => v.id === id)) {
-        set({ tabs: [...tabs, node] });
+        nextTabs = [...tabs, node];
+        changed = true;
       }
-      set({ currentViewId: id, route: "workspace" });
+      const cur = get().currentViewId;
+      if (changed || cur !== id) {
+        set({ tabs: nextTabs, currentViewId: id, route: "workspace" });
+        persistNow();
+      } else {
+        set({ route: "workspace" });
+      }
+      // Phase 3.2：异步刷新 visited_at，不阻塞 UI（失败仅 warn，不影响打开流程）
+      void viewApi.touchVisited(id).catch(logger.catch("WorkspaceStore.openView", "touchVisited failed", id));
     },
 
     closeTab: (id: string) => {
@@ -304,10 +461,36 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
         currentViewId = tabs[Math.min(idx, tabs.length - 1)]?.id ?? null;
       }
       set({ tabs, currentViewId });
+      persistNow();
     },
 
     newTab: async () => {
       await get().createView({ parentId: null, layout: "document" });
+    },
+
+    // Phase 4.4：打开（或若不存在则创建）今日 Daily Note（命名约定：YYYY-MM-DD，建在 workspace 根级）
+    openDailyNote: async (dateArg) => {
+      const { currentWorkspaceId, tree, openView, createView } = get();
+      if (!currentWorkspaceId) return;
+      const d = dateArg ?? new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      const name = `${yyyy}-${mm}-${dd}`;
+      // 在 tree 中遍历根级节点，找名称完全匹配（不区分大小写）的 document 视图
+      const existing = flattenTree(tree).find(
+        (n) => n.name === name && n.layout === "document" && n.is_trash === 0,
+      );
+      if (existing) {
+        openView(existing.id);
+        return;
+      }
+      // 不存在 → 新建
+      const view = await createView({ parentId: null, layout: "document" });
+      if (view) {
+        await viewApi.rename(view.id, name);
+        // rename 不会刷新 tab 显示名；openView 在 createView 中已经被调用
+      }
     },
 
     reorderTabs: (fromIndex: number, toIndex: number) => {
@@ -315,6 +498,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       const [moved] = tabs.splice(fromIndex, 1);
       tabs.splice(toIndex, 0, moved);
       set({ tabs });
+      persistNow();
     },
 
     setRoute: (route: Route) => set({ route }),
@@ -341,12 +525,14 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => {
 
     setSidebarWidth: (w: number) => set({ sidebarWidth: w }),
   };
-});
+}) as unknown as UseWorkspaceStoreHook;
 
-/** Grid 默认字段 + 空行（名称/数字/单选；单选预置两个选项） */
+export const useWorkspaceStore = _useWorkspaceStore;
+
+/** Grid 默认字段 + 空行（名称/日期/单选；单选预置两个选项，日期供日历视图使用，单选供看板视图使用） */
 async function seedGridFields(viewId: string, lang: "zh-CN" | "en-US"): Promise<void> {
   const text = await databaseApi.createField(viewId, "text", lang === "zh-CN" ? "名称" : "Name");
-  await databaseApi.createField(viewId, "number", lang === "zh-CN" ? "数字" : "Number");
+  await databaseApi.createField(viewId, "date", lang === "zh-CN" ? "日期" : "Date");
   const select = await databaseApi.createField(viewId, "single_select", lang === "zh-CN" ? "单选" : "Select");
   await databaseApi.updateFieldOptions(select.id, {
     kind: "select",

@@ -195,3 +195,256 @@ export function markdownToJson(md: string): JSONContent {
 
   return { type: "doc", content: blocks };
 }
+
+// ——————————————————————————————————————
+// jsonToMarkdown：TipTap JSON → Markdown 文本（Phase 4.1 导出体系）
+//
+// 设计原则：
+//   - 纯函数，便于 Vitest 单测。
+//   - 对 TipTap 原生块做精确映射；对高级块（columns/callout/toggle/math/gallery 等）
+//     不追求无损 MD 往返，输出 HTML 注释 `<!-- unsupported block: X -->` 占位。
+//   - mention 输出自定义语法 `@[label](view:<id>)`（导入时可解析回来或显示为纯文本）。
+// ——————————————————————————————————————
+
+const ESCAPE_MD_RE = /([`*_\[\]()#+\-!~\\>])/g;
+function escapeInline(text: string): string {
+  // 简单对特殊符号转义；不处理表格语法、避免过度转义破坏可读性。
+  return text.replace(ESCAPE_MD_RE, "\\$1");
+}
+
+interface MarksRecord {
+  bold?: boolean;
+  italic?: boolean;
+  strike?: boolean;
+  code?: boolean;
+  link?: string | null;
+  highlight?: boolean;
+}
+
+function marksOf(node: JSONContent): MarksRecord {
+  const m: MarksRecord = {};
+  if (!Array.isArray(node.marks)) return m;
+  for (const mark of node.marks) {
+    switch (mark.type) {
+      case "bold": m.bold = true; break;
+      case "italic": m.italic = true; break;
+      case "strike": m.strike = true; break;
+      case "code": m.code = true; break;
+      case "link": m.link = (mark.attrs?.href as string) ?? null; break;
+      case "highlight": m.highlight = true; break;
+      // color/textStyle 等颜色不映射 Markdown，保留纯文本即可
+    }
+  }
+  return m;
+}
+
+function wrapMarks(text: string, m: MarksRecord): string {
+  if (m.code) {
+    // code 优先级最高（外层不叠 bold/italic）
+    return `\`${text}\``;
+  }
+  let out = text;
+  if (m.bold) out = `**${out}**`;
+  if (m.italic) out = `*${out}*`;
+  if (m.strike) out = `~~${out}~~`;
+  if (m.link) out = `[${out}](${m.link})`;
+  // highlight：Markdown 无原生语法，用 ==包裹（Obsidian/Notion 兼容）
+  if (m.highlight) out = `==${out}==`;
+  return out;
+}
+
+function renderInline(nodes: JSONContent[] | undefined): string {
+  if (!nodes || nodes.length === 0) return "";
+  let out = "";
+  for (const n of nodes) {
+    if (n.type === "text" && typeof n.text === "string") {
+      const m = marksOf(n);
+      // code mark 不转义内部内容
+      const raw = m.code ? n.text : escapeInline(n.text);
+      out += wrapMarks(raw, m);
+    } else if (n.type === "hardBreak") {
+      out += "\n";
+    } else if (n.type === "mention") {
+      const id = (n.attrs?.id as string) ?? "";
+      const label = (n.attrs?.label as string) ?? id;
+      out += `@[${label}](view:${id})`;
+    } else if (n.type === "image") {
+      const src = (n.attrs?.src as string) ?? "";
+      const alt = (n.attrs?.alt as string) ?? "";
+      out += `![${alt}](${src})`;
+    } else if (n.type === "database-link") {
+      const id = (n.attrs?.viewId as string) ?? "";
+      const label = (n.attrs?.label as string) ?? id;
+      out += `→[${label}](db:${id})`;
+    } else {
+      // 其他 inline（date/relations/hardBreak emoji 等）：回退到 textContent
+      if (typeof n.text === "string") out += escapeInline(n.text);
+      if (Array.isArray(n.content)) out += renderInline(n.content);
+    }
+  }
+  return out;
+}
+
+function indentLines(text: string, indent: string): string {
+  return text.split("\n").map((l) => (l === "" ? "" : indent + l)).join("\n");
+}
+
+function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: string } = { indent: "" }): string {
+  const indent = ctx.indent;
+  switch (node.type) {
+    case "paragraph":
+      return renderInline(node.content);
+
+    case "heading": {
+      const level = Math.max(1, Math.min(6, (node.attrs?.level as number) ?? 1));
+      const hashes = "#".repeat(level);
+      return `${hashes} ${renderInline(node.content)}`;
+    }
+
+    case "horizontalRule":
+      return "---";
+
+    case "blockquote": {
+      const inner = renderChildren(node.content, "");
+      return indentLines(inner, "> ").replace(/^> $/gm, ">");
+    }
+
+    case "codeBlock": {
+      const lang = (node.attrs?.language as string) ?? "";
+      const code = node.content?.map((c) => c.text ?? "").join("") ?? "";
+      return `\`\`\`${lang}\n${code}\n\`\`\``;
+    }
+
+    case "callout": {
+      const emoji = (node.attrs?.emoji as string) ?? "💡";
+      const inner = renderChildren(node.content, "");
+      const lines = inner.split("\n");
+      return `> ${emoji} **Callout**\n> ${lines.join("\n> ")}`;
+    }
+
+    case "toggle": {
+      const checked = node.attrs?.checked ? "x" : " ";
+      const title = (node.attrs?.title as string) ?? "";
+      const inner = renderChildren(node.content, "  ");
+      return `> <details><summary>[${checked}] ${escapeInline(title)}</summary>\n> \n${inner}\n> \n> </details>`;
+    }
+
+    case "bulletList":
+    case "taskList":
+    case "orderedList": {
+      const items = node.content ?? [];
+      return items
+        .map((it, i) => renderListItem(it, i, node.type === "orderedList", indent))
+        .join("\n");
+    }
+
+    case "table": {
+      // TipTap table: content = tableRow (header then body)
+      const rows = (node.content ?? []).map((row) =>
+        (row.content ?? []).map((cell) => renderInline(cell.content)),
+      );
+      if (rows.length === 0) return "";
+      const header = rows[0];
+      const body = rows.slice(1);
+      const sep = `| ${header.map(() => "---").join(" | ")} |`;
+      const renderRow = (r: string[]) => `| ${r.join(" | ")} |`;
+      const out = [renderRow(header), sep, ...body.map(renderRow)];
+      return out.join("\n");
+    }
+
+    case "image": {
+      const src = (node.attrs?.src as string) ?? "";
+      const alt = (node.attrs?.alt as string) ?? "";
+      return `![${alt}](${src})`;
+    }
+
+    case "math": {
+      const expr = (node.attrs?.expr as string) ?? "";
+      const display = node.attrs?.display ? "$$" : "$";
+      return `${display}${expr}${display}`;
+    }
+
+    case "database-view": {
+      const viewId = (node.attrs?.viewId as string) ?? "";
+      return `<!-- database view: ${viewId} -->`;
+    }
+
+    case "columns": {
+      const count = (node.content ?? []).length;
+      const parts = (node.content ?? []).map((col, i) => {
+        const inner = renderChildren(col.content, "    ");
+        return `  <!-- column ${i + 1}/${count} -->\n${inner}`;
+      });
+      return `<!-- columns (${count}) -->\n${parts.join("\n")}`;
+    }
+
+    case "image-gallery": {
+      const urls: string[] = (node.attrs?.urls as string[]) ?? [];
+      return `<!-- image gallery (${urls.length} images) -->\n${urls.map((u) => `![]( ${u} )`).join("\n")}`;
+    }
+
+    case "outline":
+      return "<!-- outline block -->";
+
+    case "attachment": {
+      const name = (node.attrs?.name as string) ?? "";
+      const url = (node.attrs?.url as string) ?? "";
+      return `[${name}](${url})`;
+    }
+
+    // 兜底：未知类型 → HTML 注释占位，避免导出时丢失结构
+    default:
+      if (Array.isArray(node.content) && node.content.length > 0) {
+        return `<!-- unsupported block: ${node.type} -->\n${renderChildren(node.content, indent)}`;
+      }
+      return `<!-- unsupported block: ${node.type} -->`;
+  }
+}
+
+function renderListItem(item: JSONContent, index: number, ordered: boolean, indent: string): string {
+  // item.type 预期：listItem 或 taskItem
+  const prefix = ordered ? `${index + 1}. ` : "- ";
+  const check = item.type === "taskItem" ? (item.attrs?.checked ? "[x] " : "[ ] ") : "";
+  // item.content = [paragraph, ?nestedList, ...]
+  const contents = item.content ?? [];
+  const firstPara = contents.find((c) => c.type === "paragraph");
+  const nested = contents.find((c) =>
+    c.type === "bulletList" || c.type === "orderedList" || c.type === "taskList",
+  );
+  const head = indent + prefix + check + renderInline(firstPara?.content);
+  if (!nested) return head;
+  const tail = renderBlock(nested, { indent: indent + "  " });
+  return `${head}\n${tail}`;
+}
+
+function renderChildren(children: JSONContent[] | undefined, indent: string): string {
+  if (!children || children.length === 0) return "";
+  // 如果所有子节点都是"内联级"（text/mention/image/database-link 等，非块类型），
+  // 直接拼接内联渲染结果；避免 markdownToJson 生成的 blockquote.content: [{type:'text',...}] 被当作未知块。
+  const allInline = children.every(
+    (n) =>
+      n.type === "text" ||
+      n.type === "mention" ||
+      n.type === "image" ||
+      n.type === "database-link" ||
+      n.type === "hardBreak",
+  );
+  if (allInline) return indent + renderInline(children);
+  const parts: string[] = [];
+  for (const c of children) parts.push(renderBlock(c, { indent }));
+  // 两个块间空行分隔（heading 后需要，列表项内部由 renderListItem 负责）
+  return parts.join("\n\n");
+}
+
+/**
+ * TipTap doc JSON → Markdown 文本（Phase 4.1）。
+ *
+ * 支持：paragraph / heading / horizontalRule / blockquote / codeBlock /
+ *       bulletList / orderedList / taskList / table / image / mention / math / attachment；
+ * 高级块（callout/toggle/columns/database-view/gallery/outline）输出可读占位注释，
+ * 不保证与 markdownToJson 严格往返对称，但内容可读不丢失。
+ */
+export function jsonToMarkdown(json: JSONContent): string {
+  const root = json.type === "doc" ? json : { type: "doc", content: [json] };
+  return renderChildren(root.content, "").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+}

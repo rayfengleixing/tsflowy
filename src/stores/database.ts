@@ -28,7 +28,6 @@ interface DatabaseState {
 
   // 字段
   addField: (type: FieldType, name?: string) => Promise<DatabaseField | null>;
-  addAttachmentField: (name?: string) => Promise<DatabaseField | null>;
   renameField: (id: string, name: string) => Promise<void>;
   changeFieldType: (id: string, type: FieldType) => Promise<void>;
   removeField: (id: string) => Promise<void>;
@@ -101,11 +100,6 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
     const field = await databaseApi.createField(viewId, type, name);
     set({ fields: [...get().fields, field] });
     return field;
-  },
-
-  /** 附件字段：现 attachment 已是一等 FieldType，直接 addField。保留函数以便老代码调用。 */
-  addAttachmentField: async (name) => {
-    return get().addField("attachment", name);
   },
 
   renameField: async (id, name) => {

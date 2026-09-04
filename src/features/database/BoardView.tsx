@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Plus, Table2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { useDatabaseStore } from "@/stores/database";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -10,18 +10,20 @@ import {
   defaultBoardField,
   groupRowsForBoard,
 } from "@/lib/board-calendar";
-import { formatCellValue, isAttachmentField, parseFieldOptions } from "@/lib/database-values";
-import { viewIcon } from "@/components/view-icon";
+import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { Button } from "@/components/ui/button";
 import { SelectChips } from "./editors";
 import { RowDetailPanel } from "./RowDetail";
+import { ViewModeTabs } from "./GridView";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import type { CellValue, DatabaseField } from "@/types/database";
 import type { View } from "@/types/models";
 
+type ViewMode = "grid" | "board" | "calendar";
+
 /** Board 看板视图（说明书 11 节 M5）：按单选字段分组 + 卡片拖拽改值 */
-export function BoardView({ view }: { view: View }) {
+export function BoardView({ view, viewMode = "board", onViewModeChange }: { view: View; viewMode?: ViewMode; onViewModeChange?: (m: ViewMode) => void }) {
   const store = useDatabaseStore();
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
@@ -108,22 +110,6 @@ export function BoardView({ view }: { view: View }) {
     else setCollapsedGroups(new Set());
   };
 
-  const openGrid = () => {
-    // 若 workspace 下同一父下没有 grid，则在同一空间新建一张 grid 视图打开（兜底：打开 workspace 第一个 grid）
-    const tree = useWorkspaceStore.getState().tree;
-    const views: View[] = [];
-    const walk = (nodes: View[]) => {
-      for (const n of nodes) {
-        views.push(n);
-        // @ts-expect-error tree 里带 children
-        if (Array.isArray(n.children)) walk(n.children as View[]);
-      }
-    };
-    walk(tree);
-    const grid = views.find((v) => v.layout === "grid" && v.workspace_id === view.workspace_id);
-    if (grid) useWorkspaceStore.getState().openView(grid.id);
-  };
-
   if (loading && fields.length === 0) {
     return <div className="flex h-full items-center justify-center text-sm text-neutral-500">{t("app.loading")}</div>;
   }
@@ -132,7 +118,6 @@ export function BoardView({ view }: { view: View }) {
     <div className="relative flex h-full flex-col overflow-hidden bg-white">
       {/* 顶栏（44px，和 GridView 一致） */}
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-6">
-        <span className="text-lg leading-none">{viewIcon(view)}</span>
         {editingTitle ? (
           <input
             autoFocus
@@ -184,9 +169,7 @@ export function BoardView({ view }: { view: View }) {
             {t("board.expandAll")}
           </Button>
 
-          <Button variant="ghost" size="sm" onClick={openGrid} title={t("board.goGrid")}>
-            <Table2 className="h-3.5 w-3.5" />
-          </Button>
+          {onViewModeChange && <ViewModeTabs mode={viewMode} onChange={onViewModeChange} />}
         </div>
       </div>
 
@@ -196,10 +179,11 @@ export function BoardView({ view }: { view: View }) {
           <div className="text-4xl">🗂️</div>
           <h2 className="text-base font-semibold text-neutral-800">{t("board.noField")}</h2>
           <p className="max-w-md text-sm text-neutral-500">{t("board.noFieldDesc")}</p>
-          <Button size="sm" onClick={openGrid}>
-            <Table2 className="mr-1 h-3.5 w-3.5" />
-            {t("board.goGrid")}
-          </Button>
+          {onViewModeChange && (
+            <Button size="sm" onClick={() => onViewModeChange("grid")}>
+              {t("board.goGrid")}
+            </Button>
+          )}
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
@@ -293,7 +277,7 @@ export function BoardView({ view }: { view: View }) {
                             if (draggingRow === row.id) setDraggingRow(null);
                             if (dragOverGroup === group.key) setDragOverGroup(null);
                           }}
-                          onDoubleClick={() => void openRowDetail(row, view)}
+                          onOpenDetail={() => void openRowDetail(row, view)}
                         />
                       ))}
                       {/* 新建行按钮 */}
@@ -359,7 +343,7 @@ function BoardCard(props: {
   dragging: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
-  onDoubleClick: () => void;
+  onOpenDetail: () => void;
 }) {
   const { row, primaryField, visibleFields, cells, dragging } = props;
   const value = primaryField ? cells[row.id]?.[primaryField.id] ?? null : null;
@@ -376,7 +360,7 @@ function BoardCard(props: {
       || (s.field.field_type === "date" && s.value)
       || (s.field.field_type === "checkbox" && s.value === true)
       || (s.field.field_type === "number" && s.value !== null && s.value !== undefined)
-      || (!isAttachmentField(s.field) && s.field.field_type !== "created_at" && s.field.field_type !== "last_edited_at" && s.field.field_type !== "relation" && s.value && String(s.value).length > 0),
+      || (s.field.field_type !== "created_at" && s.field.field_type !== "last_edited_at" && s.field.field_type !== "relation" && s.value && String(s.value).length > 0),
     ).slice(0, 3);
 
   return (
@@ -384,14 +368,27 @@ function BoardCard(props: {
       draggable
       onDragStart={props.onDragStart}
       onDragEnd={props.onDragEnd}
-      onDoubleClick={props.onDoubleClick}
       className={cn(
-        "cursor-grab rounded-md border bg-white p-2 shadow-sm transition active:cursor-grabbing dark:bg-neutral-800",
+        "group/card cursor-grab rounded-md border bg-white p-2 shadow-sm transition active:cursor-grabbing dark:bg-neutral-800",
         dragging ? "opacity-40 ring-1 ring-brand-500" : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 hover:shadow",
       )}
     >
-      <div className="min-h-[1.25rem] break-words text-[13px] font-medium leading-snug text-neutral-800 dark:text-neutral-100">
-        {title || <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>}
+      <div className="flex items-start justify-between gap-1">
+        <div className="min-h-[1.25rem] min-w-0 flex-1 break-words text-[13px] font-medium leading-snug text-neutral-800 dark:text-neutral-100">
+          {title || <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>}
+        </div>
+        <button
+          type="button"
+          className="shrink-0 rounded p-0.5 text-neutral-400 opacity-0 transition group-hover/card:opacity-100 hover:bg-neutral-200 hover:text-brand-600"
+          title={t("row.openDetail")}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation();
+            props.onOpenDetail();
+          }}
+        >
+          <ExternalLink className="h-3 w-3" />
+        </button>
       </div>
       {subs.length > 0 && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
