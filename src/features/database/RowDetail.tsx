@@ -145,7 +145,7 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
         </div>
         {/* 正文文档 */}
         <div className="min-h-0 flex-1 overflow-hidden">
-          <EditorPage view={view} hideTitle hideSlash />
+          <EditorPage view={view} hideSlash />
         </div>
       </div>
       <NewFieldDialog open={newFieldOpen} onOpenChange={setNewFieldOpen} onCreate={async (name, type) => {

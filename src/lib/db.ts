@@ -6,6 +6,20 @@ import { computeRenumber } from "@/lib/tree";
 
 let db: Database | null = null;
 
+/**
+ * 全局写锁：tauri-plugin-sql 内部使用连接池，每条 execute 可能走不同连接。
+ * 若 BEGIN 在连接 A、INSERT 在连接 B，B 拿不到写锁 → SQLITE_BUSY (code 5)。
+ * 用 Promise 链序列化所有写操作，确保同一时刻只有一个写操作在执行。
+ */
+let _writeChain: Promise<unknown> = Promise.resolve();
+
+export function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = _writeChain;
+  let release: () => void = () => {};
+  _writeChain = new Promise<void>((r) => { release = r; });
+  return prev.then(() => fn()).finally(() => release());
+}
+
 export async function getDb(): Promise<Database> {
   if (!db) {
     const inst = await Database.load("sqlite:appflowy.db");
@@ -17,8 +31,8 @@ export async function getDb(): Promise<Database> {
       ["PRAGMA journal_mode=WAL"],
       // NORMAL 在 WAL 下兼顾性能与 ACID（崩溃丢最多最近一次事务写入，足够）
       ["PRAGMA synchronous=NORMAL"],
-      // 并发写等待 5s 而非直接返回 SQLITE_BUSY
-      ["PRAGMA busy_timeout=5000"],
+      // 并发写等待 10s 而非直接返回 SQLITE_BUSY（从 5s 提升）
+      ["PRAGMA busy_timeout=10000"],
       // 临时表/排序放内存（不占磁盘 I/O，仅对大 ORDER BY 生效）
       ["PRAGMA temp_store=MEMORY"],
       // 启用外键（tauri-plugin-sql 有的连接默认关闭；迁移里 001 已在事务里打开，但每条连接都要强制）
@@ -51,16 +65,18 @@ export async function getDb(): Promise<Database> {
 export async function runInTransaction<T>(
   fn: (d: Database) => Promise<T>,
 ): Promise<T> {
-  const d = await getDb();
-  await d.execute("BEGIN");
-  try {
-    const result = await fn(d);
-    await d.execute("COMMIT");
-    return result;
-  } catch (e) {
-    try { await d.execute("ROLLBACK"); } catch { /* ignore rollback failure */ }
-    throw e;
-  }
+  return withWriteLock(async () => {
+    const d = await getDb();
+    await d.execute("BEGIN");
+    try {
+      const result = await fn(d);
+      await d.execute("COMMIT");
+      return result;
+    } catch (e) {
+      try { await d.execute("ROLLBACK"); } catch { /* ignore rollback failure */ }
+      throw e;
+    }
+  });
 }
 
 const now = () => Date.now();

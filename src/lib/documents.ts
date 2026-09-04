@@ -1,4 +1,4 @@
-import { getDb } from "./db";
+import { getDb, withWriteLock } from "./db";
 import { mentionsApi } from "./mentions";
 import { logger } from "./logger";
 
@@ -17,19 +17,21 @@ const running = new Map<string, Promise<void>>();
 const mailboxes = new Map<string, string>();
 
 async function saveNow(viewId: string, content: string): Promise<void> {
-  const d = await getDb();
-  await d.execute(
-    `INSERT INTO documents(view_id, content, updated_at) VALUES ($1, $2, $3)
-     ON CONFLICT(view_id) DO UPDATE SET content = $2, updated_at = $3`,
-    [viewId, content, Date.now()],
-  );
-  // 同步重建 mentions 索引（Phase 2.1）。失败仅 warn 不阻断保存。
-  try {
-    const json = JSON.parse(content);
-    await mentionsApi.rebuildFor(viewId, json);
-  } catch (e) {
-    logger.warn("documents.save", "mentions rebuild skipped", viewId, e);
-  }
+  return withWriteLock(async () => {
+    const d = await getDb();
+    await d.execute(
+      `INSERT INTO documents(view_id, content, updated_at) VALUES ($1, $2, $3)
+       ON CONFLICT(view_id) DO UPDATE SET content = $2, updated_at = $3`,
+      [viewId, content, Date.now()],
+    );
+    // 同步重建 mentions 索引（Phase 2.1）。失败仅 warn 不阻断保存。
+    try {
+      const json = JSON.parse(content);
+      await mentionsApi.rebuildFor(viewId, json);
+    } catch (e) {
+      logger.warn("documents.save", "mentions rebuild skipped", viewId, e);
+    }
+  });
 }
 
 /**

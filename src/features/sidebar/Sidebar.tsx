@@ -1,21 +1,20 @@
 import { useEffect, useRef, useState } from "react";
-import { Search, Settings, Trash2, Layers, Clock } from "lucide-react";
+import { Search, Settings, Trash2, Star } from "lucide-react";
 import { SpaceSwitcher } from "./SpaceSwitcher";
 import { NewPageMenu } from "./NewPageMenu";
 import { PageTree } from "./PageTree";
-import { RecentTab } from "./RecentTab";
+import { viewIcon } from "@/components/view-icon";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
 
 const MIN_WIDTH = 268;
 const MAX_WIDTH = 560;
 
-/** 侧边栏（说明书 6.3 结构）+ 新增 B-3：Tree/Recent Tab 切换，Recent 含「最近/收藏」二级 Tab。 */
+/** 侧边栏（说明书 6.3 结构） */
 export function Sidebar() {
-  const { sidebarWidth, setSidebarWidth, route, setRoute, openPalette } = useWorkspaceStore();
+  const { sidebarWidth, setSidebarWidth, route, setRoute, favorites, openView, openPalette } = useWorkspaceStore();
   const asideRef = useRef<HTMLElement>(null);
   const [resizing, setResizing] = useState(false);
-  const [mainTab, setMainTab] = useState<"tree" | "recent">("tree");
 
   useEffect(() => {
     if (!resizing) return;
@@ -54,46 +53,36 @@ export function Sidebar() {
         </button>
       </div>
 
-      {/* 新建页面 */}
-      <div className="px-2">
-        <NewPageMenu />
-      </div>
+      {/* 收藏置顶区 */}
+      {favorites.length > 0 && (
+        <div className="mt-1 border-t border-neutral-300/70 px-2 pt-1">
+          <div className="flex h-[26px] items-center gap-1 px-1 text-[11px] font-medium uppercase tracking-wide text-neutral-500">
+            <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
+            {t("sidebar.favorites")}
+          </div>
+          {favorites.map((v) => (
+            <button
+              key={v.id}
+              data-fav-id={v.id}
+              className="flex h-[30px] w-full items-center gap-1.5 rounded-md px-1.5 text-[13px] text-neutral-800 hover:bg-neutral-300/40"
+              onClick={() => openView(v.id)}
+            >
+              <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">{viewIcon(v)}</span>
+              <span className="min-w-0 flex-1 truncate text-left">{v.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
-      {/* B-3：侧边栏一级 Tab（PageTree / RecentTab）切换。不再把 favorites 单独置顶（移到 RecentTab.favorites tab 里统一展示）。 */}
-      <div className="flex items-stretch border-b border-neutral-300 text-[11px]">
-        <button
-          type="button"
-          onClick={() => setMainTab("tree")}
-          className={
-            "flex flex-1 items-center justify-center gap-1 py-1.5 " +
-            (mainTab === "tree" ? "bg-white text-brand-600 border-b-2 border-brand-500" : "text-neutral-500 hover:bg-neutral-200/60")
-          }
-        >
-          <Layers className="h-3 w-3" />
-          {t("sidebar.pageTree")}
-        </button>
-        <button
-          type="button"
-          onClick={() => setMainTab("recent")}
-          className={
-            "flex flex-1 items-center justify-center gap-1 py-1.5 " +
-            (mainTab === "recent" ? "bg-white text-brand-600 border-b-2 border-brand-500" : "text-neutral-500 hover:bg-neutral-200/60")
-          }
-        >
-          <Clock className="h-3 w-3" />
-          {t("sidebar.recentAndFav")}
-        </button>
-      </div>
+      {/* 页面树 */}
+      <PageTree />
 
-      {/* 内容区：根据 mainTab 切换 */}
-      <div className="min-h-0 flex-1 overflow-hidden">
-        {mainTab === "tree" ? <PageTree /> : <RecentTab />}
-      </div>
-
-      {/* 旧的「收藏置顶区」已移除（统一在 RecentTab.favorites tab 内维护） */}
-
-      {/* 底部固定区：回收站 / 设置（模板功能尚未实现，已按要求移除入口） */}
-      <div className="flex h-[60px] shrink-0 items-stretch border-t border-neutral-300">
+      {/* 底部固定区：新建页面 / 回收站 / 设置 */}
+      <div className="flex h-[100px] shrink-0 flex-col border-t border-neutral-300">
+        <div className="flex-1 px-2 py-1.5">
+          <NewPageMenu />
+        </div>
+        <div className="flex h-[60px] shrink-0 items-stretch border-t border-neutral-300">
         <button
           data-testid="trash-button"
           className={
@@ -117,6 +106,7 @@ export function Sidebar() {
           <Settings className="h-4 w-4" />
           {t("settings.title")}
         </button>
+        </div>
       </div>
 
       {/* 拖拽调宽手柄 */}

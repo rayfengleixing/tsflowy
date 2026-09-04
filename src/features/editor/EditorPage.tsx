@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -40,7 +40,6 @@ import { buildMentionSuggestion } from "./extensions/mention/suggestion";
 // — M3 高级块结束 —
 import "highlight.js/styles/github.css";
 import { FirstHeadingLock } from "./extensions/first-heading-lock";
-import { SubPagePicker } from "./SubPagePicker";
 
 const AUTOSAVE_MS = 800;
 
@@ -71,12 +70,7 @@ const CenteredTableHeader = TableHeader.extend({
 
 
 /** 文档编辑器页（项目说明书 8.1：读 content → 编辑 → 防抖 800ms 落库 → 切换/关闭前 flush） */
-export function EditorPage({ view, hideTitle = false, hideSlash = false }: { view: View; hideTitle?: boolean; hideSlash?: boolean }) {
-  const renameView = useWorkspaceStore((s) => s.renameView);
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState(view.name);
-  const [subPickerOpen, setSubPickerOpen] = useState(false);
-
+export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?: boolean }) {
   const editorRef = useRef<ReturnType<typeof useEditor>>(null);
   const dirtyRef = useRef(false);
   const saveTimer = useRef<number | null>(null);
@@ -351,54 +345,8 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
     return () => host.removeEventListener("click", onClick);
   }, [editor?.view]);
 
-  const commitTitle = () => {
-    const name = titleDraft.trim();
-    setEditingTitle(false);
-    if (name && name !== view.name) {
-      void renameView(view.id, name);
-    }
-  };
-
   return (
     <div className="flex h-full flex-col overflow-hidden bg-white">
-      {/* 顶栏标题行（说明书 6.2：高 44px；行详情弹窗复用正文时可隐藏） */}
-      {!hideTitle && (
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-6">
-        {editingTitle ? (
-          <input
-            autoFocus
-            className="min-w-0 flex-1 rounded border border-neutral-300 px-1.5 text-[15px] font-medium text-neutral-800 outline-none focus:border-brand-500"
-            value={titleDraft}
-            onChange={(e) => setTitleDraft(e.target.value)}
-            onBlur={commitTitle}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitTitle();
-              if (e.key === "Escape") setEditingTitle(false);
-            }}
-          />
-        ) : (
-          <h1
-            className="min-w-0 flex-1 cursor-text truncate text-[15px] font-medium text-neutral-800"
-            onDoubleClick={() => {
-              setTitleDraft(view.name);
-              setEditingTitle(true);
-            }}
-          >
-            {view.name}
-          </h1>
-        )}
-        <button
-          type="button"
-          onClick={() => setSubPickerOpen(true)}
-          className="shrink-0 rounded px-2 py-0.5 text-[11px] text-neutral-500 hover:bg-neutral-100 hover:text-brand-600"
-          title={t("subPage.insertBtn")}
-        >
-          + {t("subPage.insert")}
-        </button>
-        <span className="shrink-0 text-[11px] text-neutral-400">{editor?.storage.characterCount.characters?.() ?? 0} chars</span>
-      </div>
-      )}
-
       {/* 编辑区：内容最大宽约 800px 居中（说明书 6.1） */}
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[800px] px-6 py-4">
@@ -407,20 +355,6 @@ export function EditorPage({ view, hideTitle = false, hideSlash = false }: { vie
           <TableContextMenu editor={editor ?? undefined} />
         </div>
       </div>
-
-      <SubPagePicker
-        open={subPickerOpen}
-        onClose={() => setSubPickerOpen(false)}
-        onPick={(viewId, _name) => {
-          if (editorRef.current && !editorRef.current.isDestroyed) {
-            editorRef.current.chain().focus().insertContent({
-              type: "subPage",
-              attrs: { viewId },
-            }).run();
-          }
-          setSubPickerOpen(false);
-        }}
-      />
     </div>
   );
 }
