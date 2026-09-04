@@ -297,17 +297,17 @@ export function DocumentOutline() {
 // Sidebar Tab 切换状态持久化（小工具函数）
 // 旧版 OUTLINE_STORAGE_KEY 已废弃，新 key 是 sidebar_tab（tree/outline/recent）。
 // ——————————————————————————————————————
-export function getSidebarTab(): "tree" | "outline" | "recent" {
+export function getSidebarTab(): "tree" | "outline" | "favorites" {
   try {
     const v = localStorage.getItem(SIDEBAR_TAB_KEY);
-    if (v === "outline" || v === "recent") return v;
+    if (v === "outline" || v === "favorites") return v;
   } catch {
     /* ignore */
   }
   return "tree";
 }
 
-export function setSidebarTab(v: "tree" | "outline" | "recent"): void {
+export function setSidebarTab(v: "tree" | "outline" | "favorites"): void {
   try {
     localStorage.setItem(SIDEBAR_TAB_KEY, v);
   } catch {

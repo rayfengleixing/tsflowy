@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Search, Settings, Trash2, Star } from "lucide-react";
+import { Search, Settings, Trash2, Star, Layers, Hash } from "lucide-react";
 import { SpaceSwitcher } from "./SpaceSwitcher";
 import { NewPageMenu } from "./NewPageMenu";
 import { PageTree } from "./PageTree";
+import { DocumentOutline, getSidebarTab, setSidebarTab } from "@/features/editor/Outline";
 import { viewIcon } from "@/components/view-icon";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
@@ -10,11 +11,12 @@ import { t } from "@/lib/i18n";
 const MIN_WIDTH = 268;
 const MAX_WIDTH = 560;
 
-/** 侧边栏（说明书 6.3 结构） */
+/** 侧边栏（说明书 6.3 结构）：页面树 / 大纲 / 收藏 三 Tab 切换 */
 export function Sidebar() {
-  const { sidebarWidth, setSidebarWidth, route, setRoute, favorites, openView, openPalette } = useWorkspaceStore();
+  const { sidebarWidth, setSidebarWidth, route, setRoute, favorites, openView, openPalette, toggleFavorite } = useWorkspaceStore();
   const asideRef = useRef<HTMLElement>(null);
   const [resizing, setResizing] = useState(false);
+  const [mainTab, setMainTab] = useState<"tree" | "outline" | "favorites">(getSidebarTab());
 
   useEffect(() => {
     if (!resizing) return;
@@ -30,6 +32,11 @@ export function Sidebar() {
       window.removeEventListener("mouseup", onUp);
     };
   }, [resizing, setSidebarWidth]);
+
+  const switchTab = (tab: "tree" | "outline" | "favorites") => {
+    setMainTab(tab);
+    setSidebarTab(tab);
+  };
 
   return (
     <aside
@@ -53,29 +60,79 @@ export function Sidebar() {
         </button>
       </div>
 
-      {/* 收藏置顶区 */}
-      {favorites.length > 0 && (
-        <div className="mt-1 border-t border-neutral-300/70 px-2 pt-1">
-          <div className="flex h-[26px] items-center gap-1 px-1 text-[11px] font-medium uppercase tracking-wide text-neutral-500">
-            <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
-            {t("sidebar.favorites")}
-          </div>
-          {favorites.map((v) => (
-            <button
-              key={v.id}
-              data-fav-id={v.id}
-              className="flex h-[30px] w-full items-center gap-1.5 rounded-md px-1.5 text-[13px] text-neutral-800 hover:bg-neutral-300/40"
-              onClick={() => openView(v.id)}
-            >
-              <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">{viewIcon(v)}</span>
-              <span className="min-w-0 flex-1 truncate text-left">{v.name}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      {/* 一级 Tab：页面树 / 大纲 / 收藏 */}
+      <div className="flex items-stretch border-b border-neutral-300 text-[11px]">
+        <button
+          type="button"
+          onClick={() => switchTab("tree")}
+          className={
+            "flex flex-1 items-center justify-center gap-1 py-1.5 " +
+            (mainTab === "tree" ? "bg-white text-brand-600 border-b-2 border-brand-500" : "text-neutral-500 hover:bg-neutral-200/60")
+          }
+        >
+          <Layers className="h-3 w-3" />
+          {t("sidebar.pageTree")}
+        </button>
+        <button
+          type="button"
+          onClick={() => switchTab("outline")}
+          className={
+            "flex flex-1 items-center justify-center gap-1 py-1.5 " +
+            (mainTab === "outline" ? "bg-white text-brand-600 border-b-2 border-brand-500" : "text-neutral-500 hover:bg-neutral-200/60")
+          }
+        >
+          <Hash className="h-3 w-3" />
+          {t("sidebar.tab.outline")}
+        </button>
+        <button
+          type="button"
+          onClick={() => switchTab("favorites")}
+          className={
+            "flex flex-1 items-center justify-center gap-1 py-1.5 " +
+            (mainTab === "favorites" ? "bg-white text-brand-600 border-b-2 border-brand-500" : "text-neutral-500 hover:bg-neutral-200/60")
+          }
+        >
+          <Star className="h-3 w-3" />
+          {t("sidebar.favorites")}
+        </button>
+      </div>
 
-      {/* 页面树 */}
-      <PageTree />
+      {/* 内容区：根据 mainTab 切换 */}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {mainTab === "tree" ? (
+          <PageTree />
+        ) : mainTab === "outline" ? (
+          <DocumentOutline />
+        ) : (
+          <div className="h-full overflow-y-auto px-2 py-1">
+            {favorites.length === 0 ? (
+              <p className="px-2 py-4 text-[12px] text-neutral-400">{t("sidebar.favoritesEmpty")}</p>
+            ) : (
+              favorites.map((v) => (
+                <div
+                  key={v.id}
+                  className="group flex h-[30px] items-center gap-1.5 rounded-md px-1.5 hover:bg-neutral-300/40"
+                >
+                  <button
+                    className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] text-neutral-800"
+                    onClick={() => openView(v.id)}
+                  >
+                    <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">{viewIcon(v)}</span>
+                    <span className="min-w-0 flex-1 truncate text-left">{v.name}</span>
+                  </button>
+                  <button
+                    className="shrink-0 opacity-0 group-hover:opacity-100"
+                    onClick={() => toggleFavorite(v.id)}
+                    title={t("sidebar.unfavorite")}
+                  >
+                    <Star className="h-3.5 w-3.5 fill-yellow-400 text-yellow-400" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </div>
 
       {/* 底部固定区：新建页面 / 回收站 / 设置 */}
       <div className="flex h-[100px] shrink-0 flex-col border-t border-neutral-300">
@@ -83,29 +140,29 @@ export function Sidebar() {
           <NewPageMenu />
         </div>
         <div className="flex h-[60px] shrink-0 items-stretch border-t border-neutral-300">
-        <button
-          data-testid="trash-button"
-          className={
-            "flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] hover:bg-neutral-300/50 " +
-            (route === "trash" ? "text-brand-600 bg-neutral-300/50" : "text-neutral-600")
-          }
-          onClick={() => setRoute(route === "trash" ? "workspace" : "trash")}
-        >
-          <Trash2 className="h-4 w-4" />
-          {t("sidebar.trash")}
-        </button>
-        <div className="w-px self-stretch bg-neutral-300" />
-        <button
-          className={
-            "flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] hover:bg-neutral-300/50 " +
-            (route === "settings" ? "text-brand-600 bg-neutral-300/50" : "text-neutral-600")
-          }
-          onClick={() => setRoute(route === "settings" ? "workspace" : "settings")}
-          title={t("settings.title")}
-        >
-          <Settings className="h-4 w-4" />
-          {t("settings.title")}
-        </button>
+          <button
+            data-testid="trash-button"
+            className={
+              "flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] hover:bg-neutral-300/50 " +
+              (route === "trash" ? "text-brand-600 bg-neutral-300/50" : "text-neutral-600")
+            }
+            onClick={() => setRoute(route === "trash" ? "workspace" : "trash")}
+          >
+            <Trash2 className="h-4 w-4" />
+            {t("sidebar.trash")}
+          </button>
+          <div className="w-px self-stretch bg-neutral-300" />
+          <button
+            className={
+              "flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] hover:bg-neutral-300/50 " +
+              (route === "settings" ? "text-brand-600 bg-neutral-300/50" : "text-neutral-600")
+            }
+            onClick={() => setRoute(route === "settings" ? "workspace" : "settings")}
+            title={t("settings.title")}
+          >
+            <Settings className="h-4 w-4" />
+            {t("settings.title")}
+          </button>
         </div>
       </div>
 
