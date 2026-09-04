@@ -5,13 +5,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ChevronRight, MoreHorizontal, Pencil, Plus, Star, Trash2 } from "lucide-react";
+import { ChevronRight, MoreHorizontal, Pencil, Plus, Star, Trash2, Download } from "lucide-react";
 import type { ViewNode } from "@/types/models";
 import { viewIcon } from "@/components/view-icon";
 import { NewPageMenu } from "./NewPageMenu";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { isDescendant, type DropZone } from "@/lib/tree";
+import { exportPage } from "@/lib/export-page";
 import { t } from "@/lib/i18n";
 
 export interface DropHint {
@@ -183,6 +184,14 @@ export function PageTreeItem({
               <DropdownMenuItem onSelect={() => toggleFavorite(node.id)}>
                 <Star className={"mr-2 h-3.5 w-3.5 " + (node.is_favorite === 1 ? "fill-yellow-400 text-yellow-400" : "")} />
                 {node.is_favorite === 1 ? t("tree.unfavorite") : t("tree.favorite")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => exportPage(node.id, node.name, "markdown")}>
+                <Download className="mr-2 h-3.5 w-3.5" />
+                {t("tree.exportMd")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => exportPage(node.id, node.name, "html")}>
+                <Download className="mr-2 h-3.5 w-3.5" />
+                {t("tree.exportHtml")}
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="text-destructive focus:text-destructive"
