@@ -109,13 +109,36 @@ function schedulePersistUi(wsId: string, tabIds: string[], currentViewId: string
   }, 300);
 }
 
+/** 立即把挂起的 tabs/current 写回 app_settings（切换空间与关窗前冲刷共用），无挂起时快速返回 */
+export async function flushPendingUiPersist(): Promise<void> {
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  const wsId = persistPendingWs;
+  const tabs = persistPendingTabs;
+  const cur = persistPendingCurrent;
+  persistPendingWs = null;
+  persistPendingTabs = null;
+  persistPendingCurrent = undefined;
+  if (!wsId || !tabs) return;
+  try {
+    await viewApi.setSetting(TABS_KEY(wsId), JSON.stringify(tabs));
+    if (cur !== undefined) {
+      await viewApi.setSetting(CURRENT_KEY(wsId), cur ?? "");
+    }
+  } catch (e) {
+    logger.warn("WorkspaceStore", "flush pending tabs failed", wsId, e);
+  }
+}
+
 async function loadTabsForWs(wsId: string, tree: ViewNode[]): Promise<{ tabs: View[]; currentViewId: string | null }> {
   try {
     const [tabsRaw, curRaw] = await Promise.all([
       viewApi.getSetting(TABS_KEY(wsId)),
       viewApi.getSetting(CURRENT_KEY(wsId)),
     ]);
-    const ids: string[] = tabsRaw ? JSON.parse(tabsRaw) as string[] : [];
+    const ids: string[] = tabsRaw ? (JSON.parse(tabsRaw) as string[]) : [];
     const byId = new Map<string, ViewNode>();
     for (const n of flattenTree(tree)) byId.set(n.id, n);
     const tabs = ids.map((i) => byId.get(i)).filter(Boolean) as ViewNode[];
@@ -179,9 +202,7 @@ interface UseWorkspaceStoreHook {
   getState: () => WorkspaceState;
   getInitialState: () => WorkspaceState;
   setState: (
-    partial:
-      | Partial<WorkspaceState>
-      | ((state: WorkspaceState) => Partial<WorkspaceState> | WorkspaceState),
+    partial: Partial<WorkspaceState> | ((state: WorkspaceState) => Partial<WorkspaceState> | WorkspaceState),
     replace?: boolean,
   ) => void;
   subscribe: (listener: (state: WorkspaceState, prevState: WorkspaceState) => void) => () => void;
@@ -192,7 +213,11 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
   const persistNow = () => {
     const { currentWorkspaceId, tabs, currentViewId } = get();
     if (!currentWorkspaceId) return;
-    schedulePersistUi(currentWorkspaceId, tabs.map((v) => v.id), currentViewId);
+    schedulePersistUi(
+      currentWorkspaceId,
+      tabs.map((v) => v.id),
+      currentViewId,
+    );
   };
 
   const patchTree = async (): Promise<void> => {
@@ -207,8 +232,8 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     // 只保留 tree 中真实存在（未被删/移走）的 tabs，按原顺序
     const byId = new Map<string, ViewNode>();
     for (const n of flattenTree(tree)) byId.set(n.id, n);
-    const tabs = get().tabs
-      .map((v) => byId.get(v.id))
+    const tabs = get()
+      .tabs.map((v) => byId.get(v.id))
       .filter(Boolean) as ViewNode[];
     let currentViewId = get().currentViewId;
     if (currentViewId && !byId.has(currentViewId)) currentViewId = tabs[0]?.id ?? null;
@@ -256,13 +281,12 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
             const lang = useSettingsStore.getState().lang;
             const wsName = lang === "zh-CN" ? "我的工作区" : "My Workspace";
             const ws = await workspaceApi.create(wsName);
-            const welcome = await viewApi.create({
+            await viewApi.create({
               workspace_id: ws.id,
               parent_id: null,
               name: lang === "zh-CN" ? "欢迎使用 AppFlowy TS" : "Welcome to AppFlowy TS",
               layout: "document",
             });
-            void welcome;
             workspaces = await workspaceApi.list();
           }
           let current = await viewApi.getSetting("last_workspace_id");
@@ -272,7 +296,13 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
           set({ workspaces, currentWorkspaceId: current, ready: true });
           await patchTreeAndRestoreTabs();
           // 首次启动展开根级页面
-          set({ expanded: new Set(get().tree.filter((n) => n.children.length > 0).map((n) => n.id)) });
+          set({
+            expanded: new Set(
+              get()
+                .tree.filter((n) => n.children.length > 0)
+                .map((n) => n.id),
+            ),
+          });
           // 30 天回收站自动清空：启动立即扫一次，然后每小时轮询
           if (autoPurgeTimer === null) {
             void purgeAllExpiredTrash();
@@ -299,22 +329,19 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     switchWorkspace: async (id: string) => {
       if (id === get().currentWorkspaceId) return;
       // 切换前立即把旧空间的 tabs 持久化（不等 300ms，避免丢失）
-      if (persistTimer !== null) { clearTimeout(persistTimer); persistTimer = null; }
-      if (persistPendingWs && persistPendingTabs) {
-        try {
-          await viewApi.setSetting(TABS_KEY(persistPendingWs), JSON.stringify(persistPendingTabs));
-          if (persistPendingCurrent !== undefined) {
-            await viewApi.setSetting(CURRENT_KEY(persistPendingWs), persistPendingCurrent ?? "");
-          }
-        } catch { /* ignore */ }
-      }
-      persistPendingWs = null; persistPendingTabs = null; persistPendingCurrent = undefined;
+      await flushPendingUiPersist();
 
       set({ currentWorkspaceId: id, tabs: [], currentViewId: null });
       await viewApi.setSetting("last_workspace_id", id);
       await patchTreeAndRestoreTabs();
       // 展开新空间根级页面
-      set({ expanded: new Set(get().tree.filter((n) => n.children.length > 0).map((n) => n.id)) });
+      set({
+        expanded: new Set(
+          get()
+            .tree.filter((n) => n.children.length > 0)
+            .map((n) => n.id),
+        ),
+      });
     },
 
     createWorkspace: async (name: string) => {
@@ -478,9 +505,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       const dd = String(d.getDate()).padStart(2, "0");
       const name = `${yyyy}-${mm}-${dd}`;
       // 在 tree 中遍历根级节点，找名称完全匹配（不区分大小写）的 document 视图
-      const existing = flattenTree(tree).find(
-        (n) => n.name === name && n.layout === "document" && n.is_trash === 0,
-      );
+      const existing = flattenTree(tree).find((n) => n.name === name && n.layout === "document" && n.is_trash === 0);
       if (existing) {
         openView(existing.id);
         return;
@@ -531,7 +556,7 @@ export const useWorkspaceStore = _useWorkspaceStore;
 
 /** Grid 默认字段 + 空行（名称/日期/单选；单选预置两个选项，日期供日历视图使用，单选供看板视图使用） */
 async function seedGridFields(viewId: string, lang: "zh-CN" | "en-US"): Promise<void> {
-  const text = await databaseApi.createField(viewId, "text", lang === "zh-CN" ? "名称" : "Name");
+  await databaseApi.createField(viewId, "text", lang === "zh-CN" ? "名称" : "Name");
   await databaseApi.createField(viewId, "date", lang === "zh-CN" ? "日期" : "Date");
   const select = await databaseApi.createField(viewId, "single_select", lang === "zh-CN" ? "单选" : "Select");
   await databaseApi.updateFieldOptions(select.id, {
@@ -539,7 +564,6 @@ async function seedGridFields(viewId: string, lang: "zh-CN" | "en-US"): Promise<
     options: [newSelectOption("选项 1"), newSelectOption("选项 2")],
   });
   await databaseApi.createRow(viewId);
-  void text;
 }
 
 function findInTree(nodes: ViewNode[], id: string): ViewNode | null {

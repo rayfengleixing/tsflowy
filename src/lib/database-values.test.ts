@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FieldOptions } from "@/types/database";
 import {
-  defaultOptionsFor,
   defaultValue,
   deserializeValue,
   formatCellValue,
@@ -59,7 +58,9 @@ describe("validateCellValue", () => {
 
 describe("formatNumber", () => {
   it("formats integer / decimal / percent / currency", () => {
-    const opts = (format: "integer" | "decimal" | "percent" | "currency"): Extract<FieldOptions, { kind: "number" }> => ({ kind: "number", format, precision: 2, currency: "CNY" });
+    const opts = (
+      format: "integer" | "decimal" | "percent" | "currency",
+    ): Extract<FieldOptions, { kind: "number" }> => ({ kind: "number", format, precision: 2, currency: "CNY" });
     expect(formatNumber(12.345, opts("integer"))).toBe("12");
     expect(formatNumber(12.345, opts("decimal"))).toBe("12.35");
     expect(formatNumber(12.5, opts("percent"))).toBe("12.50%");
@@ -82,7 +83,10 @@ describe("formatCellValue", () => {
   });
 
   it("maps single_select id to option name", () => {
-    const options: Extract<FieldOptions, { kind: "select" }> = { kind: "select", options: [{ id: "o1", name: "进行中", color: "blue" }] };
+    const options: Extract<FieldOptions, { kind: "select" }> = {
+      kind: "select",
+      options: [{ id: "o1", name: "进行中", color: "blue" }],
+    };
     expect(formatCellValue("single_select", "o1", options)).toBe("进行中");
     expect(formatCellValue("single_select", "missing", options)).toBe("missing");
   });
@@ -93,19 +97,14 @@ describe("formatCellValue", () => {
   });
 });
 
-describe("parseFieldOptions / defaultOptionsFor", () => {
+describe("parseFieldOptions", () => {
   it("parses valid JSON and falls back to none", () => {
     expect(parseFieldOptions('{"kind":"select","options":[]}')).toEqual({ kind: "select", options: [] });
     expect(parseFieldOptions("garbage")).toEqual({ kind: "none" });
     expect(parseFieldOptions(null)).toEqual({ kind: "none" });
   });
 
-  it("provides type-appropriate defaults", () => {
-    expect(defaultOptionsFor("single_select")).toEqual({ kind: "select", options: [] });
-    expect(defaultOptionsFor("number")).toEqual({ kind: "number", format: "decimal", precision: 2, currency: "CNY" });
-    expect(defaultOptionsFor("date")).toEqual({ kind: "date", include_time: false });
-    expect(defaultOptionsFor("text")).toEqual({ kind: "none" });
-  });
+  // defaultOptionsFor 的默认值用例已随 Phase C 下沉 Rust（db::database::default_options_json）
 
   it("creates select options with unique ids", () => {
     const a = newSelectOption("待办");

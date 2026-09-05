@@ -20,8 +20,8 @@ import { Link2, ChevronDown, ChevronUp } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { documentApi } from "@/lib/documents";
 import { mentionsApi, type MentionRow } from "@/lib/mentions";
-import { viewApi } from "@/lib/db";
 import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown";
+import { registerCloseFlush } from "@/lib/close-flush";
 import { t } from "@/lib/i18n";
 import type { View } from "@/types/models";
 import { SlashMenu } from "./slash-menu";
@@ -44,6 +44,7 @@ import { buildMentionSuggestion } from "./extensions/mention/suggestion";
 // — M3 高级块结束 —
 import "highlight.js/styles/github.css";
 import { FirstHeadingLock } from "./extensions/first-heading-lock";
+import { PagePropertiesSlot } from "./extensions/page-properties-slot";
 import { BlockDrag } from "./extensions/block-drag";
 
 const AUTOSAVE_MS = 800;
@@ -87,17 +88,18 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   const hoverCacheRef = useRef<Map<string, string>>(new Map());
   const latestJsonRef = useRef<JSONContent | null>(null);
 
-  const flush = useCallback(() => {
+  // 返回落库 promise：关窗冲刷（close-flush）需要 await 真正写完；平时调用方忽略即可
+  const flush = useCallback((): Promise<void> => {
     if (saveTimer.current !== null) {
       window.clearTimeout(saveTimer.current);
       saveTimer.current = null;
     }
     // 用缓存的最新 JSON 落库：卸载时 editor 可能已被销毁，不能依赖 editor 实例
-    if (!dirtyRef.current || !latestJsonRef.current) return;
+    if (!dirtyRef.current || !latestJsonRef.current) return Promise.resolve();
     dirtyRef.current = false;
     const json = latestJsonRef.current;
     latestJsonRef.current = null;
-    documentApi.save(view.id, JSON.stringify(json)).catch((e) => {
+    return documentApi.save(view.id, JSON.stringify(json)).catch((e) => {
       console.error("autosave failed", view.id, e);
       toast.error(t("error.saveDoc", { message: String(e) }));
     });
@@ -164,6 +166,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       // — M3 高级块结束 —
       ...(hideSlash ? [] : [SlashMenu]),
       FirstHeadingLock.configure({ viewId: view.id }),
+      PagePropertiesSlot,
       BlockDrag,
     ],
 
@@ -173,6 +176,9 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   const editor = useEditor({
     extensions,
     content: { type: "doc", content: [] },
+    // 初次挂载只读：文档加载完成（或失败）前禁止输入，防止「加载期间输入 → 加载内容被丢弃
+    // → 自动保存用残缺内容覆盖整篇文档」的竞态（解锁见下方 load effect）
+    editable: false,
     editorProps: {
       attributes: { class: "tiptap focus:outline-none" },
       handleKeyDown: (_view, event) => {
@@ -288,7 +294,8 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   });
   editorRef.current = editor;
 
-  // 加载文档内容
+  // 加载文档内容：加载完成（或失败）前编辑器保持只读；输入在解锁前无法发生，
+  // 从根上消除加载与输入的竞态。失败也解锁，不让用户被锁死在空文档上。
   useEffect(() => {
     let alive = true;
     const editor = editorRef.current;
@@ -299,16 +306,23 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         if (content) {
           try {
             const json = JSON.parse(content) as JSONContent;
-            // 用户若已开始输入则不覆盖
             if (editor.isEmpty) {
-              editor.commands.setContent(json);
+              // emitUpdate=false：加载不算修改，避免打开页面就触发一轮自动保存
+              editor.commands.setContent(json, { emitUpdate: false });
+            } else {
+              // 只读期间输入不可能到达，理论上不可达；一旦发生宁可告警也不覆盖
+              console.error("document load skipped: editor not empty", view.id);
             }
           } catch (e) {
             console.error("parse document content failed", view.id, e);
           }
         }
       })
-      .catch((e) => console.error("load document failed", view.id, e));
+      .catch((e) => console.error("load document failed", view.id, e))
+      .finally(() => {
+        // setEditable 第二参 false：解锁不产生 update 事件
+        if (alive && editor && !editor.isDestroyed) editor.setEditable(true, false);
+      });
     return () => {
       alive = false;
     };
@@ -328,6 +342,10 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       flush();
     };
   }, [flush]);
+
+  // 关窗冲刷：Tauri 关窗时 beforeunload 里的异步落库可能被中断，
+  // 由 App 的 onCloseRequested 统一 await（见 lib/close-flush.ts）
+  useEffect(() => registerCloseFlush(flush), [flush]);
 
   // 全局 Ctrl+S（编辑器未聚焦时也保存）
   useEffect(() => {
@@ -349,17 +367,15 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     setBacklinks([]);
     setBacklinkViews(new Map());
     if (!view.id) return;
-    void mentionsApi.listBacklinks(view.id).then(async (rows) => {
+    // listBacklinks 的 JOIN 已带出来源视图完整行，无需再逐条 viewApi.get
+    void mentionsApi.listBacklinks(view.id).then((rows) => {
       if (!alive) return;
       setBacklinks(rows);
-      // 批量取来源视图名（一次一个；反链数量通常 < 20）
       const m = new Map<string, View>();
       for (const r of rows) {
-        if (m.has(r.src_view_id)) continue;
-        const v = await viewApi.get(r.src_view_id);
-        if (v) m.set(r.src_view_id, v);
+        if (!m.has(r.src_view_id)) m.set(r.src_view_id, r.src_view);
       }
-      if (alive) setBacklinkViews(m);
+      setBacklinkViews(m);
     });
     return () => {
       alive = false;
@@ -512,13 +528,12 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-white">
-      {/* 页面属性：标题下方横排 chip，不占太多高度 */}
-      <PageProperties view={view} />
-
       {/* 编辑区：内容最大宽约 800px 居中（说明书 6.1） */}
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[800px] px-6 py-4">
           <EditorContent editor={editor} />
+          {/* 页面属性：portal 进 PagePropertiesSlot（首个 H1 之后，样式对齐行详情属性区） */}
+          <PageProperties view={view} editor={editor} />
           <FloatingMenu editor={editor ?? undefined} />
           <TableContextMenu editor={editor ?? undefined} />
         </div>

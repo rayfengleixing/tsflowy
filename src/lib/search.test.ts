@@ -1,29 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { escapeFts, likePattern, prioritizeSearchRows, sanitizeSnippet, titleTier } from "./search";
+import { prioritizeSearchRows, sanitizeSnippet, titleTier } from "./search";
 
-describe("escapeFts", () => {
-  it("wraps plain query as a phrase", () => {
-    expect(escapeFts("测试")).toBe('"测试"');
-    expect(escapeFts("hello world")).toBe('"hello world"');
-  });
-
-  it("escapes double quotes inside the query", () => {
-    expect(escapeFts('say "hi"')).toBe('"say ""hi"""');
-  });
-
-  it("neutralizes FTS operators by quoting", () => {
-    expect(escapeFts("a OR b AND NOT c")).toBe('"a OR b AND NOT c"');
-    expect(escapeFts("foo* -bar")).toBe('"foo* -bar"');
-  });
-});
-
-describe("likePattern", () => {
-  it("wraps with % and escapes LIKE wildcards", () => {
-    expect(likePattern("50%")).toBe("%50\\%%");
-    expect(likePattern("a_b")).toBe("%a\\_b%");
-    expect(likePattern("中文")).toBe("%中文%");
-  });
-});
+// escapeFts / likePattern 的转义用例已随 Phase B 下沉 Rust（src-tauri/src/db/search.rs）。
 
 describe("titleTier", () => {
   it("ranks exact > prefix > contains > body-only", () => {
@@ -64,6 +42,6 @@ describe("prioritizeSearchRows", () => {
 
 describe("sanitizeSnippet", () => {
   it("keeps em markers only and strips other tags", () => {
-    expect(sanitizeSnippet('a <em>b</em> c <script>x</script>')).toBe('a <em>b</em> c x');
+    expect(sanitizeSnippet("a <em>b</em> c <script>x</script>")).toBe("a <em>b</em> c x");
   });
 });

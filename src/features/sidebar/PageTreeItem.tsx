@@ -9,6 +9,7 @@ import { ChevronRight, MoreHorizontal, Pencil, Plus, Star, Trash2, Download } fr
 import { toast } from "sonner";
 import type { ViewNode } from "@/types/models";
 import { viewIcon } from "@/components/view-icon";
+import { EmojiPicker } from "@/components/emoji-picker";
 import { NewPageMenu } from "./NewPageMenu";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -42,8 +43,18 @@ export function PageTreeItem({
   onDropHint,
   onDrop,
 }: PageTreeItemProps) {
-  const { tree, expanded, currentViewId, openView, toggleExpand, renameView, toggleFavorite, deleteView, expand } =
-    useWorkspaceStore();
+  const {
+    tree,
+    expanded,
+    currentViewId,
+    openView,
+    toggleExpand,
+    renameView,
+    setViewIcon,
+    toggleFavorite,
+    deleteView,
+    expand,
+  } = useWorkspaceStore();
   const isExpanded = expanded.has(node.id);
   const isActive = currentViewId === node.id;
   const hasChildren = node.children.length > 0;
@@ -147,7 +158,18 @@ export function PageTreeItem({
           <span className="w-4 shrink-0" />
         )}
 
-        <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">{viewIcon(node)}</span>
+        <span
+          className="flex w-5 shrink-0 items-center justify-center text-neutral-500"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* 点击图标直接换图标（popover 选择器）；stopPropagation 防止触发行打开 */}
+          <EmojiPicker
+            value={node.icon}
+            onChange={(icon) => void setViewIcon(node.id, icon)}
+            triggerClassName="h-5 w-5 rounded text-[13px] text-neutral-500 hover:bg-neutral-300"
+            trigger={viewIcon(node)}
+          />
+        </span>
         <span className="min-w-0 flex-1 truncate text-[13px] text-neutral-800">{node.name}</span>
 
         {/* 行尾操作按钮：hover 显示；菜单打开期间（trigger 带 data-state=open）保持可见，
@@ -184,7 +206,9 @@ export function PageTreeItem({
                 {t("tree.rename")}
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => toggleFavorite(node.id)}>
-                <Star className={"mr-2 h-3.5 w-3.5 " + (node.is_favorite === 1 ? "fill-yellow-400 text-yellow-400" : "")} />
+                <Star
+                  className={"mr-2 h-3.5 w-3.5 " + (node.is_favorite === 1 ? "fill-yellow-400 text-yellow-400" : "")}
+                />
                 {node.is_favorite === 1 ? t("tree.unfavorite") : t("tree.favorite")}
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => exportPage(node.id, node.name, "markdown")}>

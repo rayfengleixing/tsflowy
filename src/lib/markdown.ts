@@ -13,6 +13,11 @@ const HR_RE = /^(-{3,}|\*{3,}|_{3,})$/;
 const TASK_RE = /^[-*]\s+\[([ xX])\]\s+(.*)$/;
 const BULLET_RE = /^[-*+]\s+(.*)$/;
 const ORDERED_RE = /^\d+[.)]\s+(.*)$/;
+const MATH_FENCE_RE = /^\$\$\s*$/;
+const MATH_ONE_LINE_RE = /^\$\$(.+)\$\$$/;
+const DETAILS_RE = /^<details\b[^>]*>$/i;
+const DETAILS_CLOSE_RE = /^<\/details>$/i;
+const SUMMARY_RE = /^<summary>(.*)<\/summary>$/i;
 
 function textWithMarks(text: string, marks: JSONContent["marks"] = []): JSONContent {
   return marks.length ? { type: "text", text, marks } : { type: "text", text };
@@ -68,7 +73,9 @@ export function looksLikeMarkdown(text: string): boolean {
       /^[-*+]\s+/.test(l) ||
       /^\d+[.)]\s+/.test(l) ||
       /^>\s?/.test(l) ||
-      /^```/.test(l) ||
+      l.startsWith("```") ||
+      l.startsWith("$$") ||
+      /^<details\b/i.test(l) ||
       /^(-{3,}|\*{3,}|_{3,})$/.test(l)
     );
   });
@@ -80,7 +87,7 @@ export function textToBlocks(text: string): JSONContent {
   return { type: "doc", content: lines.map((line) => ({ type: "paragraph", content: parseInline(line) })) };
 }
 
-/** Markdown 文本 → TipTap doc JSON（覆盖 M3 基础块：标题/列表/任务/引用/代码/分割线/图片/表格行外） */
+/** Markdown 文本 → TipTap doc JSON（M3 基础块 + math $$ 围栏 + toggle <details>，嵌套 details 递归解析） */
 export function markdownToJson(md: string): JSONContent {
   const lines = md.replace(/\r\n/g, "\n").split("\n");
   const blocks: JSONContent[] = [];
@@ -109,6 +116,52 @@ export function markdownToJson(md: string): JSONContent {
         ...(lang ? { attrs: { language: lang } } : {}),
         content: [{ type: "text", text: buf.join("\n") }],
       });
+      continue;
+    }
+
+    // display math：$$ 围栏（jsonToMarkdown 的导出格式为 $$\n{tex}\n$$）
+    if (MATH_FENCE_RE.test(trimmed)) {
+      const buf: string[] = [];
+      i++;
+      while (i < lines.length && !MATH_FENCE_RE.test(lines[i].trim())) {
+        buf.push(lines[i]);
+        i++;
+      }
+      i++; // 跳过闭合 $$（未闭合则消费到结尾）
+      blocks.push({ type: "math", attrs: { tex: buf.join("\n").trim() } });
+      continue;
+    }
+
+    // 单行 $$...$$ 的块级公式
+    const mathOne = MATH_ONE_LINE_RE.exec(trimmed);
+    if (mathOne) {
+      blocks.push({ type: "math", attrs: { tex: mathOne[1] } });
+      i++;
+      continue;
+    }
+
+    // toggle：<details> HTML（jsonToMarkdown 的导出格式），<summary> 为标题块；
+    // 嵌套 details 用深度计数匹配闭合标签
+    if (DETAILS_RE.test(trimmed)) {
+      const isOpen = /\sopen\b/i.test(trimmed);
+      let depth = 1;
+      const innerLines: string[] = [];
+      i++;
+      while (i < lines.length) {
+        const t = lines[i].trim();
+        if (DETAILS_RE.test(t)) {
+          depth++;
+        } else if (DETAILS_CLOSE_RE.test(t)) {
+          depth--;
+          if (depth === 0) {
+            i++;
+            break;
+          }
+        }
+        innerLines.push(lines[i]);
+        i++;
+      }
+      blocks.push(detailsToToggle(innerLines, isOpen));
       continue;
     }
 
@@ -196,6 +249,32 @@ export function markdownToJson(md: string): JSONContent {
   return { type: "doc", content: blocks };
 }
 
+/** <details> 内部行 → toggle 节点：<summary> 还原为标题段落，其余递归走 markdownToJson */
+function detailsToToggle(innerLines: string[], isOpen: boolean): JSONContent {
+  const content: JSONContent[] = [];
+  let start = 0;
+  while (start < innerLines.length && innerLines[start].trim() === "") start++;
+  const summary = SUMMARY_RE.exec(innerLines[start]?.trim() ?? "");
+  if (summary) {
+    // 导出时标题做了 HTML 转义（& < 等），导入时先解码再走行内解析
+    content.push({ type: "paragraph", content: parseInline(decodeHtmlEntities(summary[1])) });
+    start++;
+  }
+  const innerJson = markdownToJson(innerLines.slice(start).join("\n").trim());
+  content.push(...(innerJson.content ?? []));
+  if (content.length === 0) content.push({ type: "paragraph" });
+  return { type: "toggle", attrs: { collapsed: !isOpen }, content };
+}
+
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
 // ——————————————————————————————————————
 // jsonToMarkdown：TipTap JSON → Markdown 文本（Phase 4.1 导出体系）
 //
@@ -226,12 +305,24 @@ function marksOf(node: JSONContent): MarksRecord {
   if (!Array.isArray(node.marks)) return m;
   for (const mark of node.marks) {
     switch (mark.type) {
-      case "bold": m.bold = true; break;
-      case "italic": m.italic = true; break;
-      case "strike": m.strike = true; break;
-      case "code": m.code = true; break;
-      case "link": m.link = (mark.attrs?.href as string) ?? null; break;
-      case "highlight": m.highlight = true; break;
+      case "bold":
+        m.bold = true;
+        break;
+      case "italic":
+        m.italic = true;
+        break;
+      case "strike":
+        m.strike = true;
+        break;
+      case "code":
+        m.code = true;
+        break;
+      case "link":
+        m.link = (mark.attrs?.href as string) ?? null;
+        break;
+      case "highlight":
+        m.highlight = true;
+        break;
       // color/textStyle 等颜色不映射 Markdown，保留纯文本即可
     }
   }
@@ -286,7 +377,10 @@ function renderInline(nodes: JSONContent[] | undefined): string {
 }
 
 function indentLines(text: string, indent: string): string {
-  return text.split("\n").map((l) => (l === "" ? "" : indent + l)).join("\n");
+  return text
+    .split("\n")
+    .map((l) => (l === "" ? "" : indent + l))
+    .join("\n");
 }
 
 function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: string } = { indent: "" }): string {
@@ -323,26 +417,33 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
     }
 
     case "toggle": {
-      const checked = node.attrs?.checked ? "x" : " ";
-      const title = (node.attrs?.title as string) ?? "";
-      const inner = renderChildren(node.content, "  ");
-      return `> <details><summary>[${checked}] ${escapeInline(title)}</summary>\n> \n${inner}\n> \n> </details>`;
+      // toggle 唯一属性是 collapsed；首块（paragraph/heading）在 UI 中充当标题，导出时提升进 <summary>
+      const blocks = node.content ?? [];
+      const first = blocks[0];
+      const firstIsTitle = first?.type === "paragraph" || first?.type === "heading";
+      const rawTitle = firstIsTitle ? renderInline(first?.content).trim() : "";
+      // <summary> 是 HTML 上下文，只做 HTML 转义（markdown 转义符会原样显示）
+      const title = rawTitle.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+      const body = firstIsTitle ? blocks.slice(1) : blocks;
+      const inner = renderChildren(body, "");
+      const open = node.attrs?.collapsed ? "" : " open";
+      const parts = [`<details${open}>`];
+      if (title) parts.push(`<summary>${title}</summary>`);
+      if (inner) parts.push("", inner, "");
+      parts.push("</details>");
+      return parts.join("\n");
     }
 
     case "bulletList":
     case "taskList":
     case "orderedList": {
       const items = node.content ?? [];
-      return items
-        .map((it, i) => renderListItem(it, i, node.type === "orderedList", indent))
-        .join("\n");
+      return items.map((it, i) => renderListItem(it, i, node.type === "orderedList", indent)).join("\n");
     }
 
     case "table": {
       // TipTap table: content = tableRow (header then body)
-      const rows = (node.content ?? []).map((row) =>
-        (row.content ?? []).map((cell) => renderInline(cell.content)),
-      );
+      const rows = (node.content ?? []).map((row) => (row.content ?? []).map((cell) => renderInline(cell.content)));
       if (rows.length === 0) return "";
       const header = rows[0];
       const body = rows.slice(1);
@@ -359,9 +460,9 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
     }
 
     case "math": {
-      const expr = (node.attrs?.expr as string) ?? "";
-      const display = node.attrs?.display ? "$$" : "$";
-      return `${display}${expr}${display}`;
+      // math 节点是块级 atom，唯一属性为 tex（extensions/math/node.ts），按 display math 围栏导出
+      const tex = (node.attrs?.tex as string) ?? "";
+      return `$$\n${tex}\n$$`;
     }
 
     case "database-view": {
@@ -408,9 +509,7 @@ function renderListItem(item: JSONContent, index: number, ordered: boolean, inde
   // item.content = [paragraph, ?nestedList, ...]
   const contents = item.content ?? [];
   const firstPara = contents.find((c) => c.type === "paragraph");
-  const nested = contents.find((c) =>
-    c.type === "bulletList" || c.type === "orderedList" || c.type === "taskList",
-  );
+  const nested = contents.find((c) => c.type === "bulletList" || c.type === "orderedList" || c.type === "taskList");
   const head = indent + prefix + check + renderInline(firstPara?.content);
   if (!nested) return head;
   const tail = renderBlock(nested, { indent: indent + "  " });
@@ -440,11 +539,15 @@ function renderChildren(children: JSONContent[] | undefined, indent: string): st
  * TipTap doc JSON → Markdown 文本（Phase 4.1）。
  *
  * 支持：paragraph / heading / horizontalRule / blockquote / codeBlock /
- *       bulletList / orderedList / taskList / table / image / mention / math / attachment；
- * 高级块（callout/toggle/columns/database-view/gallery/outline）输出可读占位注释，
+ *       bulletList / orderedList / taskList / table / image / mention / math / toggle / attachment；
+ * 高级块（callout/columns/database-view/gallery/outline）输出可读占位注释，
  * 不保证与 markdownToJson 严格往返对称，但内容可读不丢失。
  */
 export function jsonToMarkdown(json: JSONContent): string {
   const root = json.type === "doc" ? json : { type: "doc", content: [json] };
-  return renderChildren(root.content, "").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+  return (
+    renderChildren(root.content, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trimEnd() + "\n"
+  );
 }

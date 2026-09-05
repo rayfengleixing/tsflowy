@@ -58,7 +58,11 @@ export function formatNumber(value: number, opts: Extract<FieldOptions, { kind: 
     case "percent":
       return value.toFixed(Math.max(0, precision)) + "%";
     case "currency":
-      return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: Math.max(0, precision) }).format(value);
+      return new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency,
+        maximumFractionDigits: Math.max(0, precision),
+      }).format(value);
     case "decimal":
     default:
       return value.toFixed(Math.max(0, precision));
@@ -71,7 +75,10 @@ export function formatCellValue(type: FieldType, value: CellValue, options?: Fie
   switch (type) {
     case "number":
       if (typeof value !== "number") return "";
-      return formatNumber(value, options?.kind === "number" ? options : { kind: "number", format: "decimal", precision: 2, currency: "CNY" });
+      return formatNumber(
+        value,
+        options?.kind === "number" ? options : { kind: "number", format: "decimal", precision: 2, currency: "CNY" },
+      );
     case "checkbox":
       return value ? "✓" : "";
     case "multi_select":
@@ -82,7 +89,8 @@ export function formatCellValue(type: FieldType, value: CellValue, options?: Fie
       if (typeof value !== "string") return "";
       const d = new Date(value.endsWith("Z") ? value : value + "Z");
       if (Number.isNaN(d.getTime())) return value;
-      const includeTime = type !== "created_at" && type !== "last_edited_at" && options?.kind === "date" && options.include_time;
+      const includeTime =
+        type !== "created_at" && type !== "last_edited_at" && options?.kind === "date" && options.include_time;
       return includeTime ? d.toLocaleString() : d.toLocaleDateString();
     }
     case "single_select": {
@@ -111,23 +119,13 @@ export function parseFieldOptions(raw: string | null | undefined): FieldOptions 
   return { kind: "none" };
 }
 
-export function defaultOptionsFor(type: FieldType): FieldOptions {
-  switch (type) {
-    case "single_select":
-    case "multi_select":
-      return { kind: "select", options: [] };
-    case "number":
-      return { kind: "number", format: "decimal", precision: 2, currency: "CNY" };
-    case "date":
-      return { kind: "date", include_time: false };
-    default:
-      return { kind: "none" };
-  }
-}
-
 export function newSelectOption(name: string): SelectOption {
   const palette = ["blue", "green", "orange", "purple", "red", "yellow", "gray"];
-  return { id: "opt_" + crypto.randomUUID().slice(0, 8), name, color: palette[Math.floor(Math.random() * palette.length)] };
+  return {
+    id: "opt_" + crypto.randomUUID().slice(0, 8),
+    name,
+    color: palette[Math.floor(Math.random() * palette.length)],
+  };
 }
 
 /** 看板/日历分组展示用的选项形态（board-calendar 纯逻辑层避免依赖完整字段） */

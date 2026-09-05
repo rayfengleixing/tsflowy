@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Download, ExternalLink, FileUp, Filter, GripVertical, Plus, Trash2, Table2, LayoutGrid, Calendar } from "lucide-react";
+import {
+  Download,
+  ExternalLink,
+  FileUp,
+  Filter,
+  GripVertical,
+  Plus,
+  Trash2,
+  Table2,
+  LayoutGrid,
+  Calendar,
+} from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -7,8 +18,7 @@ import type { CellValue, DatabaseField } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { useDatabaseStore } from "@/stores/database";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { viewApi } from "@/lib/db";
-import { databaseApi } from "@/lib/database";
+import { viewApi, newId } from "@/lib/db";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { applyFilters, sortRows, type SortSpec } from "@/lib/database-query";
 import { buildCsvExport, csvValueToCell, parseCsv, planImport } from "@/lib/csv";
@@ -54,7 +64,15 @@ export function ViewModeTabs({ mode, onChange }: { mode: ViewMode; onChange: (m:
 }
 
 /** Grid 数据库视图（说明书 10-M4）：表头 32px / 行 32px / 单元格聚焦蓝框（6.6 节） */
-export function GridView({ view, viewMode = "grid", onViewModeChange }: { view: View; viewMode?: ViewMode; onViewModeChange?: (m: ViewMode) => void }) {
+export function GridView({
+  view,
+  viewMode = "grid",
+  onViewModeChange,
+}: {
+  view: View;
+  viewMode?: ViewMode;
+  onViewModeChange?: (m: ViewMode) => void;
+}) {
   const store = useDatabaseStore();
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
@@ -131,18 +149,17 @@ export function GridView({ view, viewMode = "grid", onViewModeChange }: { view: 
         toast.error(t("error.db", { message: String(e) }));
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
     [store],
   );
 
   const cycleSort = (fieldId: string) => {
     const current = sorts.find((s) => s.field_id === fieldId);
-    const next: SortSpec[] =
-      !current
-        ? [{ field_id: fieldId, dir: "asc" }]
-        : current.dir === "asc"
-          ? [{ field_id: fieldId, dir: "desc" }]
-          : [];
+    const next: SortSpec[] = !current
+      ? [{ field_id: fieldId, dir: "asc" }]
+      : current.dir === "asc"
+        ? [{ field_id: fieldId, dir: "desc" }]
+        : [];
     store.setSorts(next);
   };
 
@@ -164,7 +181,7 @@ export function GridView({ view, viewMode = "grid", onViewModeChange }: { view: 
     const to = sortable.indexOf(targetId);
     if (from < 0 || to < 0) return;
     sortable.splice(to, 0, sortable.splice(from, 1)[0]);
-    void store.reorderFields([primaryField?.id, ...sortable].filter(Boolean) as string[]);
+    void store.reorderFields([primaryField?.id, ...sortable].filter(Boolean));
     setDraggingField(null);
   };
 
@@ -215,28 +232,32 @@ export function GridView({ view, viewMode = "grid", onViewModeChange }: { view: 
       const wsId = useWorkspaceStore.getState().currentWorkspaceId;
       if (!wsId) return;
       // 新表 = 新 grid 视图
-      const fileName = selected.split(/[\\/]/).pop()?.replace(/\.csv$/i, "") || "导入表";
+      const fileName =
+        selected
+          .split(/[\\/]/)
+          .pop()
+          ?.replace(/\.csv$/i, "") || "导入表";
       const newView = await viewApi.create({ workspace_id: wsId, parent_id: null, name: fileName, layout: "grid" });
-      // 建字段（重名则加序号）
+      // 建字段（重名则加序号）—— 解析/类型推断/消歧/id 生成在 JS，落库由 csv_import 单命令完成
       const used = new Set<string>();
-      const createdFields: DatabaseField[] = [];
-      for (let i = 0; i < headers.length; i++) {
-        let name = headers[i];
+      const fields = headers.map((header, i) => {
+        let name = header;
         while (used.has(name)) name = name + " 2";
         used.add(name);
-        createdFields.push(await databaseApi.createField(newView.id, types[i], name));
-      }
-      // 建行写单元格
-      for (const line of parsed.slice(1)) {
-        const row = await databaseApi.createRow(newView.id);
-        for (let i = 0; i < createdFields.length; i++) {
+        return { id: newId(), name, field_type: types[i] };
+      });
+      // 嵌套 payload 按 Rust 结构体声明的 snake_case 键传（同 mention_rebuild 契约）
+      const rows = parsed.slice(1).map((line) => {
+        const cells: { field_id: string; value: string }[] = [];
+        for (let i = 0; i < fields.length; i++) {
           const raw = line[i] ?? "";
           if (raw.trim() === "") continue;
-          const field = createdFields[i];
-          const cell = csvValueToCell(field.field_type, raw);
-          if (cell !== null) await databaseApi.setCell(row.id, field.id, cell);
+          const cell = csvValueToCell(fields[i].field_type, raw);
+          if (cell !== null) cells.push({ field_id: fields[i].id, value: JSON.stringify(cell) });
         }
-      }
+        return { id: newId(), cells };
+      });
+      await invoke("csv_import", { viewId: newView.id, fields, rows });
       await useWorkspaceStore.getState().reload();
       useWorkspaceStore.getState().openView(newView.id);
       toast.success(t("csv.imported", { count: String(parsed.length - 1) }));
@@ -282,10 +303,17 @@ export function GridView({ view, viewMode = "grid", onViewModeChange }: { view: 
           </h1>
         )}
         <div className="flex shrink-0 items-center gap-1">
-          <Button variant="ghost" size="sm" onClick={() => setFilterOpen((v) => !v)} className={cn(filterOpen && "bg-brand-100 text-brand-600")}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setFilterOpen((v) => !v)}
+            className={cn(filterOpen && "bg-brand-100 text-brand-600")}
+          >
             <Filter className="h-3.5 w-3.5" />
             {t("filter.title")}
-            {filters.length > 0 && <span className="ml-1 rounded-full bg-brand-500 px-1.5 text-[10px] text-white">{filters.length}</span>}
+            {filters.length > 0 && (
+              <span className="ml-1 rounded-full bg-brand-500 px-1.5 text-[10px] text-white">{filters.length}</span>
+            )}
           </Button>
           <Button variant="ghost" size="sm" onClick={importCsv}>
             <FileUp className="h-3.5 w-3.5" />
@@ -327,7 +355,10 @@ export function GridView({ view, viewMode = "grid", onViewModeChange }: { view: 
               {visibleFields.map((field) => {
                 const sort = sorts.find((s) => s.field_id === field.id);
                 return (
-                  <th key={field.id} className="group/head relative border-b border-r border-neutral-200 bg-neutral-100 px-1 dark:border-neutral-700 dark:bg-neutral-800">
+                  <th
+                    key={field.id}
+                    className="group/head relative border-b border-r border-neutral-200 bg-neutral-100 px-1 dark:border-neutral-700 dark:bg-neutral-800"
+                  >
                     <div
                       draggable={field.id !== primaryField?.id}
                       onDragStart={() => {
@@ -335,13 +366,17 @@ export function GridView({ view, viewMode = "grid", onViewModeChange }: { view: 
                       }}
                       onDragEnd={() => setDraggingField(null)}
                       onDragOver={(e) => {
-                        if (draggingField && draggingField !== field.id && field.id !== primaryField?.id) e.preventDefault();
+                        if (draggingField && draggingField !== field.id && field.id !== primaryField?.id)
+                          e.preventDefault();
                       }}
                       onDrop={(e) => {
                         e.preventDefault();
                         onFieldDrop(field.id);
                       }}
-                      className={cn("flex h-8 cursor-pointer items-center gap-1", draggingField === field.id && "opacity-40")}
+                      className={cn(
+                        "flex h-8 cursor-pointer items-center gap-1",
+                        draggingField === field.id && "opacity-40",
+                      )}
                       onClick={() => cycleSort(field.id)}
                       onDoubleClick={(e) => {
                         e.stopPropagation();
@@ -349,7 +384,9 @@ export function GridView({ view, viewMode = "grid", onViewModeChange }: { view: 
                       }}
                     >
                       <GripVertical className="h-3 w-3 shrink-0 cursor-grab text-neutral-300 dark:text-neutral-600" />
-                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-neutral-800 dark:text-neutral-100">{field.name}</span>
+                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-neutral-800 dark:text-neutral-100">
+                        {field.name}
+                      </span>
                       <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[10px] text-brand-600 dark:text-brand-500">
                         {sort ? (sort.dir === "asc" ? "↑" : "↓") : ""}
                       </span>
@@ -362,11 +399,26 @@ export function GridView({ view, viewMode = "grid", onViewModeChange }: { view: 
                         onOpenChange={(open) => {
                           setMenuOpenFor(open ? field.id : null);
                         }}
-                        onRename={() => { setMenuOpenFor(null); setRenamingField(field.id); }}
-                        onChangeType={(type) => { setMenuOpenFor(null); void store.changeFieldType(field.id, type); }}
-                        onToggleHidden={() => { setMenuOpenFor(null); void store.toggleFieldHidden(field.id); }}
-                        onDelete={() => { setMenuOpenFor(null); void store.removeField(field.id); }}
-                        onOpenOptions={() => { setMenuOpenFor(null); setOptionsEditorFor(field); }}
+                        onRename={() => {
+                          setMenuOpenFor(null);
+                          setRenamingField(field.id);
+                        }}
+                        onChangeType={(type) => {
+                          setMenuOpenFor(null);
+                          void store.changeFieldType(field.id, type);
+                        }}
+                        onToggleHidden={() => {
+                          setMenuOpenFor(null);
+                          void store.toggleFieldHidden(field.id);
+                        }}
+                        onDelete={() => {
+                          setMenuOpenFor(null);
+                          void store.removeField(field.id);
+                        }}
+                        onOpenOptions={() => {
+                          setMenuOpenFor(null);
+                          setOptionsEditorFor(field);
+                        }}
                       />
                     </div>
                     {/* 重命名输入 */}
@@ -503,7 +555,10 @@ export function GridView({ view, viewMode = "grid", onViewModeChange }: { view: 
             ))}
             <tr>
               {/* 新建行：跨整行底部，避免无字段时挤在窄列里 */}
-              <td colSpan={1 + visibleFields.length + 1} className="h-8 border-t border-neutral-200 px-2 dark:border-neutral-700">
+              <td
+                colSpan={1 + visibleFields.length + 1}
+                className="h-8 border-t border-neutral-200 px-2 dark:border-neutral-700"
+              >
                 <button
                   data-testid="add-row"
                   className="flex h-6 items-center gap-1 rounded px-1.5 text-[12px] text-neutral-500 hover:bg-neutral-200/60 dark:text-neutral-400 dark:hover:bg-neutral-800"
@@ -618,11 +673,13 @@ function CellDisplay({
   }
   const text = formatCellValue(field.field_type, value, opts);
   return (
-    <div className={cn(
-      "flex h-full w-full items-center gap-1 truncate px-2 text-[13px] leading-8",
-      isReadonlyType(field.field_type) && "text-neutral-400",
-      primary && "font-medium text-neutral-900",
-    )}>
+    <div
+      className={cn(
+        "flex h-full w-full items-center gap-1 truncate px-2 text-[13px] leading-8",
+        isReadonlyType(field.field_type) && "text-neutral-400",
+        primary && "font-medium text-neutral-900",
+      )}
+    >
       <span className="min-w-0 flex-1 truncate">{text}</span>
       {primary && onOpenRowDetail && (
         <button

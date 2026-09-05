@@ -1,6 +1,6 @@
 [package]
 name = "tsflowy"
-version = "0.2.2"
+version = "0.3.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -24,13 +24,16 @@ custom-protocol = ["tauri/custom-protocol"]
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
-tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 0.32 对齐依赖树里 sqlx 0.8 的 libsqlite3-sys 0.30，避免重复编译 C 库
+rusqlite = { version = "0.32", features = ["bundled"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 walkdir = "2"
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# 迁移兼容：存量安装的 _sqlx_migrations 基线/对账用（tauri-plugin-sql 已移除，表成为惰性遗留）
+sha2 = "0.10"

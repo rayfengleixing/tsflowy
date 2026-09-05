@@ -1,180 +1,64 @@
-import Database from "@tauri-apps/plugin-sql";
+import { invoke } from "@tauri-apps/api/core";
 import type { LayoutType, View, Workspace } from "@/types/models";
-import { computeRenumber } from "@/lib/tree";
 
-// 所有 SQL 集中在本模块（项目说明书 9.3 节），组件不直接拼 SQL。
-
-let db: Database | null = null;
-
-/**
- * 全局写锁：tauri-plugin-sql 内部使用连接池，每条 execute 可能走不同连接。
- * 若 BEGIN 在连接 A、INSERT 在连接 B，B 拿不到写锁 → SQLITE_BUSY (code 5)。
- * 用 Promise 链序列化所有写操作，确保同一时刻只有一个写操作在执行。
- *
- * 不可重入：JS 模块级变量无法区分"同一调用栈嵌套"与"不同操作并发"，
- * 若用 _writeDepth 做可重入，A 在 await 期间让出后 B 会误判可重入直接执行 → 并发写 → SQLITE_BUSY。
- * 避免嵌套死锁的正确做法：不在 withWriteLock 内再调用走 withWriteLock 的函数
- * （见 documents.saveNow：rebuildFor 已移出锁块）。
- */
-let _writeChain: Promise<unknown> = Promise.resolve();
-
-export function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-  const prev = _writeChain;
-  let release: () => void = () => {};
-  _writeChain = new Promise<void>((r) => { release = r; });
-  return prev.then(() => fn()).finally(() => release());
-}
-
-export async function getDb(): Promise<Database> {
-  if (!db) {
-    const inst = await Database.load("sqlite:appflowy.db");
-
-    // Phase 4 优化 · P0 #2：启用 SQLite 最佳实践
-    // 顺序：journal_mode → 其余 pragma（synchronous 依赖 journal_mode 生效）
-    const pragmas: Array<[string, unknown[]?]> = [
-      // WAL = 写入并发 + 崩溃安全；断电风险极低的桌面程序首选
-      ["PRAGMA journal_mode=WAL"],
-      // NORMAL 在 WAL 下兼顾性能与 ACID（崩溃丢最多最近一次事务写入，足够）
-      ["PRAGMA synchronous=NORMAL"],
-      // 并发写等待 10s 而非直接返回 SQLITE_BUSY（从 5s 提升）
-      ["PRAGMA busy_timeout=10000"],
-      // 临时表/排序放内存（不占磁盘 I/O，仅对大 ORDER BY 生效）
-      ["PRAGMA temp_store=MEMORY"],
-      // 启用外键（tauri-plugin-sql 有的连接默认关闭；迁移里 001 已在事务里打开，但每条连接都要强制）
-      ["PRAGMA foreign_keys=ON"],
-      // cache_size = 页（通常 4KB）× 10000 ≈ 40 MB，足够 500MB 数据库热页命中
-      ["PRAGMA cache_size=-10000"],
-    ];
-    for (const [p, args] of pragmas) {
-      try {
-        // tauri-plugin-sql: Database 只有 select/execute，pragma 用 select 可带回结果。
-        // 对 journal_mode 我们不校验（Tauri + rusqlite 在某些 Windows 下会返回 memory 也 OK）
-        if (args?.length) await inst.select(p, args);
-        else await inst.select(p);
-      } catch (e) {
-        // PRAGMA 失败不致命；但至少 warn 一下
-        console.warn("[db] pragma apply failed", p, e);
-      }
-    }
-    db = inst;
-  }
-  return db;
-}
-
-/**
- * SQLite 简易事务 helper：BEGIN → 运行 fn → COMMIT；fn 抛异常则 ROLLBACK。
- * 警告：tauri-plugin-sql 每条 execute 自动 commit（它内部用的是 rusqlite 的 auto-commit 连接），
- * 所以需要显式 BEGIN/COMMIT 包裹；嵌套调用会失败（SQLite 不支持真实嵌套事务），
- * 调用方应避免嵌套 runInTransaction。
- */
-export async function runInTransaction<T>(
-  fn: (d: Database) => Promise<T>,
-): Promise<T> {
-  return withWriteLock(async () => {
-    const d = await getDb();
-    await d.execute("BEGIN");
-    try {
-      const result = await fn(d);
-      await d.execute("COMMIT");
-      return result;
-    } catch (e) {
-      try { await d.execute("ROLLBACK"); } catch { /* ignore rollback failure */ }
-      throw e;
-    }
-  });
-}
-
-const now = () => Date.now();
+// Phase A–C 完成：全部持久化已下沉 Rust 领域命令（invoke），tauri-plugin-sql 已移除。
+// 写串行化与事务由 Rust 侧单写连接保证；PRAGMA 由 Rust 侧 apply_pragmas 统一施加。
+// newId 保留：主键仍由前端生成。
 
 export function newId(): string {
   return crypto.randomUUID();
 }
 
-// ---------- 空间 ----------
+// ---------- 空间 / 视图 / 设置（Phase A：持久化下沉 Rust 领域命令） ----------
+// 行结构由 Rust 侧 serde 结构体产出，字段名 == SQL 列名（snake_case），与旧 select 行形状一致。
+// 参数契约：顶层参数 camelCase（Tauri 2 自动映射到 Rust snake_case）。
+
 export const workspaceApi = {
   async list(): Promise<Workspace[]> {
-    const d = await getDb();
-    return d.select<Workspace[]>("SELECT * FROM workspaces ORDER BY created_at ASC");
+    return invoke<Workspace[]>("workspace_list");
   },
 
   async create(name: string): Promise<Workspace> {
-    const d = await getDb();
-    const id = newId();
-    const t = now();
-    await d.execute(
-      "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ($1, $2, $3, $4)",
-      [id, name, t, t],
-    );
-    return { id, name, icon: null, created_at: t, updated_at: t };
+    // id 仍由前端生成（crypto.randomUUID），作为参数传入
+    return invoke<Workspace>("workspace_create", { id: newId(), name });
   },
 
   async rename(id: string, name: string): Promise<void> {
-    const d = await getDb();
-    await d.execute("UPDATE workspaces SET name = $1, updated_at = $2 WHERE id = $3", [
-      name,
-      now(),
-      id,
-    ]);
+    return invoke("workspace_rename", { id, name });
   },
 
   async setIcon(id: string, icon: string | null): Promise<void> {
-    const d = await getDb();
-    await d.execute("UPDATE workspaces SET icon = $1, updated_at = $2 WHERE id = $3", [
-      icon,
-      now(),
-      id,
-    ]);
+    return invoke("workspace_set_icon", { id, icon });
   },
 
   /** 级联删除空间及其下全部视图/文档（FK ON DELETE CASCADE） */
   async remove(id: string): Promise<void> {
-    const d = await getDb();
-    await d.execute("DELETE FROM workspaces WHERE id = $1", [id]);
+    return invoke("workspace_remove", { id });
   },
 };
 
-// ---------- 视图 ----------
 export const viewApi = {
-  // 排除行详情视图（说明书 12 节风险 7：extra 标记 {"row_detail":true}）
+  /** 排除行详情视图（说明书 12 节风险 7：extra 标记 {"row_detail":true}） */
   async listByWorkspace(workspaceId: string): Promise<View[]> {
-    const d = await getDb();
-    return d.select<View[]>(
-      "SELECT * FROM views WHERE workspace_id = $1 AND is_trash = 0 AND json_extract(extra, '$.row_detail') IS NOT 1 ORDER BY position ASC",
-      [workspaceId],
-    );
+    return invoke<View[]>("view_list_by_workspace", { workspaceId });
   },
 
   async listTrash(workspaceId: string): Promise<View[]> {
-    const d = await getDb();
-    return d.select<View[]>(
-      "SELECT * FROM views WHERE workspace_id = $1 AND is_trash = 1 AND json_extract(extra, '$.row_detail') IS NOT 1 ORDER BY deleted_at DESC",
-      [workspaceId],
-    );
+    return invoke<View[]>("view_list_trash", { workspaceId });
   },
 
   async listFavorites(workspaceId: string): Promise<View[]> {
-    const d = await getDb();
-    return d.select<View[]>(
-      "SELECT * FROM views WHERE workspace_id = $1 AND is_trash = 0 AND is_favorite = 1 AND json_extract(extra, '$.row_detail') IS NOT 1 ORDER BY position ASC",
-      [workspaceId],
-    );
+    return invoke<View[]>("view_list_favorites", { workspaceId });
   },
 
-  /** 最近访问视图：按 visited_at 倒序，排除回收站/行详情（Phase 3.2 - Recent Tab） */
+  /** 最近访问视图：按 visited_at 倒序（Phase 3.2 - Recent Tab） */
   async listRecent(workspaceId: string, limit = 30): Promise<View[]> {
-    const d = await getDb();
-    return d.select<View[]>(
-      "SELECT * FROM views WHERE workspace_id = $1 AND is_trash = 0 AND visited_at IS NOT NULL AND json_extract(extra, '$.row_detail') IS NOT 1 ORDER BY visited_at DESC LIMIT $2",
-      [workspaceId, limit],
-    );
+    return invoke<View[]>("view_list_recent", { workspaceId, limit });
   },
 
   /** 标记视图为"最近被打开"：openView 时调用，驱动 Recent Tab 列表 */
   async touchVisited(id: string): Promise<void> {
-    return withWriteLock(async () => {
-      const d = await getDb();
-      await d.execute("UPDATE views SET visited_at = $1 WHERE id = $2", [now(), id]);
-    });
+    return invoke("view_touch_visited", { id });
   },
 
   async create(opts: {
@@ -184,215 +68,70 @@ export const viewApi = {
     layout: LayoutType;
     extra?: string;
   }): Promise<View> {
-    return withWriteLock(async () => {
-      const d = await getDb();
-      const id = newId();
-      const t = now();
-      const rows = await d.select<{ p: number }[]>(
-        "SELECT COALESCE(MAX(position), -1) + 1 AS p FROM views WHERE workspace_id = $1 AND parent_id IS $2",
-        [opts.workspace_id, opts.parent_id],
-      );
-      const position = rows[0]?.p ?? 0;
-      const extra = opts.extra ?? "{}";
-      await d.execute(
-        `INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
-        [id, opts.workspace_id, opts.parent_id, opts.name, opts.layout, extra, position, t],
-      );
-      if (opts.layout === "document") {
-        // 文档布局需预置内容行：默认第一行 H1 标题 = 文档名（需求3）
-        const defaultContent = JSON.stringify({
-          type: "doc",
-          content: [
-            {
-              type: "heading",
-              attrs: { level: 1 },
-              content: [{ type: "text", text: opts.name }],
-            },
-          ],
-        });
-        await d.execute(
-          'INSERT INTO documents(view_id, content, updated_at) VALUES ($1, $2, $3)',
-          [id, defaultContent, t],
-        );
-      }
-      return {
-        id,
-        workspace_id: opts.workspace_id,
-        parent_id: opts.parent_id,
-        name: opts.name,
-        icon: null,
-        layout: opts.layout,
-        extra,
-        position,
-        is_favorite: 0,
-        is_trash: 0,
-        deleted_at: null,
-        created_at: t,
-        updated_at: t,
-        visited_at: null,
-      };
+    return invoke<View>("view_create", {
+      id: newId(),
+      workspaceId: opts.workspace_id,
+      parentId: opts.parent_id,
+      name: opts.name,
+      layout: opts.layout,
+      extra: opts.extra ?? null,
     });
   },
 
-  /** 按 id 读单个视图（行详情文档等） */
+  /** 按 id 读单个视图（行详情文档等）；不存在返回 null */
   async get(id: string): Promise<View | null> {
-    const d = await getDb();
-    const rows = await d.select<View[]>("SELECT * FROM views WHERE id = $1", [id]);
-    return rows[0] ?? null;
+    return invoke<View | null>("view_get", { id });
   },
 
   async rename(id: string, name: string): Promise<void> {
-    return withWriteLock(async () => {
-      const d = await getDb();
-      await d.execute("UPDATE views SET name = $1, updated_at = $2 WHERE id = $3", [
-        name,
-        now(),
-        id,
-      ]);
-    });
+    return invoke("view_rename", { id, name });
   },
 
   async setIcon(id: string, icon: string | null): Promise<void> {
-    return withWriteLock(async () => {
-      const d = await getDb();
-      await d.execute("UPDATE views SET icon = $1, updated_at = $2 WHERE id = $3", [
-        icon,
-        now(),
-        id,
-      ]);
-    });
+    return invoke("view_set_icon", { id, icon });
   },
 
   async setFavorite(id: string, favorite: boolean): Promise<void> {
-    return withWriteLock(async () => {
-      const d = await getDb();
-      await d.execute("UPDATE views SET is_favorite = $1, updated_at = $2 WHERE id = $3", [
-        favorite ? 1 : 0,
-        now(),
-        id,
-      ]);
-    });
+    return invoke("view_set_favorite", { id, favorite });
   },
 
   /** 软删：视图及其整个子树进回收站 */
   async softDelete(id: string): Promise<void> {
-    return withWriteLock(async () => {
-      const d = await getDb();
-      await d.execute(
-        `WITH RECURSIVE sub(id) AS (
-           SELECT id FROM views WHERE id = $1
-           UNION ALL
-           SELECT v.id FROM views v JOIN sub ON v.parent_id = sub.id
-         )
-         UPDATE views SET is_trash = 1, deleted_at = $2 WHERE id IN (SELECT id FROM sub)`,
-        [id, now()],
-      );
-    });
+    return invoke("view_soft_delete", { id });
   },
 
   /** 恢复：视图及其子树移出回收站 */
   async restore(id: string): Promise<void> {
-    return withWriteLock(async () => {
-      const d = await getDb();
-      await d.execute(
-        `WITH RECURSIVE sub(id) AS (
-           SELECT id FROM views WHERE id = $1
-           UNION ALL
-           SELECT v.id FROM views v JOIN sub ON v.parent_id = sub.id
-         )
-         UPDATE views SET is_trash = 0, deleted_at = NULL WHERE id IN (SELECT id FROM sub)`,
-        [id],
-      );
-    });
+    return invoke("view_restore", { id });
   },
 
   /** 彻底删除：子树递归硬删（documents/database_* 经 FK 级联） */
   async purge(id: string): Promise<void> {
-    return withWriteLock(async () => {
-      const d = await getDb();
-      await d.execute(
-        `WITH RECURSIVE sub(id) AS (
-           SELECT id FROM views WHERE id = $1
-           UNION ALL
-           SELECT v.id FROM views v JOIN sub ON v.parent_id = sub.id
-         )
-         DELETE FROM views WHERE id IN (SELECT id FROM sub)`,
-        [id],
-      );
-    });
+    return invoke("view_purge", { id });
   },
 
   async purgeTrash(workspaceId: string): Promise<void> {
-    return withWriteLock(async () => {
-      const d = await getDb();
-      await d.execute("DELETE FROM views WHERE workspace_id = $1 AND is_trash = 1", [workspaceId]);
-    });
+    return invoke("view_purge_trash", { workspaceId });
   },
 
-  /** 永久删除回收站中 deleted_at 早于 deadline_ms（毫秒时间戳）的视图，用于 30 天自动清空 */
-  async purgeExpiredTrash(workspaceId: string, deadline_ms: number): Promise<number> {
-    return withWriteLock(async () => {
-      const d = await getDb();
-      const result = await d.execute(
-        "DELETE FROM views WHERE workspace_id = $1 AND is_trash = 1 AND deleted_at IS NOT NULL AND deleted_at < $2",
-        [workspaceId, deadline_ms],
-      );
-      const affected = (result as unknown as { rowsAffected?: number; rows_affected?: number }).rowsAffected
-        ?? (result as unknown as { rows_affected?: number }).rows_affected;
-      return affected ?? 0;
-    });
+  /** 永久删除回收站中 deleted_at 早于 deadlineMs（毫秒时间戳）的视图，返回删除行数 */
+  async purgeExpiredTrash(workspaceId: string, deadlineMs: number): Promise<number> {
+    return invoke<number>("view_purge_expired_trash", { workspaceId, deadlineMs });
   },
 
   /**
-   * 移动视图：重设父级并按目标位置重排两侧兄弟。
-   * 防呆：目标不能是自身的后代（UI 已拦截，此处兜底）。
+   * 移动视图：Rust 侧单事务完成后代守卫 + computeRenumber 镜像 + 两侧兄弟重排。
    */
   async move(viewId: string, newParentId: string | null, index: number): Promise<void> {
-    const d = await getDb();
-    const views = await d.select<View[]>(
-      "SELECT * FROM views WHERE workspace_id = (SELECT workspace_id FROM views WHERE id = $1)",
-      [viewId],
-    );
-    if (newParentId) {
-      // 兜底：禁止拖入自身后代（UI 已拦截，此处防御）
-      let cursor: string | null = newParentId;
-      while (cursor) {
-        if (cursor === viewId) return;
-        cursor = views.find((v) => v.id === cursor)?.parent_id ?? null;
-      }
-    }
-    const updates = computeRenumber(views, viewId, newParentId, index);
-    if (updates.length === 0) return;
-    const t = now();
-    // Phase 4 优化 · P2#6：批量重排必须原子，避免崩溃出现父子关系刷新一半
-    await runInTransaction(async (tx) => {
-      for (const u of updates) {
-        await tx.execute("UPDATE views SET parent_id = $1, position = $2, updated_at = $3 WHERE id = $4", [
-          u.parent_id,
-          u.position,
-          t,
-          u.id,
-        ]);
-      }
-    });
+    return invoke("view_move", { viewId, newParentId, index });
   },
 
   /** 获取当前应用的工作区标识（app_settings 键值，供 store 恢复） */
   async getSetting(key: string): Promise<string | null> {
-    const d = await getDb();
-    const rows = await d.select<{ value: string }[]>(
-      "SELECT value FROM app_settings WHERE key = $1",
-      [key],
-    );
-    return rows[0]?.value ?? null;
+    return invoke<string | null>("setting_get", { key });
   },
 
   async setSetting(key: string, value: string): Promise<void> {
-    const d = await getDb();
-    await d.execute(
-      "INSERT INTO app_settings(key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value = $2",
-      [key, value],
-    );
+    return invoke("setting_set", { key, value });
   },
 };

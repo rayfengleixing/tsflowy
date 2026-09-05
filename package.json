@@ -1,7 +1,7 @@
 {
   "name": "tsflowy",
   "private": true,
-  "version": "0.2.2",
+  "version": "0.3.0",
   "type": "module",
   "packageManager": "npm@10.9.0",
   "scripts": {
@@ -35,7 +35,6 @@
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-fs": "^2.5.1",
     "@tauri-apps/plugin-opener": "^2",
-    "@tauri-apps/plugin-sql": "^2.4.0",
     "@tiptap/extension-character-count": "^3.30.5",
     "@tiptap/extension-code-block-lowlight": "^3.30.5",
     "@tiptap/extension-color": "^3.30.5",

@@ -3,7 +3,6 @@ import { Search, Settings, Trash2, Star, Layers, Hash } from "lucide-react";
 import { SpaceSwitcher } from "./SpaceSwitcher";
 import { NewPageMenu } from "./NewPageMenu";
 import { PageTree } from "./PageTree";
-import { DocCalendar } from "./DocCalendar";
 import { DocumentOutline, getSidebarTab, setSidebarTab } from "@/features/editor/Outline";
 import { viewIcon } from "@/components/view-icon";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -145,9 +144,6 @@ export function Sidebar() {
           </div>
         )}
       </div>
-
-      {/* 文档日历：默认折叠，展开后按月聚合显示最近编辑的文档 */}
-      <DocCalendar />
 
       {/* 底部固定区：新建页面 / 回收站 / 设置 */}
       <div className="flex h-[100px] shrink-0 flex-col border-t border-neutral-300">

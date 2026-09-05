@@ -1,58 +1,18 @@
 mod commands;
+mod db;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tauri_plugin_sql::{Migration, MigrationKind};
+use tauri::Manager;
 use tracing_subscriber::{fmt, EnvFilter};
 
-fn migrations() -> Vec<Migration> {
-    vec![
-        Migration {
-            version: 1,
-            description: "init",
-            sql: include_str!("../../migrations/001_init.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 2,
-            description: "created_edited_triggers",
-            sql: include_str!("../../migrations/002_created_edited_triggers.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 3,
-            description: "mentions_index",
-            sql: include_str!("../../migrations/003_mentions.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 4,
-            description: "visited_at",
-            sql: include_str!("../../migrations/004_visited_at.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 5,
-            description: "page_properties",
-            sql: include_str!("../../migrations/005_page_properties.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 6,
-            description: "composite_indexes",
-            sql: include_str!("../../migrations/006_composite_indexes.sql"),
-            kind: MigrationKind::Up,
-        },
-    ]
-}
-
 /// 启动前：若用户设置了 custom_data_dir，把 default data dir 目录重命名为备份后，
-/// 建成指向 custom 的 junction/symlink，使 tauri-plugin-sql 的相对路径 `sqlite:appflowy.db`
-/// 透明落到 custom_data_dir 下（无侵入 SQL 插件配置）。
+/// 建成指向 custom 的 junction/symlink，使 Rust 侧 Db::open 的相对路径 `sqlite:appflowy.db`
+/// 透明落到 custom_data_dir 下。
 fn bootstrap_custom_data_dir() {
-    let cfg = commands::load_config_raw();
+    let cfg = commands::files::load_config_raw();
     let Some(custom) = cfg.custom_data_dir.clone() else {
         return;
     };
@@ -61,7 +21,7 @@ fn bootstrap_custom_data_dir() {
         tracing::error!(path = %custom_pb.display(), error = %e, "bootstrap: create custom data dir failed");
         return;
     }
-    let default = commands::default_data_dir_raw();
+    let default = commands::files::default_data_dir_raw();
     // 若 default 已经是指向 custom 的 symlink/junction，直接跳过
     if is_link_to(&default, &custom_pb) {
         return;
@@ -170,37 +130,100 @@ pub fn run() {
     let _ = fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .or_else(|_| EnvFilter::try_new("info,tauri_sql=warn"))
+                .or_else(|_| EnvFilter::try_new("info"))
                 .expect("tracing env filter"),
         )
         .try_init();
 
-    // 在 tauri_plugin_sql 初始化之前，若用户配置了 custom_data_dir，
+    // 在 DB 打开之前，若用户配置了 custom_data_dir，
     // 把 default data dir 建为 junction/symlink 指向 custom 路径。
     bootstrap_custom_data_dir();
 
     let result = tauri::Builder::default()
-        .plugin(
-            tauri_plugin_sql::Builder::default()
-                .add_migrations("sqlite:appflowy.db", migrations())
-                .build(),
-        )
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            // Rust 侧独占 DB 连接（全部持久化命令）；
+            // junction 机制让 app_data_dir 透明落到 custom_data_dir。
+            let dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| PathBuf::from("."));
+            if let Err(e) = fs::create_dir_all(&dir) {
+                tracing::warn!(dir = %dir.display(), error = %e, "setup: create data dir failed");
+            }
+            let path = dir.join(db::DB_FILE);
+            tracing::info!(path = %path.display(), "database file location");
+            // Db::open 永不 panic：失败进 init_error，各 DB 命令返回该错误
+            app.manage(db::Db::open(path));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
-        commands::save_asset,
-        commands::save_asset_bytes,
-        commands::read_text_file,
-        commands::write_text_file,
-        commands::data_dir_path,
-        commands::open_data_dir,
-        commands::export_backup,
-        commands::import_backup,
-        commands::get_data_dir_info,
-        commands::change_data_dir,
-        commands::reset_data_dir_default,
-    ])
+            commands::files::save_asset,
+            commands::files::save_asset_bytes,
+            commands::files::read_text_file,
+            commands::files::write_text_file,
+            commands::files::data_dir_path,
+            commands::files::open_data_dir,
+            commands::files::export_backup,
+            commands::files::import_backup,
+            commands::files::get_data_dir_info,
+            commands::files::change_data_dir,
+            commands::files::reset_data_dir_default,
+            commands::db::workspace_list,
+            commands::db::workspace_create,
+            commands::db::workspace_rename,
+            commands::db::workspace_set_icon,
+            commands::db::workspace_remove,
+            commands::db::view_list_by_workspace,
+            commands::db::view_list_trash,
+            commands::db::view_list_favorites,
+            commands::db::view_list_recent,
+            commands::db::view_touch_visited,
+            commands::db::view_create,
+            commands::db::view_get,
+            commands::db::view_rename,
+            commands::db::view_set_icon,
+            commands::db::view_set_favorite,
+            commands::db::view_soft_delete,
+            commands::db::view_restore,
+            commands::db::view_purge,
+            commands::db::view_purge_trash,
+            commands::db::view_purge_expired_trash,
+            commands::db::view_move,
+            commands::db::setting_get,
+            commands::db::setting_set,
+            commands::db::doc_get,
+            commands::db::doc_save,
+            commands::db::doc_list_all,
+            commands::db::mention_rebuild,
+            commands::db::mention_list_backlinks,
+            commands::db::mention_count,
+            commands::db::search,
+            commands::db::pp_list,
+            commands::db::pp_set,
+            commands::db::pp_remove,
+            commands::db::pp_rename,
+            commands::db::field_list,
+            commands::db::field_create,
+            commands::db::field_rename,
+            commands::db::field_delete,
+            commands::db::field_set_width,
+            commands::db::field_set_hidden,
+            commands::db::field_update_options,
+            commands::db::field_reorder,
+            commands::db::field_change_type,
+            commands::db::row_list,
+            commands::db::row_create,
+            commands::db::row_get,
+            commands::db::row_set_document_id,
+            commands::db::row_delete,
+            commands::db::row_reorder,
+            commands::db::cells_load,
+            commands::db::cell_set,
+            commands::db::csv_import,
+        ])
         .run(tauri::generate_context!());
 
     // Phase 4 优化 · P1#4：expect → 打印带上下文的 tracing 错误 + 标准退出码，避免 Rust panic 红屏

@@ -1,20 +1,6 @@
-import { useState, type ReactNode } from "react";
-import {
-  Calendar,
-  CheckSquare,
-  CircleDot,
-  Clock,
-  Hash,
-  History,
-  ListChecks,
-  Mail,
-  Phone,
-  Plus,
-  Type as TypeIcon,
-  Link as LinkIcon,
-  X,
-} from "lucide-react";
-import type { CellValue, DatabaseField, DatabaseRow, FieldType } from "@/types/database";
+import { useState } from "react";
+import { Plus, X } from "lucide-react";
+import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { useDatabaseStore } from "@/stores/database";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
@@ -22,26 +8,9 @@ import { cn } from "@/lib/utils";
 import type { View } from "@/types/models";
 import { EditorPage } from "@/features/editor/EditorPage";
 import { CellEditorSlot, SelectChips } from "./editors";
+import { fieldIcon } from "./field-icon";
 import { NewFieldDialog } from "./NewFieldDialog";
 import { t } from "@/lib/i18n";
-
-/** 字段类型 → 图标（对齐 AppFlowy 行详情的属性图标） */
-function fieldIcon(type: FieldType): ReactNode {
-  const cls = "h-3.5 w-3.5 shrink-0 text-neutral-400";
-  switch (type) {
-    case "text": return <TypeIcon className={cls} />;
-    case "number": return <Hash className={cls} />;
-    case "date": return <Calendar className={cls} />;
-    case "single_select": return <CircleDot className={cls} />;
-    case "multi_select": return <ListChecks className={cls} />;
-    case "checkbox": return <CheckSquare className={cls} />;
-    case "url": return <LinkIcon className={cls} />;
-    case "phone": return <Phone className={cls} />;
-    case "email": return <Mail className={cls} />;
-    case "created_at": return <Clock className={cls} />;
-    case "last_edited_at": return <History className={cls} />;
-  }
-}
 
 /** 行详情属性区：可编辑该行的全部字段值，样式对齐 AppFlowy（图标 + 字段名 + 值） */
 function RowPropertyField({ field, row }: { field: DatabaseField; row: DatabaseRow }) {
@@ -60,7 +29,15 @@ function RowPropertyField({ field, row }: { field: DatabaseField; row: DatabaseR
     }
     const text = formatCellValue(field.field_type, value, parseFieldOptions(field.options));
     return (
-      <span className={cn(isReadonlyType(field.field_type) ? "text-neutral-400" : value !== null ? "text-neutral-800" : "text-neutral-300")}>
+      <span
+        className={cn(
+          isReadonlyType(field.field_type)
+            ? "text-neutral-400"
+            : value !== null
+              ? "text-neutral-800"
+              : "text-neutral-300",
+        )}
+      >
         {text || t("rowDetail.empty")}
       </span>
     );
@@ -103,10 +80,7 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
   return (
     <div className="fixed inset-0 z-50">
       {/* 遮罩：淡入动画（说明书 6.1：半透明黑） */}
-      <div
-        className="absolute inset-0 animate-in fade-in bg-black/20 duration-200"
-        onClick={onClose}
-      />
+      <div className="absolute inset-0 animate-in fade-in bg-black/20 duration-200" onClick={onClose} />
       {/* 右侧 400px 面板：滑入动画 */}
       <div
         className={
@@ -117,9 +91,7 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
       >
         {/* 顶部：行名 + 关闭 */}
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-neutral-200 px-4 dark:border-neutral-700">
-          <span className="min-w-0 flex-1 truncate text-[16px] font-medium text-neutral-900">
-            {view.name}
-          </span>
+          <span className="min-w-0 flex-1 truncate text-[16px] font-medium text-neutral-900">{view.name}</span>
           <button
             data-testid="close-row-detail"
             className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200"
@@ -146,14 +118,18 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
           <EditorPage view={view} hideSlash />
         </div>
       </div>
-      <NewFieldDialog open={newFieldOpen} onOpenChange={setNewFieldOpen} onCreate={async (name, type) => {
-        try {
-          await store.addField(type, name);
-          setNewFieldOpen(false);
-        } catch (e) {
-          console.error("add field failed", e);
-        }
-      }} />
+      <NewFieldDialog
+        open={newFieldOpen}
+        onOpenChange={setNewFieldOpen}
+        onCreate={async (name, type) => {
+          try {
+            await store.addField(type, name);
+            setNewFieldOpen(false);
+          } catch (e) {
+            console.error("add field failed", e);
+          }
+        }}
+      />
     </div>
   );
 }

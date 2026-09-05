@@ -1,8 +1,10 @@
-import { getDb, withWriteLock } from "./db";
+import { invoke } from "@tauri-apps/api/core";
 import { mentionsApi } from "./mentions";
 import { logger } from "./logger";
 
 // 文档读写（项目说明书 8.1 节：TipTap JSON 整篇存 documents.content）。
+// 持久化走 Rust 领域命令（doc_get/doc_save）；写串行化由 Rust 侧 write 连接互斥保证，
+// 不再需要前端 withWriteLock。
 //
 // Phase 4 优化 · P2#2（mailbox 合并排队）：
 //   同一 view 的保存请求如果在"前一次 save 实际开始执行"之前快速来了 N 次，
@@ -17,17 +19,8 @@ const running = new Map<string, Promise<void>>();
 const mailboxes = new Map<string, string>();
 
 async function saveNow(viewId: string, content: string): Promise<void> {
-  // 文档落库：withWriteLock 串行化，避免并发写触发 SQLITE_BUSY
-  await withWriteLock(async () => {
-    const d = await getDb();
-    await d.execute(
-      `INSERT INTO documents(view_id, content, updated_at) VALUES ($1, $2, $3)
-       ON CONFLICT(view_id) DO UPDATE SET content = $2, updated_at = $3`,
-      [viewId, content, Date.now()],
-    );
-  });
-  // mentions 重建：移出 withWriteLock 块，避免嵌套调用 runInTransaction → withWriteLock 死锁。
-  // rebuildFor 内部自己加锁，派生索引允许短暂异步滞后于文档内容。
+  await invoke("doc_save", { viewId, content });
+  // mentions 重建是独立命令，失败不阻断文档保存（派生索引允许短暂滞后于文档内容）
   try {
     const json = JSON.parse(content);
     await mentionsApi.rebuildFor(viewId, json);
@@ -82,12 +75,7 @@ async function runOrEnqueue(viewId: string, content: string): Promise<void> {
 export const documentApi = {
   /** 读取文档 JSON 字符串；无行返回 null */
   async get(viewId: string): Promise<string | null> {
-    const d = await getDb();
-    const rows = await d.select<{ content: string }[]>(
-      "SELECT content FROM documents WHERE view_id = $1",
-      [viewId],
-    );
-    return rows[0]?.content ?? null;
+    return invoke<string | null>("doc_get", { viewId });
   },
 
   /** 保存文档；同一 view 的多次请求会合并到最后一份内容落库。 */

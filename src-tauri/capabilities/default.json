@@ -5,9 +5,8 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-destroy",
     "opener:default",
-    "sql:default",
-    "sql:allow-execute",
     "fs:allow-read-dir",
     "fs:allow-read-text-file",
     "fs:allow-appdata-write-recursive",

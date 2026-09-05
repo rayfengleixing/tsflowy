@@ -335,16 +335,23 @@ for (let i = 0; i < 30; i++) {
 await evalJs("(() => { const items = [...document.querySelectorAll('[data-view-id]')]; const el = items.find(x => x.textContent.includes('" + gridName + "')) ?? items[0]; if (el) { const o = { bubbles: true, cancelable: true, pointerType: 'mouse', button: 0 }; el.dispatchEvent(new PointerEvent('pointerdown', o)); el.dispatchEvent(new PointerEvent('pointerup', o)); el.click(); } return true; })()");
 await sleep(900);
 const persisted = await evalJs("({ hasTable: !!document.querySelector('table'), text: document.querySelector('tbody')?.innerText ?? '', headers: [...document.querySelectorAll('thead th')].map(t => t.textContent.trim()).filter(Boolean) })");
-// 用应用 IPC 直查数据库确认单元格/行/字段持久化（不受隐藏列影响）
+// 用领域命令确认单元格/行/字段持久化（不受隐藏列影响）
 const dbCheck = await evalJs(`(async () => {
   const inv = window.__TAURI_INTERNALS__?.invoke;
-  const sel = async (query, values = []) => inv('plugin:sql|select', { db: 'sqlite:appflowy.db', query, values });
   try {
-    const fields = await sel("SELECT name, field_type FROM database_fields ORDER BY position");
-    const cells = await sel("SELECT c.value FROM database_cells c JOIN database_fields f ON f.id = c.field_id WHERE f.name = '任务描述'");
-    const rows = await sel("SELECT COUNT(*) AS n FROM database_rows");
-    const rowDocs = await sel("SELECT COUNT(*) AS n FROM database_rows WHERE document_id IS NOT NULL");
-    return { fields, hasTextCell: cells.some(c => c.value.includes('写周报')), rowCount: rows[0].n, rowDocs: rowDocs[0].n };
+    const ws0 = (await inv('workspace_list', {}))[0];
+    const views = await inv('view_list_by_workspace', { workspaceId: ws0.id });
+    const view = views.find(v => v.name === '${gridName}') ?? views[0];
+    const fields = await inv('field_list', { viewId: view.id });
+    const cells = await inv('cells_load', { viewId: view.id });
+    const rows = await inv('row_list', { viewId: view.id });
+    const descCells = cells.filter(c => fields.find(f => f.id === c.field_id)?.name === '任务描述');
+    return {
+      fields: fields.map(f => ({ name: f.name, field_type: f.field_type })),
+      hasTextCell: descCells.some(c => c.value.includes('写周报')),
+      rowCount: rows.length,
+      rowDocs: rows.filter(r => r.document_id).length,
+    };
   } catch (e) { return { err: String(e) }; }
 })()`);
 out.dbPersisted = dbCheck;

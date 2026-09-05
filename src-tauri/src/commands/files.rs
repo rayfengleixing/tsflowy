@@ -10,9 +10,10 @@ use walkdir::WalkDir;
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+use crate::db::{Db, DB_FILE};
+
 // 自定义 Tauri 命令（项目说明书 9.2：文件读写、导出导入等走 Rust 侧）
 
-const DB_FILE: &str = "appflowy.db";
 const ASSETS_DIR: &str = "assets";
 /// 存放 config.json 的独立子目录名（放在 config 系统目录下，避免被"重命名默认数据目录为备份"一起搬走）
 const CONFIG_DIR_NAME: &str = "TsFlowyConfig";
@@ -269,7 +270,9 @@ pub fn open_data_dir(app: tauri::AppHandle) -> Result<(), String> {
     open_path_in_system(&dir)
 }
 
-/// 将数据库文件 + assets/ 目录打包为 zip，写到 target_path（由前端文件对话框选）
+/// 将数据库文件 + assets/ 目录打包为 zip，写到 target_path（由前端文件对话框选）。
+/// WAL 模式下直接复制主库文件会丢掉尚未 checkpoint 的事务（appflowy.db-wal），
+/// 因此先 VACUUM INTO 出一致性快照（读快照包含全部已提交事务，输出自包含完整库）再打包。
 #[tauri::command]
 pub fn export_backup(app: tauri::AppHandle, target_path: String) -> Result<(), String> {
     let data_dir = app_data_dir(&app)?;
@@ -285,6 +288,32 @@ pub fn export_backup(app: tauri::AppHandle, target_path: String) -> Result<(), S
         fs::create_dir_all(parent).map_err(|e| format!("create parent dir failed: {e}"))?;
     }
 
+    // VACUUM INTO 要求目标文件不存在；用纳秒时间戳避免并发导出互相踩踏
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let snap = data_dir.join(format!("{DB_FILE}.export-{nanos}"));
+
+    let outcome = make_db_snapshot(&db, &snap)
+        .and_then(|()| write_backup_zip(target, &snap, &data_dir, &assets));
+    // 快照用完即删（成功/失败路径都覆盖）
+    let _ = fs::remove_file(&snap);
+    outcome
+}
+
+/// 用独立的只读连接对库做 VACUUM INTO 快照（并发写不受影响，快照内容为执行时刻的一致状态）
+fn make_db_snapshot(db: &Path, snap: &Path) -> Result<(), String> {
+    let conn = rusqlite::Connection::open(db)
+        .map_err(|e| format!("open db for snapshot failed: {e}"))?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| format!("set busy timeout failed: {e}"))?;
+    conn.execute("VACUUM INTO ?1", [snap.to_string_lossy().as_ref()])
+        .map(|_| ())
+        .map_err(|e| format!("create db snapshot failed: {e}"))
+}
+
+fn write_backup_zip(target: &Path, snap: &Path, data_dir: &Path, assets: &Path) -> Result<(), String> {
     let file = fs::File::create(target)
         .map_err(|e| format!("create backup file failed: {e}"))?;
     let mut zip = ZipWriter::new(BufWriter::new(file));
@@ -292,25 +321,23 @@ pub fn export_backup(app: tauri::AppHandle, target_path: String) -> Result<(), S
         .compression_method(CompressionMethod::Deflated)
         .unix_permissions(0o644);
 
-    // 1. 写入数据库文件（路径即文件名，便于解包后直接对应）
-    {
-        zip.start_file(DB_FILE, options)
-            .map_err(|e| format!("zip start db failed: {e}"))?;
-        let mut f = fs::File::open(&db).map_err(|e| format!("open db failed: {e}"))?;
-        let mut buf = Vec::new();
-        f.read_to_end(&mut buf).map_err(|e| format!("read db failed: {e}"))?;
-        zip.write_all(&buf).map_err(|e| format!("zip write db failed: {e}"))?;
-    }
+    // 1. 写入数据库快照（zip 内路径即文件名，便于解包后直接对应）
+    zip.start_file(DB_FILE, options)
+        .map_err(|e| format!("zip start db failed: {e}"))?;
+    let mut f = fs::File::open(snap).map_err(|e| format!("open db snapshot failed: {e}"))?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).map_err(|e| format!("read db failed: {e}"))?;
+    zip.write_all(&buf).map_err(|e| format!("zip write db failed: {e}"))?;
 
     // 2. 遍历 assets/
     if assets.is_dir() {
-        for entry in WalkDir::new(&assets) {
+        for entry in WalkDir::new(assets) {
             let entry = entry.map_err(|e| format!("walk assets failed: {e}"))?;
             let path = entry.path();
             if !path.is_file() {
                 continue;
             }
-            let rel = path.strip_prefix(&data_dir).map_err(|e| format!("strip prefix failed: {e}"))?;
+            let rel = path.strip_prefix(data_dir).map_err(|e| format!("strip prefix failed: {e}"))?;
             let name = rel.to_string_lossy().replace('\\', "/");
             zip.start_file(name.clone(), options)
                 .map_err(|e| format!("zip start {name} failed: {e}"))?;
@@ -325,13 +352,33 @@ pub fn export_backup(app: tauri::AppHandle, target_path: String) -> Result<(), S
     Ok(())
 }
 
-/// 从 zip 备份恢复：先把现有 db + assets 改名备份（.bak-时间戳），再解 zip 覆盖
+/// 从 zip 备份恢复：先把现有 db（含 -wal/-shm）+ assets 改名备份（.bak-时间戳），再解 zip 覆盖。
+/// 旧 db 的 -wal/-shm 必须一并移走：新恢复的库若被旧 WAL 回放会直接损坏。
+/// 恢复前后对 Db 做整体 close/reopen：Windows 下连接未关时主库/-wal 无法改名/覆盖；
+/// 也因此不再要求"先关应用再导入"。
 #[tauri::command]
-pub fn import_backup(app: tauri::AppHandle, source_path: String) -> Result<(), String> {
+pub fn import_backup(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, Db>,
+    source_path: String,
+) -> Result<(), String> {
+    db.close_for_maintenance()?;
+    let result = import_backup_inner(app, &source_path);
+    match result {
+        Ok(()) => db.reopen(),
+        // 失败路径也重开：恢复失败时应用应继续可用（原数据仍在 .bak 或原位）
+        Err(e) => {
+            let _ = db.reopen();
+            Err(e)
+        }
+    }
+}
+
+fn import_backup_inner(app: tauri::AppHandle, source_path: &str) -> Result<(), String> {
     let data_dir = app_data_dir(&app)?;
     fs::create_dir_all(&data_dir).map_err(|e| format!("create data dir: {e}"))?;
 
-    let src = Path::new(&source_path);
+    let src = Path::new(source_path);
     if !src.is_file() {
         return Err(format!("backup file not found: {}", src.display()));
     }
@@ -339,11 +386,8 @@ pub fn import_backup(app: tauri::AppHandle, source_path: String) -> Result<(), S
     // 前置：备份现有数据（即便失败用户也能手工回滚）
     let suffix = timestamp_suffix();
     let db = data_dir.join(DB_FILE);
-    if db.is_file() {
-        let bak = data_dir.join(format!("{DB_FILE}.bak-{suffix}"));
-        fs::rename(&db, &bak).map_err(|e| format!("backup db failed: {e}"))?;
-    }
     let assets_dir = data_dir.join(ASSETS_DIR);
+    stash_current_db(&db, &suffix)?;
     if assets_dir.is_dir() {
         let bak = data_dir.join(format!("{ASSETS_DIR}.bak-{suffix}"));
         fs::rename(&assets_dir, &bak).map_err(|e| format!("backup assets failed: {e}"))?;
@@ -383,18 +427,68 @@ pub fn import_backup(app: tauri::AppHandle, source_path: String) -> Result<(), S
     }
 
     // 必须有数据库文件，否则视为恢复失败，不删备份
-    let final_db = data_dir.join(DB_FILE);
-    if !final_db.is_file() {
-        // 回滚：删刚解压出来的，把 bak 改回原名
-        let _ = fs::remove_file(&final_db);
+    if !db.is_file() {
+        // 回滚：清掉刚解压的 assets，把 bak 改回原名（含 -wal/-shm）
         let _ = fs::remove_dir_all(&assets_dir);
         let db_bak = data_dir.join(format!("{DB_FILE}.bak-{suffix}"));
+        if db_bak.is_file() {
+            let _ = fs::rename(&db_bak, &db);
+        }
+        for ext in ["-wal", "-shm"] {
+            let from = data_dir.join(format!("{DB_FILE}.bak-{suffix}{ext}"));
+            let to = data_dir.join(format!("{DB_FILE}{ext}"));
+            if from.is_file() {
+                let _ = fs::rename(&from, &to);
+            }
+        }
         let assets_bak = data_dir.join(format!("{ASSETS_DIR}.bak-{suffix}"));
-        if db_bak.is_file() { let _ = fs::rename(&db_bak, &db); }
-        if assets_bak.is_dir() { let _ = fs::rename(&assets_bak, &assets_dir); }
-        return Err("backup zip does not contain valid database file".to_string());
+        if assets_bak.is_dir() {
+            let _ = fs::rename(&assets_bak, &assets_dir);
+        }
+        return Err(format!(
+            "backup zip does not contain valid database file (previous data kept at *.bak-{suffix})"
+        ));
     }
     Ok(())
+}
+
+/// 把旧 db 的 -wal/-shm 改名到 .bak-{suffix} 同名后缀。
+/// 存在的文件改名失败必须中止：新恢复的库若被旧 WAL 回放会直接损坏。
+fn move_db_sidecars_to_bak(db: &Path, suffix: &str) -> Result<(), String> {
+    for ext in ["-wal", "-shm"] {
+        let from = db.with_file_name(format!("{DB_FILE}{ext}"));
+        if !from.is_file() {
+            continue;
+        }
+        let to = db.with_file_name(format!("{DB_FILE}.bak-{suffix}{ext}"));
+        fs::rename(&from, &to).map_err(|e| format!("move old db{ext} away failed: {e}"))?;
+    }
+    Ok(())
+}
+
+/// 把当前 db 改名到 .bak-{suffix}，-wal/-shm 一并移走（新库绝不能继承旧 WAL，否则被错误回放损坏）。
+/// 先 best-effort `wal_checkpoint(TRUNCATE)`：让 .bak 主文件尽量自包含（用户常单独拷走 .bak 文件）。
+/// 注意：SQLite 打开/关闭库文件时可能会自行清理残留的 wal/shm，因此侧车文件是"被移走或被清掉"皆可，
+/// 不变量只有一个——stash 结束后原名 wal/shm 不复存在。
+fn stash_current_db(db: &Path, suffix: &str) -> Result<(), String> {
+    let wal = db.with_file_name(format!("{DB_FILE}-wal"));
+    let shm = db.with_file_name(format!("{DB_FILE}-shm"));
+    if !db.is_file() {
+        // 无主库文件时的孤儿 wal/shm 直接清掉（无法回放，留着会污染新库）
+        let _ = fs::remove_file(&wal);
+        let _ = fs::remove_file(&shm);
+        return Ok(());
+    }
+    if let Ok(conn) = rusqlite::Connection::open(db) {
+        let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
+        let _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)", []);
+    }
+    let bak = db.with_file_name(format!("{DB_FILE}.bak-{suffix}"));
+    fs::rename(db, &bak).map_err(|e| {
+        format!("backup db failed (data dir may be in use; retry after closing the app): {e}")
+    })?;
+    // 与主库同生共死：移走失败必须中止，否则解压出的新库会撞上旧 WAL
+    move_db_sidecars_to_bak(db, suffix)
 }
 
 // ————————————————————————————————————————————————
@@ -484,9 +578,33 @@ pub fn change_data_dir(
     })
 }
 
-/// 恢复默认数据目录（清除 custom_data_dir；若 move_back=true 则把 custom 下最新数据复制回 default 路径，供下次启动直接读取）
+/// 恢复默认数据目录（清除 custom_data_dir；若 move_back=true 则把 custom 下最新数据复制回 default 路径，供下次启动直接读取）。
+/// move_back 会改名/替换 default 目录 → 前后对 Db 做整体 close/reopen（应用运行中即可完成）。
 #[tauri::command]
 pub fn reset_data_dir_default(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, Db>,
+    move_back: bool,
+) -> Result<ChangeDataDirResult, String> {
+    // 未设置 custom 时无文件操作，直接返回，不动数据库连接
+    if load_app_config(&app).custom_data_dir.is_none() {
+        return Ok(ChangeDataDirResult {
+            need_restart: false,
+            copied: false,
+        });
+    }
+    db.close_for_maintenance()?;
+    let result = reset_data_dir_default_inner(app, move_back);
+    match result {
+        Ok(r) => db.reopen().map(|()| r),
+        Err(e) => {
+            let _ = db.reopen();
+            Err(e)
+        }
+    }
+}
+
+fn reset_data_dir_default_inner(
     app: tauri::AppHandle,
     move_back: bool,
 ) -> Result<ChangeDataDirResult, String> {
@@ -502,17 +620,12 @@ pub fn reset_data_dir_default(
     let mut copied = false;
 
     if move_back && custom_pb.exists() {
-        // default 若存在先改名为备份（避免用户数据丢失）
-        if default.exists() {
-            let suf = timestamp_suffix();
-            let bak = default
-                .parent()
-                .map(|p| p.join(format!("tsflowy-data-bak-{suf}")))
-                .unwrap_or_else(|| PathBuf::from(format!("./tsflowy-data-bak-{suf}")));
-            let _ = fs::rename(&default, &bak);
-        }
-        let _ = fs::remove_dir_all(&default);
-        copy_dir_all(&custom_pb, &default)?;
+        let suf = timestamp_suffix();
+        let bak = default
+            .parent()
+            .map(|p| p.join(format!("tsflowy-data-bak-{suf}")))
+            .unwrap_or_else(|| PathBuf::from(format!("./tsflowy-data-bak-{suf}")));
+        restore_custom_to_default(&default, &custom_pb, &bak)?;
         copied = true;
     }
 
@@ -521,6 +634,21 @@ pub fn reset_data_dir_default(
         need_restart: true,
         copied,
     })
+}
+
+/// 把 custom 数据恢复为 default 路径：先将现有 default 整体改名到 bak，再把 custom 复制回来。
+/// rename 失败必须中止（Windows 下数据库连接未关时目录改名很常见地失败）——
+/// 绝不允许吞掉错误继续删除/覆盖 default，那会无备份清掉用户数据。rename 成功后 default 已不存在，无需删除。
+fn restore_custom_to_default(default: &Path, custom: &Path, bak: &Path) -> Result<(), String> {
+    if default.exists() {
+        fs::rename(default, bak).map_err(|e| {
+            format!(
+                "backup default data dir failed (data dir may be in use; retry after closing the app): {e}"
+            )
+        })?;
+    }
+    copy_dir_all(custom, default)?;
+    Ok(())
 }
 
 /// 判断两个路径是否指向同一位置（规范化后比较）
@@ -579,4 +707,124 @@ fn _unused() -> Option<Cursor<Vec<u8>>> {
     // 避免 Cursor / time 导入在某些 target 下出现 dead_code 警告
     let _ = time::macros::format_description!("[year]-[month]-[day]");
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_case(name: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("tsflowy-reset-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let default = base.join("default");
+        let custom = base.join("custom");
+        let bak = base.join("bak");
+        fs::create_dir_all(default.join("assets")).unwrap();
+        fs::create_dir_all(custom.join("assets")).unwrap();
+        (base, default, custom, bak)
+    }
+
+    #[test]
+    fn restore_aborts_and_keeps_default_intact_when_rename_fails() {
+        let (base, default, custom, bak) = temp_case("fail");
+        fs::write(default.join("appflowy.db"), b"precious").unwrap();
+        fs::write(custom.join("appflowy.db"), b"new").unwrap();
+        // 预先占用 bak 位置且非空：rename 必然失败（Windows/POSIX 行为一致）
+        fs::create_dir_all(bak.join("occupied")).unwrap();
+
+        let err = restore_custom_to_default(&default, &custom, &bak).unwrap_err();
+        assert!(err.contains("backup default data dir failed"), "{err}");
+        // 关键不变量：rename 失败 → default 数据原封不动
+        assert_eq!(fs::read(default.join("appflowy.db")).unwrap(), b"precious");
+        // custom 也未被改动（不产生混合数据）
+        assert_eq!(fs::read(custom.join("appflowy.db")).unwrap(), b"new");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn stash_moves_db_sidecars_to_bak() {
+        let base = std::env::temp_dir().join(format!("tsflowy-stash-{}-sidecars", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let dir = base.join("data");
+        fs::create_dir_all(&dir).unwrap();
+        let db = dir.join(DB_FILE);
+        fs::write(&db, b"main").unwrap();
+        fs::write(dir.join(format!("{DB_FILE}-wal")), b"wal-bytes").unwrap();
+        fs::write(dir.join(format!("{DB_FILE}-shm")), b"shm-bytes").unwrap();
+
+        move_db_sidecars_to_bak(&db, "77").unwrap();
+
+        assert_eq!(
+            fs::read(dir.join(format!("{DB_FILE}.bak-77-wal"))).unwrap(),
+            b"wal-bytes"
+        );
+        assert_eq!(
+            fs::read(dir.join(format!("{DB_FILE}.bak-77-shm"))).unwrap(),
+            b"shm-bytes"
+        );
+        assert!(!dir.join(format!("{DB_FILE}-wal")).exists());
+        assert!(!dir.join(format!("{DB_FILE}-shm")).exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn stash_current_db_leaves_no_stale_wal_next_to_new_db() {
+        // 伪造非 SQLite 主库 + 残留 wal/shm。SQLite 打开/关闭时可能自行清掉侧车文件，
+        // 也可能留给 move_db_sidecars_to_bak 改名——两者皆可；不变量是 stash 结束后
+        // 原名 wal/shm 不复存在（否则解压出的新库会被旧 WAL 回放损坏）。
+        let base = std::env::temp_dir().join(format!("tsflowy-stash-{}-e2e", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let dir = base.join("data");
+        fs::create_dir_all(&dir).unwrap();
+        let db = dir.join(DB_FILE);
+        fs::write(&db, b"main").unwrap();
+        fs::write(dir.join(format!("{DB_FILE}-wal")), b"wal-bytes").unwrap();
+        fs::write(dir.join(format!("{DB_FILE}-shm")), b"shm-bytes").unwrap();
+
+        stash_current_db(&db, "77").unwrap();
+
+        assert_eq!(
+            fs::read(dir.join(format!("{DB_FILE}.bak-77"))).unwrap(),
+            b"main"
+        );
+        assert!(!db.exists());
+        assert!(!dir.join(format!("{DB_FILE}-wal")).exists());
+        assert!(!dir.join(format!("{DB_FILE}-shm")).exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn stash_current_db_clears_orphan_wal_shm_when_db_missing() {
+        let base = std::env::temp_dir().join(format!("tsflowy-stash-{}-orphan", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let dir = base.join("data");
+        fs::create_dir_all(&dir).unwrap();
+        let db = dir.join(DB_FILE);
+        fs::write(dir.join(format!("{DB_FILE}-wal")), b"stale").unwrap();
+        fs::write(dir.join(format!("{DB_FILE}-shm")), b"stale").unwrap();
+
+        stash_current_db(&db, "88").unwrap();
+
+        assert!(!dir.join(format!("{DB_FILE}-wal")).exists());
+        assert!(!dir.join(format!("{DB_FILE}-shm")).exists());
+        // 无主库时不应产生 bak 文件
+        assert!(!dir.join(format!("{DB_FILE}.bak-88")).exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn restore_moves_default_to_bak_then_copies_custom() {
+        let (base, default, custom, bak) = temp_case("ok");
+        fs::write(default.join("appflowy.db"), b"old").unwrap();
+        fs::write(custom.join("appflowy.db"), b"new").unwrap();
+        fs::write(custom.join("assets").join("a.png"), b"img").unwrap();
+
+        restore_custom_to_default(&default, &custom, &bak).unwrap();
+
+        // default 现在是 custom 的内容；旧数据完整保留在 bak
+        assert_eq!(fs::read(default.join("appflowy.db")).unwrap(), b"new");
+        assert_eq!(fs::read(default.join("assets").join("a.png")).unwrap(), b"img");
+        assert_eq!(fs::read(bak.join("appflowy.db")).unwrap(), b"old");
+        let _ = fs::remove_dir_all(&base);
+    }
 }

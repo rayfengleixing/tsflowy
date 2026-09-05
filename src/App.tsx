@@ -20,6 +20,9 @@ import { mentionsApi } from "@/lib/mentions";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 import { t } from "@/lib/i18n";
+import { flushAllForClose, registerCloseFlush } from "@/lib/close-flush";
+import { flushPendingUiPersist } from "@/stores/workspace";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { View } from "@/types/models";
 
 type ViewMode = "grid" | "board" | "calendar";
@@ -91,6 +94,28 @@ function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // 关窗前统一落盘：preventDefault 拦住关窗 → await 所有注册的冲刷（5s 看门狗兜底，
+  // 落库卡死也保证窗口最终能关）→ destroy。destroy 不再触发 close-requested，无二次拦截。
+  useEffect(() => {
+    const unregisterUi = registerCloseFlush(flushPendingUiPersist);
+    let disposed = false;
+    const listening = getCurrentWindow().onCloseRequested(async (event) => {
+      event.preventDefault();
+      await Promise.race([flushAllForClose(), new Promise((r) => setTimeout(r, 5000))]);
+      if (disposed) return;
+      try {
+        await getCurrentWindow().destroy();
+      } catch (e) {
+        logger.error("App", "window destroy failed", e);
+      }
+    });
+    return () => {
+      disposed = true;
+      unregisterUi();
+      void listening.then((unlisten) => unlisten());
+    };
   }, []);
 
   if (!ready) {

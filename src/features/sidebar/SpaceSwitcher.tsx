@@ -9,15 +9,14 @@ import {
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Check, ChevronsUpDown, LayoutGrid, Pencil, Plus, Trash2 } from "lucide-react";
-import { EMOJIS } from "@/components/emoji-picker";
+import { Check, ChevronsUpDown, Pencil, Plus, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
 
-/** 空间区（高 32px）：当前空间 + 下拉（切换/新建/重命名/图标/删除当前空间） */
+/** 空间区（高 32px）：当前空间 + 下拉（切换/新建/重命名/删除当前空间） */
 export function SpaceSwitcher() {
-  const { workspaces, currentWorkspaceId, switchWorkspace, createWorkspace, renameWorkspace, setWorkspaceIcon, deleteWorkspace } =
+  const { workspaces, currentWorkspaceId, switchWorkspace, createWorkspace, renameWorkspace, deleteWorkspace } =
     useWorkspaceStore();
   const current = workspaces.find((w) => w.id === currentWorkspaceId);
 
@@ -56,22 +55,14 @@ export function SpaceSwitcher() {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex h-7 w-full items-center gap-1.5 rounded-md px-1.5 text-[13px] font-medium text-neutral-800 hover:bg-neutral-300/60">
-              <span className="text-base leading-none">{current?.icon ?? <LayoutGrid className="h-4 w-4" />}</span>
               <span className="min-w-0 flex-1 truncate text-left">{current?.name ?? "…"}</span>
               <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-64">
             {workspaces.map((w) => (
-              <DropdownMenuItem
-                key={w.id}
-                className="justify-between"
-                onSelect={() => switchWorkspace(w.id)}
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  <span className="text-base leading-none">{w.icon ?? <LayoutGrid className="h-4 w-4" />}</span>
-                  <span className="truncate">{w.name}</span>
-                </span>
+              <DropdownMenuItem key={w.id} className="justify-between" onSelect={() => switchWorkspace(w.id)}>
+                <span className="truncate">{w.name}</span>
                 {w.id === currentWorkspaceId && <Check className="h-3.5 w-3.5 text-brand-500" />}
               </DropdownMenuItem>
             ))}
@@ -83,26 +74,19 @@ export function SpaceSwitcher() {
             {current && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => { setRenameName(current.name); setRenaming(true); }}>
+                <DropdownMenuItem
+                  onSelect={() => {
+                    setRenameName(current.name);
+                    setRenaming(true);
+                  }}
+                >
                   <Pencil className="mr-2 h-4 w-4" />
                   {t("workspace.rename")}
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
-                  <span className="mr-2 h-4 w-4" />
-                  <span className="flex items-center gap-1">
-                    <span className="mr-1 text-[13px]">{t("workspace.changeIcon")}</span>
-                    {EMOJIS.map((e) => (
-                      <button
-                        key={e}
-                        className="flex h-6 w-6 items-center justify-center rounded text-sm hover:bg-neutral-200"
-                        onClick={() => setWorkspaceIcon(current.id, e)}
-                      >
-                        {e}
-                      </button>
-                    ))}
-                  </span>
-                </DropdownMenuItem>
-                <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => setDeleting(true)}>
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onSelect={() => setDeleting(true)}
+                >
                   <Trash2 className="mr-2 h-4 w-4" />
                   {t("workspace.delete")}
                 </DropdownMenuItem>

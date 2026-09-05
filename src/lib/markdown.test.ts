@@ -83,6 +83,75 @@ describe("markdownToJson", () => {
     });
   });
 
+  it("converts $$ display math fence", () => {
+    const json = markdownToJson("$$\nE=mc^2\n$$");
+    expect(json.content?.[0]).toEqual({ type: "math", attrs: { tex: "E=mc^2" } });
+  });
+
+  it("converts single-line $$...$$ math", () => {
+    const json = markdownToJson("$$E=mc^2$$");
+    expect(json.content?.[0]).toEqual({ type: "math", attrs: { tex: "E=mc^2" } });
+  });
+
+  it("consumes unterminated math fence to end of input", () => {
+    const json = markdownToJson("$$\na+b");
+    expect(json.content).toEqual([{ type: "math", attrs: { tex: "a+b" } }]);
+  });
+
+  it("converts <details open> with summary into expanded toggle", () => {
+    const json = markdownToJson("<details open>\n<summary>折叠标题</summary>\n\n隐藏内容\n\n</details>");
+    expect(json.content?.[0]).toEqual({
+      type: "toggle",
+      attrs: { collapsed: false },
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "折叠标题" }] },
+        { type: "paragraph", content: [{ type: "text", text: "隐藏内容" }] },
+      ],
+    });
+  });
+
+  it("converts <details> without open into collapsed toggle", () => {
+    const json = markdownToJson("<details>\n<summary>标题</summary>\n\n内容\n\n</details>");
+    expect(json.content?.[0]?.type).toBe("toggle");
+    expect(json.content?.[0]?.attrs).toEqual({ collapsed: true });
+  });
+
+  it("decodes HTML entities in summary title", () => {
+    const json = markdownToJson("<details open>\n<summary>a &amp; b &lt;c&gt;</summary>\n\n正文\n\n</details>");
+    expect(json.content?.[0]?.content?.[0]).toEqual({
+      type: "paragraph",
+      content: [{ type: "text", text: "a & b <c>" }],
+    });
+  });
+
+  it("handles nested details via depth counting", () => {
+    const md = [
+      "<details open>",
+      "<summary>外层</summary>",
+      "",
+      "<details>",
+      "<summary>内层</summary>",
+      "",
+      "深处",
+      "",
+      "</details>",
+      "",
+      "</details>",
+    ].join("\n");
+    const outer = markdownToJson(md).content?.[0];
+    expect(outer?.type).toBe("toggle");
+    expect(outer?.attrs).toEqual({ collapsed: false });
+    // 内层 toggle 是外层的第二个子块
+    const nested = outer?.content?.find((c) => c.type === "toggle");
+    expect(nested?.attrs).toEqual({ collapsed: true });
+    expect(nested?.content).toEqual([
+      { type: "paragraph", content: [{ type: "text", text: "内层" }] },
+      { type: "paragraph", content: [{ type: "text", text: "深处" }] },
+    ]);
+    // 深度计数应恰好吃掉外层闭合标签，不残留 </details> 段落
+    expect(markdownToJson(md).content).toHaveLength(1);
+  });
+
   it("converts blockquote and horizontal rule", () => {
     const json = markdownToJson("> 引用一句\n\n---");
     expect(json.content).toEqual([
@@ -112,6 +181,8 @@ describe("looksLikeMarkdown / textToBlocks", () => {
     expect(looksLikeMarkdown("> 引用")).toBe(true);
     expect(looksLikeMarkdown("```js\ncode\n```")).toBe(true);
     expect(looksLikeMarkdown("---")).toBe(true);
+    expect(looksLikeMarkdown("$$\nE=mc^2\n$$")).toBe(true);
+    expect(looksLikeMarkdown("<details>\n<summary>x</summary>\n</details>")).toBe(true);
     expect(looksLikeMarkdown("普通文本第一行\n第二行")).toBe(false);
   });
 
@@ -190,8 +261,16 @@ describe("jsonToMarkdown", () => {
         {
           type: "taskList",
           content: [
-            { type: "taskItem", attrs: { checked: false }, content: [{ type: "paragraph", content: [{ type: "text", text: "未" }] }] },
-            { type: "taskItem", attrs: { checked: true }, content: [{ type: "paragraph", content: [{ type: "text", text: "已" }] }] },
+            {
+              type: "taskItem",
+              attrs: { checked: false },
+              content: [{ type: "paragraph", content: [{ type: "text", text: "未" }] }],
+            },
+            {
+              type: "taskItem",
+              attrs: { checked: true },
+              content: [{ type: "paragraph", content: [{ type: "text", text: "已" }] }],
+            },
           ],
         },
       ],
@@ -211,7 +290,7 @@ describe("jsonToMarkdown", () => {
         {
           type: "codeBlock",
           attrs: { language: "ts" },
-          content: [{ type: "text", text: 'const a = 1;\nconst b = 2;' }],
+          content: [{ type: "text", text: "const a = 1;\nconst b = 2;" }],
         },
       ],
     });
@@ -284,16 +363,69 @@ describe("jsonToMarkdown", () => {
     expect(md).toMatch(/^\| 1 \| 2 \|$/m);
   });
 
-  it("outputs placeholder comments for advanced blocks without crashing", () => {
+  it("renders math block with real tex attribute", () => {
+    const md = jsonToMarkdown({
+      type: "doc",
+      content: [{ type: "math", attrs: { tex: "E=mc^2" } }],
+    });
+    expect(md).toContain("$$\nE=mc^2\n$$");
+  });
+
+  it("renders math block without attrs without crashing", () => {
+    const md = jsonToMarkdown({ type: "doc", content: [{ type: "math" }] });
+    expect(md).toContain("$$");
+  });
+
+  it("renders toggle block with first paragraph lifted into summary", () => {
     const md = jsonToMarkdown({
       type: "doc",
       content: [
-        { type: "math", attrs: { expr: "E=mc^2", display: true } },
-        { type: "database-view", attrs: { viewId: "db-1" } },
-        { type: "outline" },
+        {
+          type: "toggle",
+          attrs: { collapsed: false },
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "折叠标题" }] },
+            { type: "paragraph", content: [{ type: "text", text: "隐藏内容" }] },
+          ],
+        },
       ],
     });
-    expect(md).toContain("$$E=mc^2$$");
+    expect(md).toContain("<details open>");
+    expect(md).toContain("<summary>折叠标题</summary>");
+    expect(md).toContain("隐藏内容");
+    // 标题只应出现在 summary，不重复出现在正文
+    expect(md.match(/折叠标题/g)).toHaveLength(1);
+  });
+
+  it("exports collapsed toggle as closed details", () => {
+    const md = jsonToMarkdown({
+      type: "doc",
+      content: [
+        {
+          type: "toggle",
+          attrs: { collapsed: true },
+          content: [{ type: "paragraph", content: [{ type: "text", text: "标题" }] }],
+        },
+      ],
+    });
+    expect(md).toContain("<details>\n<summary>标题</summary>");
+    expect(md).not.toContain("<details open>");
+  });
+
+  it("renders empty toggle without crashing", () => {
+    const md = jsonToMarkdown({
+      type: "doc",
+      content: [{ type: "toggle", attrs: { collapsed: false }, content: [{ type: "paragraph" }] }],
+    });
+    expect(md).toContain("<details open>");
+    expect(md).toContain("</details>");
+  });
+
+  it("outputs placeholder comments for advanced blocks without crashing", () => {
+    const md = jsonToMarkdown({
+      type: "doc",
+      content: [{ type: "database-view", attrs: { viewId: "db-1" } }, { type: "outline" }],
+    });
     expect(md).toContain("<!-- database view: db-1 -->");
     expect(md).toContain("<!-- outline block -->");
   });
@@ -308,5 +440,45 @@ describe("jsonToMarkdown", () => {
     expect(output).toMatch(/^> 引用一段$/m);
     expect(output).toMatch(/^```$/m);
     expect(output).toMatch(/^code line$/m);
+  });
+
+  it("round-trips math: json → md → json", () => {
+    const json = { type: "doc", content: [{ type: "math", attrs: { tex: "E=mc^2" } }] };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("$$\nE=mc^2\n$$");
+    expect(markdownToJson(md)).toEqual(json);
+  });
+
+  it("round-trips collapsed toggle: json → md → json", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "toggle",
+          attrs: { collapsed: true },
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "折叠标题" }] },
+            { type: "paragraph", content: [{ type: "text", text: "隐藏内容" }] },
+          ],
+        },
+      ],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("<details>\n<summary>折叠标题</summary>");
+    expect(markdownToJson(md)).toEqual(json);
+  });
+
+  it("round-trips expanded toggle: json → md → json", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "toggle",
+          attrs: { collapsed: false },
+          content: [{ type: "paragraph", content: [{ type: "text", text: "展开标题" }] }],
+        },
+      ],
+    };
+    expect(markdownToJson(jsonToMarkdown(json))).toEqual(json);
   });
 });
