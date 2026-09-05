@@ -3,6 +3,8 @@ import type { CellValue, DatabaseField, DatabaseRow, FieldOptions, FieldType } f
 import { databaseApi } from "@/lib/database";
 import { newSelectOption, parseFieldOptions } from "@/lib/database-values";
 import { viewApi } from "@/lib/db";
+import { t } from "@/lib/i18n";
+import { toast } from "sonner";
 import type { FilterMode, FilterSpec, SortSpec } from "@/lib/database-query";
 import type { View } from "@/types/models";
 
@@ -78,6 +80,7 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
       set({ fields, rows, cells, loading: false });
     } catch (e) {
       console.error("load database view failed", viewId, e);
+      toast.error(t("error.db", { message: String(e) }));
       set({ loading: false });
       throw e;
     }
@@ -245,6 +248,7 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
       }
     } catch (e) {
       console.error("open row detail failed", e);
+      toast.error(t("error.db", { message: String(e) }));
     }
   },
 

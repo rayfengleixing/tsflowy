@@ -1,11 +1,26 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Plus } from "lucide-react";
 import type { Editor } from "@tiptap/core";
 import { pagePropertiesApi, type PagePropertyFieldType, type PagePropertyRow } from "@/lib/page-properties";
+import { registerCloseFlush } from "@/lib/close-flush";
 import { t } from "@/lib/i18n";
+import { toast } from "sonner";
 import type { View } from "@/types/models";
-import { fieldIcon } from "@/features/database/field-icon";
+import { FieldTypeMenu } from "@/features/database/FieldTypeMenu";
+
+const PROPERTIES_SAVE_MS = 500;
+
+/** 页面属性可选类型（005 迁移 CHECK 约束） */
+const PP_TYPES = ["text", "date", "single_select", "multi_select", "number", "checkbox"] as const;
+
+/** 新属性默认 key 去重：统一叫「属性/属性 2/属性 3…」（(view_id,key) 唯一约束） */
+function uniqueKey(base: string, existing: string[]): string {
+  if (!existing.includes(base)) return base;
+  let i = 2;
+  while (existing.includes(`${base} ${i}`)) i++;
+  return `${base} ${i}`;
+}
 
 /**
  * PageProperties：页面属性区，portal 渲染进 PagePropertiesSlot 扩展提供的挂载点
@@ -17,9 +32,6 @@ import { fieldIcon } from "@/features/database/field-icon";
 export function PageProperties({ view, editor }: { view: View; editor: Editor | null | undefined }) {
   const viewId = view.id;
   const [rows, setRows] = useState<PagePropertyRow[]>([]);
-  const [addOpen, setAddOpen] = useState(false);
-  const [addKey, setAddKey] = useState("");
-  const [addType, setAddType] = useState<PagePropertyFieldType>("text");
   const [slot, setSlot] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -45,34 +57,104 @@ export function PageProperties({ view, editor }: { view: View; editor: Editor | 
     return () => mo.disconnect();
   }, [editor]);
 
-  const setValue = (row: PagePropertyRow, nextVal: string) => {
-    const nextRows = rows.map((r) => (r.key === row.key ? { ...r, value: nextVal } : r));
-    setRows(nextRows);
-    pagePropertiesApi.set(viewId, row.key, nextVal, row.field_type).catch(() => {
+  // 属性值防抖落库：键击只更新本地 rows，停顿 500ms / 失焦 / 切页 / 关窗才真正写库
+  const pendingRef = useRef(new Map<string, { value: string; fieldType: PagePropertyFieldType; timer: number }>());
+  const flushKey = useCallback((vid: string, key: string): Promise<void> => {
+    const entry = pendingRef.current.get(key);
+    if (!entry) return Promise.resolve();
+    window.clearTimeout(entry.timer);
+    pendingRef.current.delete(key);
+    return pagePropertiesApi.set(vid, key, entry.value, entry.fieldType).catch(() => {
       // 写失败：回滚 UI 状态（重新拉取）
-      void pagePropertiesApi.list(viewId).then(setRows);
+      void pagePropertiesApi.list(vid).then(setRows);
     });
+  }, []);
+  const flushAllPending = useCallback(
+    (vid: string) => {
+      const keys = [...pendingRef.current.keys()];
+      return Promise.allSettled(keys.map((key) => flushKey(vid, key))).then(() => undefined);
+    },
+    [flushKey],
+  );
+
+  // 切换文档/卸载时冲刷挂起写；并注册进关窗冲刷链（close-flush）
+  useEffect(() => {
+    const unregister = registerCloseFlush(() => flushAllPending(viewId));
+    return () => {
+      unregister();
+      void flushAllPending(viewId);
+    };
+  }, [viewId, flushAllPending]);
+
+  const setValue = (row: PagePropertyRow, nextVal: string) => {
+    setRows((prev) => prev.map((r) => (r.key === row.key ? { ...r, value: nextVal } : r)));
+    const prev = pendingRef.current.get(row.key);
+    if (prev) window.clearTimeout(prev.timer);
+    const vid = viewId;
+    const timer = window.setTimeout(() => void flushKey(vid, row.key), PROPERTIES_SAVE_MS);
+    pendingRef.current.set(row.key, { value: nextVal, fieldType: row.field_type, timer });
   };
 
   const addRow = async () => {
-    const key = addKey.trim();
-    if (!key) return;
-    const initValue = addType === "checkbox" ? "0" : addType === "multi_select" ? "[]" : "";
-    await pagePropertiesApi.set(viewId, key, initValue, addType);
-    setRows(await pagePropertiesApi.list(viewId));
-    setAddKey("");
-    setAddOpen(false);
+    // 直接新建文本属性行；名称/类型后续通过点名称（重命名）和点图标（改类型）调整
+    const key = uniqueKey(
+      t("prop.defaultKey"),
+      rows.map((r) => r.key),
+    );
+    try {
+      await pagePropertiesApi.set(viewId, key, "", "text");
+      setRows(await pagePropertiesApi.list(viewId));
+    } catch (e: unknown) {
+      console.error("add page property failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
+  };
+
+  const changeType = async (key: string, nextType: PagePropertyFieldType) => {
+    const row = rows.find((r) => r.key === key);
+    if (!row) return;
+    // 取消挂起防抖写：其 fieldType 是旧类型，若晚于类型变更落库会把类型改回去
+    const pending = pendingRef.current.get(key);
+    if (pending) {
+      window.clearTimeout(pending.timer);
+      pendingRef.current.delete(key);
+    }
+    try {
+      // upsert 保留 position，value 原样保留
+      await pagePropertiesApi.set(viewId, key, row.value, nextType);
+      setRows(await pagePropertiesApi.list(viewId));
+    } catch (e: unknown) {
+      console.error("change property type failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
   };
 
   const removeKey = async (key: string) => {
-    await pagePropertiesApi.remove(viewId, key);
-    setRows(await pagePropertiesApi.list(viewId));
+    // 先取消挂起写，避免删除后又被防抖写库复活
+    const pending = pendingRef.current.get(key);
+    if (pending) {
+      window.clearTimeout(pending.timer);
+      pendingRef.current.delete(key);
+    }
+    try {
+      await pagePropertiesApi.remove(viewId, key);
+      setRows(await pagePropertiesApi.list(viewId));
+    } catch (e: unknown) {
+      console.error("remove page property failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
   };
 
   const renameKey = async (oldKey: string, newKey: string) => {
     if (!newKey.trim() || newKey === oldKey) return;
-    await pagePropertiesApi.rename(viewId, oldKey, newKey);
-    setRows(await pagePropertiesApi.list(viewId));
+    try {
+      await flushKey(viewId, oldKey); // 先冲刷挂起值再改名，避免刚输入的内容丢失在旧键下
+      await pagePropertiesApi.rename(viewId, oldKey, newKey);
+      setRows(await pagePropertiesApi.list(viewId));
+    } catch (e: unknown) {
+      console.error("rename page property failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
   };
 
   if (!slot) return null;
@@ -84,48 +166,21 @@ export function PageProperties({ view, editor }: { view: View; editor: Editor | 
           key={row.key}
           row={row}
           onChange={(v) => setValue(row, v)}
+          onFlush={() => void flushKey(viewId, row.key)}
           onRemove={() => removeKey(row.key)}
           onRename={(nk) => renameKey(row.key, nk)}
+          onChangeType={(nt) => void changeType(row.key, nt)}
         />
       ))}
       <button
         type="button"
-        onClick={() => setAddOpen((v) => !v)}
+        data-testid="add-prop"
+        onClick={() => void addRow()}
         className="flex items-center gap-1.5 px-3 py-1 text-[12px] text-neutral-500 hover:text-neutral-800"
       >
         <Plus className="h-3.5 w-3.5" />
         {t("prop.add")}
       </button>
-      {addOpen && (
-        <div className="flex flex-wrap items-center gap-2 px-3 py-1 text-[12px]">
-          <input
-            className="h-6 rounded-md border border-neutral-300 px-2 outline-none focus:border-brand-500"
-            value={addKey}
-            onChange={(e) => setAddKey(e.target.value)}
-            placeholder={t("prop.namePlaceholder")}
-          />
-          <select
-            className="h-6 rounded-md border border-neutral-300 bg-white px-1"
-            value={addType}
-            onChange={(e) => setAddType(e.target.value as PagePropertyFieldType)}
-          >
-            {(["text", "date", "single_select", "multi_select", "number", "checkbox"] as PagePropertyFieldType[]).map(
-              (t_) => (
-                <option key={t_} value={t_}>
-                  {t_}
-                </option>
-              ),
-            )}
-          </select>
-          <button
-            type="button"
-            onClick={addRow}
-            className="rounded bg-brand-500 px-2 py-0.5 text-white hover:bg-brand-600"
-          >
-            {t("common.confirm")}
-          </button>
-        </div>
-      )}
     </div>,
     slot,
   );
@@ -135,13 +190,17 @@ export function PageProperties({ view, editor }: { view: View; editor: Editor | 
 function PropertyRow({
   row,
   onChange,
+  onFlush,
   onRemove,
   onRename,
+  onChangeType,
 }: {
   row: PagePropertyRow;
   onChange: (v: string) => void;
+  onFlush: () => void;
   onRemove: () => void;
   onRename: (k: string) => void;
+  onChangeType: (t: PagePropertyFieldType) => void;
 }) {
   const [editKey, setEditKey] = useState(false);
   const [keyDraft, setKeyDraft] = useState(row.key);
@@ -155,7 +214,10 @@ function PropertyRow({
             <input
               type="checkbox"
               checked={val === "1"}
-              onChange={(e) => onChange(e.target.checked ? "1" : "0")}
+              onChange={(e) => {
+                onChange(e.target.checked ? "1" : "0");
+                onFlush(); // 勾选是单次操作，立即落库
+              }}
               className="h-3 w-3"
             />
             {t("prop.checkbox")}
@@ -167,6 +229,7 @@ function PropertyRow({
             type="date"
             value={val}
             onChange={(e) => onChange(e.target.value)}
+            onBlur={onFlush}
             className="w-full cursor-pointer bg-transparent text-[12px] text-neutral-800 outline-none"
           />
         );
@@ -176,6 +239,7 @@ function PropertyRow({
             type="number"
             value={val}
             onChange={(e) => onChange(e.target.value)}
+            onBlur={onFlush}
             className="w-24 bg-transparent text-[12px] text-neutral-800 outline-none"
           />
         );
@@ -197,6 +261,7 @@ function PropertyRow({
                 .filter(Boolean);
               onChange(JSON.stringify(next));
             }}
+            onBlur={onFlush}
             placeholder={t("prop.placeholder")}
             className="w-full bg-transparent text-[12px] text-neutral-800 outline-none"
           />
@@ -208,6 +273,7 @@ function PropertyRow({
             type="text"
             value={val}
             onChange={(e) => onChange(e.target.value)}
+            onBlur={onFlush}
             placeholder={t("prop.placeholder")}
             className="w-full bg-transparent text-[12px] text-neutral-800 outline-none"
           />
@@ -217,7 +283,12 @@ function PropertyRow({
 
   return (
     <div className="group flex items-center gap-2 px-3 py-1 text-[12px]">
-      {fieldIcon(row.field_type)}
+      <FieldTypeMenu
+        testid="prop-icon"
+        types={PP_TYPES}
+        current={row.field_type}
+        onSelect={(type) => onChangeType(type as PagePropertyFieldType)}
+      />
       {editKey ? (
         <input
           autoFocus

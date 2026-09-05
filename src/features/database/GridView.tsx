@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   Download,
   ExternalLink,
@@ -94,41 +94,36 @@ export function GridView({
   const [filterOpen, setFilterOpen] = useState(false);
   const [draggingField, setDraggingField] = useState<string | null>(null);
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
-  const [resizingField, setResizingField] = useState<string | null>(null);
 
   useEffect(() => {
     store.load(view.id).catch((e) => console.error("grid load failed", e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.id]);
 
-  // 列宽拖拽（基于 clientX 差值，比 movementX 稳健）
-  const resizeStartRef = useRef<{ x: number; width: number } | null>(null);
-  useEffect(() => {
-    if (!resizingField) return;
-    const onDown = (e: MouseEvent) => {
-      const field = store.fields.find((f) => f.id === resizingField);
-      if (field) resizeStartRef.current = { x: e.clientX, width: field.width };
+  // 列宽拖拽：拖拽期间直接改 <col> 宽度（纯 DOM，零重渲/零 IPC），mouseup 才落库一次
+  const tableRef = useRef<HTMLTableElement | null>(null);
+  const startColumnResize = (e: ReactMouseEvent, fieldId: string, startWidth: number) => {
+    e.preventDefault();
+    const col = tableRef.current?.querySelector<HTMLTableColElement>(`col[data-field-id="${fieldId}"]`);
+    if (!col) return;
+    const startX = e.clientX;
+    const clamp = (w: number) => Math.max(60, Math.min(600, w));
+    const onMove = (ev: MouseEvent) => {
+      col.style.width = clamp(startWidth + ev.clientX - startX) + "px";
     };
-    const onMove = (e: MouseEvent) => {
-      const start = resizeStartRef.current;
-      if (!start) return;
-      const width = Math.max(60, Math.min(600, start.width + (e.clientX - start.x)));
-      void store.setFieldWidth(resizingField, width);
-    };
-    const onUp = () => {
-      resizeStartRef.current = null;
-      setResizingField(null);
-    };
-    window.addEventListener("mousemove", onDown, { once: true });
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onDown);
+    const onUp = (ev: MouseEvent) => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      const width = clamp(startWidth + ev.clientX - startX);
+      void store.setFieldWidth(fieldId, width).catch((err: unknown) => {
+        col.style.width = ""; // 落库失败：去掉本地预览宽度，回退 store 旧值
+        console.error("set field width failed", err);
+        toast.error(t("error.db", { message: String(err) }));
+      });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resizingField]);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   const visibleFields = useMemo(() => fields.filter((f) => f.is_hidden === 0), [fields]);
   // 名称列（主列）：position 最小且不可隐藏，作为行详情入口
@@ -339,11 +334,11 @@ export function GridView({
 
       {/* 表格（横向滚动） */}
       <div className="min-h-0 flex-1 overflow-auto">
-        <table className="border-separate border-spacing-0">
+        <table ref={tableRef} className="border-separate border-spacing-0">
           <colgroup>
             <col style={{ width: 44 }} />
             {visibleFields.map((f) => (
-              <col key={f.id} style={{ width: f.width }} />
+              <col key={f.id} data-field-id={f.id} style={{ width: f.width }} />
             ))}
             <col style={{ width: 44 }} />
           </colgroup>
@@ -436,10 +431,7 @@ export function GridView({
                     <div
                       data-testid={"resize-" + field.id}
                       className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-brand-500/60"
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        setResizingField(field.id);
-                      }}
+                      onMouseDown={(e) => startColumnResize(e, field.id, field.width)}
                     />
                   </th>
                 );

@@ -4,6 +4,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { searchApi, type SearchHit } from "@/lib/search";
 import { viewIcon } from "@/components/view-icon";
 import { t } from "@/lib/i18n";
+import { toast } from "sonner";
 
 function highlightTitle(title: string, query: string) {
   const q = query.trim().toLowerCase();
@@ -55,7 +56,10 @@ export function SearchResultsPage() {
       .then((r) => {
         if (alive) setResults(r);
       })
-      .catch((e) => console.error("search failed", e))
+      .catch((e: unknown) => {
+        console.error("search failed", e);
+        toast.error(t("error.db", { message: String(e) }));
+      })
       .finally(() => {
         if (alive) setLoading(false);
       });

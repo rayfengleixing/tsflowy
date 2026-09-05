@@ -313,12 +313,16 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
               // 只读期间输入不可能到达，理论上不可达；一旦发生宁可告警也不覆盖
               console.error("document load skipped: editor not empty", view.id);
             }
-          } catch (e) {
+          } catch (e: unknown) {
             console.error("parse document content failed", view.id, e);
+            toast.error(t("error.db", { message: String(e) }));
           }
         }
       })
-      .catch((e) => console.error("load document failed", view.id, e))
+      .catch((e: unknown) => {
+        console.error("load document failed", view.id, e);
+        toast.error(t("error.db", { message: String(e) }));
+      })
       .finally(() => {
         // setEditable 第二参 false：解锁不产生 update 事件
         if (alive && editor && !editor.isDestroyed) editor.setEditable(true, false);

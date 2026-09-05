@@ -5,23 +5,36 @@ import { viewIcon } from "@/components/view-icon";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
+import { toast } from "sonner";
 
 /** 回收站页（说明书 5.1：恢复 / 彻底删除 / 清空） */
 export function TrashPage() {
-  const { trash, restoreView, purgeView, purgeTrash } = useWorkspaceStore();
+  const trash = useWorkspaceStore((s) => s.trash);
+  const restoreView = useWorkspaceStore((s) => s.restoreView);
+  const purgeView = useWorkspaceStore((s) => s.purgeView);
+  const purgeTrash = useWorkspaceStore((s) => s.purgeTrash);
   const [purgeAllOpen, setPurgeAllOpen] = useState(false);
   const [purgeTarget, setPurgeTarget] = useState<string | null>(null);
 
-  const handleRestore = (id: string) => restoreView(id).catch((e) => console.error("restore failed", e));
-  const handlePurge = (id: string) => purgeView(id).catch((e) => console.error("purge failed", e));
-  const handlePurgeAll = () => purgeTrash().catch((e) => console.error("purge trash failed", e));
+  const onFail = (e: unknown) => {
+    console.error("trash operation failed", e);
+    toast.error(t("error.db", { message: String(e) }));
+  };
+  const handleRestore = (id: string) => restoreView(id).catch(onFail);
+  const handlePurge = (id: string) => purgeView(id).catch(onFail);
+  const handlePurgeAll = () => purgeTrash().catch(onFail);
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-11 shrink-0 items-center justify-between border-b border-neutral-300 px-4">
         <h1 className="text-sm font-medium text-neutral-800">{t("trash.title")}</h1>
         {trash.length > 0 && (
-          <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setPurgeAllOpen(true)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-destructive hover:text-destructive"
+            onClick={() => setPurgeAllOpen(true)}
+          >
             <Trash2 className="mr-1 h-3.5 w-3.5" />
             {t("trash.purgeAll")}
           </Button>
@@ -44,7 +57,12 @@ export function TrashPage() {
                 <span className="shrink-0 text-xs text-neutral-500">
                   {t("trash.deletedAt", { date: v.deleted_at ? new Date(v.deleted_at).toLocaleString() : "?" })}
                 </span>
-                <Button variant="ghost" size="sm" className="h-6 shrink-0 px-2 text-[12px]" onClick={() => handleRestore(v.id)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 shrink-0 px-2 text-[12px]"
+                  onClick={() => handleRestore(v.id)}
+                >
                   <RotateCcw className="mr-1 h-3 w-3" />
                   {t("trash.restore")}
                 </Button>

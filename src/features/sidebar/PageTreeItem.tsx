@@ -43,20 +43,17 @@ export function PageTreeItem({
   onDropHint,
   onDrop,
 }: PageTreeItemProps) {
-  const {
-    tree,
-    expanded,
-    currentViewId,
-    openView,
-    toggleExpand,
-    renameView,
-    setViewIcon,
-    toggleFavorite,
-    deleteView,
-    expand,
-  } = useWorkspaceStore();
-  const isExpanded = expanded.has(node.id);
-  const isActive = currentViewId === node.id;
+  // 每树节点一份订阅：用原子 selector（含布尔派生），任一 store 字段变化只重渲受影响节点而非整棵树
+  const tree = useWorkspaceStore((s) => s.tree);
+  const isExpanded = useWorkspaceStore((s) => s.expanded.has(node.id));
+  const isActive = useWorkspaceStore((s) => s.currentViewId === node.id);
+  const openView = useWorkspaceStore((s) => s.openView);
+  const toggleExpand = useWorkspaceStore((s) => s.toggleExpand);
+  const renameView = useWorkspaceStore((s) => s.renameView);
+  const setViewIcon = useWorkspaceStore((s) => s.setViewIcon);
+  const toggleFavorite = useWorkspaceStore((s) => s.toggleFavorite);
+  const deleteView = useWorkspaceStore((s) => s.deleteView);
+  const expand = useWorkspaceStore((s) => s.expand);
   const hasChildren = node.children.length > 0;
 
   const [editing, setEditing] = useState(false);

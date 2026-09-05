@@ -4,6 +4,7 @@ import { PageTreeItem, type DropHint } from "./PageTreeItem";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { dropTarget, type DropZone } from "@/lib/tree";
 import { t } from "@/lib/i18n";
+import { toast } from "sonner";
 
 /** 页面树：递归渲染 + 原生 HTML5 拖拽（排序/换父级），空白处拖放 = 移到根级末尾 */
 export function PageTree() {
@@ -12,13 +13,18 @@ export function PageTree() {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropHint, setDropHint] = useState<DropHint | null>(null);
 
+  const onMoveFail = (e: unknown) => {
+    console.error("move view failed", e);
+    toast.error(t("error.db", { message: String(e) }));
+  };
+
   const handleDrop = async (viewId: string, targetId: string, zone: DropZone) => {
     const target = dropTarget(tree, targetId, zone);
     if (!target) return;
     try {
       await moveView(viewId, target.parentId, target.index);
-    } catch (e) {
-      console.error("move view failed", e);
+    } catch (e: unknown) {
+      onMoveFail(e);
     }
   };
 
@@ -30,8 +36,8 @@ export function PageTree() {
     setDropHint(null);
     try {
       await moveView(from, null, tree.length);
-    } catch (e) {
-      console.error("move view to root failed", e);
+    } catch (e: unknown) {
+      onMoveFail(e);
     }
   };
 
@@ -46,9 +52,7 @@ export function PageTree() {
       }}
       onDrop={handleRootDrop}
     >
-      {tree.length === 0 && (
-        <div className="px-2 py-3 text-center text-xs text-neutral-500">{t("tree.empty")}</div>
-      )}
+      {tree.length === 0 && <div className="px-2 py-3 text-center text-xs text-neutral-500">{t("tree.empty")}</div>}
       {tree.map((node: ViewNode) => (
         <PageTreeItem
           key={node.id}
@@ -64,9 +68,7 @@ export function PageTree() {
           onDrop={handleDrop}
         />
       ))}
-      {draggingId && !dropHint && (
-        <div className="mx-1 my-1 h-[2px] rounded bg-brand-500" />
-      )}
+      {draggingId && !dropHint && <div className="mx-1 my-1 h-[2px] rounded bg-brand-500" />}
     </div>
   );
 }

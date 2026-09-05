@@ -13,11 +13,16 @@ import { Check, ChevronsUpDown, Pencil, Plus, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
+import { toast } from "sonner";
 
 /** 空间区（高 32px）：当前空间 + 下拉（切换/新建/重命名/删除当前空间） */
 export function SpaceSwitcher() {
-  const { workspaces, currentWorkspaceId, switchWorkspace, createWorkspace, renameWorkspace, deleteWorkspace } =
-    useWorkspaceStore();
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace);
+  const createWorkspace = useWorkspaceStore((s) => s.createWorkspace);
+  const renameWorkspace = useWorkspaceStore((s) => s.renameWorkspace);
+  const deleteWorkspace = useWorkspaceStore((s) => s.deleteWorkspace);
   const current = workspaces.find((w) => w.id === currentWorkspaceId);
 
   const [creating, setCreating] = useState(false);
@@ -32,8 +37,9 @@ export function SpaceSwitcher() {
     setNewName("");
     try {
       await createWorkspace(name);
-    } catch (e) {
+    } catch (e: unknown) {
       console.error("create workspace failed", e);
+      toast.error(t("error.db", { message: String(e) }));
     }
   };
 
@@ -44,8 +50,9 @@ export function SpaceSwitcher() {
     setRenaming(false);
     try {
       await renameWorkspace(id, name);
-    } catch (e) {
+    } catch (e: unknown) {
       console.error("rename workspace failed", e);
+      toast.error(t("error.db", { message: String(e) }));
     }
   };
 

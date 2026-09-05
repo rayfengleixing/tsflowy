@@ -10,6 +10,7 @@ import { LAYOUTS } from "@/types/models";
 import { layoutMeta } from "@/components/view-icon";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
+import { toast } from "sonner";
 
 interface NewPageMenuProps {
   parentId?: string | null;
@@ -23,7 +24,10 @@ export function NewPageMenu({ parentId = null, align = "start", triggerClassName
   const createView = useWorkspaceStore((s) => s.createView);
 
   const handleCreate = (layout: LayoutType) => {
-    createView({ parentId, layout }).catch((e) => console.error("create view failed", e));
+    createView({ parentId, layout }).catch((e: unknown) => {
+      console.error("create view failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    });
   };
 
   return (

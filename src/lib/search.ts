@@ -48,8 +48,9 @@ export function sanitizeSnippet(snippet: string): string {
 
 export const searchApi = {
   /**
-   * 搜索当前空间：Rust 侧一次返回 FTS 命中（文档正文/标题）+ 无文档行的视图标题 LIKE 兜底。
-   * 这里只做 <em> 清洗与标题优先排序，最多 100+50 条。
+   * 搜索当前空间：Rust 侧一次返回 FTS 命中（文档正文/标题）+ 无文档行的视图标题 LIKE 兜底
+   * + 短查询（<3 字）的正文 LIKE 兜底。
+   * 这里只做 <em> 清洗与标题优先排序，最多 100+50+50 条。
    */
   async search(workspaceId: string, input: string): Promise<SearchHit[]> {
     const q = input.trim();

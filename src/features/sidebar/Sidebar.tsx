@@ -13,8 +13,14 @@ const MAX_WIDTH = 560;
 
 /** 侧边栏（说明书 6.3 结构）：页面树 / 大纲 / 收藏 三 Tab 切换 */
 export function Sidebar() {
-  const { sidebarWidth, setSidebarWidth, route, setRoute, favorites, openView, openPalette, toggleFavorite } =
-    useWorkspaceStore();
+  const sidebarWidth = useWorkspaceStore((s) => s.sidebarWidth);
+  const setSidebarWidth = useWorkspaceStore((s) => s.setSidebarWidth);
+  const route = useWorkspaceStore((s) => s.route);
+  const setRoute = useWorkspaceStore((s) => s.setRoute);
+  const favorites = useWorkspaceStore((s) => s.favorites);
+  const openView = useWorkspaceStore((s) => s.openView);
+  const openPalette = useWorkspaceStore((s) => s.openPalette);
+  const toggleFavorite = useWorkspaceStore((s) => s.toggleFavorite);
   const asideRef = useRef<HTMLElement>(null);
   const [resizing, setResizing] = useState(false);
   const [mainTab, setMainTab] = useState<"tree" | "outline" | "favorites">(getSidebarTab());

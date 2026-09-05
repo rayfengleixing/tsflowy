@@ -7,7 +7,12 @@ import type { View } from "@/types/models";
 
 /** 顶部标签栏（说明书 6.4：高 40px、标签宽 200px、可切换/关闭/拖拽排序） */
 export function TabBar() {
-  const { tabs, currentViewId, openView, closeTab, newTab, reorderTabs } = useWorkspaceStore();
+  const tabs = useWorkspaceStore((s) => s.tabs);
+  const currentViewId = useWorkspaceStore((s) => s.currentViewId);
+  const openView = useWorkspaceStore((s) => s.openView);
+  const closeTab = useWorkspaceStore((s) => s.closeTab);
+  const newTab = useWorkspaceStore((s) => s.newTab);
+  const reorderTabs = useWorkspaceStore((s) => s.reorderTabs);
   const dragIndex = useRef<number | null>(null);
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
@@ -42,9 +47,7 @@ export function TabBar() {
             onClick={() => openView(v.id)}
             className={
               "group relative flex w-[200px] shrink-0 cursor-pointer items-center gap-1.5 border-r border-neutral-300 px-2 text-[13px] " +
-              (active
-                ? "bg-white text-neutral-800"
-                : "text-neutral-500 hover:bg-neutral-200/60")
+              (active ? "bg-white text-neutral-800" : "text-neutral-500 hover:bg-neutral-200/60")
             }
           >
             {active && <div className="absolute inset-x-0 top-0 h-[2px] bg-brand-500" />}
