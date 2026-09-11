@@ -221,9 +221,9 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
             {t("field.addColumn")}
           </button>
         </div>
-        {/* 正文文档 */}
+        {/* 正文文档：行详情不需要"添加属性"区（属性已在面板顶部编辑） */}
         <div className="min-h-0 flex-1 overflow-hidden">
-          <EditorPage view={view} hideSlash />
+          <EditorPage view={view} hideSlash hidePageProperties />
         </div>
       </div>
     </div>

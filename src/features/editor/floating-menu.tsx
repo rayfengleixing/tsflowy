@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/core";
 import type { Selection } from "@tiptap/pm/state";
 import {
@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
+import { clampFloatToEditor } from "./float-clamp";
 
 // 选中文本浮动工具栏（项目说明书 8.3）。
 // 说明：TipTap v3 @tiptap/react 未导出 React BubbleMenu 组件（独立拆包），此处手写跟随坐标版本：
@@ -167,6 +168,7 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
   const [coord, setCoord] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [placed, setPlaced] = useState<{ x: number; y: number } | null>(null);
   const [colorOpen, setColorOpen] = useState(false);
   const [highlightOpen, setHighlightOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
@@ -261,6 +263,18 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
     return () => window.removeEventListener("scroll", onScroll, true);
   }, [visible]);
 
+  // 渲染后量测实际尺寸，把 fixed 浮层 clamp 进编辑区可视矩形（窄面板不飘出编辑区）
+  useLayoutEffect(() => {
+    if (!visible || !boxRef.current || !editor) return;
+    const w = boxRef.current.offsetWidth;
+    const h = boxRef.current.offsetHeight;
+    if (!w || !h) return;
+    // 原定位：translate(-50%,-100%)，即盒子左下角落在 (coord.x, coord.y)
+    const rawLeft = coord.x - w / 2;
+    const rawTop = coord.y - h;
+    setPlaced(clampFloatToEditor(editor, rawLeft, rawTop, w, h));
+  }, [visible, coord, editor]);
+
   // 需求2：渲染级再兜一层 —— 只有 TextSelection（字符范围）选中才渲染
   const selection = editor?.state.selection;
   const isCharSelection =
@@ -291,15 +305,14 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
     return typeof s.href === "string" ? s.href : null;
   })();
 
-  // Box 尺寸由内容决定；定位：fixed 居中
+  // Box 尺寸由内容决定；定位：fixed 居中（render 后 layout 量测 → clamp 到编辑区内）
   return (
     <div
       ref={boxRef}
       style={{
         position: "fixed",
-        left: `${coord.x}px`,
-        top: `${coord.y}px`,
-        transform: "translate(-50%, -100%)",
+        left: `${placed?.x ?? coord.x}px`,
+        top: `${placed?.y ?? coord.y - 40}px`,
         zIndex: 50,
       }}
       onMouseDown={(e) => e.preventDefault()}

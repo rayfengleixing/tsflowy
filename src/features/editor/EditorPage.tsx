@@ -76,7 +76,16 @@ const CenteredTableHeader = TableHeader.extend({
 // （@tiptap/extension-bold·italic·strike·highlight·code 的 addInputRules 已注册，无需自定义）
 
 /** 文档编辑器页（项目说明书 8.1：读 content → 编辑 → 防抖 800ms 落库 → 切换/关闭前 flush） */
-export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?: boolean }) {
+export function EditorPage({
+  view,
+  hideSlash = false,
+  hidePageProperties = false,
+}: {
+  view: View;
+  hideSlash?: boolean;
+  /** 行详情等场景隐藏"添加属性"区（不挂载 PagePropertiesSlot，也不渲染 PageProperties） */
+  hidePageProperties?: boolean;
+}) {
   const editorRef = useRef<ReturnType<typeof useEditor>>(null);
   const dirtyRef = useRef(false);
   const saveTimer = useRef<number | null>(null);
@@ -167,11 +176,11 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       // — M3 高级块结束 —
       ...(hideSlash ? [] : [SlashMenu]),
       FirstHeadingLock.configure({ viewId: view.id }),
-      PagePropertiesSlot,
+      ...(hidePageProperties ? [] : [PagePropertiesSlot]),
       BlockDrag,
     ],
 
-    [hideSlash, view.id],
+    [hideSlash, hidePageProperties, view.id],
   );
 
   const editor = useEditor({
@@ -534,11 +543,11 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-white">
       {/* 编辑区：内容最大宽由 --tiptap-max-width 控制（默认 800px，设置页可调，说明书 6.1） */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div data-editor-scroll className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto px-6 py-4" style={{ maxWidth: "var(--tiptap-max-width, 800px)" }}>
           <EditorContent editor={editor} />
           {/* 页面属性：portal 进 PagePropertiesSlot（首个 H1 之后，样式对齐行详情属性区） */}
-          <PageProperties view={view} editor={editor} />
+          {!hidePageProperties && <PageProperties view={view} editor={editor} />}
           <FloatingMenu editor={editor ?? undefined} />
           <TableContextMenu editor={editor ?? undefined} />
           <BlockMenu />

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Editor } from "@tiptap/core";
 import { t } from "@/lib/i18n";
+import { clampFloatToEditor } from "./float-clamp";
 
 const CELL_TYPES = ["tableCell", "tableHeader"];
 
@@ -36,18 +37,18 @@ export function TableContextMenu({ editor }: { editor: Editor | null }) {
     return () => dom.removeEventListener("contextmenu", onContextMenu);
   }, [editor]);
 
-  // 打开后校正坐标，避免超出视口
+  // 打开后校正坐标：整体 clamp 进编辑区可视矩形内（不超出编辑区，也不超出窗口）
   useLayoutEffect(() => {
-    if (!raw) return;
+    if (!raw || !editor) return;
     const el = menuRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    let x = raw.x;
-    let y = raw.y;
-    if (x + rect.width > window.innerWidth - 8) x = Math.max(8, window.innerWidth - rect.width - 8);
-    if (y + rect.height > window.innerHeight - 8) y = Math.max(8, window.innerHeight - rect.height - 8);
-    setPos({ x, y });
-  }, [raw]);
+    const w = rect.width;
+    const h = rect.height;
+    if (!w || !h) return;
+    const clamped = clampFloatToEditor(editor, raw.x, raw.y, w, h);
+    setPos({ x: clamped.x, y: clamped.y });
+  }, [raw, editor]);
 
   // 关闭：点击别处 / Esc / 滚动
   useEffect(() => {
@@ -75,7 +76,8 @@ export function TableContextMenu({ editor }: { editor: Editor | null }) {
     fn();
     setRaw(null);
   };
-  const itemCls = "flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-[13px] text-neutral-700 hover:bg-neutral-100";
+  const itemCls =
+    "flex w-full cursor-pointer items-center px-3 py-1.5 text-left text-[13px] text-neutral-700 hover:bg-neutral-100";
   const divider = <div className="my-1 h-px bg-neutral-100" />;
 
   return createPortal(
@@ -106,7 +108,10 @@ export function TableContextMenu({ editor }: { editor: Editor | null }) {
         {t("table.deleteColumn")}
       </button>
       {divider}
-      <button className={`${itemCls} text-red-600 hover:bg-red-50`} onClick={run(() => editor.chain().focus().deleteTable().run())}>
+      <button
+        className={`${itemCls} text-red-600 hover:bg-red-50`}
+        onClick={run(() => editor.chain().focus().deleteTable().run())}
+      >
         {t("table.deleteTable")}
       </button>
     </div>,

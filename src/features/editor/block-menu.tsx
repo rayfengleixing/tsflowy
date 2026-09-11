@@ -25,6 +25,7 @@ import {
 import { cn } from "@/lib/utils";
 import { t, type MessageKey } from "@/lib/i18n";
 import { TEXT_COLORS, HIGHLIGHT_COLORS, SwatchPalette, IconBtn } from "./floating-menu";
+import { clampXToEditor } from "./float-clamp";
 
 export const BLOCK_MENU_EVENT = "tsflowy:block-menu";
 
@@ -218,9 +219,10 @@ export function BlockMenu() {
   if (!payload) return null;
   const { pos, nodeType, nodeSize, x, y, editor } = payload;
   const isContainer = CONTAINER_TYPES.has(nodeType);
-  // 定位：优先块左侧；左侧空间不足（贴屏幕左缘）则放右侧
-  const left = x - MENU_WIDTH - 12 < 8 ? x + 12 : x - MENU_WIDTH - 12;
+  // 定位：优先块左侧；左侧空间不足则放右侧；再用编辑区边界 clamp（行详情窄面板不飘出）
+  let left = x - MENU_WIDTH - 12 < 8 ? x + 12 : x - MENU_WIDTH - 12;
   const top = Math.max(8, y - 24);
+  left = clampXToEditor(editor, left, MENU_WIDTH);
 
   const currentTextColor = (() => {
     const s = editor.getAttributes("textStyle");
