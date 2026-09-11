@@ -9,11 +9,13 @@ import {
   ACCENT_PRESETS,
   FONT_SIZE_PRESETS,
   LINE_HEIGHT_PRESETS,
+  EDITOR_WIDTH_PRESETS,
   type ThemeMode,
   type AccentColor,
   type FontFamily,
   type FontSize,
   type LineHeight,
+  type EditorWidth,
 } from "@/stores/settings";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { Button } from "@/components/ui/button";
@@ -44,12 +46,14 @@ export function SettingsPage() {
     lang,
     fontSize,
     lineHeight,
+    editorWidth,
     setTheme,
     setAccent,
     setFont,
     setLang,
     setFontSize,
     setLineHeight,
+    setEditorWidth,
   } = useSettingsStore();
 
   const [dataDir, setDataDir] = useState<string>("");
@@ -237,6 +241,30 @@ export function SettingsPage() {
                     )}
                   >
                     {labels[lh]}
+                  </button>
+                );
+              })}
+            </div>
+          </Row>
+          <Row label={t("settings.editorWidth")}>
+            <div className="inline-flex overflow-hidden rounded-md border border-neutral-300 p-0.5">
+              {EDITOR_WIDTH_PRESETS.map((w) => {
+                const labels: Record<EditorWidth, string> = {
+                  narrow: t("settings.editorWidthNarrow"),
+                  default: t("settings.editorWidthDefault"),
+                  wide: t("settings.editorWidthWide"),
+                  xwide: t("settings.editorWidthXwide"),
+                };
+                return (
+                  <button
+                    key={w}
+                    onClick={() => setEditorWidth(w)}
+                    className={cn(
+                      "rounded px-3 py-1 text-xs font-medium transition",
+                      editorWidth === w ? "bg-brand-500 text-white shadow" : "text-neutral-600 hover:bg-neutral-100",
+                    )}
+                  >
+                    {labels[w]}
                   </button>
                 );
               })}

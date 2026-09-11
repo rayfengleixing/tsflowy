@@ -46,6 +46,28 @@ function loadLineHeight(): LineHeight {
   }
 }
 
+/** 编辑区内容宽度档位：窄 640 / 默认 800 / 宽 960 / 超宽 1120（px） */
+export type EditorWidth = "narrow" | "default" | "wide" | "xwide";
+
+export const EDITOR_WIDTH_PX: Record<EditorWidth, number> = {
+  narrow: 640,
+  default: 800,
+  wide: 960,
+  xwide: 1120,
+};
+export const EDITOR_WIDTH_PRESETS: EditorWidth[] = ["narrow", "default", "wide", "xwide"];
+
+const EDITOR_WIDTH_KEY = "tsflowy-editor-width";
+
+function loadEditorWidth(): EditorWidth {
+  try {
+    const v = localStorage.getItem(EDITOR_WIDTH_KEY);
+    return v === "narrow" || v === "default" || v === "wide" || v === "xwide" ? v : "default";
+  } catch {
+    return "default";
+  }
+}
+
 interface SettingsState {
   lang: "zh-CN" | "en-US";
   theme: ThemeMode;
@@ -53,6 +75,7 @@ interface SettingsState {
   font: FontFamily;
   fontSize: FontSize;
   lineHeight: LineHeight;
+  editorWidth: EditorWidth;
 
   setLang: (lang: "zh-CN" | "en-US") => void;
   setTheme: (t: ThemeMode) => void;
@@ -60,15 +83,16 @@ interface SettingsState {
   setFont: (f: FontFamily) => void;
   setFontSize: (s: FontSize) => void;
   setLineHeight: (l: LineHeight) => void;
+  setEditorWidth: (w: EditorWidth) => void;
 }
 
-const ACCENT_CLASS_BY_COLOR: Record<AccentColor, { brand: string; palette: Record<50|100|500|600, string> }> = {
-  blue:   { brand: "blue",   palette: { 50:"#EFF6FF", 100:"#DBEAFE", 500:"#2563EB", 600:"#1D4ED8" } },
-  green:  { brand: "green",  palette: { 50:"#F0FDF4", 100:"#DCFCE7", 500:"#16A34A", 600:"#15803D" } },
-  orange: { brand: "orange", palette: { 50:"#FFF7ED", 100:"#FFEDD5", 500:"#EA580C", 600:"#C2410C" } },
-  purple: { brand: "purple", palette: { 50:"#FAF5FF", 100:"#F3E8FF", 500:"#9333EA", 600:"#7E22CE" } },
-  red:    { brand: "red",    palette: { 50:"#FEF2F2", 100:"#FEE2E2", 500:"#DC2626", 600:"#B91C1C" } },
-  yellow: { brand: "yellow", palette: { 50:"#FEFCE8", 100:"#FEF9C3", 500:"#CA8A04", 600:"#A16207" } },
+const ACCENT_CLASS_BY_COLOR: Record<AccentColor, { brand: string; palette: Record<50 | 100 | 500 | 600, string> }> = {
+  blue: { brand: "blue", palette: { 50: "#EFF6FF", 100: "#DBEAFE", 500: "#2563EB", 600: "#1D4ED8" } },
+  green: { brand: "green", palette: { 50: "#F0FDF4", 100: "#DCFCE7", 500: "#16A34A", 600: "#15803D" } },
+  orange: { brand: "orange", palette: { 50: "#FFF7ED", 100: "#FFEDD5", 500: "#EA580C", 600: "#C2410C" } },
+  purple: { brand: "purple", palette: { 50: "#FAF5FF", 100: "#F3E8FF", 500: "#9333EA", 600: "#7E22CE" } },
+  red: { brand: "red", palette: { 50: "#FEF2F2", 100: "#FEE2E2", 500: "#DC2626", 600: "#B91C1C" } },
+  yellow: { brand: "yellow", palette: { 50: "#FEFCE8", 100: "#FEF9C3", 500: "#CA8A04", 600: "#A16207" } },
 };
 
 export const ACCENT_PRESETS: AccentColor[] = ["blue", "green", "orange", "purple", "red", "yellow"];
@@ -77,7 +101,7 @@ export const ACCENT_PRESETS: AccentColor[] = ["blue", "green", "orange", "purple
 export function applyAccentToDocument(accent: AccentColor) {
   const { palette } = ACCENT_CLASS_BY_COLOR[accent];
   const root = document.documentElement;
-  root.style.setProperty("--color-brand-50",  palette[50]);
+  root.style.setProperty("--color-brand-50", palette[50]);
   root.style.setProperty("--color-brand-100", palette[100]);
   root.style.setProperty("--color-brand-500", palette[500]);
   root.style.setProperty("--color-brand-600", palette[600]);
@@ -117,7 +141,7 @@ const FONT_CLASS: Record<FontFamily, string> = {
 
 export function applyFontToDocument(font: FontFamily) {
   const body = document.body;
-  (Object.values(FONT_CLASS) as string[]).forEach((c) => body.classList.remove(c));
+  Object.values(FONT_CLASS).forEach((c) => body.classList.remove(c));
   body.classList.add(FONT_CLASS[font]);
 }
 
@@ -131,6 +155,11 @@ export function applyLineHeightToDocument(lh: LineHeight) {
   document.documentElement.style.setProperty("--tiptap-line-height", `${LINE_HEIGHT_VALUE[lh]}`);
 }
 
+/** 把编辑区内容宽度写到 <html> 的 --tiptap-max-width CSS 变量，由编辑器内容容器读取（默认 800px 兜底） */
+export function applyEditorWidthToDocument(w: EditorWidth) {
+  document.documentElement.style.setProperty("--tiptap-max-width", `${EDITOR_WIDTH_PX[w]}px`);
+}
+
 export const useSettingsStore = create<SettingsState>()((set) => ({
   lang: "zh-CN",
   theme: "light",
@@ -138,6 +167,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   font: "sans",
   fontSize: loadFontSize(),
   lineHeight: loadLineHeight(),
+  editorWidth: loadEditorWidth(),
 
   setLang: (lang) => set({ lang }),
   setTheme: (theme) => {
@@ -170,6 +200,15 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     }
     applyLineHeightToDocument(lineHeight);
   },
+  setEditorWidth: (editorWidth) => {
+    set({ editorWidth });
+    try {
+      localStorage.setItem(EDITOR_WIDTH_KEY, editorWidth);
+    } catch {
+      /* localStorage 不可用时静默降级 */
+    }
+    applyEditorWidthToDocument(editorWidth);
+  },
 }));
 
 /** App 启动时用 settings 存储当前值立即写一次（避免第一次进入才有效果） */
@@ -179,8 +218,8 @@ export function bootstrapVisualSettings() {
   applyFontToDocument(s.font);
   applyFontSizeToDocument(s.fontSize);
   applyLineHeightToDocument(s.lineHeight);
+  applyEditorWidthToDocument(s.editorWidth);
   return applyThemeToDocument(s.theme);
 }
 
 export { FONT_CLASS };
-

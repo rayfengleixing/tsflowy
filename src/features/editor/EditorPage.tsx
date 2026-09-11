@@ -532,9 +532,9 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-white">
-      {/* 编辑区：内容最大宽约 800px 居中（说明书 6.1） */}
+      {/* 编辑区：内容最大宽由 --tiptap-max-width 控制（默认 800px，设置页可调，说明书 6.1） */}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[800px] px-6 py-4">
+        <div className="mx-auto px-6 py-4" style={{ maxWidth: "var(--tiptap-max-width, 800px)" }}>
           <EditorContent editor={editor} />
           {/* 页面属性：portal 进 PagePropertiesSlot（首个 H1 之后，样式对齐行详情属性区） */}
           <PageProperties view={view} editor={editor} />
