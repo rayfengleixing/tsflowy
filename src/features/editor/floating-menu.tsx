@@ -24,22 +24,25 @@ import { t } from "@/lib/i18n";
 
 const TEXT_COLORS = [
   { name: "default", value: "inherit", swatch: "border-neutral-300 bg-white text-neutral-700" },
-  { name: "blue",    value: "#0092D6", swatch: "bg-[#0092D6]" },
-  { name: "red",     value: "#D92D20", swatch: "bg-[#D92D20]" },
-  { name: "green",   value: "#12B76A", swatch: "bg-[#12B76A]" },
-  { name: "orange",  value: "#F79009", swatch: "bg-[#F79009]" },
-  { name: "purple",  value: "#9E77ED", swatch: "bg-[#9E77ED]" },
-  { name: "gray",    value: "#6F748C", swatch: "bg-[#6F748C]" },
+  { name: "blue", value: "#0092D6", swatch: "bg-[#0092D6]" },
+  { name: "red", value: "#D92D20", swatch: "bg-[#D92D20]" },
+  { name: "green", value: "#12B76A", swatch: "bg-[#12B76A]" },
+  { name: "orange", value: "#F79009", swatch: "bg-[#F79009]" },
+  { name: "purple", value: "#9E77ED", swatch: "bg-[#9E77ED]" },
+  { name: "gray", value: "#6F748C", swatch: "bg-[#6F748C]" },
 ] as const;
 
 const HIGHLIGHT_COLORS = [
-  { name: "none",   value: "transparent", swatch: "border border-dashed border-neutral-300 bg-white" },
-  { name: "yellow", value: "#FEF3C7",     swatch: "bg-[#FEF3C7]" },
-  { name: "blue",   value: "#E3F6FF",     swatch: "bg-[#E3F6FF]" },
-  { name: "green",  value: "#D1FAE5",     swatch: "bg-[#D1FAE5]" },
-  { name: "pink",   value: "#FCE7F3",     swatch: "bg-[#FCE7F3]" },
-  { name: "purple", value: "#EDE9FE",     swatch: "bg-[#EDE9FE]" },
+  { name: "none", value: "transparent", swatch: "border border-dashed border-neutral-300 bg-white" },
+  { name: "yellow", value: "#FEF3C7", swatch: "bg-[#FEF3C7]" },
+  { name: "blue", value: "#E3F6FF", swatch: "bg-[#E3F6FF]" },
+  { name: "green", value: "#D1FAE5", swatch: "bg-[#D1FAE5]" },
+  { name: "pink", value: "#FCE7F3", swatch: "bg-[#FCE7F3]" },
+  { name: "purple", value: "#EDE9FE", swatch: "bg-[#EDE9FE]" },
 ] as const;
+
+// 供块菜单（block-menu.tsx）复用
+export { TEXT_COLORS, HIGHLIGHT_COLORS, SwatchPalette, IconBtn };
 
 type SwatchPal = readonly { readonly name: string; readonly value: string; readonly swatch: string }[];
 
@@ -115,11 +118,7 @@ function SwatchPalette<T extends SwatchPal>(props: {
   );
 }
 
-function LinkPopover(props: {
-  current: string | null;
-  onSubmit: (url: string | null) => void;
-  onClose: () => void;
-}) {
+function LinkPopover(props: { current: string | null; onSubmit: (url: string | null) => void; onClose: () => void }) {
   const [value, setValue] = useState(props.current ?? "");
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -201,16 +200,34 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
       forceUpdate((x) => x + 1);
       const sel = editor.state.selection;
       // 需求2（严格门）：必须是字符范围选择
-      if (!isCharSelection(sel)) { setVisible(false); return; }
+      if (!isCharSelection(sel)) {
+        setVisible(false);
+        return;
+      }
       // 跳过图片/代码块/表格/数据库/其他 atom 容器节点
-      const forbidden = ["image", "codeBlock", "table", "math", "databaseView", "attachment", "callout", "toggle", "columns", "imageGallery", "outline"];
+      const forbidden = [
+        "image",
+        "codeBlock",
+        "table",
+        "math",
+        "databaseView",
+        "attachment",
+        "callout",
+        "toggle",
+        "columns",
+        "imageGallery",
+        "outline",
+      ];
       for (const name of forbidden) {
-        if (editor.isActive(name)) { setVisible(false); return; }
+        if (editor.isActive(name)) {
+          setVisible(false);
+          return;
+        }
       }
       // ProseMirror view 给出选区边界屏幕坐标
       try {
         const from = editor.view.coordsAtPos(sel.from);
-        const to   = editor.view.coordsAtPos(sel.to);
+        const to = editor.view.coordsAtPos(sel.to);
         const x = (from.left + to.right) / 2;
         const y = from.top - 8; // 顶部上方 8px
         setCoord({ x, y });
@@ -286,24 +303,50 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
         zIndex: 50,
       }}
       onMouseDown={(e) => e.preventDefault()}
-      onMouseLeave={() => { /* noop */ }}
+      onMouseLeave={() => {
+        /* noop */
+      }}
     >
       <div className="relative flex items-center rounded-lg border border-neutral-200 bg-white px-1 py-1 shadow-lg">
-        <IconBtn title={t("float.bold")} active={editor.isActive("bold")} onClick={() => editor.chain().focus().toggleBold().run()}>
+        <IconBtn
+          title={t("float.bold")}
+          active={editor.isActive("bold")}
+          onClick={() => editor.chain().focus().toggleBold().run()}
+        >
           <Bold className="h-4 w-4" />
         </IconBtn>
-        <IconBtn title={t("float.italic")} active={editor.isActive("italic")} onClick={() => editor.chain().focus().toggleItalic().run()}>
+        <IconBtn
+          title={t("float.italic")}
+          active={editor.isActive("italic")}
+          onClick={() => editor.chain().focus().toggleItalic().run()}
+        >
           <Italic className="h-4 w-4" />
         </IconBtn>
-        <IconBtn title={t("float.underline")} active={editor.isActive("underline")} onClick={() => editor.chain().focus().toggleUnderline().run()}>
+        <IconBtn
+          title={t("float.underline")}
+          active={editor.isActive("underline")}
+          onClick={() => editor.chain().focus().toggleUnderline().run()}
+        >
           <Underline className="h-4 w-4" />
         </IconBtn>
-        <IconBtn title={t("float.strike")} active={editor.isActive("strike")} onClick={() => editor.chain().focus().toggleStrike().run()}>
+        <IconBtn
+          title={t("float.strike")}
+          active={editor.isActive("strike")}
+          onClick={() => editor.chain().focus().toggleStrike().run()}
+        >
           <Strikethrough className="h-4 w-4" />
         </IconBtn>
         <Divider />
         <div className="relative">
-          <IconBtn title={t("float.highlight")} active={currentHighlight !== "transparent"} onClick={() => { setHighlightOpen((v) => !v); setColorOpen(false); setLinkOpen(false); }}>
+          <IconBtn
+            title={t("float.highlight")}
+            active={currentHighlight !== "transparent"}
+            onClick={() => {
+              setHighlightOpen((v) => !v);
+              setColorOpen(false);
+              setLinkOpen(false);
+            }}
+          >
             <Highlighter className="h-4 w-4" />
           </IconBtn>
           {highlightOpen && (
@@ -321,7 +364,15 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
           )}
         </div>
         <div className="relative">
-          <IconBtn title={t("float.color")} active={!!currentTextColor} onClick={() => { setColorOpen((v) => !v); setHighlightOpen(false); setLinkOpen(false); }}>
+          <IconBtn
+            title={t("float.color")}
+            active={!!currentTextColor}
+            onClick={() => {
+              setColorOpen((v) => !v);
+              setHighlightOpen(false);
+              setLinkOpen(false);
+            }}
+          >
             <Palette className="h-4 w-4" />
           </IconBtn>
           {colorOpen && (
@@ -339,7 +390,14 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
           )}
         </div>
         <div className="relative">
-          <IconBtn title={t("float.link")} active={!!currentLink} onClick={() => { closeAll(); setLinkOpen(!linkOpen); }}>
+          <IconBtn
+            title={t("float.link")}
+            active={!!currentLink}
+            onClick={() => {
+              closeAll();
+              setLinkOpen(!linkOpen);
+            }}
+          >
             <Link2 className="h-4 w-4" />
           </IconBtn>
           {linkOpen && (
@@ -360,11 +418,18 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
           </IconBtn>
         )}
         <Divider />
-        <IconBtn title={t("float.code")} active={editor.isActive("code")} onClick={() => editor.chain().focus().toggleCode().run()}>
+        <IconBtn
+          title={t("float.code")}
+          active={editor.isActive("code")}
+          onClick={() => editor.chain().focus().toggleCode().run()}
+        >
           <Code className="h-4 w-4" />
         </IconBtn>
         <Divider />
-        <IconBtn title={t("float.clearFormat")} onClick={() => editor.chain().focus().clearNodes().unsetAllMarks().run()}>
+        <IconBtn
+          title={t("float.clearFormat")}
+          onClick={() => editor.chain().focus().clearNodes().unsetAllMarks().run()}
+        >
           <Eraser className="h-4 w-4" />
         </IconBtn>
       </div>

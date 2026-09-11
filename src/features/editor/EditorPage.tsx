@@ -27,6 +27,7 @@ import type { View } from "@/types/models";
 import { SlashMenu } from "./slash-menu";
 import { TableContextMenu } from "./table-context-menu";
 import { FloatingMenu } from "./floating-menu";
+import { BlockMenu } from "./block-menu";
 import { PageProperties } from "./PageProperties";
 import { Image } from "./extensions/image/node";
 import { DatabaseView } from "./extensions/database-view/node";
@@ -540,6 +541,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
           <PageProperties view={view} editor={editor} />
           <FloatingMenu editor={editor ?? undefined} />
           <TableContextMenu editor={editor ?? undefined} />
+          <BlockMenu />
         </div>
       </div>
 

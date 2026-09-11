@@ -3,32 +3,31 @@
 // 实现方式：自定义 TipTap Extension（非 NodeView 方式），
 //   - addOptions: 默认行为；
 //   - addProseMirrorPlugins: 返回自定义 Plugin + PluginView，它会在 editor.view.dom 旁侧
-//     挂一个 React 渲染的 handle 容器（这里为最小实现不走 React 也不引入 react-dom/client，直接写 DOM）。
-//   - handle 仅显示在顶层块左侧（blockGroup/doc 直接子节点），点击可拖拽，drop 时计算位置并执行 tr。
-//
-// 简化（plan 风险备选 B）：drop 只按"前/后"插入目标块相邻位置（不做精确坐标命中块内容中间），
-//   避免 posAtCoords 在嵌入表格/数据库视图中产生的各种坑。
+//     挂一个 handle 容器（最小实现，直接写 DOM，不引入 React）。
+//   - handle 仅显示在顶层块左侧（doc 直接子节点），支持两种交互：
+//       · 按住拖动（mouse 事件链，不用 HTML5 drag——WebView2/自动化环境不可靠）→ 排序
+//       · 单击 → 派发 BLOCK_MENU_EVENT，由 React 块菜单（block-menu.tsx）接管
+//   - drop 只按"前/后"插入目标块相邻位置（不做精确坐标命中块内容中间），
+//     避免 posAtCoords 在嵌入表格/数据库视图中产生的各种坑。
 import { Extension } from "@tiptap/react";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
 import { Slice, Fragment, Node as PMNode } from "@tiptap/pm/model";
+import type { Editor } from "@tiptap/core";
+import { BLOCK_MENU_EVENT, type BlockMenuPayload } from "@/features/editor/block-menu";
 
 const PLUGIN_KEY = new PluginKey<{ draggingDom: HTMLElement | null }>("block-drag");
 
 const HANDLE_CLASS = "block-drag-handle";
 const HANDLE_WIDTH = 20; // px，含 padding
+/** 拖拽启动阈值（px） */
+const DRAG_THRESHOLD = 5;
 // 需要跳过的块（它们有自己的 drag handle，见 image/component.tsx）
-const SKIP_BLOCK_TYPES = new Set([
-  "image",
-  "databaseView",
-  "database_view",
-  "imageGallery",
-  "image-gallery",
-]);
+const SKIP_BLOCK_TYPES = new Set(["image", "databaseView", "database_view", "imageGallery", "image-gallery"]);
 
 /** 顶层块信息列表（按 DOM 顺序），用于根据鼠标 Y 计算 hover 目标。 */
 function listTopBlocks(view: EditorView): { dom: HTMLElement; top: number; bottom: number; pos: number }[] {
-  const docEl = view.dom as HTMLElement;
+  const docEl = view.dom;
   const rects: { dom: HTMLElement; top: number; bottom: number; pos: number }[] = [];
   for (let i = 0; i < docEl.children.length; i++) {
     const child = docEl.children[i] as HTMLElement;
@@ -50,11 +49,12 @@ export const BlockDrag = Extension.create({
   name: "blockDrag",
 
   addProseMirrorPlugins() {
+    const editor = this.editor;
     return [
       new Plugin({
         key: PLUGIN_KEY,
         view(view) {
-          return new BlockDragView(view);
+          return new BlockDragView(view, editor);
         },
         state: {
           init: () => ({ draggingDom: null }),
@@ -62,7 +62,7 @@ export const BlockDrag = Extension.create({
         },
         props: {
           handleDOMEvents: {
-            // 点击 handle 时确保不触发 editor 选区变化（handle 用 draggable + dragstart 拦截）
+            // 点击 handle 时确保不触发 editor 选区变化（handle 用 mousedown preventDefault 拦截）
           },
         },
       }),
@@ -71,25 +71,27 @@ export const BlockDrag = Extension.create({
 });
 
 // ——————————————————————————————————————
-// PluginView：handle DOM 管理 + 拖拽事件
+// PluginView：handle DOM 管理 + 拖拽/点击事件
 // ——————————————————————————————————————
 class BlockDragView {
   handle: HTMLDivElement;
   view: EditorView;
+  editor: Editor;
   /** 当前 hover 的顶层块 */
   hover: HTMLElement | null = null;
-  /** 拖拽源块信息 */
-  dragging: { pos: number; node: PMNode; dom: HTMLElement } | null = null;
+  /** 拖拽会话：按下点 + 源块信息（moved 表示已超过阈值进入拖拽） */
+  dragging: { pos: number; node: PMNode; dom: HTMLElement; startX: number; startY: number; moved: boolean } | null =
+    null;
   /** 拖拽目标：前/后 */
   dropTarget: { type: "before" | "after"; sibling: HTMLElement; pos: number } | null = null;
   dropIndicator: HTMLDivElement;
 
-  constructor(view: EditorView) {
+  constructor(view: EditorView, editor: Editor) {
     this.view = view;
+    this.editor = editor;
     this.handle = document.createElement("div");
     this.handle.className = HANDLE_CLASS;
-    this.handle.setAttribute("draggable", "true");
-    this.handle.title = "拖动移动块";
+    this.handle.title = "拖动排序，点击编辑";
     this.handle.innerHTML =
       '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">' +
       '<circle cx="5" cy="3" r="1.1" fill="currentColor"/>' +
@@ -138,37 +140,63 @@ class BlockDragView {
     document.body.appendChild(this.handle);
     document.body.appendChild(this.dropIndicator);
 
-    // 事件绑定
-    this.handle.addEventListener("dragstart", this.onDragStart);
-    this.handle.addEventListener("dragend", this.onDragEnd);
+    // 事件绑定：mouse 事件链（不用 HTML5 drag：WebView2/自动化下 dragstart 不可靠）
+    this.handle.addEventListener("mousedown", this.onHandleMouseDown);
     window.addEventListener("mousemove", this.onMouseMove, true);
+    window.addEventListener("mouseup", this.onMouseUp, true);
     window.addEventListener("scroll", this.onScroll, true);
-    document.addEventListener("dragover", this.onDragOver);
-    document.addEventListener("drop", this.onDrop, true);
   }
 
+  onHandleMouseDown = (e: MouseEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); // 防止浏览器发起文本选区/拖拽
+    const blockDom: HTMLElement | null = (this.handle as HTMLElement & { _blockDom?: HTMLElement })._blockDom ?? null;
+    if (!blockDom) return;
+    const blocks = listTopBlocks(this.view);
+    const info = blocks.find((b) => b.dom === blockDom);
+    if (!info) return;
+    const node = this.view.state.doc.nodeAt(info.pos);
+    if (!node) return;
+    this.dragging = { pos: info.pos, node, dom: blockDom, startX: e.clientX, startY: e.clientY, moved: false };
+  };
+
   onMouseMove = (e: MouseEvent) => {
-    if (this.dragging) return; // 拖拽中保持 handle 位置不变
-    const root = (this.view.dom as HTMLElement).getBoundingClientRect();
-    // 仅在 editor 范围内显示
-    if (e.clientX < root.left - 60 || e.clientX > root.right + 10 ||
-        e.clientY < root.top - 10 || e.clientY > root.bottom + 10) {
+    if (this.dragging) {
+      // 未超过阈值：仍是"潜在点击"，不进入拖拽
+      if (!this.dragging.moved) {
+        const dx = e.clientX - this.dragging.startX;
+        const dy = e.clientY - this.dragging.startY;
+        if (Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return;
+        this.dragging.moved = true;
+        this.dragging.dom.style.opacity = "0.5";
+        this.hideHandle();
+      }
+      this.updateDropTarget(e.clientY);
+      return;
+    }
+    // 普通 hover：在 editor 范围内显示手柄
+    const root = this.view.dom.getBoundingClientRect();
+    if (
+      e.clientX < root.left - 60 ||
+      e.clientX > root.right + 10 ||
+      e.clientY < root.top - 10 ||
+      e.clientY > root.bottom + 10
+    ) {
       this.hideHandle();
       return;
     }
-    // 找到鼠标所在行的顶层块
     const blocks = listTopBlocks(this.view);
-    let target: typeof blocks[number] | null = null;
+    let target: (typeof blocks)[number] | null = null;
     for (const b of blocks) {
       if (e.clientY >= b.top - 2 && e.clientY < b.bottom + 2) {
-        target = b; break;
+        target = b;
+        break;
       }
     }
     if (!target) {
       this.hideHandle();
       return;
     }
-    // 跳过已用自己 handle 的块类型（根据 data-drag-handle 标记）
     if (target.dom.querySelector("[data-drag-handle]")) {
       this.hideHandle();
       return;
@@ -176,9 +204,23 @@ class BlockDragView {
     this.showHandle(target.dom);
   };
 
+  onMouseUp = (_e: MouseEvent) => {
+    if (!this.dragging) return;
+    const session = this.dragging;
+    if (session.moved) {
+      this.performDrop();
+    } else {
+      // 点击（未超过拖拽阈值）→ 打开块菜单
+      this.openBlockMenu(session.pos, session.node);
+    }
+    this.onDragEnd();
+  };
+
   onScroll = () => {
-    // 滚动时隐藏 handle（下次 mousemove 再重新定位）
+    // 滚动时隐藏 handle 并取消未完成的拖拽会话（下次 mousemove 再重新定位）
     this.hideHandle();
+    this.clearDropTarget();
+    if (this.dragging && !this.dragging.moved) this.dragging = null;
   };
 
   showHandle(blockDom: HTMLElement) {
@@ -202,84 +244,62 @@ class BlockDragView {
     this.handle.style.display = "none";
   }
 
-  onDragStart = (e: DragEvent) => {
-    const blockDom: HTMLElement | null =
-      (this.handle as HTMLElement & { _blockDom?: HTMLElement })._blockDom ?? null;
-    if (!blockDom) return;
-    // 找到块在 doc 中的 pos
+  /** 根据鼠标 Y 计算 before/after 目标并更新蓝色指示条 */
+  updateDropTarget(clientY: number) {
     const blocks = listTopBlocks(this.view);
-    const info = blocks.find((b) => b.dom === blockDom);
-    if (!info) return;
-    const node = this.view.state.doc.nodeAt(info.pos);
-    if (!node) return;
-    this.dragging = { pos: info.pos, node, dom: blockDom };
-    this.hideHandle();
-    blockDom.style.opacity = "0.5";
-    try {
-      // 自定义数据类型+文本
-      e.dataTransfer?.setData("text/block-drag-pos", String(info.pos));
-      e.dataTransfer?.setData("text/plain", String(info.pos));
-      // 使用块 DOM 快照作拖拽图像（视觉更佳）
-      if (blockDom instanceof Element && e.dataTransfer) {
-        e.dataTransfer.effectAllowed = "move";
-      }
-    } catch { /* ignore */ }
-  };
-
-  onDragEnd = () => {
-    if (this.dragging) this.dragging.dom.style.opacity = "";
-    this.dragging = null;
-    this.clearDropTarget();
-  };
-
-  onDragOver = (e: DragEvent) => {
-    if (!this.dragging) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    const blocks = listTopBlocks(this.view);
-    const y = e.clientY;
-    let target: { type: "before" | "after"; pos: number; sibling: HTMLElement; top: number; left: number; width: number } | null = null;
+    let target: {
+      type: "before" | "after";
+      pos: number;
+      sibling: HTMLElement;
+      top: number;
+      left: number;
+      width: number;
+    } | null = null;
     for (let i = 0; i < blocks.length; i++) {
       const b = blocks[i];
       const mid = (b.top + b.bottom) / 2;
-      if (y < mid) {
-        // 插到这个块之前
-        target = { type: "before", pos: b.pos, sibling: b.dom, top: b.top - 1, left: b.dom.getBoundingClientRect().left, width: b.dom.getBoundingClientRect().width };
+      if (clientY < mid) {
+        target = {
+          type: "before",
+          pos: b.pos,
+          sibling: b.dom,
+          top: b.top - 1,
+          left: b.dom.getBoundingClientRect().left,
+          width: b.dom.getBoundingClientRect().width,
+        };
         break;
       }
-      // 最后一个块下半区 → 插到后面
       if (i === blocks.length - 1) {
-        target = { type: "after", pos: b.pos, sibling: b.dom, top: b.bottom - 1, left: b.dom.getBoundingClientRect().left, width: b.dom.getBoundingClientRect().width };
+        target = {
+          type: "after",
+          pos: b.pos,
+          sibling: b.dom,
+          top: b.bottom - 1,
+          left: b.dom.getBoundingClientRect().left,
+          width: b.dom.getBoundingClientRect().width,
+        };
       }
     }
-    if (!target) return;
+    if (!target || !this.dragging) return;
     // 若目标就是源块 → 不显示指示
-    const src = this.dragging.dom;
-    if (target.sibling === src) { this.clearDropTarget(); return; }
+    if (target.sibling === this.dragging.dom) {
+      this.clearDropTarget();
+      return;
+    }
     this.dropTarget = { type: target.type, sibling: target.sibling, pos: target.pos };
-    // 显示蓝色指示条
     this.dropIndicator.style.display = "block";
     this.dropIndicator.style.top = `${target.top}px`;
     this.dropIndicator.style.left = `${target.left}px`;
     this.dropIndicator.style.width = `${target.width}px`;
-  };
+  }
 
   clearDropTarget() {
     this.dropTarget = null;
     this.dropIndicator.style.display = "none";
   }
 
-  onDrop = (e: DragEvent) => {
+  performDrop() {
     if (!this.dragging || !this.dropTarget) return;
-    // 只有在 editor DOM 内放下才处理
-    const editorRoot = this.view.dom as HTMLElement;
-    if (!editorRoot.contains(e.target as Node | null) &&
-        !editorRoot.contains((e.target as HTMLElement | null)?.closest?.(".ProseMirror") as HTMLElement | null)) {
-      // 忽略 editor 之外的 drop（可能交给浏览器默认行为）
-      return;
-    }
-    e.preventDefault();
-    e.stopPropagation();
     try {
       const src = this.dragging.pos;
       const node = this.dragging.node;
@@ -299,7 +319,6 @@ class BlockDragView {
       const shiftByDelete = srcEnd <= dropSiblingStart ? node.nodeSize : 0;
 
       let tr2 = tr.delete(src, srcEnd);
-      // 根据 before/after 计算插入位置
       let targetPos = dropSiblingStart - shiftByDelete;
       if (isAfter) {
         const remaining = tr2.doc.nodeAt(targetPos);
@@ -314,24 +333,43 @@ class BlockDragView {
       this.view.dispatch(tr2.scrollIntoView());
     } catch (err) {
       console.warn("block drag drop failed", err);
-    } finally {
-      this.onDragEnd();
     }
-  };
+  }
 
-  update() { /* 不需要处理 state 变化 */ }
+  openBlockMenu(pos: number, node: PMNode) {
+    const br = this.dragging?.dom.getBoundingClientRect() ?? this.view.dom.getBoundingClientRect();
+    const payload: BlockMenuPayload = {
+      pos,
+      nodeType: node.type.name,
+      nodeSize: node.nodeSize,
+      x: br.left,
+      y: br.top,
+      editor: this.editor,
+    };
+    window.dispatchEvent(new CustomEvent<BlockMenuPayload>(BLOCK_MENU_EVENT, { detail: payload }));
+  }
+
+  onDragEnd() {
+    if (this.dragging) this.dragging.dom.style.opacity = "";
+    this.dragging = null;
+    this.clearDropTarget();
+  }
+
+  update() {
+    /* 不需要处理 state 变化 */
+  }
 
   destroy() {
-    document.removeEventListener("dragover", this.onDragOver);
-    document.removeEventListener("drop", this.onDrop, true);
+    this.handle.removeEventListener("mousedown", this.onHandleMouseDown);
     window.removeEventListener("mousemove", this.onMouseMove, true);
+    window.removeEventListener("mouseup", this.onMouseUp, true);
     window.removeEventListener("scroll", this.onScroll, true);
-    this.handle.removeEventListener("dragstart", this.onDragStart);
-    this.handle.removeEventListener("dragend", this.onDragEnd);
     try {
       document.body.removeChild(this.handle);
       document.body.removeChild(this.dropIndicator);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 }
 
