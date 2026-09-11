@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, X } from "lucide-react";
+import { Maximize2, Minimize2, Plus, X } from "lucide-react";
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { FIELD_TYPES, isReadonlyType, type FieldType } from "@/types/database";
 import { useDatabaseStore } from "@/stores/database";
@@ -127,7 +127,7 @@ function RowPropertyField({
         </button>
       )}
       <div
-        className="min-w-0 flex-1 cursor-text rounded px-1.5 py-0.5 hover:bg-neutral-100"
+        className="relative min-w-0 flex-1 cursor-text rounded px-1.5 py-0.5 hover:bg-neutral-100"
         onClick={() => !isReadonlyType(field.field_type) && setEditing(true)}
       >
         {editing ? (
@@ -155,6 +155,8 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
   const fields = useDatabaseStore((s) => s.fields);
   const addField = useDatabaseStore((s) => s.addField);
   const visibleFields = useMemo(() => fields.filter((f) => f.is_hidden === 0), [fields]);
+  // 放大态：居中大尺寸面板（配合头部放大/缩小按钮切换）
+  const [enlarged, setEnlarged] = useState(false);
 
   const addTextField = async () => {
     const name = uniqueName(
@@ -169,21 +171,34 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
     }
   };
 
+  // 普通态：右侧 400px 滑入；放大态：屏幕中央 90vh×min(92vw,1100px) 缩放渐入
+  const panelClass = enlarged
+    ? "absolute left-1/2 top-1/2 h-[90vh] w-[min(92vw,1100px)] -translate-x-1/2 -translate-y-1/2 " +
+      "rounded-lg border border-neutral-200 shadow-2xl " +
+      "animate-in fade-in zoom-in duration-200 ease-out " +
+      "dark:border-neutral-700"
+    : "absolute right-0 top-0 h-full w-[400px] " +
+      "border-l border-neutral-200 shadow-2xl " +
+      "animate-in slide-in-from-right duration-300 ease-out " +
+      "dark:border-neutral-700";
+
   return (
     <div className="fixed inset-0 z-50">
       {/* 遮罩：淡入动画（说明书 6.1：半透明黑） */}
       <div className="absolute inset-0 animate-in fade-in bg-black/20 duration-200" onClick={onClose} />
-      {/* 右侧 400px 面板：滑入动画 */}
-      <div
-        className={
-          "absolute right-0 top-0 flex h-full w-[400px] flex-col bg-white shadow-2xl " +
-          "animate-in slide-in-from-right duration-300 ease-out " +
-          "border-l border-neutral-200 dark:border-neutral-700"
-        }
-      >
-        {/* 顶部：行名 + 关闭 */}
+      {/* 面板：默认右侧滑入，放大态居中大尺寸 */}
+      <div className={"flex flex-col bg-white " + panelClass}>
+        {/* 顶部：行名 + 放大/关闭 */}
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-neutral-200 px-4 dark:border-neutral-700">
           <span className="min-w-0 flex-1 truncate text-[16px] font-medium text-neutral-900">{view.name}</span>
+          <button
+            data-testid="enlarge-row-detail"
+            className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200"
+            title={enlarged ? t("rowDetail.shrink") : t("rowDetail.enlarge")}
+            onClick={() => setEnlarged((v) => !v)}
+          >
+            {enlarged ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </button>
           <button
             data-testid="close-row-detail"
             className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200"
