@@ -28,7 +28,6 @@ import { SlashMenu } from "./slash-menu";
 import { TableContextMenu } from "./table-context-menu";
 import { FloatingMenu } from "./floating-menu";
 import { BlockMenu } from "./block-menu";
-import { PageProperties } from "./PageProperties";
 import { Image } from "./extensions/image/node";
 import { DatabaseView } from "./extensions/database-view/node";
 import { Attachment } from "./extensions/attachment/node";
@@ -45,7 +44,6 @@ import { buildMentionSuggestion } from "./extensions/mention/suggestion";
 // — M3 高级块结束 —
 import "highlight.js/styles/github.css";
 import { FirstHeadingLock } from "./extensions/first-heading-lock";
-import { PagePropertiesSlot } from "./extensions/page-properties-slot";
 import { BlockDrag } from "./extensions/block-drag";
 
 const AUTOSAVE_MS = 800;
@@ -76,16 +74,7 @@ const CenteredTableHeader = TableHeader.extend({
 // （@tiptap/extension-bold·italic·strike·highlight·code 的 addInputRules 已注册，无需自定义）
 
 /** 文档编辑器页（项目说明书 8.1：读 content → 编辑 → 防抖 800ms 落库 → 切换/关闭前 flush） */
-export function EditorPage({
-  view,
-  hideSlash = false,
-  hidePageProperties = false,
-}: {
-  view: View;
-  hideSlash?: boolean;
-  /** 行详情等场景隐藏"添加属性"区（不挂载 PagePropertiesSlot，也不渲染 PageProperties） */
-  hidePageProperties?: boolean;
-}) {
+export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?: boolean }) {
   const editorRef = useRef<ReturnType<typeof useEditor>>(null);
   const dirtyRef = useRef(false);
   const saveTimer = useRef<number | null>(null);
@@ -176,11 +165,10 @@ export function EditorPage({
       // — M3 高级块结束 —
       ...(hideSlash ? [] : [SlashMenu]),
       FirstHeadingLock.configure({ viewId: view.id }),
-      ...(hidePageProperties ? [] : [PagePropertiesSlot]),
       BlockDrag,
     ],
 
-    [hideSlash, hidePageProperties, view.id],
+    [hideSlash, view.id],
   );
 
   const editor = useEditor({
@@ -546,8 +534,6 @@ export function EditorPage({
       <div data-editor-scroll className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto px-6 py-4" style={{ maxWidth: "var(--tiptap-max-width, 800px)" }}>
           <EditorContent editor={editor} />
-          {/* 页面属性：portal 进 PagePropertiesSlot（首个 H1 之后，样式对齐行详情属性区） */}
-          {!hidePageProperties && <PageProperties view={view} editor={editor} />}
           <FloatingMenu editor={editor ?? undefined} />
           <TableContextMenu editor={editor ?? undefined} />
           <BlockMenu />

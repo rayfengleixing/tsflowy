@@ -1,12 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-  useState,
-  type ReactNode,
-  type Ref,
-} from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from "react";
 import { Extension } from "@tiptap/core";
 import type { Editor, Range } from "@tiptap/core";
 import Suggestion from "@tiptap/suggestion";
@@ -42,6 +34,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { t, type MessageKey } from "@/lib/i18n";
+import { pinyinInitials } from "@/lib/pinyin-initials";
 import { INSERT_DATABASE_VIEW_EVENT } from "./DatabaseViewPicker";
 import { INSERT_EMOJI_EVENT } from "./EmojiPickerDialog";
 
@@ -76,11 +69,27 @@ function inTableOnly(key: string): boolean {
 
 export const slashItems: SlashItem[] = [
   { key: "text", icon: <Type className="h-4 w-4" />, run: (e) => e.chain().focus().clearNodes().run() },
-  { key: "heading1", icon: <Heading1 className="h-4 w-4" />, run: (e) => e.chain().focus().toggleHeading({ level: 1 }).run() },
-  { key: "heading2", icon: <Heading2 className="h-4 w-4" />, run: (e) => e.chain().focus().toggleHeading({ level: 2 }).run() },
-  { key: "heading3", icon: <Heading3 className="h-4 w-4" />, run: (e) => e.chain().focus().toggleHeading({ level: 3 }).run() },
+  {
+    key: "heading1",
+    icon: <Heading1 className="h-4 w-4" />,
+    run: (e) => e.chain().focus().toggleHeading({ level: 1 }).run(),
+  },
+  {
+    key: "heading2",
+    icon: <Heading2 className="h-4 w-4" />,
+    run: (e) => e.chain().focus().toggleHeading({ level: 2 }).run(),
+  },
+  {
+    key: "heading3",
+    icon: <Heading3 className="h-4 w-4" />,
+    run: (e) => e.chain().focus().toggleHeading({ level: 3 }).run(),
+  },
   { key: "bulletList", icon: <List className="h-4 w-4" />, run: (e) => e.chain().focus().toggleBulletList().run() },
-  { key: "orderedList", icon: <ListOrdered className="h-4 w-4" />, run: (e) => e.chain().focus().toggleOrderedList().run() },
+  {
+    key: "orderedList",
+    icon: <ListOrdered className="h-4 w-4" />,
+    run: (e) => e.chain().focus().toggleOrderedList().run(),
+  },
   { key: "taskList", icon: <CheckSquare className="h-4 w-4" />, run: (e) => e.chain().focus().toggleTaskList().run() },
   { key: "blockquote", icon: <Quote className="h-4 w-4" />, run: (e) => e.chain().focus().toggleBlockquote().run() },
   { key: "codeBlock", icon: <Code2 className="h-4 w-4" />, run: (e) => e.chain().focus().toggleCodeBlock().run() },
@@ -96,7 +105,10 @@ export const slashItems: SlashItem[] = [
         });
         if (typeof selected !== "string") return;
         const relative = await invoke<string>("save_asset", { sourcePath: selected });
-        e.chain().focus().insertContent({ type: "image", attrs: { src: relative, alt: "" } }).run();
+        e.chain()
+          .focus()
+          .insertContent({ type: "image", attrs: { src: relative, alt: "" } })
+          .run();
       } catch (err) {
         console.error("upload image failed", err);
         toast.error(t("error.upload", { message: String(err) }));
@@ -138,7 +150,12 @@ export const slashItems: SlashItem[] = [
   {
     key: "math",
     icon: <FunctionSquare className="h-4 w-4" />,
-    run: (e) => e.chain().focus().insertContent({ type: "math", attrs: { tex: "" } }).run(),
+    run: (e) =>
+      e
+        .chain()
+        .focus()
+        .insertContent({ type: "math", attrs: { tex: "" } })
+        .run(),
   },
   {
     key: "callout",
@@ -247,8 +264,11 @@ export function filterSlashItems(props: { query: string; editor: Editor }): Slas
   const q = query.toLowerCase();
   const inTable = editor.isActive("table");
   return slashItems.filter((item) => {
-    const label = t(`slash.${item.key}` as MessageKey).toLowerCase();
-    const hit = label.includes(q) || item.key.includes(q);
+    const label = t(`slash.${item.key}` as MessageKey);
+    const labelLower = label.toLowerCase();
+    // 名称（中/英）、key、拼音首字母（如 "bt" → 标题）任一命中即显示
+    const hit =
+      labelLower.includes(q) || item.key.toLowerCase().includes(q) || pinyinInitials(label).toLowerCase().includes(q);
     if (!hit) return false;
     return !(inTable && !inTableOnly(item.key));
   });

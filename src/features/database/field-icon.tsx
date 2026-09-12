@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import type { FieldType } from "@/types/database";
 
-/** 字段类型 → 图标（对齐 AppFlowy 行详情的属性图标；RowDetail / PageProperties 共用） */
+/** 字段类型 → 图标（对齐 AppFlowy 行详情的属性图标；RowDetail 使用） */
 export function fieldIcon(type: FieldType): ReactNode {
   const cls = "h-3.5 w-3.5 shrink-0 text-neutral-400";
   switch (type) {
