@@ -171,22 +171,22 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
     }
   };
 
-  // 普通态：右侧 400px 滑入；放大态：屏幕中央 90vh×min(92vw,1100px) 缩放渐入
+  // 普通态：右侧 400px 滑入；放大态：编辑区中央大尺寸（不超出编辑区，锚定到各视图根容器的 relative）
   const panelClass = enlarged
-    ? "absolute left-1/2 top-1/2 h-[90vh] w-[min(92vw,1100px)] -translate-x-1/2 -translate-y-1/2 " +
+    ? "absolute left-1/2 top-1/2 h-[calc(100%-2rem)] w-[min(calc(100%-2rem),1100px)] -translate-x-1/2 -translate-y-1/2 " +
       "rounded-lg border border-neutral-200 shadow-2xl " +
       "animate-in fade-in zoom-in duration-200 ease-out " +
       "dark:border-neutral-700"
-    : "absolute right-0 top-0 h-full w-[400px] " +
+    : "absolute right-0 top-0 h-full w-[min(400px,100%)] " +
       "border-l border-neutral-200 shadow-2xl " +
       "animate-in slide-in-from-right duration-300 ease-out " +
       "dark:border-neutral-700";
 
   return (
-    <div className="fixed inset-0 z-50">
-      {/* 遮罩：淡入动画（说明书 6.1：半透明黑） */}
+    <div className="absolute inset-0 z-50">
+      {/* 遮罩：覆盖编辑区（锚定到视图根容器的 relative），淡入动画（说明书 6.1：半透明黑） */}
       <div className="absolute inset-0 animate-in fade-in bg-black/20 duration-200" onClick={onClose} />
-      {/* 面板：默认右侧滑入，放大态居中大尺寸 */}
+      {/* 面板：默认右侧滑入，放大态编辑区中央大尺寸 */}
       <div className={"flex flex-col bg-white " + panelClass}>
         {/* 顶部：行名 + 放大/关闭 */}
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-neutral-200 px-4 dark:border-neutral-700">
