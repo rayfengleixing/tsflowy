@@ -7,8 +7,10 @@ import { logger } from "@/lib/logger";
  * FirstHeadingLock TipTap 扩展（B-2 接入）。
  *
  * 把「文档首 H1 文本」同步为 view.name，避免 TabBar/顶栏/面包屑
- * 长时间显示"无标题页面"。只在用户编辑产生新 H1 内容时写入；
- * 外部 renameView 不会反向覆盖 H1（H1 是权威源）。
+ * 长时间显示"无标题页面"。只在用户编辑产生新 H1 内容时写入。
+ * 注：结构锁定后 H1 不可编辑，名称权威源为 view.name（EditorPage
+ * 重命名时反向同步 H1，见 document-structure-lock 的 STRUCTURE_SYNC_META）；
+ * 本扩展仅兜底历史文档中未被锁定的 H1 变化。
  */
 export const FirstHeadingLock = Extension.create({
   name: "firstHeadingLock",

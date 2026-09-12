@@ -40,18 +40,24 @@ function listTopBlocks(view: EditorView): { dom: HTMLElement; top: number; botto
     if (!posRes) continue;
     const $ = view.state.doc.resolve(posRes.pos);
     const pos = $.depth >= 1 ? $.before(Math.min($.depth, 1)) : $.pos;
-    // 文档首行 H1 标题：不显示手柄、不作为拖拽目标（标题固定第一行）
-    if (isDocTitleBlock(view, pos)) continue;
+    // 文档结构锁定块（首行 H1 标题 / 第二行分割线）：不显示手柄、不作为拖拽目标
+    if (isProtectedStructureBlock(view, pos)) continue;
     rects.push({ dom: child, top: r.top, bottom: r.bottom, pos });
   }
   return rects;
 }
 
-/** 文档首行是否为 H1 标题（标题行不参与手柄显示/拖拽） */
-function isDocTitleBlock(view: EditorView, pos: number): boolean {
-  if (pos !== 0) return false;
-  const node = view.state.doc.child(0);
-  return node.type.name === "heading" && (node.attrs as { level: number }).level === 1;
+/** 结构锁定块（首行 H1 标题 / 第二行分割线）不参与手柄显示/拖拽 */
+function isProtectedStructureBlock(view: EditorView, pos: number): boolean {
+  const doc = view.state.doc;
+  if (doc.childCount === 0) return false;
+  const first = doc.child(0);
+  if (pos === 0) {
+    return first.type.name === "heading" && (first.attrs as { level: number }).level === 1;
+  }
+  if (doc.childCount < 2 || pos !== first.nodeSize) return false;
+  const second = doc.child(1);
+  return second.type.name === "horizontalRule";
 }
 
 export const BlockDrag = Extension.create({

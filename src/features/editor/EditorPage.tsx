@@ -45,6 +45,7 @@ import { buildMentionSuggestion } from "./extensions/mention/suggestion";
 import "highlight.js/styles/github.css";
 import { FirstHeadingLock } from "./extensions/first-heading-lock";
 import { BlockDrag } from "./extensions/block-drag";
+import { LockedHeading, DocumentStructureLock, STRUCTURE_SYNC_META } from "./extensions/document-structure-lock";
 
 const AUTOSAVE_MS = 800;
 
@@ -120,8 +121,12 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       StarterKit.configure({
         link: { openOnClick: false, autolink: true },
         codeBlock: false,
-        heading: { levels: [1, 2, 3] },
+        heading: false,
       }),
+      // 标题：H1 锁定为只读文档标题（首行），H2/H3 正常可编辑
+      LockedHeading.configure({ levels: [1, 2, 3] }),
+      // 结构锁定：首行 H1 + 第二行分割线不可修改（filterTransaction 拦截）
+      DocumentStructureLock,
       CodeBlock,
       Placeholder.configure({
         placeholder: ({ node }) =>
@@ -329,6 +334,20 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       alive = false;
     };
   }, [view.id]);
+
+  // 外部重命名（侧边栏/数据库视图）→ 同步首行 H1 标题：
+  // 标题被结构锁定后不可在编辑器内修改，名称变更只能来自外部，反向写回文档并落库
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || editor.isDestroyed) return;
+    const doc = editor.state.doc;
+    const first = doc.childCount > 0 ? doc.child(0) : null;
+    if (!first || first.type.name !== "heading" || (first.attrs as { level: number }).level !== 1) return;
+    if (first.textContent === view.name) return;
+    const tr = editor.state.tr.replaceWith(1, first.nodeSize - 1, editor.state.schema.text(view.name));
+    tr.setMeta(STRUCTURE_SYNC_META, true);
+    editor.view.dispatch(tr);
+  }, [view.name, view.id]);
 
   // 卸载/切页/关闭前 flush；页面隐藏时也 flush
   useEffect(() => {

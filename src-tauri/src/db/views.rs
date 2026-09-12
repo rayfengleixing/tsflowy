@@ -93,8 +93,8 @@ pub fn get(conn: &Connection, id: &str) -> Result<Option<ViewRow>, String> {
         .map_err(dberr("get view"))
 }
 
-/// 单事务：同父 MAX(position)+1 → INSERT views → document 布局再插默认 H1 内容行
-/// （JSON 与旧前端 db.ts 逐字节一致，documents_fts 的 insert 触发器随之生效）。
+/// 单事务：同父 MAX(position)+1 → INSERT views → document 布局再插默认内容行（H1 标题 + 分割线，
+/// 前端 document-structure-lock 锁定二者；documents_fts 的 insert 触发器随之生效）。
 pub fn create(
     conn: &Connection,
     id: &str,
@@ -120,8 +120,9 @@ pub fn create(
     )
     .map_err(dberr("create view"))?;
     if layout == "document" {
+        // 默认结构：首行 H1 标题 + 第二行分割线（前端 document-structure-lock 锁定二者不可修改）
         let content = format!(
-            r#"{{"type":"doc","content":[{{"type":"heading","attrs":{{"level":1}},"content":[{{"type":"text","text":{}}}]}}]}}"#,
+            r#"{{"type":"doc","content":[{{"type":"heading","attrs":{{"level":1}},"content":[{{"type":"text","text":{}}}]}},{{"type":"horizontalRule"}}]}}"#,
             serde_json::to_string(name).map_err(|e| format!("encode doc content: {e}"))?,
         );
         tx.execute(
@@ -506,10 +507,10 @@ mod tests {
         let content: String = conn
             .query_row("SELECT content FROM documents WHERE view_id = 'v1'", [], |r| r.get(0))
             .unwrap();
-        // 与旧前端 db.ts 的 JSON.stringify 输出逐字节一致（含 JSON 转义）
+        // 默认结构：H1 标题 + 分割线（与前端 document-structure-lock 的保护区一致）
         assert_eq!(
             content,
-            r#"{"type":"doc","content":[{"type":"heading","attrs":{"level":1},"content":[{"type":"text","text":"He said \"hi\" \\ ok"}]}]}"#
+            r#"{"type":"doc","content":[{"type":"heading","attrs":{"level":1},"content":[{"type":"text","text":"He said \"hi\" \\ ok"}]},{"type":"horizontalRule"}]}"#
         );
         // documents INSERT 触发器已写 FTS
         let fts: i64 = conn.query_row("SELECT COUNT(*) FROM documents_fts", [], |r| r.get(0)).unwrap();
