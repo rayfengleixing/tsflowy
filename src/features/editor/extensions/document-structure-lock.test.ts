@@ -11,6 +11,9 @@ const schema = new Schema({
     horizontalRule: { group: "block", atom: true },
     text: { group: "inline" },
   },
+  marks: {
+    strong: {},
+  },
 });
 
 function doc(json: Parameters<typeof schema.nodeFromJSON>[0]): PMNode {
@@ -52,12 +55,42 @@ describe("filterStructureTransaction 结构锁定", () => {
     expect(filterStructureTransaction(t)).toBe(true);
   });
 
-  it("拒绝：删除 H1 标题文本", () => {
-    expect(filterStructureTransaction(tr().delete(1, 3))).toBe(false);
+  it("放行：删除 H1 内部文本", () => {
+    expect(filterStructureTransaction(tr().delete(1, 3))).toBe(true);
+  });
+
+  it("放行：替换 H1 内部文本（标题内容可编辑）", () => {
+    const t = tr();
+    t.replaceWith(1, 3, schema.text("新标题"));
+    expect(filterStructureTransaction(t)).toBe(true);
+  });
+
+  it("放行：在 H1 内追加文本", () => {
+    const t = tr();
+    t.insert(3, schema.text("追加"));
+    expect(filterStructureTransaction(t)).toBe(true);
+  });
+
+  it("放行：给 H1 内部文本加格式标记", () => {
+    const t = tr();
+    t.addMark(1, 3, schema.marks.strong.create());
+    expect(filterStructureTransaction(t)).toBe(true);
   });
 
   it("拒绝：删除整个 H1 标题节点", () => {
     expect(filterStructureTransaction(tr().delete(0, 4))).toBe(false);
+  });
+
+  it("拒绝：把 H1 标题改为二级标题", () => {
+    const t = tr();
+    t.setNodeMarkup(0, schema.nodes.heading, { level: 2 });
+    expect(filterStructureTransaction(t)).toBe(false);
+  });
+
+  it("拒绝：在 H1 内回车分割标题", () => {
+    const t = tr();
+    t.split(2);
+    expect(filterStructureTransaction(t)).toBe(false);
   });
 
   it("拒绝：删除第二行分割线", () => {
@@ -82,7 +115,7 @@ describe("filterStructureTransaction 结构锁定", () => {
     expect(filterStructureTransaction(t)).toBe(false);
   });
 
-  it("旧文档（仅 H1 无分割线）：标题仍保护，其后可编辑", () => {
+  it("旧文档（仅 H1 无分割线）：H1 内部可编辑，其后可编辑", () => {
     const d = doc({
       type: "doc",
       content: [
@@ -91,7 +124,7 @@ describe("filterStructureTransaction 结构锁定", () => {
       ],
     });
     const state = EditorState.create({ schema, doc: d });
-    expect(filterStructureTransaction(state.tr.delete(1, 3))).toBe(false);
+    expect(filterStructureTransaction(state.tr.delete(1, 3))).toBe(true);
     expect(filterStructureTransaction(state.tr.delete(5, 7))).toBe(true);
   });
 
