@@ -62,12 +62,6 @@ pub async fn view_list_trash(db: State<'_, Db>, workspace_id: String) -> Result<
 }
 
 #[tauri::command]
-pub async fn view_list_favorites(db: State<'_, Db>, workspace_id: String) -> Result<Vec<ViewRow>, String> {
-    let conn = db.read_conn()?;
-    db::views::list_favorites(&conn, &workspace_id)
-}
-
-#[tauri::command]
 pub async fn view_list_recent(db: State<'_, Db>, workspace_id: String, limit: i64) -> Result<Vec<ViewRow>, String> {
     let conn = db.read_conn()?;
     db::views::list_recent(&conn, &workspace_id, limit)
@@ -117,12 +111,6 @@ pub async fn view_rename(db: State<'_, Db>, id: String, name: String) -> Result<
 pub async fn view_set_icon(db: State<'_, Db>, id: String, icon: Option<String>) -> Result<(), String> {
     let conn = db.write_conn()?;
     db::views::set_icon(&conn, &id, icon.as_deref())
-}
-
-#[tauri::command]
-pub async fn view_set_favorite(db: State<'_, Db>, id: String, favorite: bool) -> Result<(), String> {
-    let conn = db.write_conn()?;
-    db::views::set_favorite(&conn, &id, favorite)
 }
 
 #[tauri::command]

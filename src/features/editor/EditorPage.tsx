@@ -18,6 +18,7 @@ import { Slice, Fragment, Node as PMNode } from "@tiptap/pm/model";
 import { toast } from "sonner";
 import { Link2, ChevronDown, ChevronUp } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useEditorStore } from "@/stores/editor";
 import { documentApi } from "@/lib/documents";
 import { mentionsApi, type MentionRow } from "@/lib/mentions";
 import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown";
@@ -296,6 +297,16 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     },
   });
   editorRef.current = editor;
+
+  // 推送 editor 到全局 store：侧边栏大纲（DocumentOutline）通过 useEditorStore 读取；
+  // 卸载/切换视图时清空，避免大纲读到已销毁实例
+  useEffect(() => {
+    if (!editor) return;
+    useEditorStore.getState().setEditor(editor, view.id);
+    return () => {
+      useEditorStore.getState().setEditor(null, null);
+    };
+  }, [editor, view.id]);
 
   // 加载文档内容：加载完成（或失败）前编辑器保持只读；输入在解锁前无法发生，
   // 从根上消除加载与输入的竞态。失败也解锁，不让用户被锁死在空文档上。

@@ -14,7 +14,6 @@ interface WorkspaceState {
   workspaces: Workspace[];
   currentWorkspaceId: string | null;
   tree: ViewNode[];
-  favorites: View[];
   trash: View[];
   tabs: View[]; // 当前空间打开的标签页（含顺序）
   currentViewId: string | null;
@@ -36,7 +35,6 @@ interface WorkspaceState {
   createView: (opts: { parentId: string | null; layout: LayoutType }) => Promise<View | null>;
   renameView: (id: string, name: string) => Promise<void>;
   setViewIcon: (id: string, icon: string | null) => Promise<void>;
-  toggleFavorite: (id: string) => Promise<void>;
   deleteView: (id: string) => Promise<void>;
   restoreView: (id: string) => Promise<void>;
   purgeView: (id: string) => Promise<void>;
@@ -223,9 +221,8 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
   const patchTree = async (): Promise<void> => {
     const { currentWorkspaceId } = get();
     if (!currentWorkspaceId) return;
-    const [views, favorites, trash] = await Promise.all([
+    const [views, trash] = await Promise.all([
       viewApi.listByWorkspace(currentWorkspaceId),
-      viewApi.listFavorites(currentWorkspaceId),
       viewApi.listTrash(currentWorkspaceId),
     ]);
     const tree = buildTree(views);
@@ -237,7 +234,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       .filter(Boolean) as ViewNode[];
     let currentViewId = get().currentViewId;
     if (currentViewId && !byId.has(currentViewId)) currentViewId = tabs[0]?.id ?? null;
-    set({ tree, favorites, trash, tabs, currentViewId });
+    set({ tree, trash, tabs, currentViewId });
     persistNow();
   };
 
@@ -245,14 +242,13 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
   const patchTreeAndRestoreTabs = async (): Promise<void> => {
     const { currentWorkspaceId } = get();
     if (!currentWorkspaceId) return;
-    const [views, favorites, trash] = await Promise.all([
+    const [views, trash] = await Promise.all([
       viewApi.listByWorkspace(currentWorkspaceId),
-      viewApi.listFavorites(currentWorkspaceId),
       viewApi.listTrash(currentWorkspaceId),
     ]);
     const tree = buildTree(views);
     const { tabs, currentViewId } = await loadTabsForWs(currentWorkspaceId, tree);
-    set({ tree, favorites, trash, tabs, currentViewId });
+    set({ tree, trash, tabs, currentViewId });
     persistNow();
   };
 
@@ -261,7 +257,6 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     workspaces: [],
     currentWorkspaceId: null,
     tree: [],
-    favorites: [],
     trash: [],
     tabs: [],
     currentViewId: null,
@@ -416,13 +411,6 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
         tabs: state.tabs.map((v) => (v.id === id ? { ...v, icon } : v)),
         tree: patchTreeIcon(state.tree, id, icon),
       }));
-    },
-
-    toggleFavorite: async (id: string) => {
-      const node = get().tree.find((n) => n.id === id) ?? null;
-      const favorite = node ? node.is_favorite === 1 : false;
-      await viewApi.setFavorite(id, !favorite);
-      await get().reload();
     },
 
     deleteView: async (id: string) => {

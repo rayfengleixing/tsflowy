@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
-import { clampFloatToEditor } from "./float-clamp";
+import { clampFloatToEditor, getEditorViewportRect } from "./float-clamp";
 
 // 选中文本浮动工具栏（项目说明书 8.3）。
 // 说明：TipTap v3 @tiptap/react 未导出 React BubbleMenu 组件（独立拆包），此处手写跟随坐标版本：
@@ -75,15 +75,43 @@ function Divider() {
   return <div className="mx-0.5 h-5 w-px bg-neutral-200" />;
 }
 
+/**
+ * 弹层（调色板/链接输入）翻转判定：工具栏贴近编辑区底部时，默认向下展开（top-full）
+ * 会超出可视区，此时改向上展开（bottom-full）。依据：弹层高度 > 下方剩余空间，
+ * 且上方空间更大。
+ */
+function usePopoverFlip(editor: Editor | undefined, childRef: React.RefObject<HTMLDivElement | null>) {
+  const [flip, setFlip] = useState(false);
+  useLayoutEffect(() => {
+    const el = childRef.current;
+    if (!el) return;
+    const parent = el.offsetParent as HTMLElement | null;
+    if (!parent) return;
+    const h = el.offsetHeight;
+    const pr = parent.getBoundingClientRect();
+    const rect = getEditorViewportRect(editor);
+    const bottom = rect ? rect.bottom : window.innerHeight;
+    const top = rect ? rect.top : 0;
+    const spaceBelow = bottom - pr.bottom;
+    const spaceAbove = pr.top - top;
+    setFlip(spaceBelow < h && spaceAbove > spaceBelow);
+    // childRef 是稳定 ref 引用，无需列入依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor]);
+  return flip;
+}
+
 function SwatchPalette<T extends SwatchPal>(props: {
   title: string;
   palette: T;
   current: string | null;
   onPick: (value: string) => void;
   onClose: () => void;
+  editor: Editor | undefined;
 }) {
-  const { palette, current, onPick, title } = props;
+  const { palette, current, onPick, title, editor } = props;
   const ref = useRef<HTMLDivElement>(null);
+  const flip = usePopoverFlip(editor, ref);
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) props.onClose();
@@ -94,7 +122,10 @@ function SwatchPalette<T extends SwatchPal>(props: {
   return (
     <div
       ref={ref}
-      className="absolute left-0 top-full z-50 mt-1 rounded-lg border border-neutral-300 bg-white p-2 shadow-lg"
+      className={cn(
+        "absolute left-0 z-50 rounded-lg border border-neutral-300 bg-white p-2 shadow-lg",
+        flip ? "bottom-full mb-1" : "top-full mt-1",
+      )}
       onMouseDown={(e) => e.preventDefault()}
     >
       <div className="mb-1 px-1 text-[11px] text-neutral-400">{title}</div>
@@ -119,9 +150,15 @@ function SwatchPalette<T extends SwatchPal>(props: {
   );
 }
 
-function LinkPopover(props: { current: string | null; onSubmit: (url: string | null) => void; onClose: () => void }) {
+function LinkPopover(props: {
+  current: string | null;
+  onSubmit: (url: string | null) => void;
+  onClose: () => void;
+  editor: Editor | undefined;
+}) {
   const [value, setValue] = useState(props.current ?? "");
   const ref = useRef<HTMLDivElement>(null);
+  const flip = usePopoverFlip(props.editor, ref);
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) props.onClose();
@@ -132,7 +169,10 @@ function LinkPopover(props: { current: string | null; onSubmit: (url: string | n
   return (
     <div
       ref={ref}
-      className="absolute left-0 top-full z-50 mt-1 flex items-center gap-1 rounded-lg border border-neutral-300 bg-white p-1 shadow-lg"
+      className={cn(
+        "absolute left-0 z-50 flex items-center gap-1 rounded-lg border border-neutral-300 bg-white p-1 shadow-lg",
+        flip ? "bottom-full mb-1" : "top-full mt-1",
+      )}
       onMouseDown={(e) => e.preventDefault()}
     >
       <input
@@ -367,6 +407,7 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
               title={t("float.highlight")}
               palette={HIGHLIGHT_COLORS}
               current={currentHighlight}
+              editor={editor}
               onPick={(v) => {
                 if (v === "transparent") editor.chain().focus().unsetHighlight().run();
                 else editor.chain().focus().setHighlight({ color: v }).run();
@@ -393,6 +434,7 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
               title={t("float.color")}
               palette={TEXT_COLORS}
               current={currentTextColor}
+              editor={editor}
               onPick={(v) => {
                 if (v === "inherit") editor.chain().focus().unsetColor().run();
                 else editor.chain().focus().setColor(v).run();
@@ -416,6 +458,7 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
           {linkOpen && (
             <LinkPopover
               current={currentLink}
+              editor={editor}
               onSubmit={(url) => {
                 if (!url) editor.chain().focus().unsetLink().run();
                 else editor.chain().focus().setLink({ href: url, target: "_blank", rel: "noopener noreferrer" }).run();

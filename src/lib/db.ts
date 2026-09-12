@@ -47,10 +47,6 @@ export const viewApi = {
     return invoke<View[]>("view_list_trash", { workspaceId });
   },
 
-  async listFavorites(workspaceId: string): Promise<View[]> {
-    return invoke<View[]>("view_list_favorites", { workspaceId });
-  },
-
   /** 最近访问视图：按 visited_at 倒序（Phase 3.2 - Recent Tab） */
   async listRecent(workspaceId: string, limit = 30): Promise<View[]> {
     return invoke<View[]>("view_list_recent", { workspaceId, limit });
@@ -89,10 +85,6 @@ export const viewApi = {
 
   async setIcon(id: string, icon: string | null): Promise<void> {
     return invoke("view_set_icon", { id, icon });
-  },
-
-  async setFavorite(id: string, favorite: boolean): Promise<void> {
-    return invoke("view_set_favorite", { id, favorite });
   },
 
   /** 软删：视图及其整个子树进回收站 */

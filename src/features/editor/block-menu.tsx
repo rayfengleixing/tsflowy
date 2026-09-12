@@ -424,6 +424,7 @@ export function BlockMenu() {
               title={t("blockMenu.color")}
               palette={TEXT_COLORS}
               current={currentTextColor}
+              editor={editor}
               onPick={pickColor}
               onClose={() => setColorOpen(false)}
             />
@@ -445,6 +446,7 @@ export function BlockMenu() {
               title={t("blockMenu.highlight")}
               palette={HIGHLIGHT_COLORS}
               current={currentHighlight}
+              editor={editor}
               onPick={pickHighlight}
               onClose={() => setHighlightOpen(false)}
             />

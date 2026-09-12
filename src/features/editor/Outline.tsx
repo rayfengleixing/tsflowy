@@ -86,7 +86,6 @@ export function DocumentOutline() {
       editor.off("update", collect);
       editor.off("selectionUpdate", onSelectionChange);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, isDocument]);
 
   // 找到 editor 内容的 overflow-y 父容器（EditorPage 编辑区外层 overflow-auto）
@@ -95,7 +94,7 @@ export function DocumentOutline() {
       scrollElRef.current = null;
       return;
     }
-    let el: Element | null = editor.view.dom as Element;
+    let el: Element | null = editor.view.dom;
     for (let i = 0; i < 8 && el; i++) {
       const ov = window.getComputedStyle(el).overflowY;
       if (ov === "auto" || ov === "scroll") break;
@@ -169,9 +168,8 @@ export function DocumentOutline() {
     if (!editor) return;
     const current = headingsRef.current;
     let best: { pos: number; top: number } | null = null;
-    const containerRect = scrollElRef.current instanceof HTMLElement
-      ? scrollElRef.current.getBoundingClientRect()
-      : null;
+    const containerRect =
+      scrollElRef.current instanceof HTMLElement ? scrollElRef.current.getBoundingClientRect() : null;
     const baseTop = containerRect ? containerRect.top : 0;
     for (const h of current) {
       const dom = findHeadingDom(editor, h.pos, current);
@@ -187,7 +185,11 @@ export function DocumentOutline() {
   }
 
   /** 按 PM pos 找到 <h1>..<h6> DOM（含缓存） */
-  function findHeadingDom(ed: { view: { domAtPos: (p: number) => { node: Node; offset: number } } }, pos: number, list: HeadingItem[]): HTMLElement | null {
+  function findHeadingDom(
+    ed: { view: { domAtPos: (p: number) => { node: Node; offset: number } } },
+    pos: number,
+    list: HeadingItem[],
+  ): HTMLElement | null {
     const cached = list.find((x) => x.pos === pos)?.cachedDom;
     if (cached !== undefined) return cached || null;
     try {
@@ -219,7 +221,11 @@ export function DocumentOutline() {
     } else if (dom) {
       dom.scrollIntoView({ block: "start", behavior: "smooth" });
     }
-    editor.chain().focus().setTextSelection(h.pos + 1).run();
+    editor
+      .chain()
+      .focus()
+      .setTextSelection(h.pos + 1)
+      .run();
     setActivePos(h.pos);
   }
 
@@ -269,17 +275,11 @@ export function DocumentOutline() {
                 style={{ paddingLeft: indentBy(h.level) }}
                 className={[
                   "group block w-full rounded-md border-l-2 px-2.5 py-1.5 pr-2 text-left transition",
-                  isActive
-                    ? "border-brand-500 bg-brand-50 text-brand-800"
-                    : "border-transparent hover:bg-neutral-100",
+                  isActive ? "border-brand-500 bg-brand-50 text-brand-800" : "border-transparent hover:bg-neutral-100",
                 ].join(" ")}
               >
                 <span
-                  className={[
-                    "block truncate",
-                    levelStyle(h.level),
-                    isActive ? "text-brand-800" : "",
-                  ].join(" ")}
+                  className={["block truncate", levelStyle(h.level), isActive ? "text-brand-800" : ""].join(" ")}
                   title={h.text}
                 >
                   {h.text}
@@ -295,19 +295,19 @@ export function DocumentOutline() {
 
 // ——————————————————————————————————————
 // Sidebar Tab 切换状态持久化（小工具函数）
-// 旧版 OUTLINE_STORAGE_KEY 已废弃，新 key 是 sidebar_tab（tree/outline/recent）。
+// 旧版 OUTLINE_STORAGE_KEY 已废弃，新 key 是 sidebar_tab（tree/outline）。
 // ——————————————————————————————————————
-export function getSidebarTab(): "tree" | "outline" | "favorites" {
+export function getSidebarTab(): "tree" | "outline" {
   try {
     const v = localStorage.getItem(SIDEBAR_TAB_KEY);
-    if (v === "outline" || v === "favorites") return v;
+    if (v === "outline") return v;
   } catch {
     /* ignore */
   }
   return "tree";
 }
 
-export function setSidebarTab(v: "tree" | "outline" | "favorites"): void {
+export function setSidebarTab(v: "tree" | "outline"): void {
   try {
     localStorage.setItem(SIDEBAR_TAB_KEY, v);
   } catch {

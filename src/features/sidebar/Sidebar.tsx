@@ -1,29 +1,25 @@
 import { useEffect, useRef, useState } from "react";
-import { Search, Settings, Trash2, Star, Layers, Hash } from "lucide-react";
+import { Search, Settings, Trash2, Layers, Hash } from "lucide-react";
 import { SpaceSwitcher } from "./SpaceSwitcher";
 import { NewPageMenu } from "./NewPageMenu";
 import { PageTree } from "./PageTree";
 import { DocumentOutline, getSidebarTab, setSidebarTab } from "@/features/editor/Outline";
-import { viewIcon } from "@/components/view-icon";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
 
 const MIN_WIDTH = 268;
 const MAX_WIDTH = 560;
 
-/** 侧边栏（说明书 6.3 结构）：页面树 / 大纲 / 收藏 三 Tab 切换 */
+/** 侧边栏（说明书 6.3 结构）：页面树 / 大纲 两 Tab 切换 */
 export function Sidebar() {
   const sidebarWidth = useWorkspaceStore((s) => s.sidebarWidth);
   const setSidebarWidth = useWorkspaceStore((s) => s.setSidebarWidth);
   const route = useWorkspaceStore((s) => s.route);
   const setRoute = useWorkspaceStore((s) => s.setRoute);
-  const favorites = useWorkspaceStore((s) => s.favorites);
-  const openView = useWorkspaceStore((s) => s.openView);
   const openPalette = useWorkspaceStore((s) => s.openPalette);
-  const toggleFavorite = useWorkspaceStore((s) => s.toggleFavorite);
   const asideRef = useRef<HTMLElement>(null);
   const [resizing, setResizing] = useState(false);
-  const [mainTab, setMainTab] = useState<"tree" | "outline" | "favorites">(getSidebarTab());
+  const [mainTab, setMainTab] = useState<"tree" | "outline">(getSidebarTab());
 
   useEffect(() => {
     if (!resizing) return;
@@ -40,7 +36,7 @@ export function Sidebar() {
     };
   }, [resizing, setSidebarWidth]);
 
-  const switchTab = (tab: "tree" | "outline" | "favorites") => {
+  const switchTab = (tab: "tree" | "outline") => {
     setMainTab(tab);
     setSidebarTab(tab);
   };
@@ -69,7 +65,7 @@ export function Sidebar() {
         </button>
       </div>
 
-      {/* 一级 Tab：页面树 / 大纲 / 收藏 */}
+      {/* 一级 Tab：页面树 / 大纲 */}
       <div className="flex items-stretch border-b border-neutral-300 text-[11px]">
         <button
           type="button"
@@ -97,59 +93,10 @@ export function Sidebar() {
           <Hash className="h-3 w-3" />
           {t("sidebar.tab.outline")}
         </button>
-        <button
-          type="button"
-          onClick={() => switchTab("favorites")}
-          className={
-            "flex flex-1 items-center justify-center gap-1 py-1.5 " +
-            (mainTab === "favorites"
-              ? "bg-white text-brand-600 border-b-2 border-brand-500"
-              : "text-neutral-500 hover:bg-neutral-200/60")
-          }
-        >
-          <Star className="h-3 w-3" />
-          {t("sidebar.favorites")}
-        </button>
       </div>
 
       {/* 内容区：根据 mainTab 切换 */}
-      <div className="min-h-0 flex-1 overflow-hidden">
-        {mainTab === "tree" ? (
-          <PageTree />
-        ) : mainTab === "outline" ? (
-          <DocumentOutline />
-        ) : (
-          <div className="h-full overflow-y-auto px-2 py-1">
-            {favorites.length === 0 ? (
-              <p className="px-2 py-4 text-[12px] text-neutral-400">{t("sidebar.favoritesEmpty")}</p>
-            ) : (
-              favorites.map((v) => (
-                <div
-                  key={v.id}
-                  className="group flex h-[30px] items-center gap-1.5 rounded-md px-1.5 hover:bg-neutral-300/40"
-                >
-                  <button
-                    className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] text-neutral-800"
-                    onClick={() => openView(v.id)}
-                  >
-                    <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">
-                      {viewIcon(v)}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-left">{v.name}</span>
-                  </button>
-                  <button
-                    className="shrink-0 opacity-0 group-hover:opacity-100"
-                    onClick={() => toggleFavorite(v.id)}
-                    title={t("sidebar.unfavorite")}
-                  >
-                    <Star className="h-3.5 w-3.5 fill-yellow-400 text-yellow-400" />
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        )}
-      </div>
+      <div className="min-h-0 flex-1 overflow-hidden">{mainTab === "tree" ? <PageTree /> : <DocumentOutline />}</div>
 
       {/* 底部固定区：新建页面 / 回收站 / 设置 */}
       <div className="flex h-[100px] shrink-0 flex-col border-t border-neutral-300">

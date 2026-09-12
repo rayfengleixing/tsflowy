@@ -5,7 +5,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ChevronRight, MoreHorizontal, Pencil, Plus, Star, Trash2, Download } from "lucide-react";
+import { ChevronRight, MoreHorizontal, Pencil, Plus, Trash2, Download } from "lucide-react";
 import { toast } from "sonner";
 import type { ViewNode } from "@/types/models";
 import { viewIcon } from "@/components/view-icon";
@@ -51,7 +51,6 @@ export function PageTreeItem({
   const toggleExpand = useWorkspaceStore((s) => s.toggleExpand);
   const renameView = useWorkspaceStore((s) => s.renameView);
   const setViewIcon = useWorkspaceStore((s) => s.setViewIcon);
-  const toggleFavorite = useWorkspaceStore((s) => s.toggleFavorite);
   const deleteView = useWorkspaceStore((s) => s.deleteView);
   const expand = useWorkspaceStore((s) => s.expand);
   const hasChildren = node.children.length > 0;
@@ -201,12 +200,6 @@ export function PageTreeItem({
               >
                 <Pencil className="mr-2 h-3.5 w-3.5" />
                 {t("tree.rename")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => toggleFavorite(node.id)}>
-                <Star
-                  className={"mr-2 h-3.5 w-3.5 " + (node.is_favorite === 1 ? "fill-yellow-400 text-yellow-400" : "")}
-                />
-                {node.is_favorite === 1 ? t("tree.unfavorite") : t("tree.favorite")}
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => exportPage(node.id, node.name, "markdown")}>
                 <Download className="mr-2 h-3.5 w-3.5" />

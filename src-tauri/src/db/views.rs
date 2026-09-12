@@ -59,17 +59,6 @@ pub fn list_trash(conn: &Connection, workspace_id: &str) -> Result<Vec<ViewRow>,
     )
 }
 
-pub fn list_favorites(conn: &Connection, workspace_id: &str) -> Result<Vec<ViewRow>, String> {
-    query_views(
-        conn,
-        "SELECT * FROM views WHERE workspace_id = ?1 AND is_trash = 0 AND is_favorite = 1
-           AND json_extract(extra, '$.row_detail') IS NOT 1
-         ORDER BY position ASC",
-        params![workspace_id],
-        "list favorites",
-    )
-}
-
 pub fn list_recent(conn: &Connection, workspace_id: &str, limit: i64) -> Result<Vec<ViewRow>, String> {
     query_views(
         conn,
@@ -165,15 +154,6 @@ pub fn set_icon(conn: &Connection, id: &str, icon: Option<&str>) -> Result<(), S
         params![icon, now_ms(), id],
     )
     .map_err(dberr("set view icon"))?;
-    Ok(())
-}
-
-pub fn set_favorite(conn: &Connection, id: &str, favorite: bool) -> Result<(), String> {
-    conn.execute(
-        "UPDATE views SET is_favorite = ?1, updated_at = ?2 WHERE id = ?3",
-        params![favorite, now_ms(), id],
-    )
-    .map_err(dberr("set view favorite"))?;
     Ok(())
 }
 

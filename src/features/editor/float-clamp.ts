@@ -8,8 +8,8 @@ import type { Editor } from "@tiptap/core";
 
 const PAD = 8;
 
-/** 查找最近的可滚动编辑区容器（无则返回 viewport 矩形，作为兜底） */
-function getEditorRect(editor: Editor | null | undefined): DOMRect | null {
+/** 查找最近的可滚动编辑区容器（无则返回 null；调用方以 viewport 兜底） */
+export function getEditorViewportRect(editor: Editor | null | undefined): DOMRect | null {
   const dom = (editor?.view?.dom as HTMLElement | null) ?? null;
   const scroller = dom?.closest?.("[data-editor-scroll]");
   if (scroller) return scroller.getBoundingClientRect();
@@ -27,7 +27,7 @@ export function clampFloatToEditor(
   w: number,
   h: number,
 ): { x: number; y: number } {
-  const rect = getEditorRect(editor);
+  const rect = getEditorViewportRect(editor);
   if (!rect) return { x, y };
   const minX = rect.left + PAD;
   const maxX = rect.right - PAD - w;
@@ -40,7 +40,7 @@ export function clampFloatToEditor(
 
 /** 仅水平 clamp（菜单往往只用水平方向修正，垂直交给自身逻辑） */
 export function clampXToEditor(editor: Editor | null | undefined, x: number, w: number): number {
-  const rect = getEditorRect(editor);
+  const rect = getEditorViewportRect(editor);
   if (!rect) return x;
   const minX = rect.left + PAD;
   const maxX = rect.right - PAD - w;
