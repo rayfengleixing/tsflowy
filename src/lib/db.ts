@@ -52,6 +52,11 @@ export const viewApi = {
     return invoke<View[]>("view_list_recent", { workspaceId, limit });
   },
 
+  /** 一张数据库表的全部视图（宿主 + 派生，宿主在首）：页面内视图标签栏数据源 */
+  async listForSource(sourceId: string): Promise<View[]> {
+    return invoke<View[]>("view_list_for_source", { sourceId });
+  },
+
   /** 标记视图为"最近被打开"：openView 时调用，驱动 Recent Tab 列表 */
   async touchVisited(id: string): Promise<void> {
     return invoke("view_touch_visited", { id });
@@ -63,6 +68,8 @@ export const viewApi = {
     name: string;
     layout: LayoutType;
     extra?: string;
+    /** 数据库多视图：宿主视图 id；派生视图不进页面树，parent_id 由 Rust 侧忽略 */
+    source_id?: string | null;
   }): Promise<View> {
     return invoke<View>("view_create", {
       id: newId(),
@@ -71,6 +78,7 @@ export const viewApi = {
       name: opts.name,
       layout: opts.layout,
       extra: opts.extra ?? null,
+      sourceId: opts.source_id ?? null,
     });
   },
 

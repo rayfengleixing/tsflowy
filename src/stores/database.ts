@@ -54,7 +54,8 @@ interface DatabaseState {
 
   // 行详情（右侧滑出面板）
   rowDetail: { row: DatabaseRow; view: View } | null;
-  openRowDetail: (row: DatabaseRow, dbView: View) => Promise<void>;
+  /** host：宿主页面视图（派生视图不带子节点，行详情文档一律挂在宿主下） */
+  openRowDetail: (row: DatabaseRow, host: View) => Promise<void>;
   closeRowDetail: () => void;
 }
 
@@ -242,7 +243,7 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
     set({ cells });
   },
 
-  openRowDetail: async (row, dbView) => {
+  openRowDetail: async (row, host) => {
     try {
       // 用最新行数据（document_id 可能已被之前会话更新，store 里是旧副本）
       const fresh = await databaseApi.getRow(row.id);
@@ -252,8 +253,8 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
         // 首次打开：创建行详情文档 view（extra 标记 row_detail，说明书 12 节风险 7）
         const name = "行 " + (row.position + 1);
         const view = await viewApi.create({
-          workspace_id: dbView.workspace_id,
-          parent_id: dbView.id,
+          workspace_id: host.workspace_id,
+          parent_id: host.id,
           name,
           layout: "document",
           extra: JSON.stringify({ row_detail: true }),

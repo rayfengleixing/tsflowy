@@ -149,7 +149,7 @@ mod tests {
     #[test]
     fn views_purge_removes_fts_rows_too() {
         let conn = setup();
-        views::create(&conn, "v1", "w1", None, "文档", "document", "{}").unwrap();
+        views::create(&conn, "v1", "w1", None, "文档", "document", "{}", None).unwrap();
         save(&conn, "v1", r#"{"text":"独特内容串"}"#).unwrap();
         views::soft_delete(&conn, "v1").unwrap();
         views::purge(&conn, "v1").unwrap();

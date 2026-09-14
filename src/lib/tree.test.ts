@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildTree,
-  computeRenumber,
-  dropTarget,
-  flattenTree,
-  isDescendant,
-  siblingIds,
-} from "./tree";
+import { buildTree, computeRenumber, dropTarget, flattenTree, isDescendant, siblingIds } from "./tree";
 import type { View } from "@/types/models";
 
 const v = (id: string, parent_id: string | null, position: number): View => ({
@@ -24,6 +17,7 @@ const v = (id: string, parent_id: string | null, position: number): View => ({
   created_at: 0,
   updated_at: 0,
   visited_at: null,
+  source_id: null, // 树里只有页面/宿主：派生视图由 Rust 侧查询排除
 });
 
 const views = [
@@ -116,13 +110,7 @@ describe("siblingIds", () => {
 });
 
 describe("dropTarget", () => {
-  const tree = buildTree([
-    v("r1", null, 0),
-    v("r2", null, 1),
-    v("c1", "r1", 0),
-    v("c2", "r1", 1),
-    v("d1", "c1", 0),
-  ]);
+  const tree = buildTree([v("r1", null, 0), v("r2", null, 1), v("c1", "r1", 0), v("c2", "r1", 1), v("d1", "c1", 0)]);
 
   it("before 落在兄弟前", () => {
     expect(dropTarget(tree, "r2", "before")).toEqual({ parentId: null, index: 1 });

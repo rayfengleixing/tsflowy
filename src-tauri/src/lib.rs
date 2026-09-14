@@ -179,6 +179,7 @@ pub fn run() {
             commands::db::workspace_remove,
             commands::db::view_list_by_workspace,
             commands::db::view_list_trash,
+            commands::db::view_list_for_source,
             commands::db::view_list_recent,
             commands::db::view_touch_visited,
             commands::db::view_create,

@@ -19,6 +19,7 @@ fn row_to_view(r: &rusqlite::Row<'_>) -> rusqlite::Result<ViewRow> {
         created_at: r.get("created_at")?,
         updated_at: r.get("updated_at")?,
         visited_at: r.get("visited_at")?,
+        source_id: r.get("source_id")?,
     })
 }
 
@@ -37,12 +38,15 @@ fn query_views(
     Ok(rows)
 }
 
+/// 树 / 回收站 / 最近访问的可见性口径：行详情文档与派生视图（多视图）都不是"页面"，一律排除。
+const VISIBLE_IN_TREE: &str = " AND json_extract(extra, '$.row_detail') IS NOT 1 AND source_id IS NULL";
+
 pub fn list_by_workspace(conn: &Connection, workspace_id: &str) -> Result<Vec<ViewRow>, String> {
     query_views(
         conn,
-        "SELECT * FROM views WHERE workspace_id = ?1 AND is_trash = 0
-           AND json_extract(extra, '$.row_detail') IS NOT 1
-         ORDER BY position ASC",
+        &format!(
+            "SELECT * FROM views WHERE workspace_id = ?1 AND is_trash = 0{VISIBLE_IN_TREE} ORDER BY position ASC"
+        ),
         params![workspace_id],
         "list views",
     )
@@ -51,9 +55,9 @@ pub fn list_by_workspace(conn: &Connection, workspace_id: &str) -> Result<Vec<Vi
 pub fn list_trash(conn: &Connection, workspace_id: &str) -> Result<Vec<ViewRow>, String> {
     query_views(
         conn,
-        "SELECT * FROM views WHERE workspace_id = ?1 AND is_trash = 1
-           AND json_extract(extra, '$.row_detail') IS NOT 1
-         ORDER BY deleted_at DESC",
+        &format!(
+            "SELECT * FROM views WHERE workspace_id = ?1 AND is_trash = 1{VISIBLE_IN_TREE} ORDER BY deleted_at DESC"
+        ),
         params![workspace_id],
         "list trash",
     )
@@ -62,12 +66,40 @@ pub fn list_trash(conn: &Connection, workspace_id: &str) -> Result<Vec<ViewRow>,
 pub fn list_recent(conn: &Connection, workspace_id: &str, limit: i64) -> Result<Vec<ViewRow>, String> {
     query_views(
         conn,
-        "SELECT * FROM views WHERE workspace_id = ?1 AND is_trash = 0 AND visited_at IS NOT NULL
-           AND json_extract(extra, '$.row_detail') IS NOT 1
-         ORDER BY visited_at DESC LIMIT ?2",
+        &format!(
+            "SELECT * FROM views WHERE workspace_id = ?1 AND is_trash = 0 AND visited_at IS NOT NULL\
+             {VISIBLE_IN_TREE} ORDER BY visited_at DESC LIMIT ?2"
+        ),
         params![workspace_id, limit],
         "list recent views",
     )
+}
+
+/// 一张表的全部视图（宿主 + 派生），供页面内的视图标签栏使用。
+/// 宿主恒排第一：它的 position 是树里的排序位，与派生视图的 position 空间互不相干。
+pub fn list_for_source(conn: &Connection, source_id: &str) -> Result<Vec<ViewRow>, String> {
+    query_views(
+        conn,
+        "SELECT * FROM views WHERE (id = ?1 OR source_id = ?1) AND is_trash = 0
+         ORDER BY (source_id IS NULL) DESC, position ASC",
+        params![source_id],
+        "list views of source",
+    )
+}
+
+/// 数据宿主解析：派生视图一律折算到宿主 id —— fields/rows/cells 只挂在宿主上。
+/// source_id 创建后不可变（无写入路径），故各入口查一次即可，无需缓存。
+/// 视图行不存在时原样返回：保持旧行为（查询得到空集），避免已删视图的残留标签页弹错。
+pub fn data_view_id(conn: &Connection, view_id: &str) -> Result<String, String> {
+    let resolved: Option<String> = conn
+        .query_row(
+            "SELECT COALESCE(source_id, id) FROM views WHERE id = ?1",
+            params![view_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(dberr("resolve data view"))?;
+    Ok(resolved.unwrap_or_else(|| view_id.to_string()))
 }
 
 pub fn touch_visited(conn: &Connection, id: &str) -> Result<(), String> {
@@ -82,8 +114,11 @@ pub fn get(conn: &Connection, id: &str) -> Result<Option<ViewRow>, String> {
         .map_err(dberr("get view"))
 }
 
-/// 单事务：同父 MAX(position)+1 → INSERT views → document 布局再插默认内容行（H1 标题 + 分割线，
+/// 单事务：同级 MAX(position)+1 → INSERT views → document 布局再插默认内容行（H1 标题 + 分割线，
 /// 前端 document-structure-lock 锁定二者；documents_fts 的 insert 触发器随之生效）。
+///
+/// `source_id = Some(host)` 建的是宿主表的一个派生视图（多视图）：不进树（parent_id 强制 NULL）、
+/// position 在"该宿主的视图列表"内递增、不碰宿主的树内 position。
 pub fn create(
     conn: &Connection,
     id: &str,
@@ -92,20 +127,50 @@ pub fn create(
     name: &str,
     layout: &str,
     extra: &str,
+    source_id: Option<&str>,
 ) -> Result<ViewRow, String> {
+    if source_id.is_some() && layout == "document" {
+        return Err("a derived view of a database cannot use the document layout".to_string());
+    }
     let t = now_ms();
     let tx = conn.unchecked_transaction().map_err(dberr("create view"))?;
-    let position: i64 = tx
-        .query_row(
-            "SELECT COALESCE(MAX(position), -1) + 1 FROM views WHERE workspace_id = ?1 AND parent_id IS ?2",
-            params![workspace_id, parent_id],
-            |r| r.get(0),
-        )
-        .map_err(dberr("create view"))?;
+    let parent_id = match source_id {
+        // 派生视图不属于页面树
+        Some(_) => None,
+        None => parent_id,
+    };
+    let position: i64 = match source_id {
+        Some(host) => {
+            // 宿主必须是已存在的宿主（不允许派生视图再挂派生视图，否则数据归属要递归解析）
+            let is_host: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM views WHERE id = ?1 AND source_id IS NULL",
+                    params![host],
+                    |r| r.get(0),
+                )
+                .map_err(dberr("create derived view"))?;
+            if is_host == 0 {
+                return Err(format!("database view not found: {host}"));
+            }
+            tx.query_row(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM views WHERE source_id = ?1",
+                params![host],
+                |r| r.get(0),
+            )
+            .map_err(dberr("create derived view"))?
+        }
+        None => tx
+            .query_row(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM views WHERE workspace_id = ?1 AND parent_id IS ?2",
+                params![workspace_id, parent_id],
+                |r| r.get(0),
+            )
+            .map_err(dberr("create view"))?,
+    };
     tx.execute(
-        "INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-        params![id, workspace_id, parent_id, name, layout, extra, position, t],
+        "INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at, source_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)",
+        params![id, workspace_id, parent_id, name, layout, extra, position, t, source_id],
     )
     .map_err(dberr("create view"))?;
     if layout == "document" {
@@ -136,6 +201,7 @@ pub fn create(
         created_at: t,
         updated_at: t,
         visited_at: None,
+        source_id: source_id.map(|s| s.to_string()),
     })
 }
 
@@ -195,19 +261,27 @@ fn with_recursive_subtree(conn: &Connection, body: &str, id: &str, extra: Option
     Ok(n)
 }
 
-/// 软删：视图及其整个子树进回收站
+/// 软删：视图及其整个子树进回收站（含数据库表的派生视图，否则恢复时视图配置丢失）
 pub fn soft_delete(conn: &Connection, id: &str) -> Result<(), String> {
+    let t = now_ms();
     with_recursive_subtree(
         conn,
         "UPDATE views SET is_trash = 1, deleted_at = ?2 WHERE id IN (SELECT id FROM sub)",
         id,
-        Some(now_ms()),
+        Some(t),
         "soft delete view",
+    )?;
+    with_recursive_subtree(
+        conn,
+        "UPDATE views SET is_trash = 1, deleted_at = ?2 WHERE source_id IN (SELECT id FROM sub)",
+        id,
+        Some(t),
+        "soft delete derived views",
     )
     .map(|_| ())
 }
 
-/// 恢复：视图及其子树移出回收站
+/// 恢复：视图及其子树移出回收站（含派生视图）
 pub fn restore(conn: &Connection, id: &str) -> Result<(), String> {
     with_recursive_subtree(
         conn,
@@ -215,11 +289,19 @@ pub fn restore(conn: &Connection, id: &str) -> Result<(), String> {
         id,
         None,
         "restore view",
+    )?;
+    with_recursive_subtree(
+        conn,
+        "UPDATE views SET is_trash = 0, deleted_at = NULL WHERE source_id IN (SELECT id FROM sub)",
+        id,
+        None,
+        "restore derived views",
     )
     .map(|_| ())
 }
 
-/// 彻底删除：子树递归硬删（documents/database_* 经 FK 级联 + FTS delete 触发器）
+/// 彻底删除：子树递归硬删（documents/database_* 经 FK 级联 + FTS delete 触发器；
+/// 数据库表的派生视图经 views.source_id 的 FK 级联随之删除）
 pub fn purge(conn: &Connection, id: &str) -> Result<(), String> {
     with_recursive_subtree(
         conn,
@@ -317,8 +399,8 @@ fn compute_renumber(
     updates
 }
 
-/// 单事务移动：SELECT 全 workspace 视图（含 trash，同旧 db.ts）→ 后代环守卫（静默 no-op）
-/// → compute_renumber → prepared statement 逐行 UPDATE。
+/// 单事务移动：SELECT 全 workspace 视图（含 trash，同旧 db.ts；排除派生视图——它们 parent_id 为 NULL
+/// 但不属于页面树）→ 后代环守卫（静默 no-op）→ compute_renumber → prepared statement 逐行 UPDATE。
 pub fn move_view(
     conn: &Connection,
     view_id: &str,
@@ -328,7 +410,8 @@ pub fn move_view(
     let tx = conn.unchecked_transaction().map_err(dberr("move view"))?;
     let views = query_views(
         &tx,
-        "SELECT * FROM views WHERE workspace_id = (SELECT workspace_id FROM views WHERE id = ?1)",
+        "SELECT * FROM views WHERE workspace_id = (SELECT workspace_id FROM views WHERE id = ?1)
+           AND source_id IS NULL",
         params![view_id],
         "move view",
     )?;
@@ -502,7 +585,7 @@ mod tests {
     fn create_document_seeds_content_row_and_fts() {
         let conn = setup();
         let name = r#"He said "hi" \ ok"#;
-        let v = create(&conn, "v1", "w1", None, name, "document", "{}").unwrap();
+        let v = create(&conn, "v1", "w1", None, name, "document", "{}", None).unwrap();
         assert_eq!(v.position, 0);
         assert_eq!(v.is_trash, 0);
         let content: String = conn
@@ -521,7 +604,7 @@ mod tests {
     #[test]
     fn create_grid_has_no_document_row() {
         let conn = setup();
-        create(&conn, "v1", "w1", None, "grid", "grid", "{}").unwrap();
+        create(&conn, "v1", "w1", None, "grid", "grid", "{}", None).unwrap();
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0);
     }
@@ -529,9 +612,9 @@ mod tests {
     #[test]
     fn create_position_increments_per_parent() {
         let conn = setup();
-        create(&conn, "a", "w1", None, "a", "grid", "{}").unwrap();
-        create(&conn, "b", "w1", None, "b", "grid", "{}").unwrap();
-        create(&conn, "c", "w1", Some("a"), "c", "grid", "{}").unwrap();
+        create(&conn, "a", "w1", None, "a", "grid", "{}", None).unwrap();
+        create(&conn, "b", "w1", None, "b", "grid", "{}", None).unwrap();
+        create(&conn, "c", "w1", Some("a"), "c", "grid", "{}", None).unwrap();
         let pa: i64 = conn.query_row("SELECT position FROM views WHERE id='a'", [], |r| r.get(0)).unwrap();
         let pb: i64 = conn.query_row("SELECT position FROM views WHERE id='b'", [], |r| r.get(0)).unwrap();
         let pc: i64 = conn.query_row("SELECT position FROM views WHERE id='c'", [], |r| r.get(0)).unwrap();
@@ -584,5 +667,115 @@ mod tests {
         assert_eq!(r2, 0);
         let r3: i64 = conn.query_row("SELECT COUNT(*) FROM views WHERE id='r3'", [], |r| r.get(0)).unwrap();
         assert_eq!(r3, 1);
+    }
+
+    // ---------- 多视图（迁移 007：views.source_id） ----------
+
+    /// 在宿主表上建一个派生视图
+    fn derive(conn: &Connection, id: &str, host: &str, name: &str, layout: &str) -> ViewRow {
+        create(conn, id, "w1", None, name, layout, "{}", Some(host)).unwrap()
+    }
+
+    fn ids(rows: &[ViewRow]) -> Vec<String> {
+        rows.iter().map(|v| v.id.clone()).collect()
+    }
+
+    #[test]
+    fn derived_views_hide_from_tree_trash_and_recent() {
+        let conn = setup();
+        create(&conn, "g1", "w1", None, "表", "grid", "{}", None).unwrap();
+        derive(&conn, "d1", "g1", "看板", "board");
+        conn.execute("UPDATE views SET visited_at = 5 WHERE id = 'd1'", []).unwrap();
+
+        // 活跃态：派生视图既不在树里，也不因 visited_at 出现在最近
+        assert_eq!(ids(&list_by_workspace(&conn, "w1").unwrap()), vec!["g1"]);
+        assert!(list_recent(&conn, "w1", 10).unwrap().is_empty(), "派生视图不进最近列表");
+
+        // 回收站：派生视图随宿主一起软删，但不单独占一行
+        soft_delete(&conn, "g1").unwrap();
+        assert_eq!(ids(&list_trash(&conn, "w1").unwrap()), vec!["g1"]);
+    }
+
+    #[test]
+    fn list_for_source_returns_host_first_then_derived_by_position() {
+        let conn = setup();
+        create(&conn, "g1", "w1", None, "表", "grid", "{}", None).unwrap();
+        derive(&conn, "d2", "g1", "日历", "calendar");
+        derive(&conn, "d1", "g1", "看板", "board");
+        assert_eq!(ids(&list_for_source(&conn, "g1").unwrap()), vec!["g1", "d2", "d1"]);
+
+        // 宿主自身的派生视图不会漏，别的表也串不进来
+        create(&conn, "g2", "w1", None, "另一张表", "grid", "{}", None).unwrap();
+        assert_eq!(ids(&list_for_source(&conn, "g2").unwrap()), vec!["g2"]);
+    }
+
+    #[test]
+    fn create_derived_view_scopes_position_and_rejects_bad_host() {
+        let conn = setup();
+        // 宿主的树内 position 已占用 0/1，派生视图的 position 另起一套从 0 开始
+        create(&conn, "g1", "w1", None, "表", "grid", "{}", None).unwrap();
+        create(&conn, "g2", "w1", None, "表2", "grid", "{}", None).unwrap();
+        assert_eq!(derive(&conn, "d1", "g1", "看板", "board").position, 0);
+        assert_eq!(derive(&conn, "d2", "g1", "日历", "calendar").position, 1);
+        let g1_pos: i64 = conn.query_row("SELECT position FROM views WHERE id='g1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(g1_pos, 0, "派生视图不抢宿主的树内排序位");
+
+        // 派生视图不进树：parent_id 强制 NULL，哪怕调用方传了父节点
+        let d = create(&conn, "d3", "w1", Some("g2"), "x", "grid", "{}", Some("g1")).unwrap();
+        assert_eq!(d.parent_id, None);
+        assert_eq!(d.source_id.as_deref(), Some("g1"));
+
+        // 宿主不存在 → 报错
+        let err = create(&conn, "d4", "w1", None, "x", "board", "{}", Some("ghost")).unwrap_err();
+        assert!(err.contains("database view not found"), "{err}");
+        // 派生视图不能再被派生（否则数据归属要递归解析）
+        let err = create(&conn, "d5", "w1", None, "x", "board", "{}", Some("d1")).unwrap_err();
+        assert!(err.contains("database view not found"), "{err}");
+        // document 布局的派生视图没有意义（内容挂在 documents 上）
+        let err = create(&conn, "d6", "w1", None, "x", "document", "{}", Some("g1")).unwrap_err();
+        assert!(err.contains("document layout"), "{err}");
+    }
+
+    #[test]
+    fn soft_delete_and_restore_cover_derived_views() {
+        let conn = setup();
+        create(&conn, "g1", "w1", None, "表", "grid", "{}", None).unwrap();
+        derive(&conn, "d1", "g1", "看板", "board");
+
+        soft_delete(&conn, "g1").unwrap();
+        let (t, del): (i64, Option<i64>) = conn
+            .query_row("SELECT is_trash, deleted_at FROM views WHERE id='d1'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!((t, del.is_some()), (1, true), "派生视图随宿主进回收站");
+
+        restore(&conn, "g1").unwrap();
+        let (t, del): (i64, Option<i64>) = conn
+            .query_row("SELECT is_trash, deleted_at FROM views WHERE id='d1'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!((t, del.is_some()), (0, false), "恢复后派生视图回来且 deleted_at 清空");
+    }
+
+    #[test]
+    fn purge_host_cascades_to_derived_views() {
+        let conn = setup();
+        create(&conn, "g1", "w1", None, "表", "grid", "{}", None).unwrap();
+        derive(&conn, "d1", "g1", "看板", "board");
+        purge(&conn, "g1").unwrap(); // views.source_id 的 FK ON DELETE CASCADE
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM views", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn move_renumber_ignores_derived_views() {
+        let conn = setup();
+        seed_default_fixture(&conn); // r1/r2/r3 根级 0..2
+        derive(&conn, "d1", "r1", "看板", "board"); // parent_id 同为 NULL
+        move_view(&conn, "r3", Some("r1"), 0).unwrap();
+        let l = layout(&conn);
+        assert_eq!(l["r3"], (Some("r1".into()), 0));
+        assert_eq!(l["r1"], (None, 0));
+        assert_eq!(l["r2"], (None, 1));
+        // 派生视图没被当成根级兄弟参与重排：仍是 NULL 父级、position 独立
+        assert_eq!(l["d1"], (None, 0));
     }
 }

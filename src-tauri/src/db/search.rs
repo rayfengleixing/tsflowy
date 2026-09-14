@@ -70,7 +70,8 @@ pub fn search(conn: &Connection, workspace_id: &str, raw_query: &str) -> Result<
             "SELECT v.id AS view_id, v.name AS title, v.icon, v.layout,
                     '' AS snippet, 1e9 AS rank
              FROM views v
-             WHERE v.is_trash = 0 AND v.workspace_id = ?1 AND v.name LIKE ?2 ESCAPE '\\'
+             WHERE v.is_trash = 0 AND v.workspace_id = ?1 AND v.source_id IS NULL
+               AND v.name LIKE ?2 ESCAPE '\\'
                AND NOT EXISTS (SELECT 1 FROM documents_fts f WHERE f.view_id = v.id)
              LIMIT 50",
         )

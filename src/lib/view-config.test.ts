@@ -5,7 +5,7 @@ describe("parseViewConfig", () => {
   it("reads a full config", () => {
     const cfg = parseViewConfig(
       JSON.stringify({
-        mode: "board",
+        activeViewId: "v2",
         filters: [{ id: "f1", field_id: "a", op: "contains", value: "x" }],
         filterMode: "or",
         sorts: [{ field_id: "b", dir: "desc" }],
@@ -13,7 +13,7 @@ describe("parseViewConfig", () => {
         calendarFieldId: "d1",
       }),
     );
-    expect(cfg.mode).toBe("board");
+    expect(cfg.activeViewId).toBe("v2");
     expect(cfg.filters).toHaveLength(1);
     expect(cfg.filterMode).toBe("or");
     expect(cfg.sorts).toEqual([{ field_id: "b", dir: "desc" }]);
@@ -27,14 +27,14 @@ describe("parseViewConfig", () => {
     expect(parseViewConfig("")).toEqual({});
     expect(parseViewConfig("{ not json")).toEqual({});
     expect(parseViewConfig("[]")).toEqual({});
-    expect(parseViewConfig('"mode"')).toEqual({});
+    expect(parseViewConfig('"sorts"')).toEqual({});
     expect(parseViewConfig("null")).toEqual({});
   });
 
   it("ignores unknown and malformed values instead of throwing", () => {
     const cfg = parseViewConfig(
       JSON.stringify({
-        mode: "kanban", // 不在白名单
+        activeViewId: "", // 空串 = 未配置
         filterMode: "maybe",
         sorts: [{ field_id: "b", dir: "sideways" }],
         filters: [{ nope: true }],
@@ -42,7 +42,7 @@ describe("parseViewConfig", () => {
         calendarFieldId: "", // 空串 = 清除选择
       }),
     );
-    expect(cfg.mode).toBeUndefined();
+    expect(cfg.activeViewId).toBeUndefined();
     expect(cfg.filterMode).toBeUndefined();
     expect(cfg.boardFieldId).toBeUndefined();
     expect(cfg.calendarFieldId).toBeUndefined();
@@ -61,30 +61,30 @@ describe("parseViewConfig", () => {
 describe("mergeViewConfig", () => {
   it("preserves foreign keys already in extra", () => {
     // row_detail 标记一旦被丢掉，行详情文档就会出现在页面树里（views.rs 靠 json_extract 过滤）
-    const merged = mergeViewConfig('{"row_detail":true,"name":"keep"}', { mode: "grid" });
+    const merged = mergeViewConfig('{"row_detail":true,"name":"keep"}', { activeViewId: "v1" });
     const raw = JSON.parse(merged) as Record<string, unknown>;
     expect(raw.row_detail).toBe(true);
     expect(raw.name).toBe("keep");
-    expect(raw.mode).toBe("grid");
+    expect(raw.activeViewId).toBe("v1");
   });
 
   it("survives damaged base text", () => {
-    expect(JSON.parse(mergeViewConfig("{ broken", { mode: "board" }))).toEqual({ mode: "board" });
+    expect(JSON.parse(mergeViewConfig("{ broken", { activeViewId: "v1" }))).toEqual({ activeViewId: "v1" });
   });
 
   it("overwrites an existing config key and skips undefined", () => {
-    const merged = mergeViewConfig('{"mode":"grid","sorts":[{"field_id":"a","dir":"asc"}]}', {
-      mode: "calendar",
+    const merged = mergeViewConfig('{"activeViewId":"v1","sorts":[{"field_id":"a","dir":"asc"}]}', {
+      activeViewId: "v2",
       sorts: undefined,
     });
     const raw = JSON.parse(merged) as Record<string, unknown>;
-    expect(raw.mode).toBe("calendar");
+    expect(raw.activeViewId).toBe("v2");
     expect(raw.sorts).toEqual([{ field_id: "a", dir: "asc" }]);
   });
 
   it("round-trips every supported key through parse", () => {
     const patch = {
-      mode: "board" as const,
+      activeViewId: "v2",
       filters: [{ id: "f1", field_id: "a", op: "equals" as const, value: "v" }],
       filterMode: "or" as const,
       sorts: [{ field_id: "b", dir: "desc" as const }],
@@ -96,9 +96,9 @@ describe("mergeViewConfig", () => {
 
   it("keeps successive patches for one view instead of clobbering", () => {
     // 组件拿到的 view 是树快照、不会随写入刷新；第二次 patch 必须基于第一次的结果
-    const first = mergeViewConfig('{"row_detail":true}', { mode: "grid" });
+    const first = mergeViewConfig('{"row_detail":true}', { activeViewId: "v1" });
     const second = mergeViewConfig(first, { sorts: [{ field_id: "a", dir: "asc" }] });
-    expect(parseViewConfig(second)).toEqual({ mode: "grid", sorts: [{ field_id: "a", dir: "asc" }] });
+    expect(parseViewConfig(second)).toEqual({ activeViewId: "v1", sorts: [{ field_id: "a", dir: "asc" }] });
     expect((JSON.parse(second) as Record<string, unknown>).row_detail).toBe(true);
   });
 });

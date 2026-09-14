@@ -38,6 +38,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "composite_indexes",
         sql: include_str!("../../../migrations/006_composite_indexes.sql"),
     },
+    Migration {
+        version: 7,
+        description: "multi_views",
+        sql: include_str!("../../../migrations/007_multi_views.sql"),
+    },
 ];
 
 pub fn ensure_migrated(conn: &rusqlite::Connection) -> Result<(), String> {
@@ -267,6 +272,46 @@ mod tests {
                 "checksum mismatch for version {version}"
             );
         }
+    }
+
+    /// 存量库（001–006 已应用，extra 里带着已废弃的 mode 键）升到 007：
+    /// 只加列 + 清死键，不重跑建表；非法 JSON 的 extra 既不能炸迁移也不该被改写。
+    #[test]
+    fn migration_007_upgrades_existing_install_and_strips_stale_mode_key() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_sqlx_table(&conn);
+        for m in &MIGRATIONS[..MIGRATIONS.len() - 1] {
+            conn.execute_batch(m.sql).unwrap();
+            record_sqlx_migration(&conn, m);
+        }
+        conn.execute(
+            "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ('w1','W',1,1)",
+            [],
+        )
+        .unwrap();
+        for (id, extra) in [("v1", r#"{"mode":"board","sorts":[]}"#), ("v2", "not json")] {
+            conn.execute(
+                "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at)
+                 VALUES (?1, 'w1', '表', 'grid', ?2, 0, 1, 1)",
+                rusqlite::params![id, extra],
+            )
+            .unwrap();
+        }
+
+        ensure_migrated(&conn).unwrap();
+
+        let src: Option<String> = conn
+            .query_row("SELECT source_id FROM views WHERE id = 'v1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(src, None, "存量行都是宿主");
+        let kept: String = conn
+            .query_row("SELECT extra FROM views WHERE id = 'v1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(kept, r#"{"sorts":[]}"#, "只删 mode 死键，其余键原样保留");
+        let untouched: String = conn
+            .query_row("SELECT extra FROM views WHERE id = 'v2'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(untouched, "not json", "非法 JSON 由 json_valid 挡在清理之外");
     }
 
     #[test]

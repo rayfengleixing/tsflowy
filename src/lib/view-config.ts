@@ -6,22 +6,19 @@ import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import type { View } from "@/types/models";
 
-// 视图显示配置持久化在 views.extra（JSON）：视图模式、筛选、排序、看板分组字段、日历日期字段。
+// 视图显示配置持久化在 views.extra（JSON）：筛选、排序、看板分组字段、日历日期字段，
+// 以及数据库页最后一次停留的视图 id（activeViewId，只写在宿主行上）。
 // 这些原先都只是组件里的内存状态，切页/重启即丢。
 // extra 同时承载 row_detail 等既有标记，所以写入一律"读改写整份 JSON"，未知键原样保留。
 
-export type ViewMode = "grid" | "board" | "calendar";
-
 export interface ViewConfig {
-  mode?: ViewMode;
   filters?: FilterSpec[];
   filterMode?: FilterMode;
   sorts?: SortSpec[];
   boardFieldId?: string;
   calendarFieldId?: string;
+  activeViewId?: string;
 }
-
-const MODES: string[] = ["grid", "board", "calendar"];
 
 function asObject(text: string | null | undefined): Record<string, unknown> {
   try {
@@ -46,7 +43,6 @@ const specArray = <T>(v: unknown, keep: (item: unknown) => boolean = isFieldSpec
 export function parseViewConfig(text: string | null | undefined): ViewConfig {
   const o = asObject(text);
   const out: ViewConfig = {};
-  if (typeof o.mode === "string" && MODES.includes(o.mode)) out.mode = o.mode as ViewMode;
   const filters = specArray<FilterSpec>(o.filters);
   if (filters) out.filters = filters;
   if (o.filterMode === "and" || o.filterMode === "or") out.filterMode = o.filterMode;
@@ -55,18 +51,19 @@ export function parseViewConfig(text: string | null | undefined): ViewConfig {
   // 空串是"清除字段选择"的哨兵写法，读出时归一为未配置
   if (typeof o.boardFieldId === "string" && o.boardFieldId) out.boardFieldId = o.boardFieldId;
   if (typeof o.calendarFieldId === "string" && o.calendarFieldId) out.calendarFieldId = o.calendarFieldId;
+  if (typeof o.activeViewId === "string" && o.activeViewId) out.activeViewId = o.activeViewId;
   return out;
 }
 
 /** 纯函数：把 patch 合并进整份 extra 文本，保留 patch 之外的既有键；值为 undefined 的键不动 */
 export function mergeViewConfig(text: string | null | undefined, patch: Partial<ViewConfig>): string {
   const next: Record<string, unknown> = { ...asObject(text) };
-  if (patch.mode !== undefined) next.mode = patch.mode;
   if (patch.filters !== undefined) next.filters = patch.filters;
   if (patch.filterMode !== undefined) next.filterMode = patch.filterMode;
   if (patch.sorts !== undefined) next.sorts = patch.sorts;
   if (patch.boardFieldId !== undefined) next.boardFieldId = patch.boardFieldId;
   if (patch.calendarFieldId !== undefined) next.calendarFieldId = patch.calendarFieldId;
+  if (patch.activeViewId !== undefined) next.activeViewId = patch.activeViewId;
   return JSON.stringify(next);
 }
 

@@ -61,6 +61,13 @@ pub async fn view_list_trash(db: State<'_, Db>, workspace_id: String) -> Result<
     db::views::list_trash(&conn, &workspace_id)
 }
 
+/// 一张数据库表的全部视图（宿主 + 派生，按 position 排序）：页面内视图标签栏数据源
+#[tauri::command]
+pub async fn view_list_for_source(db: State<'_, Db>, source_id: String) -> Result<Vec<ViewRow>, String> {
+    let conn = db.read_conn()?;
+    db::views::list_for_source(&conn, &source_id)
+}
+
 #[tauri::command]
 pub async fn view_list_recent(db: State<'_, Db>, workspace_id: String, limit: i64) -> Result<Vec<ViewRow>, String> {
     let conn = db.read_conn()?;
@@ -82,6 +89,7 @@ pub async fn view_create(
     name: String,
     layout: String,
     extra: Option<String>,
+    source_id: Option<String>,
 ) -> Result<ViewRow, String> {
     let conn = db.write_conn()?;
     db::views::create(
@@ -92,6 +100,7 @@ pub async fn view_create(
         &name,
         &layout,
         extra.as_deref().unwrap_or("{}"),
+        source_id.as_deref(),
     )
 }
 

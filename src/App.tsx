@@ -1,12 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { TabBar } from "@/features/tabs/TabBar";
 import { TrashPage } from "@/features/trash/TrashPage";
 import { PlaceholderPage } from "@/features/placeholder/PlaceholderPage";
 import { EditorPage } from "@/features/editor/EditorPage";
-import { GridView } from "@/features/database/GridView";
-import { BoardView } from "@/features/database/BoardView";
-import { CalendarView } from "@/features/database/CalendarView";
+import { DatabasePage } from "@/features/database/DatabasePage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { CommandPalette } from "@/features/search/CommandPalette";
 import { SearchResultsPage } from "@/features/search/SearchResultsPage";
@@ -22,31 +20,7 @@ import { toast } from "sonner";
 import { t } from "@/lib/i18n";
 import { flushAllForClose, registerCloseFlush } from "@/lib/close-flush";
 import { flushPendingUiPersist } from "@/stores/workspace";
-import { patchViewConfig, readViewConfig, type ViewMode } from "@/lib/view-config";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { View } from "@/types/models";
-
-/** 数据库视图包装器：管理视图模式切换（Grid/Board/Calendar 共用同一份数据，模式落库到 views.extra） */
-function DatabaseViewWrapper({ view }: { view: View }) {
-  const [viewMode, setViewMode] = useState<ViewMode>(() => {
-    const saved = readViewConfig(view).mode;
-    if (saved) return saved;
-    return view.layout === "board" ? "board" : view.layout === "calendar" ? "calendar" : "grid";
-  });
-
-  const changeMode = (mode: ViewMode) => {
-    setViewMode(mode);
-    patchViewConfig(view, { mode });
-  };
-
-  if (viewMode === "board") {
-    return <BoardView key={view.id + "-board"} view={view} viewMode="board" onViewModeChange={changeMode} />;
-  }
-  if (viewMode === "calendar") {
-    return <CalendarView key={view.id + "-calendar"} view={view} viewMode="calendar" onViewModeChange={changeMode} />;
-  }
-  return <GridView key={view.id + "-grid"} view={view} viewMode="grid" onViewModeChange={changeMode} />;
-}
 
 function App() {
   // Phase 4 修复 React 19 dev infinite-loop：
@@ -146,7 +120,7 @@ function App() {
             {view && view.layout === "document" ? (
               <EditorPage key={view.id} view={view} />
             ) : view && (view.layout === "grid" || view.layout === "board" || view.layout === "calendar") ? (
-              <DatabaseViewWrapper key={view.id} view={view} />
+              <DatabasePage key={view.id} view={view} />
             ) : (
               <PlaceholderPage />
             )}

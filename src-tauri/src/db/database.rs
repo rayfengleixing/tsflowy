@@ -3,6 +3,7 @@ use rusqlite::{params, Connection};
 use super::models::{
     CellLoadRow, CsvCellIn, CsvFieldIn, CsvRowIn, DatabaseFieldRow, DatabaseRowRow,
 };
+use super::views::data_view_id;
 use super::{dberr, now_ms};
 
 // 数据库三表（database_fields / database_rows / database_cells）领域函数，
@@ -10,6 +11,10 @@ use super::{dberr, now_ms};
 // 002 迁移的两个触发器继续生效：
 // - trg_cells_row_inserted：INSERT 行时为已有 created_at/last_edited_at 字段自动补单元格
 // - trg_cells_value_changed：单元格值 UPDATE 且变化时刷新行 updated_at + last_edited_at
+//
+// 多视图（迁移 007）：一张表的数据只挂在宿主视图上，派生视图是纯显示配置。
+// 因此所有以 view_id 为入参的函数先过一遍 data_view_id 折算成宿主 id 再执行；
+// 返回行里的 database_view_id 是宿主 id（前端不读该列做等值比较，仅类型保留）。
 
 /// 镜像前端 database-values.ts defaultOptionsFor：新字段/改类型写入的默认 options JSON。
 /// 键序由 serde_json 字典序决定，消费方 parseFieldOptions 按键名读取，无顺序依赖。
@@ -52,6 +57,8 @@ fn field_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DatabaseFieldRow> {
 // ---------- 字段 ----------
 
 pub fn list_fields(conn: &Connection, view_id: &str) -> Result<Vec<DatabaseFieldRow>, String> {
+    let host = data_view_id(conn, view_id)?;
+    let view_id = host.as_str();
     let mut stmt = conn
         .prepare(
             "SELECT id, database_view_id, name, field_type, options, width, is_hidden, position
@@ -74,6 +81,8 @@ pub fn create_field(
     field_type: &str,
     name: Option<&str>,
 ) -> Result<DatabaseFieldRow, String> {
+    let host = data_view_id(conn, view_id)?;
+    let view_id = host.as_str();
     let name = name.unwrap_or(field_type);
     let options = default_options_json(field_type);
     let position = next_position(conn, "database_fields", view_id)?;
@@ -131,6 +140,8 @@ pub fn update_field_options(conn: &Connection, field_id: &str, options: &str) ->
 
 /// 整列重排：ordered_ids 为最终顺序（position 0..n-1）。单事务避免中间态。
 pub fn reorder_fields(conn: &Connection, view_id: &str, ordered_ids: &[&str]) -> Result<(), String> {
+    let host = data_view_id(conn, view_id)?;
+    let view_id = host.as_str();
     let tx = conn.unchecked_transaction().map_err(dberr("reorder fields"))?;
     for (i, id) in ordered_ids.iter().enumerate() {
         tx.execute(
@@ -170,6 +181,8 @@ fn row_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DatabaseRowRow> {
 }
 
 pub fn list_rows(conn: &Connection, view_id: &str) -> Result<Vec<DatabaseRowRow>, String> {
+    let host = data_view_id(conn, view_id)?;
+    let view_id = host.as_str();
     let mut stmt = conn
         .prepare(
             "SELECT id, database_view_id, position, document_id, created_at, updated_at
@@ -186,6 +199,8 @@ pub fn list_rows(conn: &Connection, view_id: &str) -> Result<Vec<DatabaseRowRow>
 
 /// id 由前端 newId() 生成后传入；trg_cells_row_inserted 同事务补时间戳单元格。
 pub fn create_row(conn: &Connection, view_id: &str, id: &str) -> Result<DatabaseRowRow, String> {
+    let host = data_view_id(conn, view_id)?;
+    let view_id = host.as_str();
     let position = next_position(conn, "database_rows", view_id)?;
     let t = now_ms();
     conn.execute(
@@ -235,6 +250,8 @@ pub fn delete_row(conn: &Connection, row_id: &str) -> Result<(), String> {
 }
 
 pub fn reorder_rows(conn: &Connection, view_id: &str, ordered_ids: &[&str]) -> Result<(), String> {
+    let host = data_view_id(conn, view_id)?;
+    let view_id = host.as_str();
     let tx = conn.unchecked_transaction().map_err(dberr("reorder rows"))?;
     for (i, id) in ordered_ids.iter().enumerate() {
         tx.execute(
@@ -251,6 +268,8 @@ pub fn reorder_rows(conn: &Connection, view_id: &str, ordered_ids: &[&str]) -> R
 
 /// 全量读取某视图所有单元格（扁平行；JS 侧组装成 rowId → fieldId → 值并 JSON.parse）。
 pub fn load_cells(conn: &Connection, view_id: &str) -> Result<Vec<CellLoadRow>, String> {
+    let host = data_view_id(conn, view_id)?;
+    let view_id = host.as_str();
     let mut stmt = conn
         .prepare(
             "SELECT c.row_id, c.field_id, c.value
@@ -292,6 +311,8 @@ pub fn csv_import(
     fields: &[CsvFieldIn],
     rows: &[CsvRowIn],
 ) -> Result<(usize, usize, usize), String> {
+    let host = data_view_id(conn, view_id)?;
+    let view_id = host.as_str();
     let tx = conn.unchecked_transaction().map_err(dberr("csv import"))?;
     for (i, f) in fields.iter().enumerate() {
         tx.execute(
@@ -603,5 +624,57 @@ mod tests {
         // 整体回滚：合法的 f1 也不存在
         assert!(list_fields(&conn, "v1").unwrap().is_empty());
         assert!(list_rows(&conn, "v1").unwrap().is_empty());
+    }
+
+    // ---------- 多视图：派生视图 id 折算到宿主 ----------
+
+    fn derive(conn: &Connection, id: &str, host: &str, layout: &str) {
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at, source_id)
+             VALUES (?1, 'w1', NULL, ?1, ?2, '{}', 0, 1, 1, ?3)",
+            params![id, layout, host],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn data_view_id_maps_derived_to_host_and_passes_others_through() {
+        let conn = setup();
+        derive(&conn, "v1-board", "v1", "board");
+        assert_eq!(data_view_id(&conn, "v1-board").unwrap(), "v1");
+        assert_eq!(data_view_id(&conn, "v1").unwrap(), "v1", "宿主折算到自己");
+        // 视图行不存在时原样返回：查询得到空集，不在已删视图的残留标签页上报错
+        assert_eq!(data_view_id(&conn, "ghost").unwrap(), "ghost");
+    }
+
+    #[test]
+    fn every_view_id_entry_point_resolves_to_the_host() {
+        let conn = setup();
+        derive(&conn, "v1-board", "v1", "board");
+        let derived = "v1-board";
+
+        let f = create_field(&conn, derived, "f1", "text", Some("名称")).unwrap();
+        assert_eq!(f.database_view_id, "v1", "返回行报告真实归属");
+        assert_eq!(list_fields(&conn, derived).unwrap().len(), 1, "派生视图读得到宿主字段");
+
+        let r = create_row(&conn, derived, "r1").unwrap();
+        assert_eq!(r.database_view_id, "v1");
+        set_cell(&conn, "r1", "f1", r#""x""#).unwrap();
+        assert_eq!(load_cells(&conn, derived).unwrap().len(), 1);
+        assert_eq!(list_rows(&conn, "v1").unwrap()[0].id, "r1", "宿主读得到派生视图建的行");
+
+        create_field(&conn, derived, "f2", "number", None).unwrap();
+        reorder_fields(&conn, derived, &["f2", "f1"]).unwrap();
+        let order: Vec<String> = list_fields(&conn, "v1").unwrap().into_iter().map(|f| f.id).collect();
+        assert_eq!(order, vec!["f2", "f1"]);
+
+        let fields = vec![CsvFieldIn { id: "f3".into(), name: "导入".into(), field_type: "text".into() }];
+        let rows = vec![CsvRowIn {
+            id: "r3".into(),
+            cells: vec![CsvCellIn { field_id: "f3".into(), value: r#""v""#.into() }],
+        }];
+        let (nf, nr, nc) = csv_import(&conn, derived, &fields, &rows).unwrap();
+        assert_eq!((nf, nr, nc), (1, 1, 1));
+        assert_eq!(list_rows(&conn, "v1").unwrap().len(), 2);
     }
 }

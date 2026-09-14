@@ -26,6 +26,8 @@ export interface View {
   updated_at: number;
   /** 最近一次被用户打开（openView）的时间戳；NULL=从未访问（Phase 3.2 Recent Tab） */
   visited_at: number | null;
+  /** 多视图（迁移 007）：非空 = 数据库页内的派生视图，值为其宿主视图 id；派生视图不在树/回收站/搜索中出现 */
+  source_id: string | null;
 }
 
 export interface ViewNode extends View {
@@ -33,3 +35,7 @@ export interface ViewNode extends View {
 }
 
 export const LAYOUTS: LayoutType[] = ["document", "grid", "board", "calendar"];
+
+/** 数据库视图布局集合：一张表可拥有的视图类型（多视图阶段 2） */
+export const DB_LAYOUTS = ["grid", "board", "calendar"] as const;
+export type DbLayout = (typeof DB_LAYOUTS)[number];

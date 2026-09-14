@@ -9,23 +9,28 @@ import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { Button } from "@/components/ui/button";
 import { SelectChips } from "./editors";
 import { RowDetailPanel } from "./RowDetail";
-import { ViewModeTabs } from "./GridView";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import { patchViewConfig, readViewConfig, type ViewMode } from "@/lib/view-config";
+import { patchViewConfig, readViewConfig } from "@/lib/view-config";
 import type { CellValue, DatabaseField } from "@/types/database";
 import type { View } from "@/types/models";
 
 /** Calendar 日历视图（说明书 11 节 M5）：月视图（周一起）+ 卡片拖拽改日期 */
 export function CalendarView({
   view,
-  viewMode = "calendar",
-  onViewModeChange,
+  source,
+  tabs,
+  onGoGrid,
 }: {
+  /** 当前视图：日期字段等显示配置的归属 */
   view: View;
-  viewMode?: ViewMode;
-  onViewModeChange?: (m: ViewMode) => void;
+  /** 宿主页面：标题、重命名与行详情的父子归属 */
+  source: View;
+  /** 标题行右侧的视图标签栏 */
+  tabs?: React.ReactNode;
+  /** 无日期字段时引导回到表格视图 */
+  onGoGrid?: () => void;
 }) {
   const store = useDatabaseStore();
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
@@ -35,7 +40,7 @@ export function CalendarView({
   const [year, setYear] = useState<number>(new Date().getFullYear());
   const [month, setMonth] = useState<number>(new Date().getMonth() + 1);
   const [editingTitle, setEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState(view.name);
+  const [titleDraft, setTitleDraft] = useState(source.name);
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
   const [dragOverDate, setDragOverDate] = useState<string | null>(null);
 
@@ -149,7 +154,7 @@ export function CalendarView({
             onBlur={() => {
               const name = titleDraft.trim();
               setEditingTitle(false);
-              if (name && name !== view.name) void useWorkspaceStore.getState().renameView(view.id, name);
+              if (name && name !== source.name) void useWorkspaceStore.getState().renameView(source.id, name);
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter") (e.target as HTMLInputElement).blur();
@@ -160,11 +165,11 @@ export function CalendarView({
           <h1
             className="min-w-0 flex-1 truncate text-[15px] font-medium text-neutral-800"
             onDoubleClick={() => {
-              setTitleDraft(view.name);
+              setTitleDraft(source.name);
               setEditingTitle(true);
             }}
           >
-            {view.name}
+            {source.name}
           </h1>
         )}
 
@@ -201,7 +206,7 @@ export function CalendarView({
             {t("calendar.today")}
           </Button>
 
-          {onViewModeChange && <ViewModeTabs mode={viewMode} onChange={onViewModeChange} />}
+          {tabs}
         </div>
       </div>
 
@@ -210,8 +215,8 @@ export function CalendarView({
           <div className="text-4xl">📅</div>
           <h2 className="text-base font-semibold text-neutral-800">{t("calendar.noField")}</h2>
           <p className="max-w-md text-sm text-neutral-500">{t("calendar.noFieldDesc")}</p>
-          {onViewModeChange && (
-            <Button size="sm" onClick={() => onViewModeChange("grid")}>
+          {onGoGrid && (
+            <Button size="sm" onClick={onGoGrid}>
               {t("board.goGrid")}
             </Button>
           )}
@@ -317,7 +322,7 @@ export function CalendarView({
                             if (draggingRow === row.id) setDraggingRow(null);
                             if (dragOverDate === d.date) setDragOverDate(null);
                           }}
-                          onOpenDetail={() => void openRowDetail(row, view)}
+                          onOpenDetail={() => void openRowDetail(row, source)}
                         />
                       ))}
                     </div>

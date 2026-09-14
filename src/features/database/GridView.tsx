@@ -1,16 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import {
-  Download,
-  ExternalLink,
-  FileUp,
-  Filter,
-  GripVertical,
-  Plus,
-  Trash2,
-  Table2,
-  LayoutGrid,
-  Calendar,
-} from "lucide-react";
+import { Download, ExternalLink, FileUp, Filter, GripVertical, Plus, Trash2 } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -28,66 +17,32 @@ import { NewFieldDialog } from "./NewFieldDialog";
 import { FilterBar } from "./FilterBar";
 import { CellEditorSlot, SelectChips } from "./editors";
 import { RowDetailPanel } from "./RowDetail";
-import { BoardView } from "./BoardView";
-import { CalendarView } from "./CalendarView";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import type { ViewMode } from "@/lib/view-config";
 import type { View } from "@/types/models";
-
-/** 视图模式切换标签（Grid/Board/Calendar 共用） */
-export function ViewModeTabs({ mode, onChange }: { mode: ViewMode; onChange: (m: ViewMode) => void }) {
-  const tabs: { key: ViewMode; icon: React.ReactNode; label: string }[] = [
-    { key: "grid", icon: <Table2 className="h-3.5 w-3.5" />, label: t("dbViewMode.grid") },
-    { key: "board", icon: <LayoutGrid className="h-3.5 w-3.5" />, label: t("dbViewMode.board") },
-    { key: "calendar", icon: <Calendar className="h-3.5 w-3.5" />, label: t("dbViewMode.calendar") },
-  ];
-  return (
-    <div className="flex items-center gap-0.5 rounded-md border border-neutral-300 bg-white text-xs">
-      {tabs.map((tab) => (
-        <button
-          key={tab.key}
-          className={cn(
-            "flex items-center gap-1 px-2 py-1 rounded transition",
-            mode === tab.key ? "bg-brand-100 text-brand-700 font-medium" : "text-neutral-600 hover:bg-neutral-100",
-          )}
-          onClick={() => onChange(tab.key)}
-        >
-          {tab.icon}
-          {tab.label}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 /** Grid 数据库视图（说明书 10-M4）：表头 32px / 行 32px / 单元格聚焦蓝框（6.6 节） */
 export function GridView({
   view,
-  viewMode = "grid",
-  onViewModeChange,
+  source,
+  tabs,
 }: {
+  /** 当前视图：显示配置与数据的归属键（可能是宿主本身，也可能是派生视图） */
   view: View;
-  viewMode?: ViewMode;
-  onViewModeChange?: (m: ViewMode) => void;
+  /** 宿主页面：标题、重命名与行详情的父子归属都挂在它上面 */
+  source: View;
+  /** 标题行右侧的视图标签栏 */
+  tabs?: React.ReactNode;
 }) {
   const store = useDatabaseStore();
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
 
-  // 嵌入式视图模式切换（当从 GridView 内切换到 Board/Calendar 时）
-  if (viewMode === "board" && onViewModeChange) {
-    return <BoardView view={view} viewMode="board" onViewModeChange={onViewModeChange} />;
-  }
-  if (viewMode === "calendar" && onViewModeChange) {
-    return <CalendarView view={view} viewMode="calendar" onViewModeChange={onViewModeChange} />;
-  }
-
   const [editing, setEditing] = useState<{ rowId: string; fieldId: string } | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState(view.name);
+  const [titleDraft, setTitleDraft] = useState(source.name);
   const [renamingField, setRenamingField] = useState<string | null>(null);
   const [optionsEditorFor, setOptionsEditorFor] = useState<DatabaseField | null>(null);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
@@ -197,7 +152,7 @@ export function GridView({
     try {
       const content = buildCsvExport(fields, rows, cells);
       const target = await save({
-        defaultPath: (view.name || "export").replace(/[\\/:*?"<>|]/g, "_") + ".csv",
+        defaultPath: (source.name || "export").replace(/[\\/:*?"<>|]/g, "_") + ".csv",
         filters: [{ name: "CSV", extensions: ["csv"] }],
       });
       if (!target) return;
@@ -279,7 +234,7 @@ export function GridView({
             onBlur={() => {
               const name = titleDraft.trim();
               setEditingTitle(false);
-              if (name && name !== view.name) void useWorkspaceStore.getState().renameView(view.id, name);
+              if (name && name !== source.name) void useWorkspaceStore.getState().renameView(source.id, name);
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter") (e.target as HTMLInputElement).blur();
@@ -290,11 +245,11 @@ export function GridView({
           <h1
             className="min-w-0 flex-1 truncate text-[15px] font-medium text-neutral-800"
             onDoubleClick={() => {
-              setTitleDraft(view.name);
+              setTitleDraft(source.name);
               setEditingTitle(true);
             }}
           >
-            {view.name}
+            {source.name}
           </h1>
         )}
         <div className="flex shrink-0 items-center gap-1">
@@ -318,7 +273,7 @@ export function GridView({
             <Download className="h-3.5 w-3.5" />
             {t("csv.export")}
           </Button>
-          {onViewModeChange && <ViewModeTabs mode={viewMode} onChange={onViewModeChange} />}
+          {tabs}
         </div>
       </div>
 
@@ -523,7 +478,7 @@ export function GridView({
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setEditing(null);
-                                void openRowDetail(row, view);
+                                void openRowDetail(row, source);
                               }}
                             >
                               <ExternalLink className="h-3.5 w-3.5" />
@@ -536,7 +491,7 @@ export function GridView({
                           value={cells[row.id]?.[field.id] ?? null}
                           primary={isPrimary}
                           onChipRemove={(newVal) => void store.setCell(row.id, field.id, newVal)}
-                          onOpenRowDetail={() => void openRowDetail(row, view)}
+                          onOpenRowDetail={() => void openRowDetail(row, source)}
                         />
                       )}
                     </td>
