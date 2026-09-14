@@ -4,8 +4,10 @@ import { databaseApi } from "@/lib/database";
 import { newSelectOption, parseFieldOptions } from "@/lib/database-values";
 import { viewApi } from "@/lib/db";
 import { t } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 import type { FilterMode, FilterSpec, SortSpec } from "@/lib/database-query";
+import { patchViewConfig, readViewConfig } from "@/lib/view-config";
 import type { View } from "@/types/models";
 
 // 数据库视图的字段/行/单元格缓存（项目说明书 3 章 stores/database.ts）。
@@ -13,19 +15,21 @@ import type { View } from "@/types/models";
 
 interface DatabaseState {
   viewId: string | null;
+  /** 当前视图行（写回 extra 配置用；viewId 保持原有语义不变） */
+  view: View | null;
   fields: DatabaseField[];
   rows: DatabaseRow[];
   cells: Record<string, Record<string, CellValue>>;
   loading: boolean;
 
-  // 排序/筛选（本地 UI 状态）
+  // 排序/筛选（持久化到 views.extra）
   sorts: SortSpec[];
   filters: FilterSpec[];
   filterMode: FilterMode;
   setSorts: (sorts: SortSpec[]) => void;
   setFilters: (filters: FilterSpec[], mode: FilterMode) => void;
 
-  load: (viewId: string) => Promise<void>;
+  load: (view: View) => Promise<void>;
   reload: () => Promise<void>;
 
   // 字段
@@ -56,6 +60,7 @@ interface DatabaseState {
 
 export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
   viewId: null,
+  view: null,
   fields: [],
   rows: [],
   cells: {},
@@ -65,12 +70,29 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
   filterMode: "and",
   rowDetail: null,
 
-  setSorts: (sorts) => set({ sorts }),
-  setFilters: (filters, filterMode) => set({ filters, filterMode }),
+  setSorts: (sorts) => {
+    set({ sorts });
+    const view = get().view;
+    if (view) patchViewConfig(view, { sorts });
+  },
+  setFilters: (filters, filterMode) => {
+    set({ filters, filterMode });
+    const view = get().view;
+    if (view) patchViewConfig(view, { filters, filterMode });
+  },
 
-  load: async (viewId) => {
+  load: async (view) => {
+    const viewId = view.id;
     if (get().viewId === viewId && get().fields.length > 0) return;
-    set({ loading: true, viewId, sorts: [], filters: [] });
+    const cfg = readViewConfig(view);
+    set({
+      loading: true,
+      view,
+      viewId,
+      sorts: cfg.sorts ?? [],
+      filters: cfg.filters ?? [],
+      filterMode: cfg.filterMode ?? "and",
+    });
     try {
       const [fields, rows, cells] = await Promise.all([
         databaseApi.listFields(viewId),
@@ -79,7 +101,7 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
       ]);
       set({ fields, rows, cells, loading: false });
     } catch (e) {
-      console.error("load database view failed", viewId, e);
+      logger.error("database.load", e);
       toast.error(t("error.db", { message: String(e) }));
       set({ loading: false });
       throw e;

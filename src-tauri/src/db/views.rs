@@ -157,6 +157,27 @@ pub fn set_icon(conn: &Connection, id: &str, icon: Option<&str>) -> Result<(), S
     Ok(())
 }
 
+/// 整体覆写视图 extra（视图模式/筛选/排序/看板分组字段/日历日期字段等显示配置）。
+/// 合并语义在前端做（读改写整份 extra），这里只校验来料必须是 JSON 对象，
+/// 以免把 row_detail 之类的既有标记冲成不可解析文本。
+pub fn update_extra(conn: &Connection, id: &str, extra: &str) -> Result<(), String> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(extra).map_err(|e| format!("invalid extra JSON: {e}"))?;
+    if !parsed.is_object() {
+        return Err("extra must be a JSON object".to_string());
+    }
+    let n = conn
+        .execute(
+            "UPDATE views SET extra = ?1, updated_at = ?2 WHERE id = ?3",
+            params![extra, now_ms(), id],
+        )
+        .map_err(dberr("update view extra"))?;
+    if n == 0 {
+        return Err(format!("view not found: {id}"));
+    }
+    Ok(())
+}
+
 fn with_recursive_subtree(conn: &Connection, body: &str, id: &str, extra: Option<i64>, ctx: &'static str) -> Result<usize, String> {
     let sql = format!(
         "WITH RECURSIVE sub(id) AS (

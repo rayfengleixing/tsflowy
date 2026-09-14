@@ -4,11 +4,7 @@ import { toast } from "sonner";
 import { useDatabaseStore } from "@/stores/database";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { applyFilters, sortRows } from "@/lib/database-query";
-import {
-  buildCalendarMonth,
-  cellValueForDate,
-  defaultCalendarField,
-} from "@/lib/board-calendar";
+import { buildCalendarMonth, cellValueForDate, defaultCalendarField } from "@/lib/board-calendar";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { Button } from "@/components/ui/button";
 import { SelectChips } from "./editors";
@@ -16,18 +12,26 @@ import { RowDetailPanel } from "./RowDetail";
 import { ViewModeTabs } from "./GridView";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
+import { patchViewConfig, readViewConfig, type ViewMode } from "@/lib/view-config";
 import type { CellValue, DatabaseField } from "@/types/database";
 import type { View } from "@/types/models";
 
-type ViewMode = "grid" | "board" | "calendar";
-
 /** Calendar 日历视图（说明书 11 节 M5）：月视图（周一起）+ 卡片拖拽改日期 */
-export function CalendarView({ view, viewMode = "calendar", onViewModeChange }: { view: View; viewMode?: ViewMode; onViewModeChange?: (m: ViewMode) => void }) {
+export function CalendarView({
+  view,
+  viewMode = "calendar",
+  onViewModeChange,
+}: {
+  view: View;
+  viewMode?: ViewMode;
+  onViewModeChange?: (m: ViewMode) => void;
+}) {
   const store = useDatabaseStore();
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
 
-  const [dateFieldId, setDateFieldId] = useState<string | null>(null);
+  const [dateFieldId, setDateFieldId] = useState<string | null>(() => readViewConfig(view).calendarFieldId ?? null);
   const [year, setYear] = useState<number>(new Date().getFullYear());
   const [month, setMonth] = useState<number>(new Date().getMonth() + 1);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -36,15 +40,23 @@ export function CalendarView({ view, viewMode = "calendar", onViewModeChange }: 
   const [dragOverDate, setDragOverDate] = useState<string | null>(null);
 
   useEffect(() => {
-    store.load(view.id).catch((e) => console.error("calendar load failed", e));
+    store.load(view).catch((e) => logger.error("calendar.load", e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.id]);
+
+  const changeDateField = (id: string | null) => {
+    setDateFieldId(id);
+    patchViewConfig(view, { calendarFieldId: id ?? "" });
+  };
 
   // 初始化日期字段：第一个 date/created_at/last_edited_at
   useEffect(() => {
     if (fields.length === 0) return;
     const def = defaultCalendarField(fields);
-    if (dateFieldId && fields.some((f) => f.id === dateFieldId && ["date","created_at","last_edited_at"].includes(f.field_type))) {
+    if (
+      dateFieldId &&
+      fields.some((f) => f.id === dateFieldId && ["date", "created_at", "last_edited_at"].includes(f.field_type))
+    ) {
       return;
     }
     setDateFieldId(def?.id ?? null);
@@ -162,27 +174,25 @@ export function CalendarView({ view, viewMode = "calendar", onViewModeChange }: 
             <select
               className="bg-transparent text-xs outline-none"
               value={dateFieldId ?? ""}
-              onChange={(e) => setDateFieldId(e.target.value || null)}
+              onChange={(e) => changeDateField(e.target.value || null)}
             >
               {dateFields.length === 0 && <option value="">{t("calendar.noField")}</option>}
               {dateFields.map((f) => (
-                <option key={f.id} value={f.id}>{f.name}</option>
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
               ))}
             </select>
           </div>
 
           <div className="flex items-center gap-0.5 rounded-md border border-neutral-300 bg-white text-xs">
-            <button
-              className="rounded-l-md px-2 py-1 text-neutral-600 hover:bg-neutral-100"
-              onClick={gotoPrevMonth}
-            >
+            <button className="rounded-l-md px-2 py-1 text-neutral-600 hover:bg-neutral-100" onClick={gotoPrevMonth}>
               <ChevronLeft className="h-3.5 w-3.5" />
             </button>
-            <span className="px-2 font-medium text-neutral-800">{year} / {String(month).padStart(2,"0")}</span>
-            <button
-              className="px-2 py-1 text-neutral-600 hover:bg-neutral-100"
-              onClick={gotoNextMonth}
-            >
+            <span className="px-2 font-medium text-neutral-800">
+              {year} / {String(month).padStart(2, "0")}
+            </span>
+            <button className="px-2 py-1 text-neutral-600 hover:bg-neutral-100" onClick={gotoNextMonth}>
               <ChevronRight className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -211,12 +221,24 @@ export function CalendarView({ view, viewMode = "calendar", onViewModeChange }: 
           <div className="flex h-full min-h-full flex-col">
             {/* 周标题行 */}
             <div className="grid grid-cols-7 border-b border-neutral-200 bg-neutral-100/60 text-[11px] text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800/40 dark:text-neutral-400">
-              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">{t("calendar.wMon")}</div>
-              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">{t("calendar.wTue")}</div>
-              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">{t("calendar.wWed")}</div>
-              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">{t("calendar.wThu")}</div>
-              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">{t("calendar.wFri")}</div>
-              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">{t("calendar.wSat")}</div>
+              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">
+                {t("calendar.wMon")}
+              </div>
+              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">
+                {t("calendar.wTue")}
+              </div>
+              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">
+                {t("calendar.wWed")}
+              </div>
+              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">
+                {t("calendar.wThu")}
+              </div>
+              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">
+                {t("calendar.wFri")}
+              </div>
+              <div className="border-r border-neutral-200 px-2 py-1 text-right dark:border-neutral-700">
+                {t("calendar.wSat")}
+              </div>
               <div className="px-2 py-1 text-right">{t("calendar.wSun")}</div>
             </div>
 
@@ -336,18 +358,21 @@ function CalCard(props: {
   onOpenDetail: () => void;
 }) {
   const { row, primaryField, visibleFields, cells, dragging } = props;
-  const value = primaryField ? cells[row.id]?.[primaryField.id] ?? null : null;
+  const value = primaryField ? (cells[row.id]?.[primaryField.id] ?? null) : null;
   const title = primaryField
     ? formatCellValue(primaryField.field_type, value, parseFieldOptions(primaryField.options))
     : `行 ${row.position + 1}`;
 
   // 副信息：只取前 1 个可见单/多选/数字（紧凑）
-  const subField = visibleFields.slice(1, 3).find((f) =>
-    f.field_type === "single_select"
-    || f.field_type === "multi_select"
-    || (f.field_type === "checkbox" && cells[row.id]?.[f.id] === true)
-    || (f.field_type === "number" && cells[row.id]?.[f.id] != null),
-  );
+  const subField = visibleFields
+    .slice(1, 3)
+    .find(
+      (f) =>
+        f.field_type === "single_select" ||
+        f.field_type === "multi_select" ||
+        (f.field_type === "checkbox" && cells[row.id]?.[f.id] === true) ||
+        (f.field_type === "number" && cells[row.id]?.[f.id] != null),
+    );
   const sub = subField ? { field: subField, value: cells[row.id]?.[subField.id] ?? null } : null;
 
   return (
@@ -357,7 +382,9 @@ function CalCard(props: {
       onDragEnd={props.onDragEnd}
       className={cn(
         "group/card cursor-grab overflow-hidden rounded border bg-white text-[11px] leading-tight shadow-sm transition active:cursor-grabbing dark:bg-neutral-800",
-        dragging ? "opacity-40 ring-1 ring-brand-500" : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 hover:shadow-sm",
+        dragging
+          ? "opacity-40 ring-1 ring-brand-500"
+          : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 hover:shadow-sm",
       )}
     >
       <div className="flex items-center justify-between gap-0.5 px-1.5 py-1">

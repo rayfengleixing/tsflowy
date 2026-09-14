@@ -4,12 +4,7 @@ import { toast } from "sonner";
 import { useDatabaseStore } from "@/stores/database";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { applyFilters, sortRows } from "@/lib/database-query";
-import {
-  NO_GROUP,
-  cellValueForGroup,
-  defaultBoardField,
-  groupRowsForBoard,
-} from "@/lib/board-calendar";
+import { NO_GROUP, cellValueForGroup, defaultBoardField, groupRowsForBoard } from "@/lib/board-calendar";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { Button } from "@/components/ui/button";
 import { SelectChips } from "./editors";
@@ -17,18 +12,26 @@ import { RowDetailPanel } from "./RowDetail";
 import { ViewModeTabs } from "./GridView";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
+import { patchViewConfig, readViewConfig, type ViewMode } from "@/lib/view-config";
 import type { CellValue, DatabaseField } from "@/types/database";
 import type { View } from "@/types/models";
 
-type ViewMode = "grid" | "board" | "calendar";
-
 /** Board 看板视图（说明书 11 节 M5）：按单选字段分组 + 卡片拖拽改值 */
-export function BoardView({ view, viewMode = "board", onViewModeChange }: { view: View; viewMode?: ViewMode; onViewModeChange?: (m: ViewMode) => void }) {
+export function BoardView({
+  view,
+  viewMode = "board",
+  onViewModeChange,
+}: {
+  view: View;
+  viewMode?: ViewMode;
+  onViewModeChange?: (m: ViewMode) => void;
+}) {
   const store = useDatabaseStore();
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
 
-  const [groupFieldId, setGroupFieldId] = useState<string | null>(null);
+  const [groupFieldId, setGroupFieldId] = useState<string | null>(() => readViewConfig(view).boardFieldId ?? null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(view.name);
@@ -38,9 +41,14 @@ export function BoardView({ view, viewMode = "board", onViewModeChange }: { view
   const [newGroupOpen, setNewGroupOpen] = useState(false);
 
   useEffect(() => {
-    store.load(view.id).catch((e) => console.error("board load failed", e));
+    store.load(view).catch((e) => logger.error("board.load", e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.id]);
+
+  const changeGroupField = (id: string | null) => {
+    setGroupFieldId(id);
+    patchViewConfig(view, { boardFieldId: id ?? "" });
+  };
 
   // 初始化默认分组字段
   useEffect(() => {
@@ -55,10 +63,7 @@ export function BoardView({ view, viewMode = "board", onViewModeChange }: { view
   const visibleFields = useMemo(() => fields.filter((f) => f.is_hidden === 0), [fields]);
   const primaryField = visibleFields[0] ?? null;
   const groupField = fields.find((f) => f.id === groupFieldId) ?? null;
-  const selectFields = useMemo(
-    () => fields.filter((f) => f.field_type === "single_select"),
-    [fields],
-  );
+  const selectFields = useMemo(() => fields.filter((f) => f.field_type === "single_select"), [fields]);
 
   const displayRows = useMemo(() => {
     const filtered = applyFilters(rows, cells, filters, fields, filterMode);
@@ -153,11 +158,13 @@ export function BoardView({ view, viewMode = "board", onViewModeChange }: { view
             <select
               className="bg-transparent text-xs outline-none"
               value={groupFieldId ?? ""}
-              onChange={(e) => setGroupFieldId(e.target.value || null)}
+              onChange={(e) => changeGroupField(e.target.value || null)}
             >
               {selectFields.length === 0 && <option value="">{t("board.noField")}</option>}
               {selectFields.map((f) => (
-                <option key={f.id} value={f.id}>{f.name}</option>
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
               ))}
             </select>
           </div>
@@ -199,7 +206,9 @@ export function BoardView({ view, viewMode = "board", onViewModeChange }: { view
                   key={group.key}
                   className={cn(
                     "flex w-72 shrink-0 flex-col overflow-hidden rounded-lg border bg-neutral-100/50",
-                    overThis && draggingRow ? "border-brand-500 bg-brand-50 ring-1 ring-brand-500" : "border-neutral-200",
+                    overThis && draggingRow
+                      ? "border-brand-500 bg-brand-50 ring-1 ring-brand-500"
+                      : "border-neutral-200",
                   )}
                   onDragOver={(e) => {
                     if (draggingRow) {
@@ -226,26 +235,22 @@ export function BoardView({ view, viewMode = "board", onViewModeChange }: { view
                       className="rounded p-0.5 text-neutral-500 hover:bg-neutral-200/60"
                       onClick={() => {
                         const next = new Set(collapsedGroups);
-                        if (collapsed) next.delete(group.key); else next.add(group.key);
+                        if (collapsed) next.delete(group.key);
+                        else next.add(group.key);
                         setCollapsedGroups(next);
                       }}
                     >
-                      {collapsed
-                        ? <ChevronRight className="h-3.5 w-3.5" />
-                        : <ChevronDown className="h-3.5 w-3.5" />}
+                      {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                     </button>
                     {accent ? (
-                      <span
-                        className="h-2.5 w-2.5 shrink-0 rounded-full"
-                        style={{ backgroundColor: accent }}
-                      />
-                    ) : (
-                      isUngrouped ? (
-                        <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[10px] text-neutral-400">⊘</span>
-                      ) : null
-                    )}
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: accent }} />
+                    ) : isUngrouped ? (
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[10px] text-neutral-400">
+                        ⊘
+                      </span>
+                    ) : null}
                     <div className="min-w-0 flex-1 text-xs font-medium text-neutral-800">
-                      {isUngrouped ? t("board.ungrouped") : group.option?.name ?? group.key}
+                      {isUngrouped ? t("board.ungrouped") : (group.option?.name ?? group.key)}
                       <span className="ml-1.5 text-[10px] font-normal text-neutral-400">{group.rows.length}</span>
                     </div>
                     <button
@@ -346,7 +351,7 @@ function BoardCard(props: {
   onOpenDetail: () => void;
 }) {
   const { row, primaryField, visibleFields, cells, dragging } = props;
-  const value = primaryField ? cells[row.id]?.[primaryField.id] ?? null : null;
+  const value = primaryField ? (cells[row.id]?.[primaryField.id] ?? null) : null;
   const title = primaryField
     ? formatCellValue(primaryField.field_type, value, parseFieldOptions(primaryField.options))
     : `行 ${row.position + 1}`;
@@ -355,13 +360,19 @@ function BoardCard(props: {
   const subFields = visibleFields.slice(1, 4);
   const subs: { field: DatabaseField; value: CellValue }[] = subFields
     .map((f) => ({ field: f, value: cells[row.id]?.[f.id] ?? null }))
-    .filter((s) =>
-      (s.field.field_type === "single_select" || s.field.field_type === "multi_select")
-      || (s.field.field_type === "date" && s.value)
-      || (s.field.field_type === "checkbox" && s.value === true)
-      || (s.field.field_type === "number" && s.value !== null && s.value !== undefined)
-      || (s.field.field_type !== "created_at" && s.field.field_type !== "last_edited_at" && s.value && String(s.value).length > 0),
-    ).slice(0, 3);
+    .filter(
+      (s) =>
+        s.field.field_type === "single_select" ||
+        s.field.field_type === "multi_select" ||
+        (s.field.field_type === "date" && s.value) ||
+        (s.field.field_type === "checkbox" && s.value === true) ||
+        (s.field.field_type === "number" && s.value !== null && s.value !== undefined) ||
+        (s.field.field_type !== "created_at" &&
+          s.field.field_type !== "last_edited_at" &&
+          s.value &&
+          String(s.value).length > 0),
+    )
+    .slice(0, 3);
 
   return (
     <div
@@ -370,7 +381,9 @@ function BoardCard(props: {
       onDragEnd={props.onDragEnd}
       className={cn(
         "group/card cursor-grab rounded-md border bg-white p-2 shadow-sm transition active:cursor-grabbing dark:bg-neutral-800",
-        dragging ? "opacity-40 ring-1 ring-brand-500" : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 hover:shadow",
+        dragging
+          ? "opacity-40 ring-1 ring-brand-500"
+          : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 hover:shadow",
       )}
     >
       <div className="flex items-start justify-between gap-1">
@@ -421,7 +434,10 @@ function CardSub({ field, value }: { field: DatabaseField; value: CellValue }) {
   const text = formatCellValue(field.field_type, value, parseFieldOptions(field.options));
   if (!text) return null;
   return (
-    <span className="max-w-[120px] truncate rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] text-neutral-600" title={text}>
+    <span
+      className="max-w-[120px] truncate rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] text-neutral-600"
+      title={text}
+    >
       {text}
     </span>
   );
@@ -432,15 +448,24 @@ function optionColorToClass(color: string): string | null {
   if (/^[0-9a-fA-F]{6}$/.test(color)) return "#" + color;
   if (/^#[0-9a-fA-F]{3,8}$/.test(color)) return color;
   switch (color) {
-    case "blue": return "#3b82f6";
-    case "green": return "#22c55e";
-    case "orange": return "#f97316";
-    case "red": return "#ef4444";
-    case "purple": return "#a855f7";
-    case "yellow": return "#eab308";
-    case "pink": return "#ec4899";
-    case "gray": return "#6b7280";
-    case "cyan": return "#06b6d4";
+    case "blue":
+      return "#3b82f6";
+    case "green":
+      return "#22c55e";
+    case "orange":
+      return "#f97316";
+    case "red":
+      return "#ef4444";
+    case "purple":
+      return "#a855f7";
+    case "yellow":
+      return "#eab308";
+    case "pink":
+      return "#ec4899";
+    case "gray":
+      return "#6b7280";
+    case "cyan":
+      return "#06b6d4";
   }
   return null;
 }

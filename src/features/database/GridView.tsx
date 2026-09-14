@@ -33,9 +33,9 @@ import { CalendarView } from "./CalendarView";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
+import type { ViewMode } from "@/lib/view-config";
 import type { View } from "@/types/models";
-
-type ViewMode = "grid" | "board" | "calendar";
 
 /** 视图模式切换标签（Grid/Board/Calendar 共用） */
 export function ViewModeTabs({ mode, onChange }: { mode: ViewMode; onChange: (m: ViewMode) => void }) {
@@ -96,7 +96,7 @@ export function GridView({
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
 
   useEffect(() => {
-    store.load(view.id).catch((e) => console.error("grid load failed", e));
+    store.load(view).catch((e) => logger.error("grid.load", e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.id]);
 

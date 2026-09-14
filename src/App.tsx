@@ -22,24 +22,30 @@ import { toast } from "sonner";
 import { t } from "@/lib/i18n";
 import { flushAllForClose, registerCloseFlush } from "@/lib/close-flush";
 import { flushPendingUiPersist } from "@/stores/workspace";
+import { patchViewConfig, readViewConfig, type ViewMode } from "@/lib/view-config";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { View } from "@/types/models";
 
-type ViewMode = "grid" | "board" | "calendar";
-
-/** 数据库视图包装器：管理视图模式切换（Grid/Board/Calendar 共用同一份数据） */
+/** 数据库视图包装器：管理视图模式切换（Grid/Board/Calendar 共用同一份数据，模式落库到 views.extra） */
 function DatabaseViewWrapper({ view }: { view: View }) {
-  const [viewMode, setViewMode] = useState<ViewMode>(
-    view.layout === "board" ? "board" : view.layout === "calendar" ? "calendar" : "grid",
-  );
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    const saved = readViewConfig(view).mode;
+    if (saved) return saved;
+    return view.layout === "board" ? "board" : view.layout === "calendar" ? "calendar" : "grid";
+  });
+
+  const changeMode = (mode: ViewMode) => {
+    setViewMode(mode);
+    patchViewConfig(view, { mode });
+  };
 
   if (viewMode === "board") {
-    return <BoardView key={view.id + "-board"} view={view} viewMode="board" onViewModeChange={setViewMode} />;
+    return <BoardView key={view.id + "-board"} view={view} viewMode="board" onViewModeChange={changeMode} />;
   }
   if (viewMode === "calendar") {
-    return <CalendarView key={view.id + "-calendar"} view={view} viewMode="calendar" onViewModeChange={setViewMode} />;
+    return <CalendarView key={view.id + "-calendar"} view={view} viewMode="calendar" onViewModeChange={changeMode} />;
   }
-  return <GridView key={view.id + "-grid"} view={view} viewMode="grid" onViewModeChange={setViewMode} />;
+  return <GridView key={view.id + "-grid"} view={view} viewMode="grid" onViewModeChange={changeMode} />;
 }
 
 function App() {

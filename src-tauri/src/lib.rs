@@ -162,6 +162,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::files::save_asset,
             commands::files::save_asset_bytes,
+            commands::files::open_asset,
             commands::files::read_text_file,
             commands::files::write_text_file,
             commands::files::data_dir_path,
@@ -184,6 +185,7 @@ pub fn run() {
             commands::db::view_get,
             commands::db::view_rename,
             commands::db::view_set_icon,
+            commands::db::view_update_extra,
             commands::db::view_soft_delete,
             commands::db::view_restore,
             commands::db::view_purge,

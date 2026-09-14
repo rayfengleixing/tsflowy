@@ -114,6 +114,12 @@ pub async fn view_set_icon(db: State<'_, Db>, id: String, icon: Option<String>) 
 }
 
 #[tauri::command]
+pub async fn view_update_extra(db: State<'_, Db>, id: String, extra: String) -> Result<(), String> {
+    let conn = db.write_conn()?;
+    db::views::update_extra(&conn, &id, &extra)
+}
+
+#[tauri::command]
 pub async fn view_soft_delete(db: State<'_, Db>, id: String) -> Result<(), String> {
     let conn = db.write_conn()?;
     db::views::soft_delete(&conn, &id)

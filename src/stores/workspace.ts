@@ -56,8 +56,6 @@ interface WorkspaceState {
   expand: (id: string) => void;
   setExpandedAll: (ids: Set<string>) => void;
   setSidebarWidth: (w: number) => void;
-  /** Phase 4.4：打开（或新建）指定日期的 Daily Note，日期格式 YYYY-MM-DD（默认今天），命名空间工作区根级。 */
-  openDailyNote: (date?: Date) => Promise<void>;
 }
 
 let initPromise: Promise<void> | null = null;
@@ -481,29 +479,6 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
 
     newTab: async () => {
       await get().createView({ parentId: null, layout: "document" });
-    },
-
-    // Phase 4.4：打开（或若不存在则创建）今日 Daily Note（命名约定：YYYY-MM-DD，建在 workspace 根级）
-    openDailyNote: async (dateArg) => {
-      const { currentWorkspaceId, tree, openView, createView } = get();
-      if (!currentWorkspaceId) return;
-      const d = dateArg ?? new Date();
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, "0");
-      const dd = String(d.getDate()).padStart(2, "0");
-      const name = `${yyyy}-${mm}-${dd}`;
-      // 在 tree 中遍历根级节点，找名称完全匹配（不区分大小写）的 document 视图
-      const existing = flattenTree(tree).find((n) => n.name === name && n.layout === "document" && n.is_trash === 0);
-      if (existing) {
-        openView(existing.id);
-        return;
-      }
-      // 不存在 → 新建
-      const view = await createView({ parentId: null, layout: "document" });
-      if (view) {
-        await viewApi.rename(view.id, name);
-        // rename 不会刷新 tab 显示名；openView 在 createView 中已经被调用
-      }
     },
 
     reorderTabs: (fromIndex: number, toIndex: number) => {

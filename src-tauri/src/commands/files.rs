@@ -242,6 +242,49 @@ pub fn save_asset_bytes(app: tauri::AppHandle, bytes: Vec<u8>, ext: String) -> R
     Ok(format!("{ASSETS_DIR}/{file_name}"))
 }
 
+/// 把文档里存的 assets 相对路径解析成绝对路径，并确保结果仍在 assets 目录内。
+/// 文档内容可被导入/编辑，因此这里假定 `relative` 不可信：绝对路径、`..`、
+/// 以及经符号链接/junction 逃逸出 assets 目录的目标一律拒绝。
+fn resolve_asset_path(data_dir: &Path, relative: &str) -> Result<PathBuf, String> {
+    use std::ffi::OsStr;
+    use std::path::Component;
+
+    let rel = Path::new(relative);
+    let mut comps = rel.components();
+    if comps.next() != Some(Component::Normal(OsStr::new(ASSETS_DIR))) {
+        return Err("only paths under assets/ can be opened".to_string());
+    }
+    if comps.any(|c| !matches!(c, Component::Normal(_))) {
+        return Err("invalid asset path".to_string());
+    }
+
+    let assets_dir = data_dir.join(ASSETS_DIR);
+    let assets_root = assets_dir
+        .canonicalize()
+        .map_err(|e| format!("failed to resolve assets dir: {e}"))?;
+    let sub = rel
+        .strip_prefix(ASSETS_DIR)
+        .map_err(|_| "only paths under assets/ can be opened".to_string())?;
+    let target = assets_root
+        .join(sub)
+        .canonicalize()
+        .map_err(|_| format!("asset file not found: {relative}"))?;
+    if !target.starts_with(&assets_root) {
+        return Err("asset path escapes the assets directory".to_string());
+    }
+    Ok(target)
+}
+
+/// 用系统默认程序打开 assets/ 下的附件（附件卡片点击入口）。
+#[tauri::command]
+pub fn open_asset(app: tauri::AppHandle, relative: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let target = resolve_asset_path(&app_data_dir(&app)?, &relative)?;
+    app.opener()
+        .open_path(target.display().to_string(), None::<&str>)
+        .map_err(|e| format!("failed to open asset: {e}"))
+}
+
 /// 读取任意 UTF-8 文本文件（CSV 导入用；路径来自文件对话框，不受 fs 插件 scope 限制）
 #[tauri::command]
 pub fn read_text_file(path: String) -> Result<String, String> {
@@ -722,6 +765,45 @@ mod tests {
         fs::create_dir_all(default.join("assets")).unwrap();
         fs::create_dir_all(custom.join("assets")).unwrap();
         (base, default, custom, bak)
+    }
+
+    #[test]
+    fn resolve_asset_path_accepts_real_file_under_assets() {
+        let (base, default, ..) = temp_case("asset-ok");
+        fs::write(default.join("assets/123.pdf"), b"x").unwrap();
+
+        let got = resolve_asset_path(&default, "assets/123.pdf").unwrap();
+        assert!(got.starts_with(default.join("assets").canonicalize().unwrap()));
+        assert!(got.is_file());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn resolve_asset_path_rejects_absolute_and_foreign_prefix() {
+        let (base, default, ..) = temp_case("asset-prefix");
+        fs::write(default.join("assets/123.pdf"), b"x").unwrap();
+
+        assert!(resolve_asset_path(&default, r"C:\Windows\notepad.exe").is_err());
+        assert!(resolve_asset_path(&default, "/etc/passwd").is_err());
+        assert!(resolve_asset_path(&default, "appflowy.db").is_err());
+        assert!(resolve_asset_path(&default, "").is_err());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn resolve_asset_path_rejects_traversal_and_missing_file() {
+        let (base, default, ..) = temp_case("asset-traversal");
+        fs::write(default.join("appflowy.db"), b"secret").unwrap();
+        fs::write(default.join("assets/123.pdf"), b"x").unwrap();
+
+        // .. 组件即使以 assets/ 开头也拒绝
+        assert!(resolve_asset_path(&default, "assets/../appflowy.db").is_err());
+        assert!(resolve_asset_path(&default, "assets/sub/../../appflowy.db").is_err());
+        // 不存在的文件干净报错，不返回可供打开的空路径
+        assert!(resolve_asset_path(&default, "assets/missing.pdf").is_err());
+        // 关键不变量：库文件仍在原位
+        assert_eq!(fs::read(default.join("appflowy.db")).unwrap(), b"secret");
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
