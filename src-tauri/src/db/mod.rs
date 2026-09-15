@@ -16,8 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::Connection;
 
 pub use models::{
-    BacklinkRow, CellLoadRow, CsvCellIn, CsvFieldIn, CsvRowIn, DatabaseFieldRow, DatabaseRowRow,
-    DocRowOut, MentionRowIn, PagePropertyOut, SearchRowOut, ViewRow, WorkspaceRow,
+    BacklinkRow, CellLoadRow, CsvFieldIn, CsvRowIn, DatabaseFieldRow, DatabaseRowRow, DocRowOut,
+    MentionRowIn, PagePropertyOut, SearchRowOut, ViewRow, WorkspaceRow,
 };
 
 pub const DB_FILE: &str = "appflowy.db";

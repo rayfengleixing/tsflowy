@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection};
 
 use super::models::{
-    CellLoadRow, CsvCellIn, CsvFieldIn, CsvRowIn, DatabaseFieldRow, DatabaseRowRow,
+    CellLoadRow, CsvFieldIn, CsvRowIn, DatabaseFieldRow, DatabaseRowRow,
 };
 use super::views::data_view_id;
 use super::{dberr, now_ms};
@@ -347,6 +347,7 @@ pub fn csv_import(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::models::CsvCellIn;
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();

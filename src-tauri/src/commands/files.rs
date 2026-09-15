@@ -92,13 +92,6 @@ pub fn load_config_raw() -> AppConfig {
     .unwrap_or_default()
 }
 
-pub fn save_config_raw(cfg: &AppConfig) -> Result<(), String> {
-    let dir = app_config_dir_raw();
-    fs::create_dir_all(&dir).map_err(|e| format!("mkdir config dir: {e}"))?;
-    let s = serde_json::to_string_pretty(cfg).map_err(|e| format!("config json: {e}"))?;
-    fs::write(config_file_path(), s).map_err(|e| format!("write config: {e}"))
-}
-
 fn app_config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_config_dir()
