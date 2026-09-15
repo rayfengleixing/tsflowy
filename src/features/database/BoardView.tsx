@@ -1,13 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Plus, ExternalLink } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, ExternalLink, LayoutList } from "lucide-react";
 import { toast } from "sonner";
 import { useDatabaseStore } from "@/stores/database";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { applyFilters, sortRows } from "@/lib/database-query";
+import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { NO_GROUP, cellValueForGroup, defaultBoardField, groupRowsForBoard } from "@/lib/board-calendar";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { SelectChips } from "./editors";
+import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
 import { RowDetailPanel } from "./RowDetail";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
@@ -37,6 +46,8 @@ export function BoardView({
   const { openRowDetail, closeRowDetail } = store;
 
   const [groupFieldId, setGroupFieldId] = useState<string | null>(() => readViewConfig(view).boardFieldId ?? null);
+  // null = 未配置（沿用"主字段之后前 3 个可见字段"的默认启发式）；数组 = 用户显式勾选的字段
+  const [cardFieldIds, setCardFieldIds] = useState<string[] | null>(() => readViewConfig(view).cardFieldIds ?? null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(source.name);
@@ -70,6 +81,20 @@ export function BoardView({
   const groupField = fields.find((f) => f.id === groupFieldId) ?? null;
   const selectFields = useMemo(() => fields.filter((f) => f.field_type === "single_select"), [fields]);
 
+  const cardCandidates = useMemo(() => visibleFields.slice(1), [visibleFields]);
+  const defaultCardFieldIds = useMemo(() => cardCandidates.slice(0, 3).map((f) => f.id), [cardCandidates]);
+  const cardSubFields = useMemo(() => {
+    const ids = cardFieldIds ?? defaultCardFieldIds;
+    return ids.map((id) => cardCandidates.find((f) => f.id === id)).filter((f): f is DatabaseField => !!f);
+  }, [cardCandidates, cardFieldIds, defaultCardFieldIds]);
+
+  const toggleCardField = (id: string) => {
+    const current = cardFieldIds ?? defaultCardFieldIds;
+    const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+    setCardFieldIds(next);
+    patchViewConfig(view, { cardFieldIds: next });
+  };
+
   const displayRows = useMemo(() => {
     const filtered = applyFilters(rows, cells, filters, fields, filterMode);
     return sortRows(filtered, cells, sorts);
@@ -79,6 +104,20 @@ export function BoardView({
     if (!groupField) return [];
     return groupRowsForBoard(displayRows, cells, groupField);
   }, [groupField, displayRows, cells]);
+
+  // 搜索命中定位：折叠键作 revision，命中卡片所在列一展开就能重新定位
+  const collapsedKey = [...collapsedGroups].join("|");
+  const { scrollerRef, focusRowId } = useRowFocus(collapsedKey);
+  useEffect(() => {
+    if (!focusRowId) return;
+    const hit = groups.find((g) => g.rows.some((r) => r.id === focusRowId));
+    if (!hit || !collapsedGroups.has(hit.key)) return;
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      next.delete(hit.key);
+      return next;
+    });
+  }, [focusRowId, groups, collapsedGroups]);
 
   const commitCell = useCallback(
     async (rowId: string, fieldId: string, value: CellValue) => {
@@ -174,6 +213,31 @@ export function BoardView({
             </select>
           </div>
 
+          {/* 卡片字段配置 */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm">
+                <LayoutList className="h-3.5 w-3.5" />
+                {t("board.cardFields")}
+                <ChevronDown className="h-3 w-3" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel>{t("board.cardFieldsHint")}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {cardCandidates.map((f) => (
+                <DropdownMenuCheckboxItem
+                  key={f.id}
+                  checked={(cardFieldIds ?? defaultCardFieldIds).includes(f.id)}
+                  onSelect={(e) => e.preventDefault()}
+                  onCheckedChange={() => toggleCardField(f.id)}
+                >
+                  {f.name}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           <Button variant="ghost" size="sm" onClick={() => toggleAllCollapsed(true)}>
             {t("board.collapseAll")}
           </Button>
@@ -198,7 +262,7 @@ export function BoardView({
           )}
         </div>
       ) : (
-        <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
+        <div ref={scrollerRef} className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
           <div className="flex h-full min-w-full gap-3 p-4">
             {groups.map((group) => {
               const collapsed = collapsedGroups.has(group.key);
@@ -279,9 +343,11 @@ export function BoardView({
                           key={row.id}
                           row={row}
                           primaryField={primaryField}
-                          visibleFields={visibleFields}
+                          subFields={cardSubFields}
+                          subFieldsExplicit={cardFieldIds !== null}
                           cells={cells}
                           dragging={draggingRow === row.id}
+                          focused={focusRowId === row.id}
                           onDragStart={() => setDraggingRow(row.id)}
                           onDragEnd={() => {
                             if (draggingRow === row.id) setDraggingRow(null);
@@ -348,39 +414,32 @@ export function BoardView({
 function BoardCard(props: {
   row: { id: string; position: number };
   primaryField: DatabaseField | null;
-  visibleFields: DatabaseField[];
+  /** 卡片副信息字段：来自视图配置，未配置时由调用方给默认前三列 */
+  subFields: DatabaseField[];
+  /** subFields 是否为用户显式勾选：决定时间戳字段是否显示 */
+  subFieldsExplicit: boolean;
   cells: Record<string, Record<string, CellValue>>;
   dragging: boolean;
+  /** 搜索命中的卡片：滚动定位后短时高亮 */
+  focused: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
   onOpenDetail: () => void;
 }) {
-  const { row, primaryField, visibleFields, cells, dragging } = props;
+  const { row, primaryField, subFields, subFieldsExplicit, cells, dragging, focused } = props;
   const value = primaryField ? (cells[row.id]?.[primaryField.id] ?? null) : null;
   const title = primaryField
     ? formatCellValue(primaryField.field_type, value, parseFieldOptions(primaryField.options))
     : `行 ${row.position + 1}`;
 
-  // 副信息：单/多选 chips + 日期 + 复选框✓（取前 3 个可见字段除主键）
-  const subFields = visibleFields.slice(1, 4);
+  // 副信息：单/多选 chips + 日期 + 复选框✓ + 文本/数字，空值不占位
   const subs: { field: DatabaseField; value: CellValue }[] = subFields
     .map((f) => ({ field: f, value: cells[row.id]?.[f.id] ?? null }))
-    .filter(
-      (s) =>
-        s.field.field_type === "single_select" ||
-        s.field.field_type === "multi_select" ||
-        (s.field.field_type === "date" && s.value) ||
-        (s.field.field_type === "checkbox" && s.value === true) ||
-        (s.field.field_type === "number" && s.value !== null && s.value !== undefined) ||
-        (s.field.field_type !== "created_at" &&
-          s.field.field_type !== "last_edited_at" &&
-          s.value &&
-          String(s.value).length > 0),
-    )
-    .slice(0, 3);
+    .filter((s) => cardSubShown(s.field, s.value, subFieldsExplicit));
 
   return (
     <div
+      data-row-id={row.id}
       draggable
       onDragStart={props.onDragStart}
       onDragEnd={props.onDragEnd}
@@ -389,6 +448,7 @@ function BoardCard(props: {
         dragging
           ? "opacity-40 ring-1 ring-brand-500"
           : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 hover:shadow",
+        focused && ROW_FOCUS_CLASS,
       )}
     >
       <div className="flex items-start justify-between gap-1">
@@ -417,6 +477,13 @@ function BoardCard(props: {
       )}
     </div>
   );
+}
+
+/** 单元格是否值得占用卡片副信息位：空值不显示，未勾选的复选框不显示 */
+function cardSubShown(field: DatabaseField, value: CellValue, explicit: boolean): boolean {
+  if (field.field_type === "checkbox") return value === true;
+  if (!explicit && (field.field_type === "created_at" || field.field_type === "last_edited_at")) return false;
+  return !isCellEmpty(value);
 }
 
 function CardSub({ field, value }: { field: DatabaseField; value: CellValue }) {

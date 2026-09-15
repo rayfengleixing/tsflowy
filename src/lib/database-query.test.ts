@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  UNGROUPED,
   applyFilters,
+  canGroupBy,
   defaultOperand,
   evaluateFilter,
+  groupRowsForGrid,
   isCellEmpty,
   opsForType,
   sortRows,
   type FilterSpec,
+  type GridGroup,
 } from "./database-query";
 import type { DatabaseField, DatabaseRow } from "@/types/database";
 
@@ -173,8 +177,88 @@ describe("opsForType / defaultOperand", () => {
   });
 
   it("default operand picks first select option", () => {
-    const f = field("s", "single_select", JSON.stringify({ kind: "select", options: [{ id: "o1", name: "A", color: "blue" }] }));
+    const f = field(
+      "s",
+      "single_select",
+      JSON.stringify({ kind: "select", options: [{ id: "o1", name: "A", color: "blue" }] }),
+    );
     expect(defaultOperand(f)).toBe("o1");
     expect(defaultOperand(field("t", "text"))).toBeNull();
+  });
+});
+
+describe("canGroupBy", () => {
+  it("skips two-value checkboxes and system-maintained timestamps", () => {
+    expect(canGroupBy(field("s", "single_select"))).toBe(true);
+    expect(canGroupBy(field("t", "text"))).toBe(true);
+    expect(canGroupBy(field("c", "created_at"))).toBe(true);
+    expect(canGroupBy(field("b", "checkbox"))).toBe(false);
+    expect(canGroupBy(field("e", "last_edited_at"))).toBe(false);
+  });
+});
+
+describe("groupRowsForGrid", () => {
+  const options = JSON.stringify({
+    kind: "select",
+    options: [
+      { id: "o2", name: "进行中", color: "blue" },
+      { id: "o1", name: "待办", color: "gray" },
+    ],
+  });
+
+  const shape = (groups: GridGroup[]) => groups.map((g) => [g.key, g.label, g.rows.map((r) => r.id)]);
+
+  it("follows option definition order and keeps the empty bucket last", () => {
+    const f = field("s", "single_select", options);
+    const cells = cellsOf({ r1: { s: "o1" }, r2: { s: "o2" }, r3: { s: null } });
+    expect(shape(groupRowsForGrid([row("r1"), row("r2"), row("r3")], cells, f))).toEqual([
+      ["o2", "进行中", ["r2"]],
+      ["o1", "待办", ["r1"]],
+      [UNGROUPED, "", ["r3"]],
+    ]);
+  });
+
+  it("buckets a stale option id on its own, after the known options", () => {
+    const f = field("s", "single_select", options);
+    const cells = cellsOf({ r1: { s: "o1" }, r2: { s: "gone" } });
+    const groups = groupRowsForGrid([row("r1"), row("r2")], cells, f);
+    // 标题取原值，至少不显示成空串
+    expect(groups.map((g) => [g.key, g.label])).toEqual([
+      ["o1", "待办"],
+      ["gone", "gone"],
+    ]);
+  });
+
+  it("keeps a multi-select row in one combined bucket", () => {
+    const f = field("m", "multi_select", options);
+    const cells = cellsOf({ r1: { m: ["o1", "o2"] }, r2: { m: ["o2", "o1"] }, r3: { m: ["o1"] } });
+    const groups = groupRowsForGrid([row("r1"), row("r2"), row("r3")], cells, f);
+    // 同一组选项不管录入顺序如何都归一桶：行不会被算两次
+    expect(groups.reduce((n, g) => n + g.rows.length, 0)).toBe(3);
+    const combined = groups.find((g) => g.key === "o2|o1");
+    expect(combined?.rows.map((r) => r.id)).toEqual(["r1", "r2"]);
+    expect(combined?.label).toBe("进行中, 待办");
+    expect(groups.find((g) => g.key === "o1")?.label).toBe("待办");
+  });
+
+  it("orders numbers by value and text by locale", () => {
+    const n = field("n", "number");
+    const numCells = cellsOf({ r1: { n: 100 }, r2: { n: 20 }, r3: { n: null } });
+    expect(groupRowsForGrid([row("r1"), row("r2"), row("r3")], numCells, n).map((g) => g.key)).toEqual([
+      "20.00",
+      "100.00",
+      UNGROUPED,
+    ]);
+    const t = field("t", "text");
+    const textCells = cellsOf({ r1: { t: "b" }, r2: { t: "a" } });
+    expect(groupRowsForGrid([row("r1"), row("r2")], textCells, t).map((g) => g.label)).toEqual(["a", "b"]);
+  });
+
+  it("collapses an all-empty column into the ungrouped bucket", () => {
+    const t = field("t", "text");
+    const groups = groupRowsForGrid([row("r1")], cellsOf({ r1: { t: null } }), t);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ key: UNGROUPED, rows: [expect.objectContaining({ id: "r1" })] });
+    expect(groupRowsForGrid([], cellsOf({}), t)).toEqual([]);
   });
 });

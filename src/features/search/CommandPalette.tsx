@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { CornerDownLeft, FileSearch, Search } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useDatabaseStore } from "@/stores/database";
 import { searchApi, type SearchHit } from "@/lib/search";
 import { viewIcon } from "@/components/view-icon";
 import { t } from "@/lib/i18n";
@@ -86,6 +87,8 @@ export function CommandPalette() {
 
   const jump = (hit: SearchHit) => {
     closePalette();
+    // 单元格命中：先记下命中行，视图挂载后据此滚动定位
+    if (hit.row_id) useDatabaseStore.getState().setFocusRow(hit.row_id);
     openView(hit.view_id);
   };
 

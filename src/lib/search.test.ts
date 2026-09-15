@@ -31,6 +31,11 @@ describe("prioritizeSearchRows", () => {
     expect(out[0]).not.toHaveProperty("rank");
   });
 
+  it("keeps row_id so a cell hit can locate the row", () => {
+    const out = prioritizeSearchRows([{ ...rows[0], row_id: "r1" }], "笔记");
+    expect(out[0].row_id).toBe("r1");
+  });
+
   it("does not mutate input order for same tier when rank differs", () => {
     const two = [
       { view_id: "x", title: "aaa", icon: null, layout: "document" as const, snippet: "", rank: 3 },

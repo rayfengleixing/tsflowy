@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, FileSearch } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useDatabaseStore } from "@/stores/database";
 import { searchApi, type SearchHit } from "@/lib/search";
 import { viewIcon } from "@/components/view-icon";
 import { t } from "@/lib/i18n";
@@ -101,6 +102,8 @@ export function SearchResultsPage() {
                   key={hit.view_id}
                   className="group flex items-start gap-2.5 rounded-lg px-3 py-2.5 text-left hover:bg-neutral-200/60"
                   onClick={() => {
+                    // 单元格命中：先记下命中行，视图挂载后据此滚动定位
+                    if (hit.row_id) useDatabaseStore.getState().setFocusRow(hit.row_id);
                     openView(hit.view_id);
                     setRoute("workspace");
                   }}

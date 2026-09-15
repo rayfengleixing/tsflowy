@@ -90,8 +90,27 @@ describe("mergeViewConfig", () => {
       sorts: [{ field_id: "b", dir: "desc" as const }],
       boardFieldId: "s1",
       calendarFieldId: "d1",
+      groupFieldId: "g1",
+      aggregates: { n1: "sum" as const, b1: "checked" as const },
+      cardFieldIds: ["f2", "f3"],
     };
     expect(parseViewConfig(mergeViewConfig("{}", patch))).toEqual(patch);
+  });
+
+  it("drops unknown aggregate names and non-string card ids", () => {
+    const cfg = parseViewConfig(
+      JSON.stringify({
+        groupFieldId: "", // 空串 = 清除选择
+        aggregates: { n1: "sum", ghost: "median", "": "count" },
+        cardFieldIds: ["f2", 42, null],
+      }),
+    );
+    expect(cfg.groupFieldId).toBeUndefined();
+    expect(cfg.aggregates).toEqual({ n1: "sum" });
+    expect(cfg.cardFieldIds).toEqual(["f2"]);
+    expect(parseViewConfig(JSON.stringify({ aggregates: "sum" })).aggregates).toBeUndefined();
+    expect(parseViewConfig(JSON.stringify({ aggregates: [] })).aggregates).toBeUndefined();
+    expect(parseViewConfig(mergeViewConfig("{}", { aggregates: {} })).aggregates).toEqual({});
   });
 
   it("keeps successive patches for one view instead of clobbering", () => {

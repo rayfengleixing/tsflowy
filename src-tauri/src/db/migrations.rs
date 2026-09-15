@@ -43,6 +43,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "multi_views",
         sql: include_str!("../../../migrations/007_multi_views.sql"),
     },
+    Migration {
+        version: 8,
+        description: "database_cells_fts",
+        sql: include_str!("../../../migrations/008_database_cells_fts.sql"),
+    },
 ];
 
 pub fn ensure_migrated(conn: &rusqlite::Connection) -> Result<(), String> {
@@ -188,7 +193,17 @@ mod tests {
             .unwrap();
         assert_eq!(n, MIGRATIONS.len() as i64);
         // 关键表都存在（也证明 bundled rusqlite 支持 FTS5 trigram）
-        for t in ["workspaces", "views", "documents", "documents_fts", "page_properties", "mentions", "app_settings"] {
+        for t in [
+            "workspaces",
+            "views",
+            "documents",
+            "documents_fts",
+            "page_properties",
+            "mentions",
+            "app_settings",
+            "database_fts",
+            "database_cell_text",
+        ] {
             let exists: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type IN ('table','view') AND name = ?1",
@@ -274,16 +289,21 @@ mod tests {
         }
     }
 
+    /// 模拟存量库：建 `_sqlx_migrations` 记账表，并只应用 version 之前的迁移
+    fn apply_older_than(conn: &Connection, version: i64) {
+        create_sqlx_table(conn);
+        for m in MIGRATIONS.iter().take_while(|m| m.version < version) {
+            conn.execute_batch(m.sql).unwrap();
+            record_sqlx_migration(conn, m);
+        }
+    }
+
     /// 存量库（001–006 已应用，extra 里带着已废弃的 mode 键）升到 007：
     /// 只加列 + 清死键，不重跑建表；非法 JSON 的 extra 既不能炸迁移也不该被改写。
     #[test]
     fn migration_007_upgrades_existing_install_and_strips_stale_mode_key() {
         let conn = Connection::open_in_memory().unwrap();
-        create_sqlx_table(&conn);
-        for m in &MIGRATIONS[..MIGRATIONS.len() - 1] {
-            conn.execute_batch(m.sql).unwrap();
-            record_sqlx_migration(&conn, m);
-        }
+        apply_older_than(&conn, 7);
         conn.execute(
             "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ('w1','W',1,1)",
             [],
@@ -312,6 +332,66 @@ mod tests {
             .query_row("SELECT extra FROM views WHERE id = 'v2'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(untouched, "not json", "非法 JSON 由 json_valid 挡在清理之外");
+    }
+
+    /// 存量库（1–7 已应用，表里已有单元格数据）升到 008：
+    /// 建索引表时要回填存量行，之后的写入才由触发器接手。
+    #[test]
+    fn migration_008_backfills_existing_cells_into_fts() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_older_than(&conn, 8);
+        conn.execute(
+            "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ('w1','W',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at)
+             VALUES ('v1','w1','任务表','grid','{}',0,1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO database_fields(id, database_view_id, name, field_type, options, width, is_hidden, position)
+               VALUES ('f1','v1','状态','single_select',
+                       '{"kind":"select","options":[{"id":"opt_a","name":"待评审","color":"blue"}]}',180,0,0)"#,
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO database_rows(id, database_view_id, position, created_at, updated_at) VALUES ('r1','v1',0,1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO database_cells(row_id, field_id, value) VALUES ('r1','f1','"opt_a"')"#,
+            [],
+        )
+        .unwrap();
+
+        ensure_migrated(&conn).unwrap();
+
+        let indexed = || -> i64 {
+            conn.query_row(
+                "SELECT COUNT(*) FROM database_fts WHERE content = '待评审'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(indexed(), 1, "存量单元格要回填成选项名，而不是 id");
+
+        conn.execute(
+            "INSERT INTO database_rows(id, database_view_id, position, created_at, updated_at) VALUES ('r2','v1',1,1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO database_cells(row_id, field_id, value) VALUES ('r2','f1','"opt_a"')"#,
+            [],
+        )
+        .unwrap();
+        assert_eq!(indexed(), 2, "升级后的新单元格由触发器入索引");
     }
 
     #[test]

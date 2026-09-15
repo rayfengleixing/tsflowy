@@ -1,26 +1,40 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { Download, ExternalLink, FileUp, Filter, GripVertical, Plus, Trash2 } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Download,
+  ExternalLink,
+  FileUp,
+  Filter,
+  GripVertical,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import type { CellValue, DatabaseField } from "@/types/database";
+import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { useDatabaseStore } from "@/stores/database";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { viewApi, newId } from "@/lib/db";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
-import { applyFilters, sortRows, type SortSpec } from "@/lib/database-query";
+import { UNGROUPED, applyFilters, canGroupBy, groupRowsForGrid, sortRows, type SortSpec } from "@/lib/database-query";
+import { aggregateValue, normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
 import { buildCsvExport, csvValueToCell, parseCsv, planImport } from "@/lib/csv";
 import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
 import { NewFieldDialog } from "./NewFieldDialog";
 import { FilterBar } from "./FilterBar";
+import { AggregateMenu } from "./AggregateMenu";
+import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
 import { CellEditorSlot, SelectChips } from "./editors";
 import { RowDetailPanel } from "./RowDetail";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
+import { patchViewConfig, readViewConfig } from "@/lib/view-config";
 import type { View } from "@/types/models";
 
 /** Grid 数据库视图（说明书 10-M4）：表头 32px / 行 32px / 单元格聚焦蓝框（6.6 节） */
@@ -49,6 +63,11 @@ export function GridView({
   const [filterOpen, setFilterOpen] = useState(false);
   const [draggingField, setDraggingField] = useState<string | null>(null);
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
+  const [groupFieldId, setGroupFieldId] = useState<string | null>(() => readViewConfig(view).groupFieldId ?? null);
+  const [aggregates, setAggregates] = useState<Record<string, AggregateFn>>(
+    () => readViewConfig(view).aggregates ?? {},
+  );
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     store.load(view).catch((e) => logger.error("grid.load", e));
@@ -88,6 +107,49 @@ export function GridView({
     const filtered = applyFilters(rows, cells, filters, fields, filterMode);
     return sortRows(filtered, cells, sorts);
   }, [rows, cells, filters, fields, filterMode, sorts]);
+
+  // 分组字段被删除或改成不可分组的类型时，自动回落成不分组（配置留着，改回来还在）
+  const groupField = useMemo(
+    () => fields.find((f) => f.id === groupFieldId && canGroupBy(f)) ?? null,
+    [fields, groupFieldId],
+  );
+  const groupableFields = useMemo(() => visibleFields.filter(canGroupBy), [visibleFields]);
+  const groups = useMemo(
+    () => (groupField ? groupRowsForGrid(displayRows, cells, groupField) : null),
+    [groupField, displayRows, cells],
+  );
+
+  // 搜索命中定位：折叠键作 revision，命中行所在分组一展开就能重新定位
+  const collapsedKey = groups ? [...collapsedGroups].join("|") : "";
+  const { scrollerRef, focusRowId } = useRowFocus(collapsedKey);
+  useEffect(() => {
+    if (!focusRowId || !groups) return;
+    const hit = groups.find((g) => g.rows.some((r) => r.id === focusRowId));
+    if (!hit || !collapsedGroups.has(hit.key)) return;
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      next.delete(hit.key);
+      return next;
+    });
+  }, [focusRowId, groups, collapsedGroups]);
+
+  // 字段类型可能已经变了：历史选择不在候选里就回落成计数
+  const aggregateOf = (field: DatabaseField) => normalizeAggregate(field.field_type, aggregates[field.id]);
+  const hasAggregates = visibleFields.some((f) => aggregateOf(f));
+
+  const changeGroupField = (id: string | null) => {
+    setGroupFieldId(id);
+    setCollapsedGroups(new Set());
+    patchViewConfig(view, { groupFieldId: id ?? "" });
+  };
+
+  const changeAggregate = (fieldId: string, fn: AggregateFn | undefined) => {
+    const next: Record<string, AggregateFn> = {};
+    for (const [id, value] of Object.entries(aggregates)) if (id !== fieldId) next[id] = value;
+    if (fn) next[fieldId] = fn;
+    setAggregates(next);
+    patchViewConfig(view, { aggregates: next });
+  };
 
   const commitCell = useCallback(
     async (rowId: string, fieldId: string, value: CellValue) => {
@@ -217,6 +279,144 @@ export function GridView({
     }
   };
 
+  // 单行渲染：不分组时顺序铺开，分组时按组铺开（组内顺序沿用当前视图排序）
+  const renderRow = (row: DatabaseRow) => (
+    <tr
+      key={row.id}
+      data-row-id={row.id}
+      draggable
+      onDragStart={() => setDraggingRow(row.id)}
+      onDragEnd={() => setDraggingRow(null)}
+      onDragOver={(e) => {
+        if (draggingRow && draggingRow !== row.id) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        onRowDrop(row.id);
+      }}
+      className={cn(
+        "group/row hover:bg-neutral-100 dark:hover:bg-neutral-800/60",
+        draggingRow === row.id && "opacity-40",
+        focusRowId === row.id && ROW_FOCUS_CLASS,
+      )}
+    >
+      <td className="relative border-b border-r border-neutral-200 px-2 text-center text-[11px] text-neutral-400 dark:border-neutral-700 dark:text-neutral-500">
+        <span className="flex items-center justify-center gap-1">
+          <GripVertical className="h-3 w-3 cursor-grab text-neutral-200 group-hover/row:text-neutral-400 dark:text-neutral-700 dark:group-hover/row:text-neutral-500" />
+          {row.position + 1}
+        </span>
+        <button
+          className="absolute right-0.5 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-neutral-400 hover:bg-red-100 hover:text-red-500 group-hover/row:flex dark:hover:bg-red-500/10"
+          title={t("row.delete")}
+          onClick={() => void store.removeRow(row.id)}
+        >
+          <Trash2 className="h-3 w-3" />
+        </button>
+      </td>
+      {visibleFields.map((field) => {
+        const isPrimary = field.id === primaryField?.id;
+        const isEditing = editing?.rowId === row.id && editing.fieldId === field.id;
+        return (
+          <td
+            key={field.id}
+            className={cn(
+              "relative h-8 border-b border-r border-neutral-200 p-0 align-middle dark:border-neutral-700",
+              isEditing && "ring-1 ring-inset ring-brand-500 dark:ring-brand-500",
+              isPrimary && "cursor-pointer",
+            )}
+            onClick={() => {
+              if (isPrimary) {
+                // 名称列：单击编辑值（编辑框后的"打开"图标/双击打开所属页面）
+                setEditing({ rowId: row.id, fieldId: field.id });
+                return;
+              }
+              if (isReadonlyType(field.field_type) || isEditing) return;
+              if (field.field_type === "checkbox") {
+                // 复选框：单击直接切换勾选
+                void commitCell(row.id, field.id, cells[row.id]?.[field.id] !== true);
+                return;
+              }
+              setEditing({ rowId: row.id, fieldId: field.id });
+            }}
+          >
+            {isEditing ? (
+              <div className="flex h-full items-center pr-1">
+                <div className="min-w-0 flex-1">
+                  <CellEditorSlot
+                    field={field}
+                    value={cells[row.id]?.[field.id] ?? null}
+                    onCommit={(v) => void commitCell(row.id, field.id, v)}
+                    onCancel={() => setEditing(null)}
+                    onAddOption={(name) => {
+                      void store.addSelectOption(field.id, name);
+                      return null;
+                    }}
+                    onDeleteOption={(optId) => void store.removeSelectOption(field.id, optId)}
+                  />
+                </div>
+                {isPrimary && (
+                  <button
+                    type="button"
+                    className="ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-brand-600"
+                    title={t("row.openDetail")}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditing(null);
+                      void openRowDetail(row, source);
+                    }}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            ) : (
+              <CellDisplay
+                field={field}
+                value={cells[row.id]?.[field.id] ?? null}
+                primary={isPrimary}
+                onChipRemove={(newVal) => void store.setCell(row.id, field.id, newVal)}
+                onOpenRowDetail={() => void openRowDetail(row, source)}
+              />
+            )}
+          </td>
+        );
+      })}
+      <td className="border-b border-neutral-200 dark:border-neutral-700" />
+    </tr>
+  );
+
+  const toggleGroup = (key: string) => {
+    const next = new Set(collapsedGroups);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setCollapsedGroups(next);
+  };
+
+  /** 分组小计行：只铺已配置汇总的列，其余列留空 */
+  const renderSubtotal = (groupRows: DatabaseRow[]) => {
+    const rowIds = groupRows.map((r) => r.id);
+    return (
+      <tr className="bg-neutral-50/80 dark:bg-neutral-900/40">
+        <td className="border-b border-r border-neutral-200 px-1 text-right text-[11px] text-neutral-400 dark:border-neutral-700">
+          {t("grid.subtotal")}
+        </td>
+        {visibleFields.map((field) => {
+          const fn = aggregateOf(field);
+          return (
+            <td
+              key={field.id}
+              className="h-7 border-b border-r border-neutral-200 px-2 align-middle text-[11px] text-neutral-600 dark:border-neutral-700 dark:text-neutral-300"
+            >
+              {fn ? aggregateValue(fn, field, rowIds, cells) : null}
+            </td>
+          );
+        })}
+        <td className="border-b border-neutral-200 dark:border-neutral-700" />
+      </tr>
+    );
+  };
+
   if (loading && fields.length === 0) {
     return <div className="flex h-full items-center justify-center text-sm text-neutral-500">{t("app.loading")}</div>;
   }
@@ -253,6 +453,24 @@ export function GridView({
           </h1>
         )}
         <div className="flex shrink-0 items-center gap-1">
+          {/* 分组字段切换 */}
+          {groupableFields.length > 0 && (
+            <div className="flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700">
+              <span className="text-neutral-500">{t("grid.groupBy")}:</span>
+              <select
+                className="bg-transparent text-xs outline-none"
+                value={groupFieldId ?? ""}
+                onChange={(e) => changeGroupField(e.target.value || null)}
+              >
+                <option value="">{t("grid.noGroup")}</option>
+                {groupableFields.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -288,7 +506,7 @@ export function GridView({
       )}
 
       {/* 表格（横向滚动） */}
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto">
         <table ref={tableRef} className="border-separate border-spacing-0">
           <colgroup>
             <col style={{ width: 44 }} />
@@ -397,109 +615,38 @@ export function GridView({
             </tr>
           </thead>
           <tbody>
-            {displayRows.map((row) => (
-              <tr
-                key={row.id}
-                draggable
-                onDragStart={() => setDraggingRow(row.id)}
-                onDragEnd={() => setDraggingRow(null)}
-                onDragOver={(e) => {
-                  if (draggingRow && draggingRow !== row.id) e.preventDefault();
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  onRowDrop(row.id);
-                }}
-                className={cn(
-                  "group/row hover:bg-neutral-100 dark:hover:bg-neutral-800/60",
-                  draggingRow === row.id && "opacity-40",
-                )}
-              >
-                <td className="relative border-b border-r border-neutral-200 px-2 text-center text-[11px] text-neutral-400 dark:border-neutral-700 dark:text-neutral-500">
-                  <span className="flex items-center justify-center gap-1">
-                    <GripVertical className="h-3 w-3 cursor-grab text-neutral-200 group-hover/row:text-neutral-400 dark:text-neutral-700 dark:group-hover/row:text-neutral-500" />
-                    {row.position + 1}
-                  </span>
-                  <button
-                    className="absolute right-0.5 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-neutral-400 hover:bg-red-100 hover:text-red-500 group-hover/row:flex dark:hover:bg-red-500/10"
-                    title={t("row.delete")}
-                    onClick={() => void store.removeRow(row.id)}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                </td>
-                {visibleFields.map((field) => {
-                  const isPrimary = field.id === primaryField?.id;
-                  const isEditing = editing?.rowId === row.id && editing.fieldId === field.id;
+            {groups
+              ? groups.map((group) => {
+                  const collapsed = collapsedGroups.has(group.key);
                   return (
-                    <td
-                      key={field.id}
-                      className={cn(
-                        "relative h-8 border-b border-r border-neutral-200 p-0 align-middle dark:border-neutral-700",
-                        isEditing && "ring-1 ring-inset ring-brand-500 dark:ring-brand-500",
-                        isPrimary && "cursor-pointer",
-                      )}
-                      onClick={() => {
-                        if (isPrimary) {
-                          // 名称列：单击编辑值（编辑框后的"打开"图标/双击打开所属页面）
-                          setEditing({ rowId: row.id, fieldId: field.id });
-                          return;
-                        }
-                        if (isReadonlyType(field.field_type) || isEditing) return;
-                        if (field.field_type === "checkbox") {
-                          // 复选框：单击直接切换勾选
-                          void commitCell(row.id, field.id, cells[row.id]?.[field.id] !== true);
-                          return;
-                        }
-                        setEditing({ rowId: row.id, fieldId: field.id });
-                      }}
-                    >
-                      {isEditing ? (
-                        <div className="flex h-full items-center pr-1">
-                          <div className="min-w-0 flex-1">
-                            <CellEditorSlot
-                              field={field}
-                              value={cells[row.id]?.[field.id] ?? null}
-                              onCommit={(v) => void commitCell(row.id, field.id, v)}
-                              onCancel={() => setEditing(null)}
-                              onAddOption={(name) => {
-                                void store.addSelectOption(field.id, name);
-                                return null;
-                              }}
-                              onDeleteOption={(optId) => void store.removeSelectOption(field.id, optId)}
-                            />
-                          </div>
-                          {isPrimary && (
-                            <button
-                              type="button"
-                              className="ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-brand-600"
-                              title={t("row.openDetail")}
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setEditing(null);
-                                void openRowDetail(row, source);
-                              }}
-                            >
-                              <ExternalLink className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        <CellDisplay
-                          field={field}
-                          value={cells[row.id]?.[field.id] ?? null}
-                          primary={isPrimary}
-                          onChipRemove={(newVal) => void store.setCell(row.id, field.id, newVal)}
-                          onOpenRowDetail={() => void openRowDetail(row, source)}
-                        />
-                      )}
-                    </td>
+                    <Fragment key={group.key}>
+                      <tr>
+                        <td
+                          colSpan={visibleFields.length + 2}
+                          className="border-b border-neutral-200 bg-neutral-50 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900/40"
+                        >
+                          <button
+                            className="flex items-center gap-1.5 text-[12px] font-medium text-neutral-700 dark:text-neutral-200"
+                            onClick={() => toggleGroup(group.key)}
+                          >
+                            {collapsed ? (
+                              <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                            ) : (
+                              <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                            )}
+                            <span className="truncate">
+                              {group.key === UNGROUPED || !group.label ? t("grid.ungrouped") : group.label}
+                            </span>
+                            <span className="text-[11px] font-normal text-neutral-400">{group.rows.length}</span>
+                          </button>
+                        </td>
+                      </tr>
+                      {!collapsed && group.rows.map(renderRow)}
+                      {!collapsed && hasAggregates && renderSubtotal(group.rows)}
+                    </Fragment>
                   );
-                })}
-                <td className="border-b border-neutral-200 dark:border-neutral-700" />
-              </tr>
-            ))}
+                })
+              : displayRows.map(renderRow)}
             <tr>
               {/* 新建行：跨整行底部，避免无字段时挤在窄列里 */}
               <td
@@ -517,6 +664,31 @@ export function GridView({
               </td>
             </tr>
           </tbody>
+          {/* 底部汇总行：每列一个可点的汇总函数，就地显示结果 */}
+          <tfoot>
+            <tr>
+              <td className="border-t border-r border-neutral-200 px-1 pt-1 text-right text-[11px] text-neutral-400 dark:border-neutral-700">
+                {t("grid.total")}
+              </td>
+              {visibleFields.map((field, index) => (
+                <td
+                  key={field.id}
+                  className="h-8 border-t border-r border-neutral-200 p-0 align-middle dark:border-neutral-700"
+                >
+                  {(hasAggregates || index === 0) && (
+                    <AggregateMenu
+                      field={field}
+                      fn={aggregateOf(field)}
+                      rowIds={displayRows.map((r) => r.id)}
+                      cells={cells}
+                      onPick={(fn) => changeAggregate(field.id, fn)}
+                    />
+                  )}
+                </td>
+              ))}
+              <td className="border-t border-neutral-200 dark:border-neutral-700" />
+            </tr>
+          </tfoot>
         </table>
       </div>
 

@@ -57,6 +57,11 @@ interface DatabaseState {
   /** host：宿主页面视图（派生视图不带子节点，行详情文档一律挂在宿主下） */
   openRowDetail: (row: DatabaseRow, host: View) => Promise<void>;
   closeRowDetail: () => void;
+
+  /** 搜索命中的行：表格/看板/日历据此滚动定位并短时高亮（瞬时状态，不落库） */
+  focusRowId: string | null;
+  setFocusRow: (rowId: string) => void;
+  clearFocusRow: () => void;
 }
 
 export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
@@ -70,6 +75,7 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
   filters: [],
   filterMode: "and",
   rowDetail: null,
+  focusRowId: null,
 
   setSorts: (sorts) => {
     set({ sorts });
@@ -276,4 +282,7 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
   },
 
   closeRowDetail: () => set({ rowDetail: null }),
+
+  setFocusRow: (rowId) => set({ focusRowId: rowId }),
+  clearFocusRow: () => set({ focusRowId: null }),
 }));

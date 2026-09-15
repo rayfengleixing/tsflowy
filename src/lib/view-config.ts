@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import type { FilterMode, FilterSpec, SortSpec } from "@/lib/database-query";
+import { isAggregateFn, type AggregateFn } from "@/lib/database-aggregate";
 import { registerCloseFlush } from "@/lib/close-flush";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
@@ -17,6 +18,12 @@ export interface ViewConfig {
   sorts?: SortSpec[];
   boardFieldId?: string;
   calendarFieldId?: string;
+  /** 表格分组字段（Grid 独有；看板分组字段是 boardFieldId） */
+  groupFieldId?: string;
+  /** 列汇总：field_id → 汇总函数；缺省即该列不显示汇总 */
+  aggregates?: Record<string, AggregateFn>;
+  /** 看板卡片上额外展示的字段 id（按此顺序）；未配置沿用"前 3 个可见字段"启发式，空数组=只显示标题 */
+  cardFieldIds?: string[];
   activeViewId?: string;
 }
 
@@ -39,6 +46,18 @@ const isSortSpec = (v: unknown): boolean =>
 const specArray = <T>(v: unknown, keep: (item: unknown) => boolean = isFieldSpec): T[] | undefined =>
   Array.isArray(v) ? (v.filter(keep) as T[]) : undefined;
 
+const isString = (v: unknown): v is string => typeof v === "string";
+
+/** 列汇总：只收 field_id → 已知函数名，其余条目整条丢弃 */
+function parseAggregates(v: unknown): Record<string, AggregateFn> | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const out: Record<string, AggregateFn> = {};
+  for (const [fieldId, fn] of Object.entries(v)) {
+    if (fieldId && isAggregateFn(fn)) out[fieldId] = fn;
+  }
+  return out;
+}
+
 /** 纯函数：extra 文本 → 已校验的配置；未知/畸形键忽略 */
 export function parseViewConfig(text: string | null | undefined): ViewConfig {
   const o = asObject(text);
@@ -51,6 +70,11 @@ export function parseViewConfig(text: string | null | undefined): ViewConfig {
   // 空串是"清除字段选择"的哨兵写法，读出时归一为未配置
   if (typeof o.boardFieldId === "string" && o.boardFieldId) out.boardFieldId = o.boardFieldId;
   if (typeof o.calendarFieldId === "string" && o.calendarFieldId) out.calendarFieldId = o.calendarFieldId;
+  if (typeof o.groupFieldId === "string" && o.groupFieldId) out.groupFieldId = o.groupFieldId;
+  const aggregates = parseAggregates(o.aggregates);
+  if (aggregates) out.aggregates = aggregates;
+  const cardFieldIds = specArray<string>(o.cardFieldIds, isString);
+  if (cardFieldIds) out.cardFieldIds = cardFieldIds;
   if (typeof o.activeViewId === "string" && o.activeViewId) out.activeViewId = o.activeViewId;
   return out;
 }
@@ -63,6 +87,9 @@ export function mergeViewConfig(text: string | null | undefined, patch: Partial<
   if (patch.sorts !== undefined) next.sorts = patch.sorts;
   if (patch.boardFieldId !== undefined) next.boardFieldId = patch.boardFieldId;
   if (patch.calendarFieldId !== undefined) next.calendarFieldId = patch.calendarFieldId;
+  if (patch.groupFieldId !== undefined) next.groupFieldId = patch.groupFieldId;
+  if (patch.aggregates !== undefined) next.aggregates = patch.aggregates;
+  if (patch.cardFieldIds !== undefined) next.cardFieldIds = patch.cardFieldIds;
   if (patch.activeViewId !== undefined) next.activeViewId = patch.activeViewId;
   return JSON.stringify(next);
 }

@@ -13,6 +13,8 @@ export interface SearchHit {
   layout: LayoutType;
   /** 正文命中片段（含 <em> 标记），标题命中或无名片段时为空串 */
   snippet: string;
+  /** 命中的数据库行 id：仅单元格命中有值，用来在表格里定位那一行 */
+  row_id?: string | null;
 }
 
 interface SearchRow extends SearchHit {

@@ -1,4 +1,4 @@
-import type { CellValue, DatabaseField, DatabaseRow, FieldType } from "@/types/database";
+import type { CellValue, DatabaseField, DatabaseRow, FieldType, SelectOption } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { formatCellValue, parseFieldOptions } from "./database-values";
 
@@ -81,12 +81,7 @@ export function sortRows(
  * select 字段的 equals 用选项 id；multi_select 的 contains 判断数组是否含选项 id；
  * checkbox 用 checked/unchecked；relation 的 contains 判断数组是否含对端行 id。
  */
-export function evaluateFilter(
-  fieldType: FieldType,
-  value: CellValue,
-  op: FilterOp,
-  operand: CellValue,
-): boolean {
+export function evaluateFilter(fieldType: FieldType, value: CellValue, op: FilterOp, operand: CellValue): boolean {
   const empty = isCellEmpty(value);
   switch (op) {
     case "is_empty":
@@ -185,3 +180,92 @@ export function fieldSortKey(field: DatabaseField, value: CellValue): string {
 }
 
 export { isReadonlyType };
+
+// ---------- 表格分组（小计与列汇总见 database-aggregate.ts） ----------
+
+/** 空值桶的 key；label 留空由 UI 用 i18n 文案兜底 */
+export const UNGROUPED = "__ungrouped__";
+
+export interface GridGroup {
+  key: string;
+  /** 分组标题（选项名或格式化后的值）；空值桶为空串 */
+  label: string;
+  rows: DatabaseRow[];
+}
+
+/** 复选框只有两个桶没有分组价值，last_edited_at 每行都在变是噪音 —— 都不给分组 */
+export function canGroupBy(field: DatabaseField): boolean {
+  if (field.field_type === "checkbox" || isReadonlyType(field.field_type)) return false;
+  return ["text", "number", "date", "single_select", "multi_select", "url", "phone", "email", "created_at"].includes(
+    field.field_type,
+  );
+}
+
+interface Bucket extends GridGroup {
+  optionIndex: number;
+  numeric: number | null;
+}
+
+function bucketOf(field: DatabaseField, options: SelectOption[], value: CellValue): Bucket {
+  // 桶按"显示出来的值"分：created_at 因此按天聚拢，格式相同的两个数字同属一桶
+  const label = formatCellValue(field.field_type, value, parseFieldOptions(field.options));
+  const base = { label, rows: [] as DatabaseRow[], optionIndex: 0, numeric: null as number | null };
+  if (field.field_type === "single_select" && typeof value === "string") {
+    const idx = options.findIndex((o) => o.id === value);
+    // 选项被删掉后残留的值自成一组，排在已知选项之后、未分组之前
+    return {
+      ...base,
+      key: value,
+      label: idx === -1 ? value : options[idx].name,
+      optionIndex: idx === -1 ? options.length : idx,
+    };
+  }
+  if (field.field_type === "multi_select" && Array.isArray(value)) {
+    // 一行的多个选项合成一个桶（按选项定义顺序），保证一行只被计一次
+    const known = options.filter((o) => value.includes(o.id));
+    const rest = value.filter((id) => !options.some((o) => o.id === id));
+    const ids = [...known.map((o) => o.id), ...rest];
+    const names = [...known.map((o) => o.name), ...rest];
+    return { ...base, key: ids.join("|"), label: names.join(", "), optionIndex: known.length ? 0 : options.length };
+  }
+  const n = typeof value === "number" ? value : Number(value);
+  return { ...base, key: label, numeric: Number.isFinite(n) ? n : null };
+}
+
+/**
+ * 按字段把行分桶。桶内顺序沿用传入顺序（视图排序已生效），
+ * 桶顺序：单选/多选按选项定义顺序 → 数字按大小 / 日期按时间 → 文本字典序，空值桶恒最后。
+ */
+export function groupRowsForGrid(
+  rows: DatabaseRow[],
+  cells: Record<string, Record<string, CellValue>>,
+  field: DatabaseField,
+): GridGroup[] {
+  const parsed = parseFieldOptions(field.options);
+  const options = parsed.kind === "select" ? parsed.options : [];
+  const buckets = new Map<string, Bucket>();
+  const ungrouped: DatabaseRow[] = [];
+  for (const row of rows) {
+    const value = cells[row.id]?.[field.id] ?? null;
+    if (isCellEmpty(value)) {
+      ungrouped.push(row);
+      continue;
+    }
+    const computed = bucketOf(field, options, value);
+    let bucket = buckets.get(computed.key);
+    if (!bucket) {
+      bucket = computed;
+      buckets.set(computed.key, bucket);
+    }
+    bucket.rows.push(row);
+  }
+  const groups: GridGroup[] = [...buckets.values()]
+    .sort((a, b) => {
+      if (a.optionIndex !== b.optionIndex) return a.optionIndex - b.optionIndex;
+      if (a.numeric !== null && b.numeric !== null) return a.numeric - b.numeric;
+      return a.label.localeCompare(b.label);
+    })
+    .map(({ key, label, rows: grouped }) => ({ key, label, rows: grouped }));
+  if (ungrouped.length > 0) groups.push({ key: UNGROUPED, label: "", rows: ungrouped });
+  return groups;
+}

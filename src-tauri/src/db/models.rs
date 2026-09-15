@@ -124,6 +124,8 @@ pub struct SearchRowOut {
     pub layout: String,
     /// 正文命中片段（含 <em> 标记）；标题 LIKE 兜底行为空串
     pub snippet: String,
+    /// 命中的数据库行 id：只有单元格命中才有，用来在表格里定位/高亮那一行
+    pub row_id: Option<String>,
     /// bm25 分（越小越相关）；兜底行固定 1e9
     pub rank: f64,
 }

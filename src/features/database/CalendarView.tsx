@@ -4,10 +4,11 @@ import { toast } from "sonner";
 import { useDatabaseStore } from "@/stores/database";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { applyFilters, sortRows } from "@/lib/database-query";
-import { buildCalendarMonth, cellValueForDate, defaultCalendarField } from "@/lib/board-calendar";
+import { buildCalendarMonth, cellValueForDate, defaultCalendarField, rowDateKey } from "@/lib/board-calendar";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { Button } from "@/components/ui/button";
 import { SelectChips } from "./editors";
+import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
 import { RowDetailPanel } from "./RowDetail";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
@@ -88,6 +89,21 @@ export function CalendarView({
     if (!dateField) return null;
     return buildCalendarMonth(year, month, displayRows, cells, dateField.id);
   }, [dateField, year, month, displayRows, cells]);
+
+  // 搜索命中定位：命中行的日期不在当前月份时先翻过去，翻完再由 useRowFocus 滚动
+  const { scrollerRef, focusRowId } = useRowFocus(`${year}-${month}`);
+  useEffect(() => {
+    if (!focusRowId || !dateField) return;
+    const row = rows.find((r) => r.id === focusRowId);
+    if (!row) return;
+    const key = rowDateKey(row, cells, dateField.id);
+    if (!key) return;
+    const hitYear = Number(key.slice(0, 4));
+    const hitMonth = Number(key.slice(5, 7));
+    if (hitYear === year && hitMonth === month) return;
+    setYear(hitYear);
+    setMonth(hitMonth);
+  }, [focusRowId, rows, cells, dateField, year, month]);
 
   const addRowAtDate = async (dateKey: string) => {
     if (!dateField) return;
@@ -222,7 +238,7 @@ export function CalendarView({
           )}
         </div>
       ) : (
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto">
           <div className="flex h-full min-h-full flex-col">
             {/* 周标题行 */}
             <div className="grid grid-cols-7 border-b border-neutral-200 bg-neutral-100/60 text-[11px] text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800/40 dark:text-neutral-400">
@@ -317,6 +333,7 @@ export function CalendarView({
                           visibleFields={visibleFields}
                           cells={cells}
                           dragging={draggingRow === row.id}
+                          focused={focusRowId === row.id}
                           onDragStart={() => setDraggingRow(row.id)}
                           onDragEnd={() => {
                             if (draggingRow === row.id) setDraggingRow(null);
@@ -358,11 +375,13 @@ function CalCard(props: {
   visibleFields: DatabaseField[];
   cells: Record<string, Record<string, CellValue>>;
   dragging: boolean;
+  /** 搜索命中的卡片：滚动定位后短时高亮 */
+  focused: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
   onOpenDetail: () => void;
 }) {
-  const { row, primaryField, visibleFields, cells, dragging } = props;
+  const { row, primaryField, visibleFields, cells, dragging, focused } = props;
   const value = primaryField ? (cells[row.id]?.[primaryField.id] ?? null) : null;
   const title = primaryField
     ? formatCellValue(primaryField.field_type, value, parseFieldOptions(primaryField.options))
@@ -382,6 +401,7 @@ function CalCard(props: {
 
   return (
     <div
+      data-row-id={row.id}
       draggable
       onDragStart={props.onDragStart}
       onDragEnd={props.onDragEnd}
@@ -390,6 +410,7 @@ function CalCard(props: {
         dragging
           ? "opacity-40 ring-1 ring-brand-500"
           : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 hover:shadow-sm",
+        focused && ROW_FOCUS_CLASS,
       )}
     >
       <div className="flex items-center justify-between gap-0.5 px-1.5 py-1">
