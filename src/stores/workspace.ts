@@ -2,10 +2,12 @@ import { create } from "zustand";
 import type { LayoutType, View, ViewNode, Workspace } from "@/types/models";
 import { viewApi, workspaceApi } from "@/lib/db";
 import { databaseApi } from "@/lib/database";
+import { documentApi } from "@/lib/documents";
 import { newSelectOption } from "@/lib/database-values";
 import { buildTree, flattenTree } from "@/lib/tree";
 import { useSettingsStore } from "./settings";
 import { logger } from "@/lib/logger";
+import { buildWelcomeDoc, welcomeDocTitle } from "@/lib/welcome-doc";
 
 export type Route = "workspace" | "trash" | "search" | "settings";
 
@@ -270,16 +272,17 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
         try {
           let workspaces = await workspaceApi.list();
           if (workspaces.length === 0) {
-            // 首次启动种子数据：默认空间 + 欢迎文档
+            // 首次启动种子数据：默认空间 + 欢迎文档（内容为全部功能的示例与使用说明）
             const lang = useSettingsStore.getState().lang;
             const wsName = lang === "zh-CN" ? "我的工作区" : "My Workspace";
             const ws = await workspaceApi.create(wsName);
-            await viewApi.create({
+            const welcome = await viewApi.create({
               workspace_id: ws.id,
               parent_id: null,
-              name: lang === "zh-CN" ? "欢迎使用 AppFlowy TS" : "Welcome to AppFlowy TS",
+              name: welcomeDocTitle(lang),
               layout: "document",
             });
+            await documentApi.save(welcome.id, JSON.stringify(buildWelcomeDoc(lang)));
             workspaces = await workspaceApi.list();
           }
           let current = await viewApi.getSetting("last_workspace_id");
