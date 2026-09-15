@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { Calendar, LayoutGrid, Plus, Table2, X } from "lucide-react";
 import { toast } from "sonner";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { viewApi } from "@/lib/db";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
@@ -41,7 +47,6 @@ export function ViewChips({
 }) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const [menuOpen, setMenuOpen] = useState(false);
 
   const commitRename = async (view: View) => {
     setRenaming(null);
@@ -72,7 +77,6 @@ export function ViewChips({
   };
 
   const create = async (layout: DbLayout) => {
-    setMenuOpen(false);
     try {
       const view = await viewApi.create({
         workspace_id: source.workspace_id,
@@ -141,32 +145,26 @@ export function ViewChips({
           </div>
         );
       })}
-      <div className="relative">
-        <button
-          className="flex h-6 w-6 items-center justify-center text-neutral-500 hover:bg-neutral-100"
-          title={t("dbView.new")}
-          onClick={() => setMenuOpen((v) => !v)}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-        {menuOpen && (
-          <>
-            <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-            <div className="absolute right-0 top-7 z-20 w-32 rounded-md border border-neutral-200 bg-white py-1 shadow-md">
-              {DB_LAYOUTS.map((layout) => (
-                <button
-                  key={layout}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-neutral-700 hover:bg-neutral-100"
-                  onClick={() => void create(layout)}
-                >
-                  {LAYOUT_ICON[layout]}
-                  {layoutLabel(layout)}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-      </div>
+      {/* 新建视图：菜单必须 portal 到 body（Radix DropdownMenu），
+          此前渲染在 overflow-x-auto 标签栏内被裁剪，看起来像按钮无响应 */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            className="flex h-6 w-6 shrink-0 items-center justify-center text-neutral-500 hover:bg-neutral-100"
+            title={t("dbView.new")}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-32">
+          {DB_LAYOUTS.map((layout) => (
+            <DropdownMenuItem key={layout} className="gap-2 text-xs" onSelect={() => void create(layout)}>
+              {LAYOUT_ICON[layout]}
+              {layoutLabel(layout)}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

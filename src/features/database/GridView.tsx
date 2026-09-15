@@ -664,17 +664,12 @@ export function GridView({
               </td>
             </tr>
           </tbody>
-          {/* 底部汇总行：每列一个可点的汇总函数，就地显示结果 */}
+          {/* 底部汇总行：每列一个可点的汇总函数，就地显示结果（无边框，与数据区视觉分离） */}
           <tfoot>
             <tr>
-              <td className="border-t border-r border-neutral-200 px-1 pt-1 text-right text-[11px] text-neutral-400 dark:border-neutral-700">
-                {t("grid.total")}
-              </td>
+              <td className="px-1 pt-1 text-right text-[11px] text-neutral-400">{t("grid.total")}</td>
               {visibleFields.map((field, index) => (
-                <td
-                  key={field.id}
-                  className="h-8 border-t border-r border-neutral-200 p-0 align-middle dark:border-neutral-700"
-                >
+                <td key={field.id} className="h-8 p-0 align-middle">
                   {(hasAggregates || index === 0) && (
                     <AggregateMenu
                       field={field}
@@ -686,7 +681,7 @@ export function GridView({
                   )}
                 </td>
               ))}
-              <td className="border-t border-neutral-200 dark:border-neutral-700" />
+              <td />
             </tr>
           </tfoot>
         </table>

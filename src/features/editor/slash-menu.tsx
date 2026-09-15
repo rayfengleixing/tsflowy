@@ -10,7 +10,6 @@ import {
   CheckSquare,
   ChevronDown,
   Code2,
-  Columns3,
   File as FileIcon,
   FunctionSquare,
   Heading1,
@@ -199,57 +198,6 @@ export const slashItems: SlashItem[] = [
     key: "emoji",
     icon: <Smile className="h-4 w-4" />,
     run: (e) => window.dispatchEvent(new CustomEvent(INSERT_EMOJI_EVENT, { detail: { editor: e } })),
-  },
-  {
-    key: "columns2",
-    icon: <Columns3 className="h-4 w-4" />,
-    run: (e) =>
-      e
-        .chain()
-        .focus()
-        .insertContent({
-          type: "columns",
-          content: [
-            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
-            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
-          ],
-        })
-        .run(),
-  },
-  {
-    key: "columns3",
-    icon: <Columns3 className="h-4 w-4" />,
-    run: (e) =>
-      e
-        .chain()
-        .focus()
-        .insertContent({
-          type: "columns",
-          content: [
-            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
-            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
-            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
-          ],
-        })
-        .run(),
-  },
-  {
-    key: "columns4",
-    icon: <Columns3 className="h-4 w-4" />,
-    run: (e) =>
-      e
-        .chain()
-        .focus()
-        .insertContent({
-          type: "columns",
-          content: [
-            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
-            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
-            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
-            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
-          ],
-        })
-        .run(),
   },
   {
     key: "imageGallery",

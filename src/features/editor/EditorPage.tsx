@@ -420,28 +420,11 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     if (!editor) return;
     const host = editor.view.dom;
 
+    // mention 是 inline atom node（非 mark），DOM 上就是带 data-id 的 span——
+    // 直接从节点自身读 id，不做 posAtCoords/marks 反推（那条路对 node 永远找不到）
     const resolveMentionId = (target: HTMLElement): string | null => {
       const nodeEl = target.closest<HTMLElement>(".mention");
-      if (!nodeEl) return null;
-      const rect = nodeEl.getBoundingClientRect();
-      const center = { left: rect.left + rect.width / 2, top: rect.top + rect.height / 2 };
-      const posResult = editor.view.posAtCoords(center);
-      if (!posResult) return null;
-      const pos = posResult.pos;
-      const $pos = editor.state.doc.resolve(pos);
-      let found: string | null = null;
-      const m = $pos.marks().find((mk) => mk.type.name === "mention");
-      if (m) found = m.attrs.id as string;
-      if (!found) {
-        for (let off = -2; off <= 2 && !found; off++) {
-          const p = pos + off;
-          if (p < 0 || p > editor.state.doc.content.size) continue;
-          const $ = editor.state.doc.resolve(p);
-          const mk = $.marks().find((k) => k.type.name === "mention");
-          if (mk) found = mk.attrs.id as string;
-        }
-      }
-      return found;
+      return nodeEl?.getAttribute("data-id") ?? null;
     };
 
     const fetchPreview = async (id: string, rect: DOMRect) => {
@@ -496,7 +479,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     };
   }, [editor?.view]);
 
-  // 点击 mention mark 跳转到对应页面（通过 posAtCoords + resolve 读 mark attrs.id，避免修改 renderHTML）
+  // 点击 mention 跳转到对应页面（双链跳转）：mention 节点 DOM 自带 data-id，直接取用
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -505,43 +488,10 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       const target = e.target as HTMLElement | null;
       if (!target) return;
       const nodeEl = target.closest<HTMLElement>(".mention");
-      if (!nodeEl) return;
-      // 通过 ProseMirror 坐标反推 position，再解析 position 的所有 mark 找到 mention
-      const rect = nodeEl.getBoundingClientRect();
-      const center = {
-        left: rect.left + rect.width / 2,
-        top: rect.top + rect.height / 2,
-      };
-      const posResult = editor.view.posAtCoords(center);
-      if (!posResult) return;
-      const pos = posResult.pos;
-      const $pos = editor.state.doc.resolve(pos);
-      const around = $pos.marks().concat(editor.state.doc.nodeAt(pos)?.marks ?? []);
-      // 也尝试 pos-1 / pos+1 附近（点击边界可能 miss）
-      let found: string | null = null;
-      const candidates = [$pos.marks(), around];
-      for (const markList of candidates) {
-        const m = markList.find((mk) => mk.type.name === "mention");
-        if (m) {
-          found = m.attrs.id as string;
-          break;
-        }
-      }
-      if (!found) {
-        // 回退：在 pos±2 的 span 内扫描 marks
-        for (let off = -2; off <= 2 && !found; off++) {
-          const p = pos + off;
-          if (p < 0 || p > editor.state.doc.content.size) continue;
-          const $ = editor.state.doc.resolve(p);
-          const m = $.marks().find((mk) => mk.type.name === "mention");
-          if (m) found = m.attrs.id as string;
-        }
-      }
-      if (found) {
-        e.preventDefault();
-        const open = useWorkspaceStore.getState().openView;
-        open(found);
-      }
+      const id = nodeEl?.getAttribute("data-id");
+      if (!id) return;
+      e.preventDefault();
+      useWorkspaceStore.getState().openView(id);
     };
     host.addEventListener("click", onClick);
     return () => host.removeEventListener("click", onClick);

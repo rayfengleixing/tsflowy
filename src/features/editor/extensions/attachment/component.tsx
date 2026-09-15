@@ -9,7 +9,7 @@ import { t } from "@/lib/i18n";
 // 附件文件卡片：点击交给系统默认程序打开（走 Rust 的 open_asset，路径越权校验在 Rust 侧）。
 // 不用 window.open(assetUrl)：WebView 对非图片/媒体的 asset 协议 URI 不会拉起外部程序。
 export function AttachmentNodeView(props: ReactNodeViewProps<HTMLElement>) {
-  const { node, selected } = props;
+  const { node } = props;
   const [busy, setBusy] = useState(false);
 
   const raw = (node.attrs.src as string | undefined) ?? "";
@@ -29,7 +29,7 @@ export function AttachmentNodeView(props: ReactNodeViewProps<HTMLElement>) {
   };
 
   return (
-    <NodeViewWrapper data-drag-handle className={"my-3 " + (selected ? "ring-2 ring-brand-500 rounded-lg" : "")}>
+    <NodeViewWrapper data-drag-handle className="my-3">
       <button
         type="button"
         onClick={open}

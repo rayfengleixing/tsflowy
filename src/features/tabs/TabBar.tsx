@@ -1,8 +1,18 @@
 import { useRef } from "react";
-import { Plus, X } from "lucide-react";
+import { Download, FileText, Image as ImageIcon, Plus, Printer, X } from "lucide-react";
+import { toast } from "sonner";
 import { viewIcon } from "@/components/view-icon";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
+import { exportPage, exportPageImage, printPage } from "@/lib/export-page";
+import { flushAllForClose } from "@/lib/close-flush";
 import type { View } from "@/types/models";
 
 /** 顶部标签栏（说明书 6.4：高 40px、标签宽 200px、可切换/关闭/拖拽排序） */
@@ -14,6 +24,25 @@ export function TabBar() {
   const newTab = useWorkspaceStore((s) => s.newTab);
   const reorderTabs = useWorkspaceStore((s) => s.reorderTabs);
   const dragIndex = useRef<number | null>(null);
+  const currentView = tabs.find((v: View) => v.id === currentViewId) ?? null;
+
+  // 当前页导出：Markdown（先冲刷防抖中的编辑）/ 长图 PNG / PDF（系统打印对话框另存为）
+  const handleExport = async (kind: "markdown" | "image" | "pdf") => {
+    if (!currentView) return;
+    try {
+      if (kind === "markdown") {
+        await flushAllForClose();
+        await exportPage(currentView.id, currentView.name, "markdown");
+      } else if (kind === "image") {
+        await exportPageImage(currentView.name);
+      } else {
+        await printPage();
+      }
+    } catch (e) {
+      logger.error("tabs.export", e);
+      toast.error(t("tree.exportFailed", { message: String(e) }));
+    }
+  };
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
     dragIndex.current = index;
@@ -74,6 +103,36 @@ export function TabBar() {
       >
         <Plus className="h-4 w-4" />
       </button>
+      {currentView?.layout === "document" && (
+        <div className="ml-auto flex shrink-0 items-center pr-1.5">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                data-testid="page-export"
+                className="flex h-7 items-center gap-1 rounded-md px-2 text-[12px] text-neutral-500 hover:bg-neutral-200/70"
+                title={t("tabs.export")}
+              >
+                <Download className="h-3.5 w-3.5" />
+                {t("tabs.export")}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem onSelect={() => void handleExport("markdown")}>
+                <FileText className="mr-2 h-3.5 w-3.5" />
+                {t("tree.exportMd")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void handleExport("image")}>
+                <ImageIcon className="mr-2 h-3.5 w-3.5" />
+                {t("tree.exportPng")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void handleExport("pdf")}>
+                <Printer className="mr-2 h-3.5 w-3.5" />
+                {t("tree.exportPdf")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
     </div>
   );
 }

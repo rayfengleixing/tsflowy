@@ -297,6 +297,23 @@ pub fn write_text_file(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| format!("failed to write {path}: {e}"))
 }
 
+/// 写入任意二进制文件（长图导出 PNG 用；路径来自文件对话框）
+#[tauri::command]
+pub fn write_binary_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    fs::write(&path, &bytes).map_err(|e| format!("failed to write {path}: {e}"))
+}
+
+/// 读取 assets/ 下文件的字节（长图/PDF 导出把图片内联为 data URL 用，绕开 asset 协议跨源抓取）。
+#[tauri::command]
+pub fn read_asset_bytes(app: tauri::AppHandle, relative: String) -> Result<Vec<u8>, String> {
+    read_asset_bytes_inner(&app_data_dir(&app)?, &relative)
+}
+
+fn read_asset_bytes_inner(data_dir: &Path, relative: &str) -> Result<Vec<u8>, String> {
+    let target = resolve_asset_path(data_dir, relative)?;
+    fs::read(&target).map_err(|e| format!("failed to read asset: {e}"))
+}
+
 // ---------- M6 设置页三个新命令 ----------
 
 /// 返回数据目录绝对路径（显示在设置页里）
@@ -787,6 +804,21 @@ mod tests {
         assert!(resolve_asset_path(&default, "/etc/passwd").is_err());
         assert!(resolve_asset_path(&default, "appflowy.db").is_err());
         assert!(resolve_asset_path(&default, "").is_err());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn read_asset_bytes_reads_real_file_and_rejects_foreign_paths() {
+        let (base, default, ..) = temp_case("asset-read");
+        fs::write(default.join("assets/pic.png"), b"\x89PNG-bytes").unwrap();
+
+        assert_eq!(
+            read_asset_bytes_inner(&default, "assets/pic.png").unwrap(),
+            b"\x89PNG-bytes"
+        );
+        // 越权/穿越路径一律拒绝，且不会读出 assets 之外的文件
+        assert!(read_asset_bytes_inner(&default, "appflowy.db").is_err());
+        assert!(read_asset_bytes_inner(&default, "assets/../appflowy.db").is_err());
         let _ = fs::remove_dir_all(&base);
     }
 
