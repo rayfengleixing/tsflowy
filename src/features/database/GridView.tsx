@@ -47,7 +47,7 @@ export function GridView({
   view: View;
   /** 宿主页面：标题、重命名与行详情的父子归属都挂在它上面 */
   source: View;
-  /** 标题行右侧的视图标签栏 */
+  /** 顶栏左侧的视图标签栏（页内切换 grid/board/calendar） */
   tabs?: React.ReactNode;
 }) {
   const store = useDatabaseStore();
@@ -55,8 +55,6 @@ export function GridView({
   const { openRowDetail, closeRowDetail } = store;
 
   const [editing, setEditing] = useState<{ rowId: string; fieldId: string } | null>(null);
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState(source.name);
   const [renamingField, setRenamingField] = useState<string | null>(null);
   const [optionsEditorFor, setOptionsEditorFor] = useState<DatabaseField | null>(null);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
@@ -423,35 +421,10 @@ export function GridView({
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-white">
-      {/* 顶栏标题行（说明书 6.2：高 44px） */}
+      {/* 顶栏（说明书 6.2：高 44px）：左侧是页内视图切换（宿主 chip 双击即重命名页面），
+          页面名已由侧边栏/标签页承载，这里不再重复 */}
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-6">
-        {editingTitle ? (
-          <input
-            autoFocus
-            className="min-w-0 flex-1 rounded border border-neutral-300 px-1.5 text-[15px] font-medium text-neutral-800 outline-none focus:border-brand-500"
-            value={titleDraft}
-            onChange={(e) => setTitleDraft(e.target.value)}
-            onBlur={() => {
-              const name = titleDraft.trim();
-              setEditingTitle(false);
-              if (name && name !== source.name) void useWorkspaceStore.getState().renameView(source.id, name);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-              if (e.key === "Escape") setEditingTitle(false);
-            }}
-          />
-        ) : (
-          <h1
-            className="min-w-0 flex-1 truncate text-[15px] font-medium text-neutral-800"
-            onDoubleClick={() => {
-              setTitleDraft(source.name);
-              setEditingTitle(true);
-            }}
-          >
-            {source.name}
-          </h1>
-        )}
+        <div className="flex min-w-0 flex-1 items-center">{tabs}</div>
         <div className="flex shrink-0 items-center gap-1">
           {/* 分组字段切换 */}
           {groupableFields.length > 0 && (
@@ -491,7 +464,6 @@ export function GridView({
             <Download className="h-3.5 w-3.5" />
             {t("csv.export")}
           </Button>
-          {tabs}
         </div>
       </div>
 

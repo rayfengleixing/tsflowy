@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Plus, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { useDatabaseStore } from "@/stores/database";
-import { useWorkspaceStore } from "@/stores/workspace";
 import { applyFilters, sortRows } from "@/lib/database-query";
 import { buildCalendarMonth, cellValueForDate, defaultCalendarField, rowDateKey } from "@/lib/board-calendar";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
@@ -28,7 +27,7 @@ export function CalendarView({
   view: View;
   /** 宿主页面：标题、重命名与行详情的父子归属 */
   source: View;
-  /** 标题行右侧的视图标签栏 */
+  /** 顶栏左侧的视图标签栏（页内切换 grid/board/calendar） */
   tabs?: React.ReactNode;
   /** 无日期字段时引导回到表格视图 */
   onGoGrid?: () => void;
@@ -40,8 +39,6 @@ export function CalendarView({
   const [dateFieldId, setDateFieldId] = useState<string | null>(() => readViewConfig(view).calendarFieldId ?? null);
   const [year, setYear] = useState<number>(new Date().getFullYear());
   const [month, setMonth] = useState<number>(new Date().getMonth() + 1);
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState(source.name);
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
   const [dragOverDate, setDragOverDate] = useState<string | null>(null);
 
@@ -159,35 +156,9 @@ export function CalendarView({
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-white">
-      {/* 顶栏 44px */}
+      {/* 顶栏（44px，和 GridView 一致）：左侧为页内视图切换 */}
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-6">
-        {editingTitle ? (
-          <input
-            autoFocus
-            className="min-w-0 flex-1 rounded border border-neutral-300 px-1.5 text-[15px] font-medium text-neutral-800 outline-none focus:border-brand-500"
-            value={titleDraft}
-            onChange={(e) => setTitleDraft(e.target.value)}
-            onBlur={() => {
-              const name = titleDraft.trim();
-              setEditingTitle(false);
-              if (name && name !== source.name) void useWorkspaceStore.getState().renameView(source.id, name);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-              if (e.key === "Escape") setEditingTitle(false);
-            }}
-          />
-        ) : (
-          <h1
-            className="min-w-0 flex-1 truncate text-[15px] font-medium text-neutral-800"
-            onDoubleClick={() => {
-              setTitleDraft(source.name);
-              setEditingTitle(true);
-            }}
-          >
-            {source.name}
-          </h1>
-        )}
+        <div className="flex min-w-0 flex-1 items-center">{tabs}</div>
 
         <div className="flex shrink-0 items-center gap-1">
           <div className="flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700">
@@ -221,8 +192,6 @@ export function CalendarView({
           <Button variant="ghost" size="sm" onClick={gotoToday}>
             {t("calendar.today")}
           </Button>
-
-          {tabs}
         </div>
       </div>
 

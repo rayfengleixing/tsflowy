@@ -49,6 +49,8 @@ import { BlockDrag } from "./extensions/block-drag";
 import { LockedHeading, DocumentStructureLock, STRUCTURE_SYNC_META } from "./extensions/document-structure-lock";
 
 const AUTOSAVE_MS = 800;
+/** 光标所在行相对编辑区高度的上限：超过就把内容上滚，保证当前行留在 70% 线以上 */
+const CARET_LINE_RATIO = 0.7;
 
 // 表格单元格默认居中（tiptap v3 表格原生支持 align 属性，导出/粘贴可保留）
 const centeredCellAttrs = () => ({
@@ -88,6 +90,11 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   const hoverTimerRef = useRef<number | null>(null);
   const hoverCacheRef = useRef<Map<string, string>>(new Map());
   const latestJsonRef = useRef<JSONContent | null>(null);
+  // 编辑区滚动容器（隐藏滚动条 + 光标行 70% 规则都挂在它上面）
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // 上一次选区变化是否来自键盘：鼠标点击不触发上滚，否则点到下半屏会把视图顶飞
+  const keyNavRef = useRef(false);
+  const caretRafRef = useRef<number | null>(null);
 
   // 返回落库 promise：关窗冲刷（close-flush）需要 await 真正写完；平时调用方忽略即可
   const flush = useCallback((): Promise<void> => {
@@ -114,6 +121,21 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(flush, AUTOSAVE_MS);
   }, [flush]);
+
+  // 光标行不低于编辑区 70%：rAF 里量（等浏览器的原生光标滚动先落地，否则会被它覆盖回去）
+  const clampCaretSoon = useCallback(() => {
+    if (caretRafRef.current !== null) return;
+    caretRafRef.current = window.requestAnimationFrame(() => {
+      caretRafRef.current = null;
+      const ed = editorRef.current;
+      const scroller = scrollRef.current;
+      if (!ed || ed.isDestroyed || !scroller) return;
+      const box = scroller.getBoundingClientRect();
+      const caret = ed.view.coordsAtPos(ed.state.selection.head);
+      const overflow = caret.bottom - (box.top + box.height * CARET_LINE_RATIO);
+      if (overflow > 1) scroller.scrollTop += overflow;
+    });
+  }, []);
 
   // 单文档编辑互斥：只有当前标签页挂载编辑器，切换/关闭即卸载并 flush
   // extensions 数组需稳定引用（useEditor 按引用比较），否则每次渲染都会 setOptions
@@ -185,7 +207,15 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     editable: false,
     editorProps: {
       attributes: { class: "tiptap focus:outline-none" },
+      // 鼠标点击落光标不算"导航"：置位后仅键盘触发上滚（见 clampCaretSoon）
+      handleDOMEvents: {
+        mousedown: () => {
+          keyNavRef.current = false;
+          return false;
+        },
+      },
       handleKeyDown: (_view, event) => {
+        keyNavRef.current = true;
         const metaOrCtrl = event.ctrlKey || event.metaKey;
         // — 快捷键 1：Ctrl+S 手动保存 —
         if (metaOrCtrl && event.key.toLowerCase() === "s") {
@@ -286,7 +316,10 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         }
       },
     },
-    onUpdate: () => scheduleSave(),
+    onUpdate: () => {
+      scheduleSave();
+      clampCaretSoon();
+    },
     // 选区塌缩后清除存储 marks：格式只作用于被选中的文字，不再延续到后续输入
     // （TipTap 的 toggleMark/setMark 会同时设置 storedMarks，导致加粗/高亮后继续输入仍带格式）
     onSelectionUpdate: ({ editor }) => {
@@ -294,6 +327,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       if (selection.empty && storedMarks && storedMarks.length > 0) {
         editor.view.dispatch(editor.state.tr.setStoredMarks([]));
       }
+      if (keyNavRef.current) clampCaretSoon();
     },
   });
   editorRef.current = editor;
@@ -345,6 +379,18 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       alive = false;
     };
   }, [view.id]);
+
+  // 编辑区尾部留白 = 视口高度的 30%（与 CARET_LINE_RATIO 配对）：没有这段余量，
+  // 文档末尾无内容可滚时，光标行只能停在视口底部，70% 规则失效
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const sync = () => el.style.setProperty("--editor-tail", `${el.clientHeight * (1 - CARET_LINE_RATIO)}px`);
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // 外部重命名（侧边栏/数据库视图）→ 同步首行 H1 标题：
   // 标题被结构锁定后不可在编辑器内修改，名称变更只能来自外部，反向写回文档并落库
@@ -510,13 +556,16 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-white">
-      {/* 编辑区：内容最大宽由 --tiptap-max-width 控制（默认 800px，设置页可调，说明书 6.1） */}
-      <div data-editor-scroll className="min-h-0 flex-1 overflow-y-auto">
+      {/* 编辑区：内容最大宽由 --tiptap-max-width 控制（默认 800px，设置页可调，说明书 6.1）。
+          滚动条由 index.css 按 data-editor-scroll 隐藏 */}
+      <div ref={scrollRef} data-editor-scroll className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto px-6 py-4" style={{ maxWidth: "var(--tiptap-max-width, 800px)" }}>
           <EditorContent editor={editor} />
           <FloatingMenu editor={editor ?? undefined} />
           <TableContextMenu editor={editor ?? undefined} />
           <BlockMenu />
+          {/* 尾部留白：给"光标行不超过 70%"预留可滚动余量，否则文档末尾时光标只能停在视口底部 */}
+          <div style={{ height: "var(--editor-tail, 0px)" }} />
         </div>
       </div>
 

@@ -10,187 +10,223 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-    --font-heading: var(--font-sans);
-    --font-sans: 'Poppins', 'Geist Variable', system-ui, sans-serif;
-    --color-sidebar-ring: var(--sidebar-ring);
-    --color-sidebar-border: var(--sidebar-border);
-    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-    --color-sidebar-accent: var(--sidebar-accent);
-    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-    --color-sidebar-primary: var(--sidebar-primary);
-    --color-sidebar-foreground: var(--sidebar-foreground);
-    --color-sidebar: var(--sidebar);
-    --color-chart-5: var(--chart-5);
-    --color-chart-4: var(--chart-4);
-    --color-chart-3: var(--chart-3);
-    --color-chart-2: var(--chart-2);
-    --color-chart-1: var(--chart-1);
-    --color-ring: var(--ring);
-    --color-input: var(--input);
-    --color-border: var(--border);
-    --color-destructive: var(--destructive);
-    --color-accent-foreground: var(--accent-foreground);
-    --color-accent: var(--accent);
-    --color-muted-foreground: var(--muted-foreground);
-    --color-muted: var(--muted);
-    --color-secondary-foreground: var(--secondary-foreground);
-    --color-secondary: var(--secondary);
-    --color-primary-foreground: var(--primary-foreground);
-    --color-primary: var(--primary);
-    --color-popover-foreground: var(--popover-foreground);
-    --color-popover: var(--popover);
-    --color-card-foreground: var(--card-foreground);
-    --color-card: var(--card);
-    --color-foreground: var(--foreground);
-    --color-background: var(--background);
-    --radius-sm: 6px;            /* 小按钮 6px（6.7 规范） */
-    --radius-md: 8px;            /* 默认按钮/输入框 8px */
-    --radius-lg: 12px;           /* 面板/对话框/卡片 12px（6.6 规范） */
-    --radius-xl: 16px;
-    --radius-2xl: 20px;
-    --radius-3xl: 24px;
-    --radius-4xl: 28px;
+  --font-heading: var(--font-sans);
+  --font-sans: "Poppins", "Geist Variable", system-ui, sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: 6px; /* 小按钮 6px（6.7 规范） */
+  --radius-md: 8px; /* 默认按钮/输入框 8px */
+  --radius-lg: 12px; /* 面板/对话框/卡片 12px（6.6 规范） */
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-3xl: 24px;
+  --radius-4xl: 28px;
 }
 
 /* AppFlowy 品牌色与中性色阶（项目说明书 6.5 节） */
 @theme {
-    --color-brand-50:  #F4FAFF;
-    --color-brand-100: #E3F6FF;
-    --color-brand-500: #00B5FF;
-    --color-brand-600: #0092D6;
-    --color-neutral-100: #F8FAFF;
-    --color-neutral-200: #E4E8F5;
-    --color-neutral-300: #CED3E6;
-    --color-neutral-400: #B5BBD3;
-    --color-neutral-500: #989EB7;
-    --color-neutral-600: #6F748C;
-    --color-neutral-800: #3D404F;
-    --color-neutral-850: #32343F;
-    --color-neutral-900: #272930;
-    --color-neutral-1000: #21232A;
+  --color-brand-50: #f4faff;
+  --color-brand-100: #e3f6ff;
+  --color-brand-500: #00b5ff;
+  --color-brand-600: #0092d6;
+  --color-neutral-100: #f8faff;
+  --color-neutral-200: #e4e8f5;
+  --color-neutral-300: #ced3e6;
+  --color-neutral-400: #b5bbd3;
+  --color-neutral-500: #989eb7;
+  --color-neutral-600: #6f748c;
+  --color-neutral-800: #3d404f;
+  --color-neutral-850: #32343f;
+  --color-neutral-900: #272930;
+  --color-neutral-1000: #21232a;
 }
 
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    /* 主按钮/选中态/链接/焦点边框：brand blue500 */
-    --primary: #00B5FF;
-    --primary-foreground: #FFFFFF;
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: #00B5FF;
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    /* 圆角基 8px：sm=6 / md=8 / lg=12（6.6/6.7 规范） */
-    --radius: 8px;
-    /* 侧边栏：neutral200 底、neutral800 字、neutral300 边框（6.5 节） */
-    --sidebar: #E4E8F5;
-    --sidebar-foreground: #3D404F;
-    --sidebar-primary: #00B5FF;
-    --sidebar-primary-foreground: #FFFFFF;
-    --sidebar-accent: #CED3E6;
-    --sidebar-accent-foreground: #3D404F;
-    --sidebar-border: #CED3E6;
-    --sidebar-ring: #00B5FF;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  /* 主按钮/选中态/链接/焦点边框：brand blue500 */
+  --primary: #00b5ff;
+  --primary-foreground: #ffffff;
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: #00b5ff;
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  /* 圆角基 8px：sm=6 / md=8 / lg=12（6.6/6.7 规范） */
+  --radius: 8px;
+  /* 侧边栏：neutral200 底、neutral800 字、neutral300 边框（6.5 节） */
+  --sidebar: #e4e8f5;
+  --sidebar-foreground: #3d404f;
+  --sidebar-primary: #00b5ff;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ced3e6;
+  --sidebar-accent-foreground: #3d404f;
+  --sidebar-border: #ced3e6;
+  --sidebar-ring: #00b5ff;
 }
 
 .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
 
-    /* — M6 6.8 深色自动兜底：解决 40 处写死 `bg-white/border-neutral/text-neutral` 的组件在深色模式下对比度不足（经验 796923 级联覆盖） — */
-    /* 白底 → 面板/卡片/弹层 → 深色统一 neutral-900 / 950 */
-    .bg-white { background-color: var(--color-neutral-900, #272930) !important; }
-    /* 边框 200/300 → 深色统一 neutral-700 */
-    .border-neutral-200 { border-color: var(--color-neutral-700, #54596E) !important; }
-    .border-neutral-300 { border-color: var(--color-neutral-700, #54596E) !important; }
-    /* 分隔底/顶 中性边框 */
-    .border-b-neutral-200,
-    .border-t-neutral-200,
-    .border-r-neutral-200,
-    .border-l-neutral-200 { border-color: var(--color-neutral-700, #54596E) !important; }
-    .border-b-neutral-300,
-    .border-t-neutral-300,
-    .border-r-neutral-300,
-    .border-l-neutral-300 { border-color: var(--color-neutral-700, #54596E) !important; }
-    /* 深色文字：800→主文字、700→正文、600/500/400/300→次级，统一浅色 */
-    .text-neutral-800 { color: var(--foreground) !important; }
-    .text-neutral-700 { color: var(--foreground) !important; }
-    .text-neutral-600 { color: var(--muted-foreground) !important; }
-    .text-neutral-500 { color: var(--muted-foreground) !important; }
-    .text-neutral-400 { color: color-mix(in srgb, var(--muted-foreground) 85%, transparent) !important; }
-    .text-neutral-300 { color: color-mix(in srgb, var(--muted-foreground) 55%, transparent) !important; }
-    /* hover 浅底（bg-neutral-100/200）→ 深色对应深灰，优先级高过其他 hover:xxx */
-    .hover\:bg-neutral-100:hover { background-color: var(--color-neutral-800, #3D404F) !important; }
-    .hover\:bg-neutral-200\/60:hover,
-    .hover\:bg-neutral-200:hover { background-color: var(--color-neutral-800, #3D404F) !important; }
-    .hover\:bg-neutral-300\/50:hover,
-    .hover\:bg-neutral-300\/40:hover,
-    .hover\:bg-neutral-300\/60:hover { background-color: var(--color-neutral-800, #3D404F) !important; }
-    .bg-neutral-100 { background-color: var(--color-neutral-800, #3D404F) !important; }
-    .bg-neutral-200 { background-color: var(--color-neutral-800, #3D404F) !important; }
-    .bg-neutral-100\/50,
-    .bg-neutral-100\/60,
-    .bg-neutral-200\/50,
-    .bg-neutral-200\/60,
-    .bg-neutral-200\/70 { background-color: color-mix(in srgb, var(--color-neutral-800, #3D404F) 60%, transparent) !important; }
-    .bg-neutral-50\/30,
-    .bg-neutral-50\/60 { background-color: color-mix(in srgb, var(--color-neutral-850, #32343F) 40%, transparent) !important; }
+  /* — M6 6.8 深色自动兜底：解决 40 处写死 `bg-white/border-neutral/text-neutral` 的组件在深色模式下对比度不足（经验 796923 级联覆盖） — */
+  /* 白底 → 面板/卡片/弹层 → 深色统一 neutral-900 / 950 */
+  .bg-white {
+    background-color: var(--color-neutral-900, #272930) !important;
+  }
+  /* 边框 200/300 → 深色统一 neutral-700 */
+  .border-neutral-200 {
+    border-color: var(--color-neutral-700, #54596e) !important;
+  }
+  .border-neutral-300 {
+    border-color: var(--color-neutral-700, #54596e) !important;
+  }
+  /* 分隔底/顶 中性边框 */
+  .border-b-neutral-200,
+  .border-t-neutral-200,
+  .border-r-neutral-200,
+  .border-l-neutral-200 {
+    border-color: var(--color-neutral-700, #54596e) !important;
+  }
+  .border-b-neutral-300,
+  .border-t-neutral-300,
+  .border-r-neutral-300,
+  .border-l-neutral-300 {
+    border-color: var(--color-neutral-700, #54596e) !important;
+  }
+  /* 深色文字：800→主文字、700→正文、600/500/400/300→次级，统一浅色 */
+  .text-neutral-800 {
+    color: var(--foreground) !important;
+  }
+  .text-neutral-700 {
+    color: var(--foreground) !important;
+  }
+  .text-neutral-600 {
+    color: var(--muted-foreground) !important;
+  }
+  .text-neutral-500 {
+    color: var(--muted-foreground) !important;
+  }
+  .text-neutral-400 {
+    color: color-mix(in srgb, var(--muted-foreground) 85%, transparent) !important;
+  }
+  .text-neutral-300 {
+    color: color-mix(in srgb, var(--muted-foreground) 55%, transparent) !important;
+  }
+  /* hover 浅底（bg-neutral-100/200）→ 深色对应深灰，优先级高过其他 hover:xxx */
+  .hover\:bg-neutral-100:hover {
+    background-color: var(--color-neutral-800, #3d404f) !important;
+  }
+  .hover\:bg-neutral-200\/60:hover,
+  .hover\:bg-neutral-200:hover {
+    background-color: var(--color-neutral-800, #3d404f) !important;
+  }
+  .hover\:bg-neutral-300\/50:hover,
+  .hover\:bg-neutral-300\/40:hover,
+  .hover\:bg-neutral-300\/60:hover {
+    background-color: var(--color-neutral-800, #3d404f) !important;
+  }
+  .bg-neutral-100 {
+    background-color: var(--color-neutral-800, #3d404f) !important;
+  }
+  .bg-neutral-200 {
+    background-color: var(--color-neutral-800, #3d404f) !important;
+  }
+  .bg-neutral-100\/50,
+  .bg-neutral-100\/60,
+  .bg-neutral-200\/50,
+  .bg-neutral-200\/60,
+  .bg-neutral-200\/70 {
+    background-color: color-mix(in srgb, var(--color-neutral-800, #3d404f) 60%, transparent) !important;
+  }
+  .bg-neutral-50\/30,
+  .bg-neutral-50\/60 {
+    background-color: color-mix(in srgb, var(--color-neutral-850, #32343f) 40%, transparent) !important;
+  }
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
-    }
+  }
   body {
     @apply bg-background text-foreground;
-    }
+  }
   html {
     @apply font-sans;
-    }
+  }
 }
 /* ---------- TipTap 编辑器块样式（M3，对齐说明书 6.5 字体/色板） ---------- */
 .tiptap {
@@ -199,7 +235,7 @@
   font-size: var(--tiptap-font-size, 16px);
   /* 默认 1.75（与原硬编码一致）；可由设置页行距档位通过 --tiptap-line-height 覆盖 */
   line-height: var(--tiptap-line-height, 1.75);
-  color: #3D404F;
+  color: #3d404f;
 }
 .dark .tiptap {
   color: var(--foreground);
@@ -210,21 +246,32 @@
 .tiptap p {
   margin: 0;
 }
-.tiptap h1, .tiptap h2, .tiptap h3 {
+.tiptap h1,
+.tiptap h2,
+.tiptap h3 {
   margin: 0.8em 0 0.3em;
   font-weight: 600;
-  color: #3D404F;
+  color: #3d404f;
   line-height: 1.3;
 }
-.dark .tiptap h1, .dark .tiptap h2, .dark .tiptap h3 {
+.dark .tiptap h1,
+.dark .tiptap h2,
+.dark .tiptap h3 {
   color: var(--foreground);
 }
 /* 标题用 em 跟随正文 --tiptap-font-size 联动缩放：
    sm(14px) 档下 ≈ 24/20/16px（与原版像素值一致），md/lg/xl 档按比例放大 */
-.tiptap h1 { font-size: 1.7em; }
-.tiptap h2 { font-size: 1.4em; }
-.tiptap h3 { font-size: 1.15em; }
-.tiptap ul, .tiptap ol {
+.tiptap h1 {
+  font-size: 1.7em;
+}
+.tiptap h2 {
+  font-size: 1.4em;
+}
+.tiptap h3 {
+  font-size: 1.15em;
+}
+.tiptap ul,
+.tiptap ol {
   padding-left: 1.4em;
   margin: 0;
 }
@@ -242,7 +289,7 @@
   list-style-type: decimal;
 }
 .tiptap li::marker {
-  color: #3D404F;
+  color: #3d404f;
 }
 .tiptap li {
   margin: 0.15em 0;
@@ -273,7 +320,7 @@
   height: 1em;
   display: block;
   cursor: pointer;
-  accent-color: var(--color-brand-500, #00B5FF);
+  accent-color: var(--color-brand-500, #00b5ff);
 }
 .tiptap ul[data-type="taskList"] li > div {
   flex: 1;
@@ -283,15 +330,17 @@
   opacity: 0.6;
 }
 .tiptap blockquote {
-  border-left: 3px solid var(--color-brand-500, #00B5FF);
+  border-left: 3px solid var(--color-brand-500, #00b5ff);
   margin: 0.6em 0;
   padding: 0.2em 0 0.2em 0.8em;
-  color: #6F748C;
+  color: #6f748c;
 }
-.dark .tiptap blockquote { color: var(--muted-foreground); }
+.dark .tiptap blockquote {
+  color: var(--muted-foreground);
+}
 .tiptap pre {
-  background: var(--color-neutral-100, #F8FAFF);
-  color: #3D404F;
+  background: var(--color-neutral-100, #f8faff);
+  color: #3d404f;
   /* 无边框无圆角：与上方语法标识栏融为一体，外层边框由 NodeView 包装盒提供 */
   padding: 12px 14px;
   font-family: "Roboto Mono", ui-monospace, monospace;
@@ -305,15 +354,15 @@
   color: var(--foreground);
 }
 .tiptap code {
-  background: var(--color-neutral-200, #E4E8F5);
-  color: #3D404F;
+  background: var(--color-neutral-200, #e4e8f5);
+  color: #3d404f;
   border-radius: 4px;
   padding: 0.1em 0.35em;
   font-family: "Roboto Mono", ui-monospace, monospace;
   font-size: 0.88em;
 }
 .dark .tiptap code {
-  background: var(--color-neutral-800, #3D404F);
+  background: var(--color-neutral-800, #3d404f);
   color: var(--foreground);
 }
 .tiptap pre code,
@@ -325,16 +374,16 @@
 }
 .tiptap hr {
   border: none;
-  border-top: 1px solid var(--color-neutral-300, #CED3E6);
+  border-top: 1px solid var(--color-neutral-300, #ced3e6);
   margin: 1em 0;
 }
 .tiptap a {
-  color: var(--color-brand-500, #00B5FF);
+  color: var(--color-brand-500, #00b5ff);
   text-decoration: underline;
   cursor: pointer;
 }
 .tiptap mark {
-  background: var(--color-brand-100, #E3F6FF);
+  background: var(--color-brand-100, #e3f6ff);
   border-radius: 2px;
   padding: 0 0.15em;
 }
@@ -344,29 +393,31 @@
   table-layout: fixed;
   margin: 0.8em 0;
 }
-.tiptap th, .tiptap td {
-  border: 1px solid var(--color-neutral-300, #CED3E6);
+.tiptap th,
+.tiptap td {
+  border: 1px solid var(--color-neutral-300, #ced3e6);
   padding: 6px 10px;
   vertical-align: top;
   position: relative;
   /* 表格内容默认居中（单元格 align 属性渲染的 text-align 内联样式优先生效） */
   text-align: center;
 }
-.dark .tiptap th, .dark .tiptap td {
-  border-color: var(--color-neutral-700, #54596E);
+.dark .tiptap th,
+.dark .tiptap td {
+  border-color: var(--color-neutral-700, #54596e);
 }
 .tiptap th {
-  background: var(--color-neutral-200, #E4E8F5);
+  background: var(--color-neutral-200, #e4e8f5);
   font-weight: 500;
 }
 .dark .tiptap th {
-  background: var(--color-neutral-800, #3D404F);
+  background: var(--color-neutral-800, #3d404f);
 }
 .tiptap .selectedCell::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: color-mix(in srgb, var(--color-brand-500, #00B5FF) 12%, transparent);
+  background: color-mix(in srgb, var(--color-brand-500, #00b5ff) 12%, transparent);
   pointer-events: none;
 }
 .tiptap .column-resize-handle {
@@ -375,21 +426,21 @@
   top: 0;
   width: 4px;
   height: 100%;
-  background: var(--color-brand-500, #00B5FF);
+  background: var(--color-brand-500, #00b5ff);
   cursor: col-resize;
 }
 .tiptap p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
   height: 0;
-  color: var(--color-neutral-500, #989EB7);
+  color: var(--color-neutral-500, #989eb7);
   pointer-events: none;
 }
 .tiptap p.is-empty::before {
   content: attr(data-placeholder);
   float: left;
   height: 0;
-  color: var(--color-neutral-500, #989EB7);
+  color: var(--color-neutral-500, #989eb7);
   pointer-events: none;
 }
 .tiptap img {
@@ -397,19 +448,35 @@
   border-radius: var(--radius-md, 8px);
 }
 .tiptap ::selection {
-  background: color-mix(in srgb, var(--color-brand-500, #00B5FF) 25%, transparent);
+  background: color-mix(in srgb, var(--color-brand-500, #00b5ff) 25%, transparent);
+}
+
+/* — 编辑区滚动容器（EditorPage 打标 data-editor-scroll）—
+   1) 隐藏滚动条：仅隐藏指示条，滚轮/键盘/触控板滚动照常
+   2) scroll-padding-bottom 30%：原生"光标滚入视口"和 scrollIntoView 也会让出底部 30%，
+      与 EditorPage 的 CARET_LINE_RATIO（当前行不越过 70% 线）配套 */
+[data-editor-scroll] {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  scroll-padding-bottom: 30%;
+}
+[data-editor-scroll]::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 /* 搜索结果 em 标记 */
 em {
   font-style: normal;
-  background: #E3F6FF;
-  color: #0092D6;
+  background: #e3f6ff;
+  color: #0092d6;
   border-radius: 2px;
 }
 
 /* — 窗口最小尺寸兜底（与 Tauri tauri.conf.json windows[0].minWidth/minHeight=960/640 对齐） — */
-html, body, #root {
+html,
+body,
+#root {
   min-width: 960px;
   min-height: 640px;
   margin: 0;
@@ -426,17 +493,19 @@ html, body, #root {
   padding: 1px 6px;
   margin: 0 1px;
   border-radius: 4px;
-  color: #0092D6 !important;         /* 蓝 brand-600 */
-  background: #E3F6FF;                /* brand-50 浅蓝底 */
-  text-decoration: underline dotted #00B5FF 1px;
+  color: #0092d6 !important; /* 蓝 brand-600 */
+  background: #e3f6ff; /* brand-50 浅蓝底 */
+  text-decoration: underline dotted #00b5ff 1px;
   text-underline-offset: 3px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
   user-select: none;
 }
 .mention:hover {
-  background: #BDEBFF;
-  color: #006EAA !important;
+  background: #bdebff;
+  color: #006eaa !important;
   text-decoration-style: solid;
 }

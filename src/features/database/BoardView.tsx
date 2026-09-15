@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Plus, ExternalLink, LayoutList } from "lucide-react";
 import { toast } from "sonner";
 import { useDatabaseStore } from "@/stores/database";
-import { useWorkspaceStore } from "@/stores/workspace";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { NO_GROUP, cellValueForGroup, defaultBoardField, groupRowsForBoard } from "@/lib/board-calendar";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
@@ -36,7 +35,7 @@ export function BoardView({
   view: View;
   /** 宿主页面：标题、重命名与行详情的父子归属 */
   source: View;
-  /** 标题行右侧的视图标签栏 */
+  /** 顶栏左侧的视图标签栏（页内切换 grid/board/calendar） */
   tabs?: React.ReactNode;
   /** 无单选字段时引导回到表格视图 */
   onGoGrid?: () => void;
@@ -49,8 +48,6 @@ export function BoardView({
   // null = 未配置（沿用"主字段之后前 3 个可见字段"的默认启发式）；数组 = 用户显式勾选的字段
   const [cardFieldIds, setCardFieldIds] = useState<string[] | null>(() => readViewConfig(view).cardFieldIds ?? null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState(source.name);
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
   const [dragOverGroup, setDragOverGroup] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState("");
@@ -165,35 +162,9 @@ export function BoardView({
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-white">
-      {/* 顶栏（44px，和 GridView 一致） */}
+      {/* 顶栏（44px，和 GridView 一致）：左侧为页内视图切换 */}
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-6">
-        {editingTitle ? (
-          <input
-            autoFocus
-            className="min-w-0 flex-1 rounded border border-neutral-300 px-1.5 text-[15px] font-medium text-neutral-800 outline-none focus:border-brand-500"
-            value={titleDraft}
-            onChange={(e) => setTitleDraft(e.target.value)}
-            onBlur={() => {
-              const name = titleDraft.trim();
-              setEditingTitle(false);
-              if (name && name !== source.name) void useWorkspaceStore.getState().renameView(source.id, name);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-              if (e.key === "Escape") setEditingTitle(false);
-            }}
-          />
-        ) : (
-          <h1
-            className="min-w-0 flex-1 truncate text-[15px] font-medium text-neutral-800"
-            onDoubleClick={() => {
-              setTitleDraft(source.name);
-              setEditingTitle(true);
-            }}
-          >
-            {source.name}
-          </h1>
-        )}
+        <div className="flex min-w-0 flex-1 items-center">{tabs}</div>
 
         <div className="flex shrink-0 items-center gap-1">
           {/* 分组字段切换 */}
@@ -244,8 +215,6 @@ export function BoardView({
           <Button variant="ghost" size="sm" onClick={() => toggleAllCollapsed(false)}>
             {t("board.expandAll")}
           </Button>
-
-          {tabs}
         </div>
       </div>
 
