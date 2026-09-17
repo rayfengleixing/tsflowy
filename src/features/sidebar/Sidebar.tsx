@@ -65,6 +65,11 @@ export function Sidebar() {
         </button>
       </div>
 
+      {/* 新建页面：位于搜索下方，与页面树之间留一个空行 */}
+      <div className="px-2 pt-1 pb-5">
+        <NewPageMenu />
+      </div>
+
       {/* 一级 Tab：页面树 / 大纲 */}
       <div className="flex items-stretch border-b border-neutral-300 text-[11px]">
         <button
@@ -98,36 +103,31 @@ export function Sidebar() {
       {/* 内容区：根据 mainTab 切换 */}
       <div className="min-h-0 flex-1 overflow-hidden">{mainTab === "tree" ? <PageTree /> : <DocumentOutline />}</div>
 
-      {/* 底部固定区：新建页面 / 回收站 / 设置 */}
-      <div className="flex h-[100px] shrink-0 flex-col border-t border-neutral-300">
-        <div className="flex-1 px-2 py-1.5">
-          <NewPageMenu />
-        </div>
-        <div className="flex h-[60px] shrink-0 items-stretch border-t border-neutral-300">
-          <button
-            data-testid="trash-button"
-            className={
-              "flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] hover:bg-neutral-300/50 " +
-              (route === "trash" ? "text-brand-600 bg-neutral-300/50" : "text-neutral-600")
-            }
-            onClick={() => setRoute(route === "trash" ? "workspace" : "trash")}
-          >
-            <Trash2 className="h-4 w-4" />
-            {t("sidebar.trash")}
-          </button>
-          <div className="w-px self-stretch bg-neutral-300" />
-          <button
-            className={
-              "flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] hover:bg-neutral-300/50 " +
-              (route === "settings" ? "text-brand-600 bg-neutral-300/50" : "text-neutral-600")
-            }
-            onClick={() => setRoute(route === "settings" ? "workspace" : "settings")}
-            title={t("settings.title")}
-          >
-            <Settings className="h-4 w-4" />
-            {t("settings.title")}
-          </button>
-        </div>
+      {/* 底部固定区：回收站 / 设置 */}
+      <div className="flex h-[60px] shrink-0 items-stretch border-t border-neutral-300">
+        <button
+          data-testid="trash-button"
+          className={
+            "flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] hover:bg-neutral-300/50 " +
+            (route === "trash" ? "text-brand-600 bg-neutral-300/50" : "text-neutral-600")
+          }
+          onClick={() => setRoute(route === "trash" ? "workspace" : "trash")}
+        >
+          <Trash2 className="h-4 w-4" />
+          {t("sidebar.trash")}
+        </button>
+        <div className="w-px self-stretch bg-neutral-300" />
+        <button
+          className={
+            "flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] hover:bg-neutral-300/50 " +
+            (route === "settings" ? "text-brand-600 bg-neutral-300/50" : "text-neutral-600")
+          }
+          onClick={() => setRoute(route === "settings" ? "workspace" : "settings")}
+          title={t("settings.title")}
+        >
+          <Settings className="h-4 w-4" />
+          {t("settings.title")}
+        </button>
       </div>
 
       {/* 拖拽调宽手柄 */}
