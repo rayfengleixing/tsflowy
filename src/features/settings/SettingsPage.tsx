@@ -10,7 +10,10 @@ import {
   FONT_SIZE_PRESETS,
   LINE_HEIGHT_PRESETS,
   EDITOR_WIDTH_PRESETS,
+  THEME_PRESET_IDS,
+  getPresetPreview,
   type ThemeMode,
+  type ThemePresetId,
   type AccentColor,
   type FontFamily,
   type FontSize,
@@ -20,7 +23,7 @@ import {
 import { useWorkspaceStore } from "@/stores/workspace";
 import { Button } from "@/components/ui/button";
 import { importMarkdownFolder } from "@/lib/import-folder";
-import { t } from "@/lib/i18n";
+import { t, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const ACCENT_HEX: Record<AccentColor, string> = {
@@ -30,6 +33,8 @@ const ACCENT_HEX: Record<AccentColor, string> = {
   purple: "#9333ea",
   red: "#dc2626",
   yellow: "#ca8a04",
+  slate: "#334155",
+  rose: "#e11d48",
 };
 
 interface ShortcutGroup {
@@ -41,6 +46,7 @@ interface ShortcutGroup {
 export function SettingsPage() {
   const {
     theme,
+    themePreset,
     accent,
     font,
     lang,
@@ -48,6 +54,7 @@ export function SettingsPage() {
     lineHeight,
     editorWidth,
     setTheme,
+    setThemePreset,
     setAccent,
     setFont,
     setLang,
@@ -172,6 +179,20 @@ export function SettingsPage() {
           <Row label={t("settings.theme")}>
             <ThemeGroup value={theme} onChange={setTheme} />
           </Row>
+          <Row label={t("settings.themePreset")}>
+            <div className="flex flex-wrap justify-end gap-2">
+              {THEME_PRESET_IDS.map((id) => (
+                <ThemePresetCard
+                  key={id}
+                  id={id}
+                  selected={themePreset === id}
+                  dark={isPreviewDark(theme)}
+                  onSelect={setThemePreset}
+                />
+              ))}
+            </div>
+          </Row>
+          <p className="-mt-1 text-right text-[11px] text-neutral-400">{t("settings.themePresetHint")}</p>
           <Row label={t("settings.accent")}>
             <div className="flex items-center gap-2">
               {ACCENT_PRESETS.map((c) => (
@@ -392,6 +413,75 @@ function ThemeGroup({ value, onChange }: { value: ThemeMode; onChange: (v: Theme
         </button>
       ))}
     </div>
+  );
+}
+
+const THEME_PRESET_LABEL_KEY: Record<ThemePresetId, MessageKey> = {
+  appflowy: "settings.themePresetAppflowy",
+  graphite: "settings.themePresetGraphite",
+  forest: "settings.themePresetForest",
+  violet: "settings.themePresetViolet",
+  sunset: "settings.themePresetSunset",
+  rose: "settings.themePresetRose",
+};
+
+/** 预览卡跟随当前生效的浅色/深色模式（system 取渲染时 matchMedia 结果） */
+function isPreviewDark(theme: ThemeMode): boolean {
+  return theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+}
+
+/** 主题预设预览卡：迷你"侧边栏 + 内容区"示意图，所见即所选 */
+function ThemePresetCard({
+  id,
+  selected,
+  dark,
+  onSelect,
+}: {
+  id: ThemePresetId;
+  selected: boolean;
+  dark: boolean;
+  onSelect: (id: ThemePresetId) => void;
+}) {
+  const c = getPresetPreview(id, dark);
+  return (
+    <button
+      onClick={() => onSelect(id)}
+      className="group flex flex-col items-center gap-1.5"
+      aria-label={t(THEME_PRESET_LABEL_KEY[id])}
+      aria-pressed={selected}
+    >
+      <div
+        className={cn(
+          "flex h-14 w-[76px] overflow-hidden rounded-lg border transition",
+          selected
+            ? "border-transparent ring-2 ring-brand-500"
+            : "border-neutral-200 group-hover:border-neutral-300 group-hover:ring-2 group-hover:ring-neutral-300",
+        )}
+        style={{ background: c.background, borderColor: c.border }}
+      >
+        <div
+          className="flex w-5 shrink-0 flex-col gap-1 border-r p-1.5"
+          style={{ background: c.sidebar, borderColor: c.border }}
+        >
+          <div className="h-1 rounded-full" style={{ background: c.foreground, opacity: 0.3 }} />
+          <div className="h-1 w-2/3 rounded-full" style={{ background: c.foreground, opacity: 0.2 }} />
+          <div className="h-1 w-3/4 rounded-full" style={{ background: c.foreground, opacity: 0.2 }} />
+        </div>
+        <div className="flex flex-1 flex-col gap-1.5 p-1.5">
+          <div className="h-1.5 w-1/2 rounded-full" style={{ background: c.accent }} />
+          <div className="h-1 w-5/6 rounded-full" style={{ background: c.foreground, opacity: 0.3 }} />
+          <div className="h-1 w-2/3 rounded-full" style={{ background: c.foreground, opacity: 0.2 }} />
+        </div>
+      </div>
+      <span
+        className={cn(
+          "text-[10px] font-medium transition",
+          selected ? "text-neutral-800 dark:text-neutral-200" : "text-neutral-500 dark:text-neutral-400",
+        )}
+      >
+        {t(THEME_PRESET_LABEL_KEY[id])}
+      </span>
+    </button>
   );
 }
 
