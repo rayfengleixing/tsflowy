@@ -309,7 +309,7 @@ export function GridView({
         focusRowId === row.id && ROW_FOCUS_CLASS,
       )}
     >
-      <td className="relative border-b border-r border-neutral-200 px-2 text-center text-[11px] text-neutral-400 dark:border-neutral-700 dark:text-neutral-500">
+      <td className="sticky left-0 z-[5] border-b border-r border-neutral-200 bg-white px-2 text-center text-[11px] text-neutral-400 group-hover/row:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-500 dark:group-hover/row:bg-neutral-800/60">
         <span className="flex items-center justify-center gap-1">
           <GripVertical className="h-3 w-3 cursor-grab text-neutral-200 group-hover/row:text-neutral-400 dark:text-neutral-700 dark:group-hover/row:text-neutral-500" />
           {row.position + 1}
@@ -335,7 +335,9 @@ export function GridView({
             key={field.id}
             className={cn(
               "relative h-8 border-b border-r border-neutral-200 p-0 align-middle dark:border-neutral-700",
-              isEditing && "ring-1 ring-inset ring-brand-500 dark:ring-brand-500",
+              isEditing && "z-10 ring-1 ring-inset ring-brand-500 dark:ring-brand-500",
+              // 冻结主列：跟随序号列（44px）右侧
+              isPrimary && "sticky left-[44px] z-[5] bg-white dark:bg-neutral-900",
               isPrimary && "cursor-pointer",
             )}
             onClick={() => {
@@ -505,15 +507,20 @@ export function GridView({
           </colgroup>
           <thead>
             <tr>
-              <th className="border-b border-r border-neutral-200 bg-neutral-100 px-2 text-[11px] font-normal text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400">
+              <th className="sticky left-0 z-[6] border-b border-r border-neutral-200 bg-neutral-100 px-2 text-[11px] font-normal text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400">
                 #
               </th>
               {visibleFields.map((field) => {
                 const sort = sorts.find((s) => s.field_id === field.id);
+                const isPrimary = field.id === primaryField?.id;
                 return (
                   <th
                     key={field.id}
-                    className="group/head relative border-b border-r border-neutral-200 bg-neutral-100 px-1 dark:border-neutral-700 dark:bg-neutral-800"
+                    className={cn(
+                      "group/head relative border-b border-r border-neutral-200 bg-neutral-100 px-1 dark:border-neutral-700 dark:bg-neutral-800",
+                      // 冻结主列表头：z 高于正文 sticky 列
+                      isPrimary && "sticky left-[44px] z-[6]",
+                    )}
                   >
                     <div
                       draggable={field.id !== primaryField?.id}
