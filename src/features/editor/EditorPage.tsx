@@ -300,20 +300,39 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
             }
           }
         }
-        // 有富文本 HTML 时交给默认处理；纯文本按 Markdown 解析转块
+        // 粘贴源分三类：
+        // 1) 纯文本含 markdown 结构（列表/标题/围栏…）→ 走 markdown 转换
+        // 2) 富文本 HTML 有真实结构（ul/ol/table/标题/图片…）→ 交给默认 HTML 解析
+        // 3) 富文本只是"段落化"的 markdown 源码（AI 聊天工具常见：text/html 是 <p>- a</p>，
+        //    text/plain 才是原始 markdown）→ 走 markdown 转换，否则 "- item" 变普通段落
         const html = event.clipboardData?.getData("text/html");
-        if (html && /<[a-z][\s\S]*>/i.test(html)) return false;
         const text = event.clipboardData?.getData("text/plain");
+        if (text && looksLikeMarkdown(text)) {
+          const htmlHasStructure = !!html && /<(ul|ol|table|h[1-6]|pre|blockquote|img)\b/i.test(html);
+          if (!htmlHasStructure) {
+            try {
+              const json = markdownToJson(text);
+              const nodes = (json.content ?? []).map((b) => PMNode.fromJSON(view.state.schema, b));
+              const slice = new Slice(Fragment.fromArray(nodes), 0, 0);
+              view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView());
+              return true;
+            } catch (e) {
+              console.error("markdown paste failed, fallback to default", e);
+            }
+          }
+          return false;
+        }
+        if (html && /<[a-z][\s\S]*>/i.test(html)) return false;
         if (!text) return false;
         try {
-          // 无 markdown 结构的纯文本：按行拆段落保留换行；有 markdown 语法才转换
-          const json = looksLikeMarkdown(text) ? markdownToJson(text) : textToBlocks(text);
+          // 无 markdown 结构的纯文本：按行拆段落保留换行
+          const json = textToBlocks(text);
           const nodes = (json.content ?? []).map((b) => PMNode.fromJSON(view.state.schema, b));
           const slice = new Slice(Fragment.fromArray(nodes), 0, 0);
           view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView());
           return true;
         } catch (e) {
-          console.error("markdown paste failed, fallback to plain text", e);
+          console.error("plain text paste failed, fallback to default", e);
           return false;
         }
       },
