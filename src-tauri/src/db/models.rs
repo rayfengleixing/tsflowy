@@ -34,6 +34,8 @@ pub struct ViewRow {
     pub visited_at: Option<i64>,
     /// 多视图：Some = 宿主视图（同一张表的数据归属方）id；None = 树里的页面/宿主本身
     pub source_id: Option<String>,
+    /// 页面标签（JSON 数组字符串，如 `["工作","重要"]`）
+    pub tags: String,
 }
 
 #[cfg(test)]
@@ -59,6 +61,7 @@ mod tests {
             updated_at: 1,
             visited_at: None,
             source_id: None,
+            tags: "[]".into(),
         };
         let obj = serde_json::to_value(&v).unwrap();
         // serde_json 的 Map 按字典序输出键：JS 侧按属性名取值，键序无关紧要，锁死键集合即可
@@ -68,8 +71,8 @@ mod tests {
             keys,
             vec![
                 "created_at", "deleted_at", "extra", "icon", "id", "is_favorite", "is_trash",
-                "layout", "name", "parent_id", "position", "source_id", "updated_at", "visited_at",
-                "workspace_id"
+                "layout", "name", "parent_id", "position", "source_id", "tags", "updated_at",
+                "visited_at", "workspace_id"
             ]
         );
         assert_eq!(obj["is_trash"], serde_json::json!(0));

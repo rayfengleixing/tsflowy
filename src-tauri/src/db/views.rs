@@ -20,6 +20,7 @@ fn row_to_view(r: &rusqlite::Row<'_>) -> rusqlite::Result<ViewRow> {
         updated_at: r.get("updated_at")?,
         visited_at: r.get("visited_at")?,
         source_id: r.get("source_id")?,
+        tags: r.get("tags")?,
     })
 }
 
@@ -202,6 +203,7 @@ pub fn create(
         updated_at: t,
         visited_at: None,
         source_id: source_id.map(|s| s.to_string()),
+        tags: "[]".to_string(),
     })
 }
 
@@ -220,6 +222,52 @@ pub fn set_icon(conn: &Connection, id: &str, icon: Option<&str>) -> Result<(), S
         params![icon, now_ms(), id],
     )
     .map_err(dberr("set view icon"))?;
+    Ok(())
+}
+
+/// 收藏/取消收藏（侧边栏收藏区置顶显示）
+pub fn set_favorite(conn: &Connection, id: &str, favorite: bool) -> Result<(), String> {
+    let n = conn
+        .execute(
+            "UPDATE views SET is_favorite = ?1, updated_at = ?2 WHERE id = ?3",
+            params![favorite as i64, now_ms(), id],
+        )
+        .map_err(dberr("set view favorite"))?;
+    if n == 0 {
+        return Err(format!("view not found: {id}"));
+    }
+    Ok(())
+}
+
+/// 设置页面标签（整体覆写 JSON 数组；空数组 = 清空标签）。
+/// 这里校验 + 去重 + 规整成紧凑 JSON，前端直接读字符串。
+pub fn set_tags(conn: &Connection, id: &str, tags: &str) -> Result<(), String> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(tags).map_err(|e| format!("invalid tags JSON: {e}"))?;
+    let serde_json::Value::Array(arr) = parsed else {
+        return Err("tags must be a JSON array".to_string());
+    };
+    let mut seen: Vec<String> = Vec::new();
+    for v in &arr {
+        let Some(s) = v.as_str() else {
+            return Err("tags must be strings".to_string());
+        };
+        let trimmed = s.trim();
+        if trimmed.is_empty() || seen.iter().any(|x| x == trimmed) {
+            continue;
+        }
+        seen.push(trimmed.to_string());
+    }
+    let normalized = serde_json::to_string(&seen).map_err(|e| format!("encode tags: {e}"))?;
+    let n = conn
+        .execute(
+            "UPDATE views SET tags = ?1, updated_at = ?2 WHERE id = ?3",
+            params![normalized, now_ms(), id],
+        )
+        .map_err(dberr("set view tags"))?;
+    if n == 0 {
+        return Err(format!("view not found: {id}"));
+    }
     Ok(())
 }
 

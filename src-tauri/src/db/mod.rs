@@ -6,6 +6,7 @@ pub mod models;
 pub mod properties;
 pub mod search;
 pub mod settings;
+pub mod snapshots;
 pub mod views;
 pub mod workspaces;
 

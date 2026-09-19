@@ -31,7 +31,7 @@ pub fn list_backlinks(conn: &Connection, target_view_id: &str) -> Result<Vec<Bac
                     v.name AS v_name, v.icon AS v_icon, v.layout AS v_layout, v.extra AS v_extra,
                     v.position AS v_position, v.is_favorite AS v_is_favorite, v.is_trash AS v_is_trash,
                     v.deleted_at AS v_deleted_at, v.created_at AS v_created_at, v.updated_at AS v_updated_at,
-                    v.visited_at AS v_visited_at, v.source_id AS v_source_id
+                    v.visited_at AS v_visited_at, v.source_id AS v_source_id, v.tags AS v_tags
              FROM mentions m
              JOIN views v ON v.id = m.src_view_id
              WHERE m.target_view_id = ?1
@@ -62,6 +62,7 @@ pub fn list_backlinks(conn: &Connection, target_view_id: &str) -> Result<Vec<Bac
                     updated_at: r.get(17)?,
                     visited_at: r.get(18)?,
                     source_id: r.get(19)?,
+                    tags: r.get(20)?,
                 },
             })
         })

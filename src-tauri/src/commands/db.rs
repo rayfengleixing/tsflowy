@@ -129,6 +129,18 @@ pub async fn view_update_extra(db: State<'_, Db>, id: String, extra: String) -> 
 }
 
 #[tauri::command]
+pub async fn view_set_favorite(db: State<'_, Db>, id: String, favorite: bool) -> Result<(), String> {
+    let conn = db.write_conn()?;
+    db::views::set_favorite(&conn, &id, favorite)
+}
+
+#[tauri::command]
+pub async fn view_set_tags(db: State<'_, Db>, id: String, tags: String) -> Result<(), String> {
+    let conn = db.write_conn()?;
+    db::views::set_tags(&conn, &id, &tags)
+}
+
+#[tauri::command]
 pub async fn view_soft_delete(db: State<'_, Db>, id: String) -> Result<(), String> {
     let conn = db.write_conn()?;
     db::views::soft_delete(&conn, &id)
@@ -198,7 +210,29 @@ pub async fn doc_get(db: State<'_, Db>, view_id: String) -> Result<Option<String
 #[tauri::command]
 pub async fn doc_save(db: State<'_, Db>, view_id: String, content: String) -> Result<(), String> {
     let conn = db.write_conn()?;
-    db::docs::save(&conn, &view_id, &content)
+    db::docs::save(&conn, &view_id, &content)?;
+    // 历史快照：节流后失败不影响保存本身（快照是尽力而为的保底）
+    if let Err(e) = db::snapshots::maybe_snapshot(&conn, &view_id, &content) {
+        tracing::warn!(error = %e, view_id = %view_id, "snapshot after save failed");
+    }
+    Ok(())
+}
+
+// ---------- 历史版本快照 ----------
+
+#[tauri::command]
+pub async fn doc_snapshot_list(
+    db: State<'_, Db>,
+    view_id: String,
+) -> Result<Vec<db::snapshots::SnapshotRowOut>, String> {
+    let conn = db.read_conn()?;
+    db::snapshots::list(&conn, &view_id)
+}
+
+#[tauri::command]
+pub async fn doc_snapshot_restore(db: State<'_, Db>, id: i64) -> Result<String, String> {
+    let conn = db.write_conn()?;
+    db::snapshots::restore(&conn, id)
 }
 
 #[tauri::command]

@@ -48,6 +48,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "database_cells_fts",
         sql: include_str!("../../../migrations/008_database_cells_fts.sql"),
     },
+    Migration {
+        version: 9,
+        description: "tags_and_snapshots",
+        sql: include_str!("../../../migrations/009_tags_and_snapshots.sql"),
+    },
 ];
 
 pub fn ensure_migrated(conn: &rusqlite::Connection) -> Result<(), String> {
