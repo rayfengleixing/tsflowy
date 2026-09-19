@@ -1,4 +1,4 @@
-import type { View, ViewNode } from "@/types/models";
+import { parseViewTags, type View, type ViewNode } from "@/types/models";
 
 // 树操作纯函数：与数据库解耦，便于 Vitest 单测（项目说明书 11 节：树操作需单测）
 
@@ -87,6 +87,20 @@ export function siblingIds(views: View[], parentId: string | null, movedId?: str
     .map((v) => v.id);
 }
 
+/** 标签过滤树：保留"自身带标签"或"子孙带标签"的节点（祖先仅作路径容器） */
+export function filterTreeByTag(nodes: ViewNode[], tag: string): ViewNode[] {
+  const walk = (ns: ViewNode[]): ViewNode[] => {
+    const out: ViewNode[] = [];
+    for (const n of ns) {
+      const children = walk(n.children);
+      const hit = parseViewTags(n.tags).includes(tag);
+      if (hit || children.length > 0) out.push({ ...n, children });
+    }
+    return out;
+  };
+  return walk(nodes);
+}
+
 export interface PositionUpdate {
   id: string;
   parent_id: string | null;
@@ -118,9 +132,7 @@ export function computeRenumber(
   newIds.forEach((id, i) => updates.push({ id, parent_id: newParentId, position: i }));
 
   if (oldParent !== newParentId) {
-    siblingIds(views, oldParent, movedId).forEach((id, i) =>
-      updates.push({ id, parent_id: oldParent, position: i }),
-    );
+    siblingIds(views, oldParent, movedId).forEach((id, i) => updates.push({ id, parent_id: oldParent, position: i }));
   }
   return updates;
 }

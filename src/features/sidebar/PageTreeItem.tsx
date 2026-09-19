@@ -3,15 +3,17 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ChevronRight, MoreHorizontal, Pencil, Plus, Trash2, Download } from "lucide-react";
+import { ChevronRight, MoreHorizontal, Pencil, Plus, Star, Tag, Trash2, Download } from "lucide-react";
 import { toast } from "sonner";
 import type { ViewNode } from "@/types/models";
 import { viewIcon } from "@/components/view-icon";
 import { EmojiPicker } from "@/components/emoji-picker";
 import { NewPageMenu } from "./NewPageMenu";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { TagEditorDialog } from "@/components/tag-editor-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { isDescendant, type DropZone } from "@/lib/tree";
 import { exportPage } from "@/lib/export-page";
@@ -51,6 +53,7 @@ export function PageTreeItem({
   const toggleExpand = useWorkspaceStore((s) => s.toggleExpand);
   const renameView = useWorkspaceStore((s) => s.renameView);
   const setViewIcon = useWorkspaceStore((s) => s.setViewIcon);
+  const setViewFavorite = useWorkspaceStore((s) => s.setViewFavorite);
   const deleteView = useWorkspaceStore((s) => s.deleteView);
   const expand = useWorkspaceStore((s) => s.expand);
   const hasChildren = node.children.length > 0;
@@ -58,7 +61,9 @@ export function PageTreeItem({
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(node.name);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [tagEditorOpen, setTagEditorOpen] = useState(false);
   const draggedRef = useRef(false);
+  const isFavorite = node.is_favorite === 1;
 
   const zoneFor = (e: React.DragEvent): DropZone => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -201,6 +206,15 @@ export function PageTreeItem({
                 <Pencil className="mr-2 h-3.5 w-3.5" />
                 {t("tree.rename")}
               </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void setViewFavorite(node.id, !isFavorite)}>
+                <Star className={"mr-2 h-3.5 w-3.5 " + (isFavorite ? "fill-brand-500 text-brand-500" : "")} />
+                {isFavorite ? t("tree.unfavorite") : t("tree.favorite")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setTagEditorOpen(true)}>
+                <Tag className="mr-2 h-3.5 w-3.5" />
+                {t("tree.editTags")}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => exportPage(node.id, node.name, "markdown")}>
                 <Download className="mr-2 h-3.5 w-3.5" />
                 {t("tree.exportMd")}
@@ -259,6 +273,8 @@ export function PageTreeItem({
         description={t("tree.confirmDeleteDesc", { name: node.name })}
         onConfirm={() => deleteView(node.id)}
       />
+
+      <TagEditorDialog view={node} open={tagEditorOpen} onOpenChange={setTagEditorOpen} />
     </>
   );
 }

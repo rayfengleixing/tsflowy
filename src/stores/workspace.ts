@@ -37,11 +37,19 @@ interface WorkspaceState {
   createView: (opts: { parentId: string | null; layout: LayoutType }) => Promise<View | null>;
   renameView: (id: string, name: string) => Promise<void>;
   setViewIcon: (id: string, icon: string | null) => Promise<void>;
+  /** 收藏/取消收藏（侧边栏收藏区） */
+  setViewFavorite: (id: string, favorite: boolean) => Promise<void>;
+  /** 设置页面标签（整体覆写） */
+  setViewTags: (id: string, tags: string[]) => Promise<void>;
   deleteView: (id: string) => Promise<void>;
   restoreView: (id: string) => Promise<void>;
   purgeView: (id: string) => Promise<void>;
   purgeTrash: () => Promise<void>;
   moveView: (viewId: string, newParentId: string | null, index: number) => Promise<void>;
+
+  /** 页面树标签过滤：null = 不过滤 */
+  tagFilter: string | null;
+  setTagFilter: (tag: string | null) => void;
 
   openView: (id: string) => void;
   closeTab: (id: string) => void;
@@ -186,6 +194,15 @@ function patchTreeName(tree: ViewNode[], id: string, name: string): ViewNode[] {
   });
 }
 
+/** 递归更新树中某个节点的部分字段（icon/name/tags/is_favorite 等浅字段） */
+function patchTreeView(tree: ViewNode[], id: string, patch: Partial<View>): ViewNode[] {
+  return tree.map((node) => {
+    if (node.id === id) return { ...node, ...patch };
+    if (node.children.length > 0) return { ...node, children: patchTreeView(node.children, id, patch) };
+    return node;
+  });
+}
+
 type EqualityFn<T> = (a: T, b: T) => boolean;
 
 /**
@@ -265,6 +282,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     paletteOpen: false,
     expanded: new Set<string>(),
     sidebarWidth: 240,
+    tagFilter: null,
 
     init: async () => {
       if (initPromise) return initPromise;
@@ -414,6 +432,16 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       }));
     },
 
+    setViewFavorite: async (id: string, favorite: boolean) => {
+      await viewApi.setFavorite(id, favorite);
+      set((state) => ({ tree: patchTreeView(state.tree, id, { is_favorite: favorite ? 1 : 0 }) }));
+    },
+
+    setViewTags: async (id: string, tags: string[]) => {
+      await viewApi.setTags(id, tags);
+      set((state) => ({ tree: patchTreeView(state.tree, id, { tags: JSON.stringify(tags) }) }));
+    },
+
     deleteView: async (id: string) => {
       await viewApi.softDelete(id);
       // 关闭该视图及全部后代的标签页
@@ -513,6 +541,8 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     },
 
     setExpandedAll: (ids: Set<string>) => set({ expanded: ids }),
+
+    setTagFilter: (tag) => set({ tagFilter: tag }),
 
     setSidebarWidth: (w: number) => set({ sidebarWidth: w }),
   };

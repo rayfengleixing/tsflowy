@@ -28,10 +28,23 @@ export interface View {
   visited_at: number | null;
   /** 多视图（迁移 007）：非空 = 数据库页内的派生视图，值为其宿主视图 id；派生视图不在树/回收站/搜索中出现 */
   source_id: string | null;
+  /** 页面标签（迁移 009）：JSON 数组字符串，如 `["工作","重要"]`；用 parseViewTags() 解析 */
+  tags: string;
 }
 
 export interface ViewNode extends View {
   children: ViewNode[];
+}
+
+/** 安全解析 views.tags JSON 列（坏数据静默为空数组） */
+export function parseViewTags(tags: string | null | undefined): string[] {
+  if (!tags) return [];
+  try {
+    const v = JSON.parse(tags);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 export const LAYOUTS: LayoutType[] = ["document", "grid", "board", "calendar"];

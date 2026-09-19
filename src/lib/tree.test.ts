@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTree, computeRenumber, dropTarget, flattenTree, isDescendant, siblingIds } from "./tree";
+import { buildTree, computeRenumber, dropTarget, filterTreeByTag, flattenTree, isDescendant, siblingIds } from "./tree";
 import type { View } from "@/types/models";
 
 const v = (id: string, parent_id: string | null, position: number): View => ({
@@ -18,6 +18,7 @@ const v = (id: string, parent_id: string | null, position: number): View => ({
   updated_at: 0,
   visited_at: null,
   source_id: null, // 树里只有页面/宿主：派生视图由 Rust 侧查询排除
+  tags: "[]",
 });
 
 const views = [
@@ -128,5 +129,35 @@ describe("dropTarget", () => {
 
   it("不存在返回 null", () => {
     expect(dropTarget(tree, "ghost", "before")).toBeNull();
+  });
+});
+
+describe("filterTreeByTag", () => {
+  const tagged = (id: string, parent_id: string | null, position: number, tags: string) => ({
+    ...v(id, parent_id, position),
+    tags,
+  });
+  // a(工作) > b > c(重要)；d(工作)（叶子）；e（无标签叶子）；f(其他)
+  const tree = buildTree([
+    tagged("a", null, 0, '["工作"]'),
+    v("b", "a", 0),
+    tagged("c", "b", 0, '["重要"]'),
+    tagged("d", null, 1, '["工作","重要"]'),
+    v("e", null, 2),
+    tagged("f", null, 3, '["其他"]'),
+  ]);
+
+  it("保留带标签节点及其祖先路径", () => {
+    const out = filterTreeByTag(tree, "工作");
+    expect(flattenTree(out).map((n) => n.id)).toEqual(["a", "d"]);
+  });
+
+  it("无命中标签的节点被剪掉", () => {
+    const out = filterTreeByTag(tree, "重要");
+    expect(flattenTree(out).map((n) => n.id)).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("无任何命中返回空树", () => {
+    expect(filterTreeByTag(tree, "不存在")).toEqual([]);
   });
 });

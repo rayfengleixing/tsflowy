@@ -95,6 +95,16 @@ export const viewApi = {
     return invoke("view_set_icon", { id, icon });
   },
 
+  /** 收藏/取消收藏：侧边栏收藏区置顶显示 */
+  async setFavorite(id: string, favorite: boolean): Promise<void> {
+    return invoke("view_set_favorite", { id, favorite });
+  },
+
+  /** 设置页面标签（整体覆写 JSON 数组） */
+  async setTags(id: string, tags: string[]): Promise<void> {
+    return invoke("view_set_tags", { id, tags: JSON.stringify(tags) });
+  },
+
   /** 软删：视图及其整个子树进回收站 */
   async softDelete(id: string): Promise<void> {
     return invoke("view_soft_delete", { id });
