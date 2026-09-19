@@ -110,6 +110,13 @@ describe("markdownToJson", () => {
     expect(md).toContain("```mermaid\ngraph LR\n  A -->|text| B\n```");
   });
 
+  it("parses image width suffix and round-trips it", () => {
+    const json = markdownToJson("![alt](assets/x.png{width=60%})");
+    expect(json.content?.[0]?.content?.[0]?.attrs).toEqual({ src: "assets/x.png", alt: "alt", width: 60 });
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("![alt](assets/x.png{width=60%})");
+  });
+
   it("consumes unterminated math fence to end of input", () => {
     const json = markdownToJson("$$\na+b");
     expect(json.content).toEqual([{ type: "math", attrs: { tex: "a+b" } }]);

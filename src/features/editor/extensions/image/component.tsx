@@ -16,13 +16,15 @@ import { t } from "@/lib/i18n";
 // Esc 或点击背景关闭（portal 到 body，避免被编辑器滚动容器裁剪）。
 
 export function ImageNodeView(props: ReactNodeViewProps<HTMLElement>) {
-  const { node, updateAttributes, deleteNode } = props;
+  const { node, updateAttributes, deleteNode, selected } = props;
   const [src, setSrc] = useState<string>("");
   const [zoomOpen, setZoomOpen] = useState(false);
+  const imgWrapRef = useRef<HTMLDivElement>(null);
 
   const raw = (node.attrs.src as string | undefined) ?? "";
   const alt = (node.attrs.alt as string | undefined) ?? "";
   const attrCaption = (node.attrs as { caption?: string }).caption ?? "";
+  const width = Math.max(20, Math.min(100, (node.attrs as { width?: number }).width ?? 100));
 
   useEffect(() => {
     let alive = true;
@@ -74,15 +76,46 @@ export function ImageNodeView(props: ReactNodeViewProps<HTMLElement>) {
     };
   }, []);
 
+  // 宽度拖拽：以图片所在行宽为基准算百分比（clamp 20-100），mouseup 落一次 attr
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const wrap = imgWrapRef.current;
+    if (!wrap) return;
+    const base = wrap.getBoundingClientRect().width || 1;
+    const startX = e.clientX;
+    const onMove = (ev: MouseEvent) => {
+      const pct = Math.max(20, Math.min(100, (((width / 100) * base + ev.clientX - startX) / base) * 100));
+      if (wrap.firstElementChild instanceof HTMLElement) {
+        wrap.firstElementChild.style.width = pct + "%";
+      }
+    };
+    const onUp = (ev: MouseEvent) => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      const pct = Math.round(Math.max(20, Math.min(100, (((width / 100) * base + ev.clientX - startX) / base) * 100)));
+      if (wrap.firstElementChild instanceof HTMLElement) {
+        wrap.firstElementChild.style.width = ""; // 恢复由 React 控制
+      }
+      if (pct !== width) updateAttributes({ width: pct });
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   return (
     <NodeViewWrapper className="group/image relative my-3" data-drag-handle>
       <div className="rounded-lg">
-        <div className="relative">
+        <div ref={imgWrapRef} className="relative w-full">
           <img
             src={src}
             alt={alt}
             data-asset-path={raw || undefined}
-            className="max-h-[480px] w-full cursor-zoom-in rounded-lg border border-neutral-200 object-contain"
+            style={width !== 100 ? { width: `${width}%` } : undefined}
+            className={
+              "block cursor-zoom-in rounded-lg border border-neutral-200 object-contain " +
+              (width === 100 ? "max-h-[480px] w-full" : "max-h-[480px]")
+            }
             onDoubleClick={(e) => {
               e.stopPropagation();
               setZoomOpen(true);
@@ -104,6 +137,17 @@ export function ImageNodeView(props: ReactNodeViewProps<HTMLElement>) {
               <X className="h-4 w-4" />
             </button>
           </div>
+          {/* 选中态右下角宽度手柄：左右拖动调整显示宽度（20-100%），left 跟随图片实际宽度 */}
+          {selected && (
+            <div
+              className="absolute bottom-0 h-4 w-4 cursor-ew-resize rounded-bl-md border-b-2 border-r-2 border-brand-500 bg-white/80"
+              style={{ left: `calc(${width}% - 4px)` }}
+              title={t("image.resizeHint")}
+              onMouseDown={startResize}
+              onDoubleClick={(e) => e.stopPropagation()}
+              contentEditable={false}
+            />
+          )}
         </div>
         <input
           ref={captionInputRef}

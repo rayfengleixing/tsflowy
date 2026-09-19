@@ -43,10 +43,12 @@ export function parseInline(text: string): JSONContent[] {
     } else if (raw.startsWith("!")) {
       const inner = raw.slice(2, -1); // [alt](src)
       const close = inner.indexOf("](");
-      out.push({
-        type: "image",
-        attrs: { src: inner.slice(close + 2), alt: inner.slice(0, close) },
-      });
+      const src = inner.slice(close + 2);
+      // 尾缀 {width=60%}：图片显示宽度（导出时 width≠100 才带）
+      const wm = /\{width=(\d+)%\}$/.exec(src);
+      const attrs: Record<string, unknown> = { src: wm ? src.slice(0, wm.index) : src, alt: inner.slice(0, close) };
+      if (wm) attrs.width = Math.max(20, Math.min(100, Number(wm[1])));
+      out.push({ type: "image", attrs });
     } else if (raw.startsWith("[")) {
       const inner = raw.slice(1, -1);
       const close = inner.indexOf("](");
@@ -376,7 +378,8 @@ function renderInline(nodes: JSONContent[] | undefined): string {
     } else if (n.type === "image") {
       const src = (n.attrs?.src as string) ?? "";
       const alt = (n.attrs?.alt as string) ?? "";
-      out += `![${alt}](${src})`;
+      const w = (n.attrs?.width as number | undefined) ?? 100;
+      out += `![${alt}](${src}${w !== 100 ? `{width=${w}%}` : ""})`;
     } else if (n.type === "database-link") {
       const id = (n.attrs?.viewId as string) ?? "";
       const label = (n.attrs?.label as string) ?? id;
@@ -470,7 +473,8 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
     case "image": {
       const src = (node.attrs?.src as string) ?? "";
       const alt = (node.attrs?.alt as string) ?? "";
-      return `![${alt}](${src})`;
+      const w = (node.attrs?.width as number | undefined) ?? 100;
+      return `![${alt}](${src}${w !== 100 ? `{width=${w}%}` : ""})`;
     }
 
     case "math": {
