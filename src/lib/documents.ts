@@ -72,6 +72,13 @@ async function runOrEnqueue(viewId: string, content: string): Promise<void> {
   return current;
 }
 
+export interface SnapshotRow {
+  id: number;
+  view_id: string;
+  reason: string;
+  created_at: number;
+}
+
 export const documentApi = {
   /** 读取文档 JSON 字符串；无行返回 null */
   async get(viewId: string): Promise<string | null> {
@@ -81,5 +88,15 @@ export const documentApi = {
   /** 保存文档；同一 view 的多次请求会合并到最后一份内容落库。 */
   save(viewId: string, content: string): Promise<void> {
     return runOrEnqueue(viewId, content);
+  },
+
+  /** 历史版本快照列表（新→旧；Rust 侧保存时自动节流落盘） */
+  async listSnapshots(viewId: string): Promise<SnapshotRow[]> {
+    return invoke<SnapshotRow[]>("doc_snapshot_list", { viewId });
+  },
+
+  /** 恢复快照；返回 viewId（恢复前的当前内容会被存为可撤销的备份） */
+  async restoreSnapshot(id: number): Promise<string> {
+    return invoke<string>("doc_snapshot_restore", { id });
   },
 };

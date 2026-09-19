@@ -6,7 +6,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ChevronRight, MoreHorizontal, Pencil, Plus, Star, Tag, Trash2, Download } from "lucide-react";
+import { ChevronRight, History, MoreHorizontal, Pencil, Plus, Star, Tag, Trash2, Download } from "lucide-react";
 import { toast } from "sonner";
 import type { ViewNode } from "@/types/models";
 import { viewIcon } from "@/components/view-icon";
@@ -14,6 +14,7 @@ import { EmojiPicker } from "@/components/emoji-picker";
 import { NewPageMenu } from "./NewPageMenu";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { TagEditorDialog } from "@/components/tag-editor-dialog";
+import { HistoryDialog } from "@/components/history-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { isDescendant, type DropZone } from "@/lib/tree";
 import { exportPage } from "@/lib/export-page";
@@ -62,6 +63,7 @@ export function PageTreeItem({
   const [editName, setEditName] = useState(node.name);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const draggedRef = useRef(false);
   const isFavorite = node.is_favorite === 1;
 
@@ -214,6 +216,10 @@ export function PageTreeItem({
                 <Tag className="mr-2 h-3.5 w-3.5" />
                 {t("tree.editTags")}
               </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setHistoryOpen(true)}>
+                <History className="mr-2 h-3.5 w-3.5" />
+                {t("tree.history")}
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => exportPage(node.id, node.name, "markdown")}>
                 <Download className="mr-2 h-3.5 w-3.5" />
@@ -275,6 +281,8 @@ export function PageTreeItem({
       />
 
       <TagEditorDialog view={node} open={tagEditorOpen} onOpenChange={setTagEditorOpen} />
+
+      <HistoryDialog view={node} open={historyOpen} onOpenChange={setHistoryOpen} />
     </>
   );
 }
