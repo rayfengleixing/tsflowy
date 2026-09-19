@@ -57,8 +57,10 @@ async function uploadAttachment(): Promise<string | null> {
 export interface SlashItem {
   key: string;
   icon: ReactNode;
-  /** 快捷搜索词（菜单项右侧提示，过滤时可匹配） */
+  /** 快捷搜索词（菜单项右侧提示，过滤时可匹配；过长会导致菜单项换行，保持一个短词） */
   alias: string;
+  /** 仅用于搜索匹配的扩展关键词（不显示） */
+  keywords?: string;
   /** 执行块命令（编辑器已聚焦；image 为异步上传） */
   run: (editor: Editor) => unknown;
 }
@@ -200,7 +202,8 @@ export const slashItems: SlashItem[] = [
   },
   {
     key: "mermaid",
-    alias: "diagram flow chart 流程图 图表",
+    alias: "mermaid",
+    keywords: "diagram flow chart 流程图 图表",
     icon: <Workflow className="h-4 w-4" />,
     run: (e) =>
       e
@@ -273,11 +276,12 @@ export function filterSlashItems(props: { query: string; editor: Editor }): Slas
   return slashItems.filter((item) => {
     const label = t(`slash.${item.key}` as MessageKey);
     const labelLower = label.toLowerCase();
-    // 名称（中/英）、key、alias 快捷词、拼音首字母（如 "bt" → 标题）任一命中即显示
+    // 名称（中/英）、key、alias 快捷词、隐藏 keywords、拼音首字母（如 "bt" → 标题）任一命中即显示
     const hit =
       labelLower.includes(q) ||
       item.key.toLowerCase().includes(q) ||
       item.alias.toLowerCase().includes(q) ||
+      (item.keywords?.toLowerCase().includes(q) ?? false) ||
       pinyinInitials(label).toLowerCase().includes(q);
     if (!hit) return false;
     return !(inTable && !inTableOnly(item.key));
