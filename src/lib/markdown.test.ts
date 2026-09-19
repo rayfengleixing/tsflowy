@@ -117,6 +117,33 @@ describe("markdownToJson", () => {
     expect(md).toContain("![alt](assets/x.png{width=60%})");
   });
 
+  it("exports table cells containing image blocks as inline markdown", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [
+                { type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "H" }] }] },
+              ],
+            },
+            {
+              type: "tableRow",
+              content: [
+                { type: "tableCell", content: [{ type: "image", attrs: { src: "a.png", alt: "", width: 100 } }] },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("| ![](a.png) |");
+  });
+
   it("consumes unterminated math fence to end of input", () => {
     const json = markdownToJson("$$\na+b");
     expect(json.content).toEqual([{ type: "math", attrs: { tex: "a+b" } }]);

@@ -63,9 +63,10 @@ export interface SlashItem {
   run: (editor: Editor) => unknown;
 }
 
-/** 上下文过滤：表格内仅基础文本块（项目说明书 8.2 slash 菜单说明） */
+/** 上下文过滤：表格单元格 content 为 block+，允许基础文本块与 image/attachment/emoji（纯文本内联）；
+ *  其余复杂块（表格嵌套/数据库/画栏/分栏等）不放行 */
 function inTableOnly(key: string): boolean {
-  return ["text", "paragraph", "bulletList", "orderedList", "taskList"].includes(key);
+  return ["text", "paragraph", "bulletList", "orderedList", "taskList", "image", "attachment", "emoji"].includes(key);
 }
 
 export const slashItems: SlashItem[] = [

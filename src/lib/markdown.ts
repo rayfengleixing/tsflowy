@@ -460,7 +460,17 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
 
     case "table": {
       // TipTap table: content = tableRow (header then body)
-      const rows = (node.content ?? []).map((row) => (row.content ?? []).map((cell) => renderInline(cell.content)));
+      // cell 内可能是多块（段落 + 图片/附件等），块级子节点逐块渲染，块间用 <br>（表格内换行惯例）
+      // 历史数据/测试里 cell 也可能直接挂 inline 节点（text/image…），一并按 inline 渲染
+      const inlineish = new Set(["text", "image", "mention", "database-link", "hardBreak"]);
+      const rows = (node.content ?? []).map((row) =>
+        (row.content ?? []).map((cell) =>
+          (cell.content ?? [])
+            .map((b) => (inlineish.has(b.type ?? "") ? renderInline([b]) : renderBlock(b)))
+            .filter((s) => s !== "")
+            .join("<br>"),
+        ),
+      );
       if (rows.length === 0) return "";
       const header = rows[0];
       const body = rows.slice(1);
