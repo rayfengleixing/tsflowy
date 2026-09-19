@@ -1,23 +1,29 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Star, X } from "lucide-react";
 import type { ViewNode } from "@/types/models";
 import { parseViewTags } from "@/types/models";
 import { PageTreeItem, type DropHint } from "./PageTreeItem";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { dropTarget, filterTreeByTag, flattenTree, type DropZone } from "@/lib/tree";
+import { dropTarget, filterTreeByTag, flattenTree, isDescendant, type DropZone } from "@/lib/tree";
 import { t } from "@/lib/i18n";
 import { toast } from "sonner";
 
-/** 页面树：递归渲染 + 原生 HTML5 拖拽（排序/换父级），空白处拖放 = 移到根级末尾。
+/** 页面树：递归渲染 + 鼠标事件链拖拽（HTML5 drag 在 WebView2 下不可靠，与编辑器块拖拽同方案）。
  *  顶部含收藏区（跨目录快速入口）与标签过滤行（点击按标签过滤树）。 */
 export function PageTree() {
   const tree = useWorkspaceStore((s) => s.tree);
   const moveView = useWorkspaceStore((s) => s.moveView);
   const openView = useWorkspaceStore((s) => s.openView);
+  const expand = useWorkspaceStore((s) => s.expand);
   const tagFilter = useWorkspaceStore((s) => s.tagFilter);
   const setTagFilter = useWorkspaceStore((s) => s.setTagFilter);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropHint, setDropHint] = useState<DropHint | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  /** 拖拽会话（mousedown 记录 → mousemove 超阈值进入拖拽 → mouseup 落点） */
+  const sessionRef = useRef<{ id: string; startX: number; startY: number; moved: boolean } | null>(null);
+  /** 拖拽落点后的同帧 click 抑制 */
+  const suppressClickRef = useRef(false);
 
   const favorites = useMemo(() => flattenTree(tree).filter((v) => v.is_favorite === 1), [tree]);
   const allTags = useMemo(() => {
@@ -43,30 +49,90 @@ export function PageTree() {
     }
   };
 
-  const handleRootDrop = async (e: React.DragEvent) => {
-    if (!draggingId) return;
-    e.preventDefault();
-    const from = draggingId;
-    setDraggingId(null);
-    setDropHint(null);
-    try {
-      await moveView(from, null, tree.length);
-    } catch (e: unknown) {
-      onMoveFail(e);
-    }
+  useEffect(() => {
+    const zoneForEl = (row: HTMLElement, clientY: number): DropZone => {
+      const rect = row.getBoundingClientRect();
+      const ratio = (clientY - rect.top) / rect.height;
+      return ratio < 0.3 ? "before" : ratio > 0.7 ? "after" : "inside";
+    };
+    const rowAt = (el: EventTarget | null): HTMLElement | null => {
+      if (!(el instanceof HTMLElement)) return null;
+      return el.closest("[data-tree-row]");
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      const s = sessionRef.current;
+      if (!s) return;
+      if (!s.moved) {
+        // 5px 阈值内视为点击（不进入拖拽）
+        if (Math.abs(e.clientX - s.startX) + Math.abs(e.clientY - s.startY) < 5) return;
+        s.moved = true;
+        setDraggingId(s.id);
+      }
+      const row = rowAt(e.target);
+      if (!row?.dataset.treeRow) {
+        setDropHint(null);
+        return;
+      }
+      const targetId = row.dataset.treeRow;
+      const cur = useWorkspaceStore.getState().tree;
+      if (targetId === s.id || isDescendant(cur, targetId, s.id)) {
+        setDropHint(null);
+        return;
+      }
+      const zone = zoneForEl(row, e.clientY);
+      setDropHint((prev) => (prev?.targetId === targetId && prev.zone === zone ? prev : { targetId, zone }));
+    };
+
+    const onMouseUp = (e: MouseEvent) => {
+      const s = sessionRef.current;
+      sessionRef.current = null;
+      if (!s) return;
+      if (!s.moved) return; // 未拖动：交给行 onClick 打开页面
+      suppressClickRef.current = true;
+      setTimeout(() => (suppressClickRef.current = false));
+      const row = rowAt(e.target);
+      const cur = useWorkspaceStore.getState().tree;
+      if (row?.dataset.treeRow) {
+        const targetId = row.dataset.treeRow;
+        if (targetId !== s.id && !isDescendant(cur, targetId, s.id)) {
+          const zone = zoneForEl(row, e.clientY);
+          if (zone === "inside") expand(targetId);
+          void handleDrop(s.id, targetId, zone);
+        }
+      } else if (containerRef.current?.contains(e.target as Node)) {
+        // 树容器空白处落点 → 移到根级末尾
+        void moveView(s.id, null, cur.length).catch(onMoveFail);
+      }
+      setDraggingId(null);
+      setDropHint(null);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tree, expand]);
+
+  /** 行点击（会话未变成拖拽时打开页面） */
+  const onRowClick = (id: string) => {
+    if (suppressClickRef.current) return;
+    openView(id);
+  };
+
+  /** 行 mousedown：左键且不在交互控件上时启动潜在拖拽会话 */
+  const onRowMouseDown = (id: string, e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("button, input, a, [role=button]")) return;
+    e.preventDefault(); // 防止拖拽选中文本
+    sessionRef.current = { id, startX: e.clientX, startY: e.clientY, moved: false };
   };
 
   return (
-    <div
-      className="flex-1 overflow-y-auto px-2 pb-2"
-      onDragOver={(e) => {
-        if (draggingId) {
-          e.preventDefault();
-          if (dropHint) setDropHint(null); // 移出行的区域时清除落点提示
-        }
-      }}
-      onDrop={handleRootDrop}
-    >
+    <div ref={containerRef} className="flex-1 overflow-y-auto px-2 pb-2">
       {/* 收藏区：有收藏页面时显示，点击直达（保留在树中原位置） */}
       {favorites.length > 0 && (
         <div className="mb-2 border-b border-neutral-200 pb-2">
@@ -122,12 +188,8 @@ export function PageTree() {
           depth={0}
           draggingId={draggingId}
           dropHint={dropHint}
-          onDraggingChange={(id) => {
-            setDraggingId(id);
-            if (!id) setDropHint(null);
-          }}
-          onDropHint={setDropHint}
-          onDrop={handleDrop}
+          onRowMouseDown={onRowMouseDown}
+          onRowClick={onRowClick}
         />
       ))}
       {draggingId && !dropHint && <div className="mx-1 my-1 h-[2px] rounded bg-brand-500" />}

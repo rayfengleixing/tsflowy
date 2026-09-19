@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,7 +16,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { TagEditorDialog } from "@/components/tag-editor-dialog";
 import { HistoryDialog } from "@/components/history-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { isDescendant, type DropZone } from "@/lib/tree";
+import type { DropZone } from "@/lib/tree";
 import { exportPage } from "@/lib/export-page";
 import { t } from "@/lib/i18n";
 
@@ -30,33 +30,23 @@ interface PageTreeItemProps {
   depth: number;
   draggingId: string | null;
   dropHint: DropHint | null;
-  onDraggingChange: (id: string | null) => void;
-  onDropHint: React.Dispatch<React.SetStateAction<DropHint | null>>;
-  onDrop: (viewId: string, targetId: string, zone: DropZone) => void;
+  /** 行 mousedown：左键且不在交互控件上时由父组件启动拖拽会话 */
+  onRowMouseDown: (id: string, e: React.MouseEvent) => void;
+  /** 行点击（未形成拖拽时打开页面） */
+  onRowClick: (id: string) => void;
 }
 
 const INDENT = 16; // 每级缩进（说明书 6.2：内容左边距 16px）
 
-export function PageTreeItem({
-  node,
-  depth,
-  draggingId,
-  dropHint,
-  onDraggingChange,
-  onDropHint,
-  onDrop,
-}: PageTreeItemProps) {
+export function PageTreeItem({ node, depth, draggingId, dropHint, onRowMouseDown, onRowClick }: PageTreeItemProps) {
   // 每树节点一份订阅：用原子 selector（含布尔派生），任一 store 字段变化只重渲受影响节点而非整棵树
-  const tree = useWorkspaceStore((s) => s.tree);
   const isExpanded = useWorkspaceStore((s) => s.expanded.has(node.id));
   const isActive = useWorkspaceStore((s) => s.currentViewId === node.id);
-  const openView = useWorkspaceStore((s) => s.openView);
   const toggleExpand = useWorkspaceStore((s) => s.toggleExpand);
   const renameView = useWorkspaceStore((s) => s.renameView);
   const setViewIcon = useWorkspaceStore((s) => s.setViewIcon);
   const setViewFavorite = useWorkspaceStore((s) => s.setViewFavorite);
   const deleteView = useWorkspaceStore((s) => s.deleteView);
-  const expand = useWorkspaceStore((s) => s.expand);
   const hasChildren = node.children.length > 0;
 
   const [editing, setEditing] = useState(false);
@@ -64,50 +54,7 @@ export function PageTreeItem({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const draggedRef = useRef(false);
   const isFavorite = node.is_favorite === 1;
-
-  const zoneFor = (e: React.DragEvent): DropZone => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = (e.clientY - rect.top) / rect.height;
-    return ratio < 0.3 ? "before" : ratio > 0.7 ? "after" : "inside";
-  };
-
-  const handleDragStart = (e: React.DragEvent) => {
-    e.dataTransfer.setData("application/x-view-id", node.id);
-    e.dataTransfer.effectAllowed = "move";
-    draggedRef.current = true;
-    onDraggingChange(node.id);
-  };
-
-  const handleDragEnd = () => {
-    draggedRef.current = false;
-    onDraggingChange(null);
-    onDropHint(null);
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    if (!draggingId || draggingId === node.id) return;
-    if (isDescendant(tree, node.id, draggingId)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const zone = zoneFor(e);
-    const hint: DropHint = { targetId: node.id, zone };
-    onDropHint((prev) => (prev?.targetId === hint.targetId && prev.zone === hint.zone ? prev : hint));
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    if (!draggingId || draggingId === node.id) return;
-    if (isDescendant(tree, node.id, draggingId)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const zone = zoneFor(e);
-    const from = draggingId;
-    onDraggingChange(null);
-    onDropHint(null);
-    if (zone === "inside") expand(node.id);
-    onDrop(from, node.id, zone);
-  };
 
   const commitRename = async () => {
     const name = editName.trim();
@@ -126,22 +73,16 @@ export function PageTreeItem({
   return (
     <>
       <div
-        draggable
-        data-view-id={node.id}
+        data-tree-row={node.id}
         className={
           "group relative flex h-[30px] cursor-pointer items-center gap-1 pr-1 select-none " +
           (isActive ? "bg-brand-100 " : "hover:bg-neutral-300/40 ") +
-          (hintFor === "inside" ? "bg-brand-100 ring-1 ring-brand-500" : "")
+          (hintFor === "inside" ? "bg-brand-100 ring-1 ring-brand-500" : "") +
+          (draggingId === node.id ? " opacity-40" : "")
         }
         style={{ paddingLeft: 16 + depth * INDENT }}
-        onClick={() => {
-          if (draggedRef.current) return;
-          openView(node.id);
-        }}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
+        onMouseDown={(e) => onRowMouseDown(node.id, e)}
+        onClick={() => onRowClick(node.id)}
       >
         {isActive && <div className="absolute left-0 top-0 h-full w-[3px] bg-brand-500" />}
         {hintFor === "before" && <div className="absolute -top-[1px] left-0 right-0 h-[2px] bg-brand-500" />}
@@ -249,9 +190,8 @@ export function PageTreeItem({
             depth={depth + 1}
             draggingId={draggingId}
             dropHint={dropHint}
-            onDraggingChange={onDraggingChange}
-            onDropHint={onDropHint}
-            onDrop={onDrop}
+            onRowMouseDown={onRowMouseDown}
+            onRowClick={onRowClick}
           />
         ))}
 
