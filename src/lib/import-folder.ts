@@ -68,8 +68,8 @@ export interface ImportResult {
  * @returns { total, created, failed }
  */
 export async function importMarkdownFolder(workspaceId: string): Promise<ImportResult> {
-  // 1. 选目录
-  const root = await open({ directory: true, multiple: false });
+  // 1. 选目录（recursive: true 让 dialog 把整棵子树授权给 fs scope，嵌套 .md 才能读取）
+  const root = await open({ directory: true, multiple: false, recursive: true });
   if (typeof root !== "string" || !root) return { total: 0, created: 0, failed: 0 };
 
   // 2. 遍历 .md
