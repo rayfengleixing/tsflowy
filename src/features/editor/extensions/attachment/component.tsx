@@ -29,12 +29,12 @@ export function AttachmentNodeView(props: ReactNodeViewProps<HTMLElement>) {
   };
 
   return (
-    <NodeViewWrapper data-drag-handle className="my-3">
+    <NodeViewWrapper data-drag-handle className="my-3 w-full max-w-full">
       <button
         type="button"
         onClick={open}
         disabled={!raw || busy}
-        className="flex max-w-[420px] items-center gap-3 rounded-lg border border-neutral-300 bg-neutral-100/50 px-3 py-2.5 text-left hover:border-brand-500 hover:bg-brand-100/30 disabled:opacity-60"
+        className="flex w-full max-w-[min(420px,100%)] items-center gap-3 rounded-lg border border-neutral-300 bg-neutral-100/50 px-3 py-2.5 text-left hover:border-brand-500 hover:bg-brand-100/30 disabled:opacity-60"
       >
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-white shadow-sm">
           <FileIcon className="h-4.5 w-4.5 text-neutral-500" />
