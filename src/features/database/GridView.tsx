@@ -21,7 +21,7 @@ import { viewApi, newId } from "@/lib/db";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { UNGROUPED, applyFilters, canGroupBy, groupRowsForGrid, sortRows, type SortSpec } from "@/lib/database-query";
 import { aggregateValue, normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
-import { buildCsvExport, csvValueToCell, parseCsv, planImport } from "@/lib/csv";
+import { buildCsvExport, csvValueToCell, parseCsv, planImport, parseTsv } from "@/lib/csv";
 import { computeFormula } from "@/lib/database-formula";
 import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
@@ -67,6 +67,8 @@ export function GridView({
     () => readViewConfig(view).aggregates ?? {},
   );
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  // TSV 粘贴的锚点：最近一次点击的可编辑单元格（粘贴从这里向右向下展开）
+  const pasteAnchorRef = useRef<{ rowId: string; fieldId: string } | null>(null);
 
   useEffect(() => {
     store.load(view).catch((e) => logger.error("grid.load", e));
@@ -235,6 +237,57 @@ export function GridView({
     }
   };
 
+  // Excel/表格 TSV 剪贴板粘贴：从锚点单元格向右向下展开，行不够自动补行
+  const onPasteTsv = async (e: React.ClipboardEvent) => {
+    if (editing) return; // 编辑框里的粘贴走默认（单格文本）
+    if (e.target instanceof HTMLElement && e.target.closest("input, textarea")) return;
+    const text = e.clipboardData.getData("text/plain");
+    if (!text || (!text.includes("\t") && !text.includes("\n"))) return;
+    const grid = parseTsv(text);
+    if (grid.length === 0 || grid[0].length === 0) return;
+    const anchor = pasteAnchorRef.current;
+    if (!anchor) {
+      toast.info(t("csv.pasteNoAnchor"));
+      return;
+    }
+    e.preventDefault();
+    const startRow = displayRows.findIndex((r) => r.id === anchor.rowId);
+    const startCol = visibleFields.findIndex((f) => f.id === anchor.fieldId);
+    if (startRow < 0 || startCol < 0) return;
+    try {
+      let skipped = 0;
+      let filled = 0;
+      // 预取行队列：现有行 + 粘贴时按需新建
+      const rowQueue: string[] = displayRows.slice(startRow).map((r) => r.id);
+      for (let i = 0; i < grid.length; i++) {
+        while (rowQueue.length <= i) {
+          const created = await store.addRow();
+          if (!created) return;
+          rowQueue.push(created.id);
+        }
+        for (let j = 0; j < grid[i].length; j++) {
+          const field = visibleFields[startCol + j];
+          if (!field) {
+            skipped++; // 超出最右列
+            continue;
+          }
+          if (isReadonlyType(field.field_type)) {
+            skipped++; // 公式/系统字段跳过
+            continue;
+          }
+          const cell = csvValueToCell(field.field_type, grid[i][j]);
+          await store.setCell(rowQueue[i], field.id, cell);
+          filled++;
+        }
+      }
+      if (filled > 0) toast.success(t("csv.pasted", { n: String(filled) }));
+      if (skipped > 0) toast.warning(t("csv.pasteSkipped", { n: String(skipped) }));
+    } catch (err) {
+      console.error("tsv paste failed", err);
+      toast.error(t("error.csv", { message: String(err) }));
+    }
+  };
+
   // CSV 导入（新表）
   const importCsv = async () => {
     try {
@@ -344,8 +397,11 @@ export function GridView({
               if (isPrimary) {
                 // 名称列：单击编辑值（编辑框后的"打开"图标/双击打开所属页面）
                 setEditing({ rowId: row.id, fieldId: field.id });
+                pasteAnchorRef.current = { rowId: row.id, fieldId: field.id };
                 return;
               }
+              // TSV 粘贴锚点：任何可编辑格都记录
+              if (!isReadonlyType(field.field_type)) pasteAnchorRef.current = { rowId: row.id, fieldId: field.id };
               if (isReadonlyType(field.field_type) || isEditing) return;
               if (field.field_type === "checkbox") {
                 // 复选框：单击直接切换勾选
@@ -495,8 +551,8 @@ export function GridView({
         />
       )}
 
-      {/* 表格（横向滚动） */}
-      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto">
+      {/* 表格（横向滚动；TSV 剪贴板粘贴见 onPasteTsv） */}
+      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto" onPaste={(e) => void onPasteTsv(e)}>
         <table ref={tableRef} className="border-separate border-spacing-0">
           <colgroup>
             <col style={{ width: 44 }} />

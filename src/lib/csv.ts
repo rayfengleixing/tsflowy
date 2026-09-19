@@ -57,6 +57,66 @@ export function parseCsv(text: string): string[][] {
   return rows;
 }
 
+/** 解析剪贴板 TSV（Excel/WPS/网页表格复制格式）：按 \t 分列、\r?\n 分行；
+ *  含制表/换行的单元格被双引号包裹（内部 "" 转义），与 Excel 剪贴板行为一致 */
+export function parseTsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  let i = 0;
+  const s = text.replace(/^\uFEFF/, "");
+  while (i < s.length) {
+    const ch = s[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (s[i + 1] === '"') {
+          field += '"';
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+        i++;
+        continue;
+      }
+      if (ch === "\n") {
+        field += ch;
+        i++;
+        continue;
+      }
+      field += ch;
+      i++;
+      continue;
+    }
+    if (ch === '"' && field === "") {
+      inQuotes = true;
+      i++;
+      continue;
+    }
+    if (ch === "\t") {
+      row.push(field);
+      field = "";
+      i++;
+      continue;
+    }
+    if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && s[i + 1] === "\n") i++;
+      row.push(field);
+      field = "";
+      rows.push(row);
+      row = [];
+      i++;
+      continue;
+    }
+    field += ch;
+    i++;
+  }
+  row.push(field);
+  rows.push(row);
+  while (rows.length > 0 && rows[rows.length - 1].every((c) => c.trim() === "")) rows.pop();
+  return rows;
+}
+
 /** 二维数组 → CSV 文本 */
 export function toCsv(rows: string[][]): string {
   const esc = (v: string) => (/[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v);
@@ -110,7 +170,11 @@ export function cellToCsv(_type: FieldType, value: CellValue): string {
 }
 
 /** 导出当前视图：首行表头，之后每行一个数据库行 */
-export function buildCsvExport(fields: DatabaseField[], rows: DatabaseRow[], cells: Record<string, Record<string, CellValue>>): string {
+export function buildCsvExport(
+  fields: DatabaseField[],
+  rows: DatabaseRow[],
+  cells: Record<string, Record<string, CellValue>>,
+): string {
   const visible = fields.filter((f) => f.is_hidden === 0);
   const header = visible.map((f) => f.name);
   const body = rows.map((r) => visible.map((f) => cellToCsv(f.field_type, cells[r.id]?.[f.id] ?? null)));
@@ -128,4 +192,3 @@ export function planImport(parsed: string[][]): { headers: string[]; types: Fiel
   });
   return { headers: header, types };
 }
-
