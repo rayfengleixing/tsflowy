@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
-import { Edit3, X } from "lucide-react";
+import { X } from "lucide-react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import { t } from "@/lib/i18n";
 
-// 公式 NodeView：非编辑态渲染 KaTeX；双击/选中+按钮切编辑态（textarea 写 TeX）
+// 公式 NodeView：非编辑态渲染 KaTeX；双击切编辑态（textarea 写 TeX，Ctrl+Enter 保存 / Esc 取消）
 export function MathNodeView(props: ReactNodeViewProps<HTMLElement>) {
   const { node, updateAttributes, deleteNode, selected } = props;
   const tex = (node.attrs.tex as string) ?? "";
@@ -41,7 +41,10 @@ export function MathNodeView(props: ReactNodeViewProps<HTMLElement>) {
   })();
 
   return (
-    <NodeViewWrapper className={"group/math relative my-3 " + (selected ? "ring-2 ring-brand-500 rounded-lg" : "")} data-drag-handle>
+    <NodeViewWrapper
+      className={"group/math relative my-3 " + (selected ? "ring-2 ring-brand-500 rounded-lg" : "")}
+      data-drag-handle
+    >
       {editing ? (
         <div className="rounded-lg border border-neutral-300 bg-neutral-50 p-2">
           <textarea
@@ -53,53 +56,56 @@ export function MathNodeView(props: ReactNodeViewProps<HTMLElement>) {
             placeholder={t("math.edit")}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) commit();
-              if (e.key === "Escape") { setDraft(tex); setEditing(false); }
+              if (e.key === "Escape") {
+                setDraft(tex);
+                setEditing(false);
+              }
             }}
           />
           <div className="mt-1 flex justify-end gap-1 text-[11px] text-neutral-400">
-            <span>Ctrl/Cmd + Enter 保存</span>
+            <span>Ctrl/Cmd + Enter 保存 · Esc 取消</span>
           </div>
         </div>
       ) : (
-        <div
-          className="rounded-lg border border-neutral-200 bg-white p-3"
-          onDoubleClick={() => setEditing(true)}
-        >
+        <div className="rounded-lg border border-neutral-200 bg-white p-3" onDoubleClick={() => setEditing(true)}>
           {tex ? (
-            <div
-              className="overflow-x-auto text-center"
-              dangerouslySetInnerHTML={{ __html: rendered }}
-            />
+            <div className="overflow-x-auto text-center" dangerouslySetInnerHTML={{ __html: rendered }} />
           ) : (
             <div className="text-center text-[13px] text-neutral-400">{t("math.placeholder")}</div>
           )}
         </div>
       )}
-      {/* 悬浮操作：编辑/删除 */}
+      {/* 悬浮操作：编辑态为取消/确认，非编辑态仅删除（编辑入口为双击） */}
       <div className="absolute right-2 top-2 hidden gap-1 group-hover/math:flex">
-        <button
-          className="flex h-7 w-7 items-center justify-center rounded-md bg-neutral-900/70 text-white hover:bg-neutral-900"
-          title={editing ? t("common.cancel") : t("math.edit")}
-          onClick={() => { if (editing) { setDraft(tex); setEditing(false); } else commit(); }}
-        >
-          {editing ? <X className="h-4 w-4" /> : <Edit3 className="h-4 w-4" />}
-        </button>
         {editing ? (
+          <>
+            <button
+              className="flex h-7 w-7 items-center justify-center rounded-md bg-neutral-900/70 text-white hover:bg-neutral-900"
+              title={t("common.cancel")}
+              onClick={() => {
+                setDraft(tex);
+                setEditing(false);
+              }}
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <button
+              className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-600 text-white hover:bg-brand-700"
+              title={t("common.confirm")}
+              onClick={commit}
+            >
+              ✓
+            </button>
+          </>
+        ) : (
           <button
-            className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-600 text-white hover:bg-brand-700"
-            title={t("common.confirm")}
-            onClick={commit}
+            className="flex h-7 w-7 items-center justify-center rounded-md bg-neutral-900/70 text-white hover:bg-neutral-900"
+            title="删除公式"
+            onClick={() => deleteNode()}
           >
-            ✓
+            <X className="h-4 w-4" />
           </button>
-        ) : null}
-        <button
-          className="flex h-7 w-7 items-center justify-center rounded-md bg-neutral-900/70 text-white hover:bg-neutral-900"
-          title="删除公式"
-          onClick={() => deleteNode()}
-        >
-          <X className="h-4 w-4" />
-        </button>
+        )}
       </div>
     </NodeViewWrapper>
   );
