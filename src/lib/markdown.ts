@@ -500,8 +500,9 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
     }
 
     case "image-gallery": {
-      const urls: string[] = (node.attrs?.urls as string[]) ?? [];
-      return `<!-- image gallery (${urls.length} images) -->\n${urls.map((u) => `![]( ${u} )`).join("\n")}`;
+      // gallery 无 attrs（子节点是 image，content: "image*"）；遍历子节点导出图片引用
+      const srcs = (node.content ?? []).map((img) => (img.attrs?.src as string) ?? "");
+      return `<!-- image gallery (${srcs.length} images) -->\n${srcs.map((u) => `![](${u})`).join("\n")}`;
     }
 
     case "outline":

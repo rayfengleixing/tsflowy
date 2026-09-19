@@ -246,6 +246,13 @@
 .tiptap p {
   margin: 0;
 }
+/* 图集双列修复：TipTap v3 ReactNodeView 会在 NodeViewContent 内再插入一层
+   block div（contentDOM），它成为 grid 唯一子项 → 所有图片挤成单列；
+   把该层改为 display:contents 不产生盒子，image 直接成为 grid item */
+[data-gallery-grid] > div[data-node-view-content],
+[data-gallery-grid] > div[data-node-view-content] > div[data-node-view-content-react] {
+  display: contents;
+}
 .tiptap h1,
 .tiptap h2,
 .tiptap h3 {

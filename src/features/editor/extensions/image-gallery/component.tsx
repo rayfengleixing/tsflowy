@@ -102,7 +102,7 @@ export function ImageGalleryNodeView(props: ReactNodeViewProps<HTMLElement>) {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-2" data-gallery-grid>
           <NodeViewContent className="contents gallery-content-host" />
         </div>
       )}
