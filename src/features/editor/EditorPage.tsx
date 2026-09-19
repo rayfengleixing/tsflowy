@@ -35,6 +35,7 @@ import { Attachment } from "./extensions/attachment/node";
 import { CodeBlock } from "./extensions/code-block/index";
 // — M3 高级块（按步骤逐个引入，见实现计划）—
 import { Math } from "./extensions/math/node";
+import { Mermaid } from "./extensions/mermaid/node";
 import { Callout } from "./extensions/callout/node";
 import { Toggle } from "./extensions/toggle/node";
 import { Outline } from "./extensions/outline/node";
@@ -177,6 +178,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       Attachment,
       // — M3 高级块（注册顺序不敏感，mention 是 mark，其余是 node）—
       Math,
+      Mermaid,
       Callout,
       Toggle,
       Outline,

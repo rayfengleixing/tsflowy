@@ -26,6 +26,7 @@ import {
   Table,
   Table2,
   Type,
+  Workflow,
   AtSign,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -194,6 +195,17 @@ export const slashItems: SlashItem[] = [
         .chain()
         .focus()
         .insertContent({ type: "math", attrs: { tex: "" } })
+        .run(),
+  },
+  {
+    key: "mermaid",
+    alias: "diagram flow chart 流程图 图表",
+    icon: <Workflow className="h-4 w-4" />,
+    run: (e) =>
+      e
+        .chain()
+        .focus()
+        .insertContent({ type: "mermaid", attrs: { code: "" } })
         .run(),
   },
   {

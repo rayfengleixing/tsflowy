@@ -278,6 +278,7 @@ const zh = {
   "table.deleteTable": "删除整个表格",
   // — M3 高级块 / 浮动工具栏新增文案 —
   "slash.math": "数学公式",
+  "slash.mermaid": "Mermaid 图表",
   "slash.callout": "提示框",
   "slash.toggle": "折叠列表",
   "slash.outline": "目录",
@@ -305,6 +306,8 @@ const zh = {
   "mention.placeholder": "输入关键词搜索页面",
   "math.placeholder": "双击编辑公式（TeX 语法）",
   "math.edit": "编辑公式",
+  "mermaid.placeholder": "双击编辑 Mermaid 源码",
+  "mermaid.renderFailed": "图表渲染失败，双击编辑源码",
   "subPage.placeholder": "选择子页面",
   "subPage.noView": "暂无页面可选",
   "emoji.pick": "选择表情",
@@ -712,6 +715,7 @@ const en: Record<MessageKey, string> = {
   "table.deleteTable": "Delete entire table",
   // — M3 advanced blocks / floating menu new keys —
   "slash.math": "Math formula",
+  "slash.mermaid": "Mermaid diagram",
   "slash.callout": "Callout",
   "slash.toggle": "Toggle list",
   "slash.outline": "Outline",
@@ -739,6 +743,8 @@ const en: Record<MessageKey, string> = {
   "mention.placeholder": "Type to search pages",
   "math.placeholder": "Double-click to edit (TeX syntax)",
   "math.edit": "Edit formula",
+  "mermaid.placeholder": "Double-click to edit Mermaid source",
+  "mermaid.renderFailed": "Failed to render diagram, double-click to edit source",
   "subPage.placeholder": "Select a sub page",
   "subPage.noView": "No pages to select yet",
   "emoji.pick": "Pick an emoji",

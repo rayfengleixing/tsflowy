@@ -93,6 +93,23 @@ describe("markdownToJson", () => {
     expect(json.content?.[0]).toEqual({ type: "math", attrs: { tex: "E=mc^2" } });
   });
 
+  it("converts ```mermaid fence into mermaid node (not codeBlock)", () => {
+    const json = markdownToJson("```mermaid\ngraph TD\n  A --> B\n```");
+    expect(json.content?.[0]).toEqual({ type: "mermaid", attrs: { code: "graph TD\n  A --> B" } });
+  });
+
+  it("keeps plain code fence as codeBlock when lang is not mermaid", () => {
+    const json = markdownToJson("```js\nconsole.log(1)\n```");
+    expect(json.content?.[0]?.type).toBe("codeBlock");
+  });
+
+  it("mermaid fence round-trips", () => {
+    const src = "```mermaid\ngraph LR\n  A -->|text| B\n```";
+    const json = markdownToJson(src);
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("```mermaid\ngraph LR\n  A -->|text| B\n```");
+  });
+
   it("consumes unterminated math fence to end of input", () => {
     const json = markdownToJson("$$\na+b");
     expect(json.content).toEqual([{ type: "math", attrs: { tex: "a+b" } }]);

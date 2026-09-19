@@ -8,6 +8,7 @@ const INLINE_RE =
   /(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(`[^`\n]+`)|(~~[^~\n]+~~)|(!\[[^\]]*\]\([^)\n]+\))|(\[[^\]]+\]\([^)\n]+\))/g;
 
 const CODE_FENCE_RE = /^```(\w*)\s*$/;
+const MERMAID_FENCE_RE = /^```mermaid\s*$/i;
 const HEADING_RE = /^(#{1,3})\s+(.*)$/;
 const HR_RE = /^(-{3,}|\*{3,}|_{3,})$/;
 const TASK_RE = /^[-*]\s+\[([ xX])\]\s+(.*)$/;
@@ -97,6 +98,19 @@ export function markdownToJson(md: string): JSONContent {
     const trimmed = lines[i].trim();
     if (!trimmed) {
       i++;
+      continue;
+    }
+
+    // mermaid 围栏：```mermaid（在通用代码围栏前判断，否则会被当作 codeBlock）
+    if (MERMAID_FENCE_RE.test(trimmed)) {
+      const buf: string[] = [];
+      i++;
+      while (i < lines.length && !/^```\s*$/.test(lines[i].trim())) {
+        buf.push(lines[i]);
+        i++;
+      }
+      i++; // 跳过闭合围栏
+      blocks.push({ type: "mermaid", attrs: { code: buf.join("\n") } });
       continue;
     }
 
@@ -463,6 +477,12 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
       // math 节点是块级 atom，唯一属性为 tex（extensions/math/node.ts），按 display math 围栏导出
       const tex = (node.attrs?.tex as string) ?? "";
       return `$$\n${tex}\n$$`;
+    }
+
+    case "mermaid": {
+      // mermaid 节点是块级 atom，唯一属性为 code，按 ```mermaid 围栏导出
+      const code = (node.attrs?.code as string) ?? "";
+      return `\`\`\`mermaid\n${code}\n\`\`\``;
     }
 
     case "database-view": {
