@@ -48,7 +48,8 @@ export function ImageGalleryNodeView(props: ReactNodeViewProps<HTMLElement>) {
       const galleryEnd = posVal + galleryNode.nodeSize - 1;
       const newImgNodes = rels.map((r) => editor.schema.node("image", { src: r, alt: "", caption: "" }));
       const tr = editor.state.tr.insert(galleryEnd, newImgNodes);
-      editor.view.dispatch(tr.scrollIntoView());
+      // 不 scrollIntoView：selection 常停留在文档其他位置（如末尾），插入图片后会把页面滚走
+      editor.view.dispatch(tr);
     } catch (e) {
       console.error("gallery upload failed", e);
       toast.error(t("error.upload", { message: String(e) }));
