@@ -6,7 +6,6 @@ import { PluginKey } from "@tiptap/pm/state";
 import { ReactRenderer } from "@tiptap/react";
 import {
   AlignLeft,
-  ArrowRight,
   CheckSquare,
   ChevronDown,
   Code2,
@@ -57,6 +56,8 @@ async function uploadAttachment(): Promise<string | null> {
 export interface SlashItem {
   key: string;
   icon: ReactNode;
+  /** 快捷搜索词（菜单项右侧提示，过滤时可匹配） */
+  alias: string;
   /** 执行块命令（编辑器已聚焦；image 为异步上传） */
   run: (editor: Editor) => unknown;
 }
@@ -67,34 +68,64 @@ function inTableOnly(key: string): boolean {
 }
 
 export const slashItems: SlashItem[] = [
-  { key: "text", icon: <Type className="h-4 w-4" />, run: (e) => e.chain().focus().clearNodes().run() },
+  { key: "text", alias: "text", icon: <Type className="h-4 w-4" />, run: (e) => e.chain().focus().clearNodes().run() },
   {
     key: "heading1",
+    alias: "h1",
     icon: <Heading1 className="h-4 w-4" />,
     run: (e) => e.chain().focus().toggleHeading({ level: 1 }).run(),
   },
   {
     key: "heading2",
+    alias: "h2",
     icon: <Heading2 className="h-4 w-4" />,
     run: (e) => e.chain().focus().toggleHeading({ level: 2 }).run(),
   },
   {
     key: "heading3",
+    alias: "h3",
     icon: <Heading3 className="h-4 w-4" />,
     run: (e) => e.chain().focus().toggleHeading({ level: 3 }).run(),
   },
-  { key: "bulletList", icon: <List className="h-4 w-4" />, run: (e) => e.chain().focus().toggleBulletList().run() },
+  {
+    key: "bulletList",
+    alias: "ul",
+    icon: <List className="h-4 w-4" />,
+    run: (e) => e.chain().focus().toggleBulletList().run(),
+  },
   {
     key: "orderedList",
+    alias: "ol",
     icon: <ListOrdered className="h-4 w-4" />,
     run: (e) => e.chain().focus().toggleOrderedList().run(),
   },
-  { key: "taskList", icon: <CheckSquare className="h-4 w-4" />, run: (e) => e.chain().focus().toggleTaskList().run() },
-  { key: "blockquote", icon: <Quote className="h-4 w-4" />, run: (e) => e.chain().focus().toggleBlockquote().run() },
-  { key: "codeBlock", icon: <Code2 className="h-4 w-4" />, run: (e) => e.chain().focus().toggleCodeBlock().run() },
-  { key: "hr", icon: <Minus className="h-4 w-4" />, run: (e) => e.chain().focus().setHorizontalRule().run() },
+  {
+    key: "taskList",
+    alias: "todo",
+    icon: <CheckSquare className="h-4 w-4" />,
+    run: (e) => e.chain().focus().toggleTaskList().run(),
+  },
+  {
+    key: "blockquote",
+    alias: "quote",
+    icon: <Quote className="h-4 w-4" />,
+    run: (e) => e.chain().focus().toggleBlockquote().run(),
+  },
+  {
+    key: "codeBlock",
+    alias: "code",
+    icon: <Code2 className="h-4 w-4" />,
+    run: (e) => e.chain().focus().toggleCodeBlock().run(),
+  },
+  {
+    key: "hr",
+    alias: "hr",
+    icon: <Minus className="h-4 w-4" />,
+    run: (e) => e.chain().focus().setHorizontalRule().run(),
+  },
   {
     key: "image",
+    alias: "img",
     icon: <ImageIcon className="h-4 w-4" />,
     run: async (e) => {
       try {
@@ -116,11 +147,13 @@ export const slashItems: SlashItem[] = [
   },
   {
     key: "table",
+    alias: "table",
     icon: <Table className="h-4 w-4" />,
     run: (e) => e.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
   },
   {
     key: "databaseView",
+    alias: "db",
     icon: <Table2 className="h-4 w-4" />,
     run: (e) => {
       // 把当前 editor + 插入位置（此时 selection 尚未被 slash 关闭改写）一并传给 handler
@@ -136,6 +169,7 @@ export const slashItems: SlashItem[] = [
   },
   {
     key: "attachment",
+    alias: "file",
     icon: <FileIcon className="h-4 w-4" />,
     run: async (e) => {
       const src = await uploadAttachment();
@@ -144,10 +178,16 @@ export const slashItems: SlashItem[] = [
       e.chain().focus().insertContent({ type: "attachment", attrs: { src, name } }).run();
     },
   },
-  { key: "paragraph", icon: <AlignLeft className="h-4 w-4" />, run: (e) => e.chain().focus().setParagraph().run() },
+  {
+    key: "paragraph",
+    alias: "para",
+    icon: <AlignLeft className="h-4 w-4" />,
+    run: (e) => e.chain().focus().setParagraph().run(),
+  },
   // — M3 高级块入口（不在白名单里的自然禁止在 table 内使用）—
   {
     key: "math",
+    alias: "tex",
     icon: <FunctionSquare className="h-4 w-4" />,
     run: (e) =>
       e
@@ -158,6 +198,7 @@ export const slashItems: SlashItem[] = [
   },
   {
     key: "callout",
+    alias: "note",
     icon: <Lightbulb className="h-4 w-4" />,
     run: (e) =>
       e
@@ -172,6 +213,7 @@ export const slashItems: SlashItem[] = [
   },
   {
     key: "toggle",
+    alias: "fold",
     icon: <ChevronDown className="h-4 w-4" />,
     run: (e) =>
       e
@@ -186,21 +228,25 @@ export const slashItems: SlashItem[] = [
   },
   {
     key: "outline",
+    alias: "toc",
     icon: <ListTree className="h-4 w-4" />,
     run: (e) => e.chain().focus().insertContent({ type: "outline" }).run(),
   },
   {
     key: "mention",
+    alias: "at",
     icon: <AtSign className="h-4 w-4" />,
     run: (e) => e.chain().focus().insertContent({ type: "text", text: "@" }).run(),
   },
   {
     key: "emoji",
+    alias: "emo",
     icon: <Smile className="h-4 w-4" />,
     run: (e) => window.dispatchEvent(new CustomEvent(INSERT_EMOJI_EVENT, { detail: { editor: e } })),
   },
   {
     key: "imageGallery",
+    alias: "gallery",
     icon: <Images className="h-4 w-4" />,
     run: (e) => e.chain().focus().insertContent({ type: "imageGallery" }).run(),
   },
@@ -214,9 +260,12 @@ export function filterSlashItems(props: { query: string; editor: Editor }): Slas
   return slashItems.filter((item) => {
     const label = t(`slash.${item.key}` as MessageKey);
     const labelLower = label.toLowerCase();
-    // 名称（中/英）、key、拼音首字母（如 "bt" → 标题）任一命中即显示
+    // 名称（中/英）、key、alias 快捷词、拼音首字母（如 "bt" → 标题）任一命中即显示
     const hit =
-      labelLower.includes(q) || item.key.toLowerCase().includes(q) || pinyinInitials(label).toLowerCase().includes(q);
+      labelLower.includes(q) ||
+      item.key.toLowerCase().includes(q) ||
+      item.alias.toLowerCase().includes(q) ||
+      pinyinInitials(label).toLowerCase().includes(q);
     if (!hit) return false;
     return !(inTable && !inTableOnly(item.key));
   });
@@ -289,7 +338,7 @@ function SlashMenuList(props: {
         >
           <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">{item.icon}</span>
           <span className="flex-1">{t(`slash.${item.key}` as MessageKey)}</span>
-          <ArrowRight className="h-3 w-3 text-neutral-400" />
+          <span className="shrink-0 font-mono text-[10px] text-neutral-400">{item.alias}</span>
         </button>
       ))}
     </div>
