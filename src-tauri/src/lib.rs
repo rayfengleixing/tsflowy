@@ -166,6 +166,7 @@ pub fn run() {
             commands::files::read_text_file,
             commands::files::write_text_file,
             commands::files::write_binary_file,
+            commands::files::mkdir_all,
             commands::files::read_asset_bytes,
             commands::files::data_dir_path,
             commands::files::open_data_dir,

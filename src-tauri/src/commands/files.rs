@@ -296,6 +296,12 @@ pub fn write_binary_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
     fs::write(&path, &bytes).map_err(|e| format!("failed to write {path}: {e}"))
 }
 
+/// 递归创建目录（整库导出 Markdown 文件夹用；路径来自目录选择对话框，不受 fs 插件 scope 限制）
+#[tauri::command]
+pub fn mkdir_all(path: String) -> Result<(), String> {
+    fs::create_dir_all(&path).map_err(|e| format!("failed to create dir {path}: {e}"))
+}
+
 /// 读取 assets/ 下文件的字节（长图/PDF 导出把图片内联为 data URL 用，绕开 asset 协议跨源抓取）。
 #[tauri::command]
 pub fn read_asset_bytes(app: tauri::AppHandle, relative: String) -> Result<Vec<u8>, String> {

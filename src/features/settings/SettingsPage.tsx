@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FolderOpen, Upload, Download, Settings2, RefreshCw, FolderInput } from "lucide-react";
+import { FolderOpen, Upload, Download, Settings2, RefreshCw, FolderInput, FolderOutput } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -23,6 +23,7 @@ import {
 import { useWorkspaceStore } from "@/stores/workspace";
 import { Button } from "@/components/ui/button";
 import { importMarkdownFolder } from "@/lib/import-folder";
+import { exportMarkdownFolder } from "@/lib/export-folder";
 import { t, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -67,6 +68,7 @@ export function SettingsPage() {
   const [busyExport, setBusyExport] = useState(false);
   const [busyImport, setBusyImport] = useState(false);
   const [busyImportFolder, setBusyImportFolder] = useState(false);
+  const [busyExportFolder, setBusyExportFolder] = useState(false);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
 
   useEffect(() => {
@@ -151,6 +153,25 @@ export function SettingsPage() {
       toast.error(t("error.db", { message: String(e) }));
     } finally {
       setBusyImportFolder(false);
+    }
+  };
+
+  // 整库导出 Markdown：按页面树递归导出 .md（有子页面的页面 → 同名文件夹）
+  const exportFolder = async () => {
+    setBusyExportFolder(true);
+    try {
+      const result = await exportMarkdownFolder();
+      if (!result) return; // 用户取消
+      if (result.total === 0) {
+        toast.info(t("settings.exportFolderEmpty"));
+      } else {
+        if (result.exported > 0) toast.success(t("settings.exportedFolder", { n: result.exported }));
+        if (result.failed > 0) toast.warning(t("settings.exportFolderFailed", { n: result.failed }));
+      }
+    } catch (e) {
+      toast.error(t("error.db", { message: String(e) }));
+    } finally {
+      setBusyExportFolder(false);
     }
   };
 
@@ -346,6 +367,14 @@ export function SettingsPage() {
                 <FolderInput className="mr-1 h-3.5 w-3.5" />
               )}
               {t("settings.importFolder")}
+            </Button>
+            <Button size="sm" variant="outline" onClick={exportFolder} disabled={busyExportFolder}>
+              {busyExportFolder ? (
+                <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FolderOutput className="mr-1 h-3.5 w-3.5" />
+              )}
+              {t("settings.exportFolder")}
             </Button>
           </div>
         </Section>
