@@ -5,6 +5,19 @@ import mermaid from "mermaid";
 import { t } from "@/lib/i18n";
 
 let renderSeq = 0;
+// 离屏渲染宿主：mermaid.render 不传容器时会把临时 div 挂到 body 的正常文档流，
+// 渲染期间短暂撑高文档导致滚动条闪现；统一渲染进固定在视口外的宿主元素
+let renderHost: HTMLDivElement | null = null;
+function getRenderHost(): HTMLDivElement {
+  if (!renderHost?.isConnected) {
+    renderHost = document.createElement("div");
+    renderHost.style.position = "fixed";
+    renderHost.style.left = "-65535px";
+    renderHost.style.top = "0";
+    document.body.appendChild(renderHost);
+  }
+  return renderHost;
+}
 
 async function renderMermaid(code: string): Promise<string> {
   const dark = document.documentElement.classList.contains("dark");
@@ -20,7 +33,7 @@ async function renderMermaid(code: string): Promise<string> {
     // mermaid v12 的 render 失败时会把错误内容留在 body 末尾的临时元素里，
     // 表现为"错误提示显示在整个应用界面之外"
     await mermaid.parse(code);
-    const { svg } = await mermaid.render(id, code);
+    const { svg } = await mermaid.render(id, code, getRenderHost());
     return svg;
   } finally {
     // 兜底清理：render 成功/失败后残留的临时元素一并移除（#<id> 与带 d 前缀的变体）
@@ -29,7 +42,7 @@ async function renderMermaid(code: string): Promise<string> {
   }
 }
 
-// Mermaid NodeView：非编辑态渲染 SVG（双击切编辑）；编辑态 textarea + 防抖实时预览
+// Mermaid NodeView：非编辑态渲染 SVG（双击切编辑）；编辑态仅编辑 textarea，退出时渲染草稿
 export function MermaidNodeView(props: ReactNodeViewProps<HTMLElement>) {
   const { node, updateAttributes, deleteNode, selected } = props;
   const code = (node.attrs.code as string) ?? "";
@@ -48,35 +61,33 @@ export function MermaidNodeView(props: ReactNodeViewProps<HTMLElement>) {
     }
   }, [editing]);
 
-  // 渲染：非编辑态渲染已保存 code；编辑态防抖渲染草稿（实时预览）
+  // 渲染：仅非编辑态渲染已保存 code。编辑态跳过——草稿不展示，
+  // 且每次防抖渲染都会往 DOM 挂临时元素（编辑中持续触发，即使离屏也无谓开销）
   useEffect(() => {
-    const src = editing ? draft : code;
-    if (!src.trim()) {
+    if (editing) return;
+    if (!code.trim()) {
       setSvg("");
       setError(null);
       return;
     }
     let cancelled = false;
-    const timer = setTimeout(
-      () => {
-        renderMermaid(src)
-          .then((s) => {
-            if (cancelled) return;
-            setSvg(s);
-            setError(null);
-          })
-          .catch((e: unknown) => {
-            if (cancelled) return;
-            setError(String(e));
-          });
-      },
-      editing ? 400 : 0,
-    );
+    const timer = setTimeout(() => {
+      renderMermaid(code)
+        .then((s) => {
+          if (cancelled) return;
+          setSvg(s);
+          setError(null);
+        })
+        .catch((e: unknown) => {
+          if (cancelled) return;
+          setError(String(e));
+        });
+    }, 0);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [code, draft, editing]);
+  }, [code, editing]);
 
   const commit = () => {
     setEditing(false);
