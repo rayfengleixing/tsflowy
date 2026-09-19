@@ -76,7 +76,9 @@ export function PageTree() {
       }
       const targetId = row.dataset.treeRow;
       const cur = useWorkspaceStore.getState().tree;
-      if (targetId === s.id || isDescendant(cur, targetId, s.id)) {
+      // 拒绝条件：目标是被拖项自身或其后代（防环）；注意参数顺序——
+      // isDescendant(tree, ancestor, x) 判 "x 在 ancestor 子树内"，父级行不是自己的后代，必须放行
+      if (targetId === s.id || isDescendant(cur, s.id, targetId)) {
         setDropHint(null);
         return;
       }
@@ -95,7 +97,7 @@ export function PageTree() {
       const cur = useWorkspaceStore.getState().tree;
       if (row?.dataset.treeRow) {
         const targetId = row.dataset.treeRow;
-        if (targetId !== s.id && !isDescendant(cur, targetId, s.id)) {
+        if (targetId !== s.id && !isDescendant(cur, s.id, targetId)) {
           const zone = zoneForEl(row, e.clientY);
           if (zone === "inside") expand(targetId);
           void handleDrop(s.id, targetId, zone);
