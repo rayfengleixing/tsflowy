@@ -345,7 +345,8 @@ class BlockDragView {
         }
       }
       tr2 = tr2.insert(targetPos, slice.content);
-      this.view.dispatch(tr2.scrollIntoView());
+      // 不 scrollIntoView：删除+插入后映射的选区常落在文档首尾，会导致滚动跳到顶部/底部
+      this.view.dispatch(tr2);
     } catch (err) {
       console.warn("block drag drop failed", err);
     }
