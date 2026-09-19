@@ -12,10 +12,12 @@ export type FieldType =
   | "phone"
   | "email"
   | "created_at"
-  | "last_edited_at";
+  | "last_edited_at"
+  | "formula";
 
 // 字段类型可选列表（附件字段完整上传/落库功能未实现，保留在 FieldType 中兼容历史数据；
 // created_at / last_edited_at 由触发器自动维护（READONLY_FIELD_TYPES）。
+// formula 由前端按表达式实时计算展示，无存储值，同样只读不可编辑。
 export const FIELD_TYPES: FieldType[] = [
   "text",
   "number",
@@ -28,10 +30,11 @@ export const FIELD_TYPES: FieldType[] = [
   "email",
   "created_at",
   "last_edited_at",
+  "formula",
 ];
 
 /** 时间戳/系统字段：创建时间手动改保留历史值；最后编辑时间由触发器强制刷新，不能在 UI 改 */
-export const READONLY_FIELD_TYPES: FieldType[] = ["last_edited_at"];
+export const READONLY_FIELD_TYPES: FieldType[] = ["last_edited_at", "formula"];
 
 export function isReadonlyType(t: FieldType): boolean {
   return READONLY_FIELD_TYPES.includes(t);
@@ -79,6 +82,7 @@ export type FieldOptions =
   | { kind: "select"; options: SelectOption[] } // single_select / multi_select
   | { kind: "number"; format: "integer" | "decimal" | "percent" | "currency"; precision: number; currency: string }
   | { kind: "date"; include_time: boolean }
+  | { kind: "formula"; formula: string } // 公式表达式，字段引用用 {字段名}
   | { kind: "none" };
 
 /** 行详情视图的 extra 标记（说明书 12 节风险 7：搜索/侧边栏过滤时排除） */

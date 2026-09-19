@@ -10,6 +10,7 @@ import {
   Mail,
   Phone,
   Type as TypeIcon,
+  Sigma,
   Link as LinkIcon,
 } from "lucide-react";
 import type { FieldType } from "@/types/database";
@@ -22,6 +23,8 @@ export function fieldIcon(type: FieldType): ReactNode {
       return <TypeIcon className={cls} />;
     case "number":
       return <Hash className={cls} />;
+    case "formula":
+      return <Sigma className={cls} />;
     case "date":
       return <Calendar className={cls} />;
     case "single_select":

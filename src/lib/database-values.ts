@@ -42,6 +42,9 @@ export function validateCellValue(type: FieldType, value: CellValue): boolean {
       return typeof value === "string";
     case "number":
       return typeof value === "number" && Number.isFinite(value);
+    case "formula":
+      // 公式字段无存储值（展示时实时计算），此处仅防御性放行
+      return typeof value === "number" && Number.isFinite(value);
     case "checkbox":
       return typeof value === "boolean";
     case "multi_select":
@@ -74,6 +77,7 @@ export function formatCellValue(type: FieldType, value: CellValue, options?: Fie
   if (value === null || value === undefined || value === "") return "";
   switch (type) {
     case "number":
+    case "formula": // 公式值由调用方算好传入（computeFormula），按数字字段格式展示
       if (typeof value !== "number") return "";
       return formatNumber(
         value,

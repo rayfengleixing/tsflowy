@@ -4,6 +4,7 @@ import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { FIELD_TYPES, isReadonlyType, type FieldType } from "@/types/database";
 import { useDatabaseStore } from "@/stores/database";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
+import { computeFormula } from "@/lib/database-formula";
 import { cn } from "@/lib/utils";
 import type { View } from "@/types/models";
 import { EditorPage } from "@/features/editor/EditorPage";
@@ -35,7 +36,12 @@ function RowPropertyField({
   const [nameEditing, setNameEditing] = useState(false);
   const [nameDraft, setNameDraft] = useState(field.name);
   // 原子 selector：只订阅本行本字段值，其他行/字段变化不触发本组件重渲
-  const value = useDatabaseStore((s) => s.cells[row.id]?.[field.id] ?? null);
+  // 公式字段无存储值：按整行字段实时计算（结果为数字，引用稳定）
+  const value = useDatabaseStore((s) =>
+    field.field_type === "formula"
+      ? computeFormula(field, s.cells[row.id] ?? {}, s.fields)
+      : (s.cells[row.id]?.[field.id] ?? null),
+  );
   const setCell = useDatabaseStore((s) => s.setCell);
   const addSelectOption = useDatabaseStore((s) => s.addSelectOption);
   const removeSelectOption = useDatabaseStore((s) => s.removeSelectOption);

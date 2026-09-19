@@ -22,6 +22,7 @@ import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { UNGROUPED, applyFilters, canGroupBy, groupRowsForGrid, sortRows, type SortSpec } from "@/lib/database-query";
 import { aggregateValue, normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
 import { buildCsvExport, csvValueToCell, parseCsv, planImport } from "@/lib/csv";
+import { computeFormula } from "@/lib/database-formula";
 import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
 import { NewFieldDialog } from "./NewFieldDialog";
@@ -207,10 +208,20 @@ export function GridView({
     setDraggingRow(null);
   };
 
-  // CSV 导出
+  // CSV 导出（公式列在导出前注入算好的值）
   const exportCsv = async () => {
     try {
-      const content = buildCsvExport(fields, rows, cells);
+      const cellsWithFormula = { ...cells };
+      for (const row of rows) {
+        for (const f of fields) {
+          if (f.field_type !== "formula") continue;
+          const v = computeFormula(f, cells[row.id] ?? {}, fields);
+          if (v !== null) {
+            cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: v };
+          }
+        }
+      }
+      const content = buildCsvExport(fields, rows, cellsWithFormula);
       const target = await save({
         defaultPath: (source.name || "export").replace(/[\\/:*?"<>|]/g, "_") + ".csv",
         filters: [{ name: "CSV", extensions: ["csv"] }],
@@ -314,6 +325,11 @@ export function GridView({
       {visibleFields.map((field) => {
         const isPrimary = field.id === primaryField?.id;
         const isEditing = editing?.rowId === row.id && editing.fieldId === field.id;
+        // 公式字段无存储值：渲染时按表达式实时计算
+        const value =
+          field.field_type === "formula"
+            ? computeFormula(field, cells[row.id] ?? {}, fields)
+            : (cells[row.id]?.[field.id] ?? null);
         return (
           <td
             key={field.id}
@@ -371,7 +387,7 @@ export function GridView({
             ) : (
               <CellDisplay
                 field={field}
-                value={cells[row.id]?.[field.id] ?? null}
+                value={value}
                 primary={isPrimary}
                 onChipRemove={(newVal) => void store.setCell(row.id, field.id, newVal)}
                 onOpenRowDetail={() => void openRowDetail(row, source)}
