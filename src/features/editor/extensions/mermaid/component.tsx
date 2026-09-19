@@ -14,8 +14,19 @@ async function renderMermaid(code: string): Promise<string> {
     theme: dark ? "dark" : "default",
     fontFamily: "inherit",
   });
-  const { svg } = await mermaid.render(`mmd-${++renderSeq}`, code);
-  return svg;
+  const id = `mmd-${++renderSeq}`;
+  try {
+    // 语法预校验：失败直接抛给上层显示（组件内错误框），不进 render——
+    // mermaid v12 的 render 失败时会把错误内容留在 body 末尾的临时元素里，
+    // 表现为"错误提示显示在整个应用界面之外"
+    await mermaid.parse(code);
+    const { svg } = await mermaid.render(id, code);
+    return svg;
+  } finally {
+    // 兜底清理：render 成功/失败后残留的临时元素一并移除（#<id> 与带 d 前缀的变体）
+    document.getElementById(id)?.remove();
+    document.getElementById(`d${id}`)?.remove();
+  }
 }
 
 // Mermaid NodeView：非编辑态渲染 SVG（双击切编辑）；编辑态 textarea + 防抖实时预览
