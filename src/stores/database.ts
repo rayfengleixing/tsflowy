@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { CellValue, DatabaseField, DatabaseRow, FieldOptions, FieldType } from "@/types/database";
 import { databaseApi } from "@/lib/database";
 import { newSelectOption, parseFieldOptions } from "@/lib/database-values";
+import { renameFormulaRef } from "@/lib/database-formula";
 import { viewApi } from "@/lib/db";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
@@ -64,6 +65,37 @@ interface DatabaseState {
   clearFocusRow: () => void;
 }
 
+// 并发 load/reload 只允许最新一次写入：快速切换视图时慢请求的旧数据不能盖住新视图
+// （DatabasePage 按 view.id 渲染 store 数据，不校验响应来自哪次请求）
+let loadSeq = 0;
+
+/** 清除所有单元格对已删除选项的引用（单选置 null / 多选剔除该项）并逐行落库。
+ *  字段设置弹窗与单元格下拉两条删除选项的路径共用，否则弹窗路径会留下悬空 id。 */
+async function clearRemovedOptionRefs(
+  set: (partial: Partial<DatabaseState>) => void,
+  get: () => DatabaseState,
+  fieldId: string,
+  removed: string[],
+) {
+  const gone = new Set(removed);
+  const cells = { ...get().cells };
+  const changed: { rowId: string; value: CellValue }[] = [];
+  for (const [rowId, rowCells] of Object.entries(cells)) {
+    const v = rowCells[fieldId];
+    if (typeof v === "string" && gone.has(v)) {
+      rowCells[fieldId] = null;
+      changed.push({ rowId, value: null });
+    } else if (Array.isArray(v) && v.some((x) => gone.has(x))) {
+      const next = v.filter((x) => !gone.has(x));
+      rowCells[fieldId] = next;
+      changed.push({ rowId, value: next });
+    }
+  }
+  if (changed.length === 0) return;
+  set({ cells });
+  for (const c of changed) await databaseApi.setCell(c.rowId, fieldId, c.value);
+}
+
 export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
   viewId: null,
   view: null,
@@ -91,6 +123,7 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
   load: async (view) => {
     const viewId = view.id;
     if (get().viewId === viewId && get().fields.length > 0) return;
+    const seq = ++loadSeq;
     const cfg = readViewConfig(view);
     set({
       loading: true,
@@ -106,11 +139,15 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
         databaseApi.listRows(viewId),
         databaseApi.loadCells(viewId),
       ]);
+      // 等待期间已切到别的视图（viewId 变了）或有更新的请求 → 丢弃本次结果，不碰 loading
+      if (seq !== loadSeq || get().viewId !== viewId) return;
       set({ fields, rows, cells, loading: false });
     } catch (e) {
-      logger.error("database.load", e);
-      toast.error(t("error.db", { message: String(e) }));
-      set({ loading: false });
+      if (seq === loadSeq) {
+        logger.error("database.load", e);
+        toast.error(t("error.db", { message: String(e) }));
+        set({ loading: false });
+      }
       throw e;
     }
   },
@@ -118,11 +155,13 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
   reload: async () => {
     const viewId = get().viewId;
     if (!viewId) return;
+    const seq = ++loadSeq;
     const [fields, rows, cells] = await Promise.all([
       databaseApi.listFields(viewId),
       databaseApi.listRows(viewId),
       databaseApi.loadCells(viewId),
     ]);
+    if (seq !== loadSeq || get().viewId !== viewId) return;
     set({ fields, rows, cells });
   },
 
@@ -135,11 +174,24 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
   },
 
   renameField: async (id, name) => {
+    const before = get().fields.find((f) => f.id === id);
     await databaseApi.renameField(id, name);
     set({ fields: get().fields.map((f) => (f.id === id ? { ...f, name } : f)) });
+    if (!before || before.name === name) return;
+    // 公式以 {字段名} 引用：不同步改写的话，重命名会让引用该字段的公式全部变空
+    const formulas = get().fields.filter((f) => f.id !== id && parseFieldOptions(f.options).kind === "formula");
+    for (const f of formulas) {
+      const opts = parseFieldOptions(f.options);
+      if (opts.kind !== "formula") continue;
+      const next = renameFormulaRef(opts.formula, before.name, name);
+      if (next === opts.formula) continue;
+      await get().updateFieldOptions(f.id, { ...opts, formula: next });
+    }
   },
 
   changeFieldType: async (id, type) => {
+    const field = get().fields.find((f) => f.id === id);
+    if (field?.field_type === type) return; // 同类型重选：不清列、不重置选项
     await databaseApi.changeFieldType(id, type);
     await get().reload();
   },
@@ -179,8 +231,15 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
   },
 
   updateFieldOptions: async (id, options) => {
+    const before = get().fields.find((f) => f.id === id);
     await databaseApi.updateFieldOptions(id, options);
     set({ fields: get().fields.map((f) => (f.id === id ? { ...f, options: JSON.stringify(options) } : f)) });
+    if (!before) return;
+    const prev = parseFieldOptions(before.options);
+    if (prev.kind !== "select" || options.kind !== "select") return;
+    const kept = new Set(options.options.map((o) => o.id));
+    const removed = prev.options.filter((o) => !kept.has(o.id)).map((o) => o.id);
+    if (removed.length > 0) await clearRemovedOptionRefs(set, get, id, removed);
   },
 
   addSelectOption: async (id, name) => {
@@ -195,31 +254,13 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
     return option.id;
   },
 
-  /** 删除选项：从字段 options 移除，并清除引用了该选项的单元格值 */
+  /** 删除选项：从字段 options 移除（单元格清理统一由 updateFieldOptions 完成） */
   removeSelectOption: async (id, optionId) => {
     const field = get().fields.find((f) => f.id === id);
     if (!field) return;
     const opts = parseFieldOptions(field.options);
     if (opts.kind !== "select") return;
-    const next: FieldOptions = { ...opts, options: opts.options.filter((o) => o.id !== optionId) };
-    await databaseApi.updateFieldOptions(id, next);
-    // 清除/更新引用了该选项的单元格
-    const cells = { ...get().cells };
-    const changed: { rowId: string; value: CellValue }[] = [];
-    for (const [rowId, rowCells] of Object.entries(cells)) {
-      if (!(id in rowCells)) continue;
-      if (rowCells[id] === optionId) {
-        rowCells[id] = null;
-        changed.push({ rowId, value: null });
-      } else if (Array.isArray(rowCells[id]) && rowCells[id].includes(optionId)) {
-        rowCells[id] = rowCells[id].filter((v) => v !== optionId);
-        changed.push({ rowId, value: rowCells[id] });
-      }
-    }
-    set({ fields: get().fields.map((f) => (f.id === id ? { ...f, options: JSON.stringify(next) } : f)), cells });
-    for (const c of changed) {
-      await databaseApi.setCell(c.rowId, id, c.value);
-    }
+    await get().updateFieldOptions(id, { ...opts, options: opts.options.filter((o) => o.id !== optionId) });
   },
 
   addRow: async () => {

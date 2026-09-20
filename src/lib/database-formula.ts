@@ -149,3 +149,9 @@ export function computeFormula(
     return cellToNumber(rowCells[target.id] ?? null);
   });
 }
+
+/** 字段改名时同步改写公式里的 {旧名} 引用；只动引用，数字/运算符/其它引用原样保留。
+ *  引用按名字解析（computeFormula 的 byName），不改写会让公式在改名后恒为空。 */
+export function renameFormulaRef(formula: string, oldName: string, newName: string): string {
+  return formula.replace(/\{([^}]*)\}/g, (whole, raw: string) => (raw.trim() === oldName ? `{${newName}}` : whole));
+}

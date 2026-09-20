@@ -235,13 +235,19 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     );
   };
 
+  // 树加载是异步的：晚到的响应可能属于已切走的空间（或已被更新的请求），只允许最新一次写入。
+  // 没有它时快速切空间/连续刷新会让旧空间的树盖住新空间的树。
+  let treeSeq = 0;
+
   const patchTree = async (): Promise<void> => {
     const { currentWorkspaceId } = get();
     if (!currentWorkspaceId) return;
+    const seq = ++treeSeq;
     const [views, trash] = await Promise.all([
       viewApi.listByWorkspace(currentWorkspaceId),
       viewApi.listTrash(currentWorkspaceId),
     ]);
+    if (seq !== treeSeq || get().currentWorkspaceId !== currentWorkspaceId) return;
     const tree = buildTree(views);
     // 只保留 tree 中真实存在（未被删/移走）的 tabs，按原顺序
     const byId = new Map<string, ViewNode>();
@@ -259,12 +265,14 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
   const patchTreeAndRestoreTabs = async (): Promise<void> => {
     const { currentWorkspaceId } = get();
     if (!currentWorkspaceId) return;
+    const seq = ++treeSeq;
     const [views, trash] = await Promise.all([
       viewApi.listByWorkspace(currentWorkspaceId),
       viewApi.listTrash(currentWorkspaceId),
     ]);
     const tree = buildTree(views);
     const { tabs, currentViewId } = await loadTabsForWs(currentWorkspaceId, tree);
+    if (seq !== treeSeq || get().currentWorkspaceId !== currentWorkspaceId) return;
     set({ tree, trash, tabs, currentViewId });
     persistNow();
   };

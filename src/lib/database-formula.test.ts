@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evalFormula } from "./database-formula";
+import { evalFormula, renameFormulaRef } from "./database-formula";
 
 describe("evalFormula", () => {
   const ref = (n: string) => ({ a: 2, b: 3, empty: null })[n] ?? null;
@@ -31,5 +31,27 @@ describe("evalFormula", () => {
   it("除零 → null", () => {
     expect(evalFormula("1 / 0", ref)).toBeNull();
     expect(evalFormula("5 / (3 - 3)", ref)).toBeNull();
+  });
+});
+
+describe("renameFormulaRef", () => {
+  it("只改写命中的引用，其余原样保留", () => {
+    expect(renameFormulaRef("{价格} * {数量}", "价格", "单价")).toBe("{单价} * {数量}");
+    expect(renameFormulaRef("{价格} + {价格}", "价格", "单价")).toBe("{单价} + {单价}");
+    expect(renameFormulaRef("{数量} + 1", "价格", "单价")).toBe("{数量} + 1");
+  });
+
+  it("名字包含空格/运算符时按引用整体匹配", () => {
+    expect(renameFormulaRef("{ 价格 } * 2", "价格", "单价")).toBe("{单价} * 2");
+    expect(renameFormulaRef("{a+b} + 1", "a+b", "c")).toBe("{c} + 1");
+    expect(renameFormulaRef("{a} + 1", "a + 1", "c")).toBe("{a} + 1");
+  });
+
+  it("引用名只是子串时不被误改", () => {
+    expect(renameFormulaRef("{价格} + {价格上限}", "价格", "单价")).toBe("{单价} + {价格上限}");
+  });
+
+  it("未闭合的引用不改写", () => {
+    expect(renameFormulaRef("{价格", "价格", "单价")).toBe("{价格");
   });
 });
