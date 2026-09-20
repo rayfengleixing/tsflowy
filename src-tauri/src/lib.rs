@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tauri::Manager;
+use tauri_plugin_window_state::StateFlags;
 use tracing_subscriber::{fmt, EnvFilter};
 
 /// 启动前：若用户设置了 custom_data_dir，把 default data dir 目录重命名为备份后，
@@ -140,6 +141,20 @@ pub fn run() {
     bootstrap_custom_data_dir();
 
     let result = tauri::Builder::default()
+        // 单实例必须第一个注册：第二次启动时回调里把已有窗口带到前台，新进程随即退出
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.unminimize();
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }))
+        // 窗口几何记忆：CloseRequested / Exit 时落盘，启动恢复大小、位置、最大化
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED)
+                .build(),
+        )
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

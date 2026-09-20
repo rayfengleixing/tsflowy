@@ -37,3 +37,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # 迁移兼容：存量安装的 _sqlx_migrations 基线/对账用（tauri-plugin-sql 已移除，表成为惰性遗留）
 sha2 = "0.10"
+tauri-plugin-single-instance = "2.4.5"
+tauri-plugin-window-state = "2.4.1"
