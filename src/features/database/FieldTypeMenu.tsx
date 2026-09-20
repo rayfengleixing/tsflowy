@@ -32,7 +32,12 @@ export function FieldTypeMenu(props: {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-72 w-44 overflow-y-auto">
         {props.types.map((type) => (
-          <DropdownMenuItem key={type} data-active={type === props.current} onSelect={() => props.onSelect(type)}>
+          <DropdownMenuItem
+            key={type}
+            disabled={type === props.current}
+            data-active={type === props.current}
+            onSelect={() => props.onSelect(type)}
+          >
             <span
               className={"mr-2 h-2 w-2 rounded-full " + (type === props.current ? "bg-brand-500" : "bg-neutral-300")}
             />

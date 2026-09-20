@@ -31,7 +31,19 @@ export function FieldMenu(props: {
   onDelete: () => void;
   onOpenOptions: () => void;
 }) {
-  const { fieldName, fieldType, hidden, primary = false, open, onOpenChange, onRename, onChangeType, onToggleHidden, onDelete, onOpenOptions } = props;
+  const {
+    fieldName,
+    fieldType,
+    hidden,
+    primary = false,
+    open,
+    onOpenChange,
+    onRename,
+    onChangeType,
+    onToggleHidden,
+    onDelete,
+    onOpenOptions,
+  } = props;
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   return (
@@ -56,8 +68,15 @@ export function FieldMenu(props: {
             <DropdownMenuSubTrigger disabled={primary}>{t("field.changeType")}</DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="max-h-72 overflow-y-auto">
               {FIELD_TYPES.map((type) => (
-                <DropdownMenuItem key={type} onSelect={() => onChangeType(type)} data-active={type === fieldType}>
-                  <span className={"mr-2 h-2 w-2 rounded-full " + (type === fieldType ? "bg-brand-500" : "bg-neutral-300")} />
+                <DropdownMenuItem
+                  key={type}
+                  disabled={type === fieldType}
+                  onSelect={() => onChangeType(type)}
+                  data-active={type === fieldType}
+                >
+                  <span
+                    className={"mr-2 h-2 w-2 rounded-full " + (type === fieldType ? "bg-brand-500" : "bg-neutral-300")}
+                  />
                   {t(`field.type.${type}` as never)}
                   {type === fieldType && <span className="ml-2 text-[11px] text-neutral-400">✓</span>}
                 </DropdownMenuItem>

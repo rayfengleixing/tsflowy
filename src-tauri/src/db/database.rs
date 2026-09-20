@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use super::models::{
     CellLoadRow, CsvFieldIn, CsvRowIn, DatabaseFieldRow, DatabaseRowRow,
@@ -155,7 +155,15 @@ pub fn reorder_fields(conn: &Connection, view_id: &str, ordered_ids: &[&str]) ->
 }
 
 /// 改字段类型：重置默认 options，并清空该字段所有单元格值（类型不兼容的数据不可保留）。
+/// 同类型重选是 no-op：UI 已对当前类型禁用，这里兜底防止误清整列数据。
 pub fn change_field_type(conn: &Connection, field_id: &str, new_type: &str) -> Result<(), String> {
+    let current: Option<String> = conn
+        .query_row("SELECT field_type FROM database_fields WHERE id = ?1", params![field_id], |r| r.get(0))
+        .optional()
+        .map_err(dberr("change field type (read current)"))?;
+    if current.as_deref() == Some(new_type) {
+        return Ok(());
+    }
     let options = default_options_json(new_type);
     conn.execute(
         "UPDATE database_fields SET field_type = ?1, options = ?2 WHERE id = ?3",
@@ -453,6 +461,22 @@ mod tests {
         let f1_cells = cells_of(&conn, "f1");
         assert_eq!(f1_cells.len(), 1); // 行还在，单元格没被删
         assert_eq!(f1_cells[0].value, "null");
+    }
+
+    #[test]
+    fn change_field_type_same_type_is_noop() {
+        let conn = setup();
+        create_field(&conn, "v1", "f1", "text", None).unwrap();
+        create_row(&conn, "v1", "r1").unwrap();
+        set_cell(&conn, "r1", "f1", r#""hello""#).unwrap();
+        let options_before = list_fields(&conn, "v1").unwrap()[0].options.clone();
+
+        change_field_type(&conn, "f1", "text").unwrap();
+
+        let f = &list_fields(&conn, "v1").unwrap()[0];
+        assert_eq!(f.field_type, "text");
+        assert_eq!(f.options, options_before); // 选项未被重置
+        assert_eq!(cells_of(&conn, "f1")[0].value, r#""hello""#); // 数据未清空
     }
 
     #[test]
