@@ -196,7 +196,7 @@ export function FieldOptionsEditor(props: {
             <p className="text-[11px] leading-5 text-neutral-400">
               {t("field.formulaHint")}
               <br />
-              <span className="font-mono">{"{字段名} * 2 + {另一字段}"}</span>
+              <span className="font-mono">{t("field.formulaExample")}</span>
             </p>
             {fieldNames.length > 0 && (
               <div className="flex flex-wrap gap-1">

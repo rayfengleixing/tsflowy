@@ -33,7 +33,7 @@ export function SpaceSwitcher() {
   const [deleting, setDeleting] = useState(false);
 
   const submitCreate = async () => {
-    const name = newName.trim() || "新空间";
+    const name = newName.trim() || t("space.defaultName");
     setCreating(false);
     setNewName("");
     try {

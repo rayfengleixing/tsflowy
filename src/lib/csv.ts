@@ -1,5 +1,6 @@
 import type { CellValue, DatabaseField, DatabaseRow, FieldType, SelectOption } from "@/types/database";
 import { parseFieldOptions } from "./database-values";
+import { t } from "./i18n";
 
 // CSV 导入导出（项目说明书 10-M4）。解析/生成/类型推断为纯函数，便于单测。
 
@@ -233,7 +234,7 @@ export function buildCsvExport(
 /** 导入计划：列头 → 字段（类型推断用前 20 个样例）；空列头生成 "字段 N"（导入为新表，编号从 1 起） */
 export function planImport(parsed: string[][]): { headers: string[]; types: FieldType[] } {
   if (parsed.length === 0) return { headers: [], types: [] };
-  const header = parsed[0].map((h, i) => h.trim() || `字段 ${i + 1}`);
+  const header = parsed[0].map((h, i) => h.trim() || t("csv.defaultFieldName", { n: i + 1 }));
   const sampleRows = parsed.slice(1, 21);
   const types = header.map((_, col) => {
     const samples = sampleRows.map((r) => r[col] ?? "");

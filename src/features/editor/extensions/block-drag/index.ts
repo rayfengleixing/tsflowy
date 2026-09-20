@@ -16,6 +16,7 @@ import { Slice, Fragment, Node as PMNode } from "@tiptap/pm/model";
 import type { Editor } from "@tiptap/core";
 import { BLOCK_MENU_EVENT, type BlockMenuPayload } from "@/features/editor/block-menu";
 import { logger } from "@/lib/logger";
+import { t } from "@/lib/i18n";
 
 const PLUGIN_KEY = new PluginKey<{ draggingDom: HTMLElement | null }>("block-drag");
 
@@ -115,7 +116,7 @@ class BlockDragView {
     this.editor = editor;
     this.handle = document.createElement("div");
     this.handle.className = HANDLE_CLASS;
-    this.handle.title = "拖动排序，点击编辑";
+    this.handle.title = t("block.dragHandle");
     this.handle.innerHTML =
       '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">' +
       '<circle cx="5" cy="3" r="1.1" fill="currentColor"/>' +

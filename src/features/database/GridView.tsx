@@ -590,11 +590,12 @@ export function GridView({
       const wsId = useWorkspaceStore.getState().currentWorkspaceId;
       if (!wsId) return;
       // 新表 = 新 grid 视图
-      const fileName =
+      const base =
         selected
           .split(/[\\/]/)
           .pop()
-          ?.replace(/\.csv$/i, "") || "导入表";
+          ?.replace(/\.csv$/i, "") ?? "";
+      const fileName = base.length > 0 ? base : t("csv.importDefaultName");
       const newView = await viewApi.create({ workspace_id: wsId, parent_id: null, name: fileName, layout: "grid" });
       // 建字段（重名则加序号）—— 解析/类型推断/消歧/id 生成在 JS，落库由 csv_import 单命令完成
       const used = new Set<string>();

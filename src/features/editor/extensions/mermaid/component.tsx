@@ -121,7 +121,7 @@ export function MermaidNodeView(props: ReactNodeViewProps<HTMLElement>) {
             }}
           />
           <div className="mt-1 flex justify-end gap-1 text-[11px] text-neutral-400">
-            <span>Ctrl/Cmd + Enter 保存 · Esc 取消</span>
+            <span>{t("editor.saveHint")}</span>
           </div>
         </div>
       ) : (

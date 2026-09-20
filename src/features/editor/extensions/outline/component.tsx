@@ -97,7 +97,9 @@ export function OutlineNodeView(props: ReactNodeViewProps<HTMLElement>) {
                 {h.level === 1 ? "H1" : h.level === 2 ? "H2" : "H3"}
               </span>
               <span className="min-w-0 truncate">
-                {h.text || <em className="text-neutral-300">(未命名 {t(`outline.h${h.level}`)})</em>}
+                {h.text || (
+                  <em className="text-neutral-300">{t("outline.untitled", { level: t(`outline.h${h.level}`) })}</em>
+                )}
               </span>
             </button>
           ))}
@@ -107,7 +109,7 @@ export function OutlineNodeView(props: ReactNodeViewProps<HTMLElement>) {
       )}
       <button
         className="absolute right-2 top-2 hidden h-7 w-7 items-center justify-center rounded-md bg-neutral-900/70 text-white hover:bg-neutral-900 group-hover/outline:flex"
-        title="删除目录"
+        title={t("outline.delete")}
         onClick={() => deleteNode()}
       >
         <X className="h-4 w-4" />

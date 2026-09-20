@@ -38,15 +38,13 @@ export function ToggleNodeView(props: ReactNodeViewProps<HTMLElement>) {
             )}
           />
           {collapsed && (
-            <div className="py-1 text-[12px] italic text-neutral-400 select-none">
-              {t("toggle.collapse") + "…"}
-            </div>
+            <div className="py-1 text-[12px] italic text-neutral-400 select-none">{t("toggle.collapse") + "…"}</div>
           )}
         </div>
       </div>
       <button
         className="absolute right-2 top-2 hidden h-7 w-7 items-center justify-center rounded-md bg-neutral-900/70 text-white hover:bg-neutral-900 group-hover/toggle:flex"
-        title="删除折叠块"
+        title={t("toggle.delete")}
         onClick={() => deleteNode()}
       >
         <X className="h-4 w-4" />

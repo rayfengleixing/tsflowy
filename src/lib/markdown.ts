@@ -1,4 +1,5 @@
 import type { JSONContent } from "@tiptap/core";
+import { t } from "./i18n";
 
 // Markdown 粘贴转换（项目说明书 8.2/10-M3：粘贴 markdown 文本自动转成块）。
 // 纯函数：文本 → TipTap JSON，便于 Vitest 单测。
@@ -636,7 +637,7 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
 
     case "databaseView": {
       const viewId = (node.attrs?.viewId as string) ?? "";
-      const name = (node.attrs?.name as string) || "数据库";
+      const name = (node.attrs?.name as string) || t("databaseView.defaultName");
       return `→[${name}](db:${viewId})`;
     }
 

@@ -366,7 +366,7 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
       row = fresh;
       if (!row.document_id) {
         // 首次打开：创建行详情文档 view（extra 标记 row_detail，说明书 12 节风险 7）
-        const name = "行 " + (row.position + 1);
+        const name = t("row.detailName", { n: row.position + 1 });
         const view = await viewApi.create({
           workspace_id: host.workspace_id,
           parent_id: host.id,

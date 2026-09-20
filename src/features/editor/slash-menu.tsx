@@ -179,7 +179,7 @@ export const slashItems: SlashItem[] = [
     run: async (e) => {
       const src = await uploadAttachment();
       if (!src) return;
-      const name = src.split("/").pop() ?? "附件";
+      const name = src.split("/").pop() ?? t("attachment.defaultName");
       e.chain().focus().insertContent({ type: "attachment", attrs: { src, name } }).run();
     },
   },

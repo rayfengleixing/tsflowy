@@ -8,7 +8,6 @@ import { flattenTree } from "@/lib/tree";
 import { viewApi } from "@/lib/db";
 import { databaseApi } from "@/lib/database";
 import { newSelectOption } from "@/lib/database-values";
-import { useSettingsStore } from "@/stores/settings";
 import type { View } from "@/types/models";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
@@ -113,19 +112,18 @@ export function MentionList(props: MentionListProps) {
     try {
       const ws = useWorkspaceStore.getState();
       const wsId = ws.currentWorkspaceId;
-      const lang = useSettingsStore.getState().lang;
       if (!wsId) return;
       // 1. 创建 grid 视图
       const newView = await viewApi.create({ workspace_id: wsId, parent_id: null, name, layout: "grid" });
       // 2. 预置默认字段（名称/日期/单选 + 两个选项 + 一行空行）
-      await databaseApi.createField(newView.id, "text", lang === "zh-CN" ? "名称" : "Name");
-      await databaseApi.createField(newView.id, "date", lang === "zh-CN" ? "日期" : "Date");
-      const select = await databaseApi.createField(newView.id, "single_select", lang === "zh-CN" ? "单选" : "Select");
+      await databaseApi.createField(newView.id, "text", t("field.exampleName"));
+      await databaseApi.createField(newView.id, "date", t("field.exampleDate"));
+      const select = await databaseApi.createField(newView.id, "single_select", t("field.exampleSelect"));
       await databaseApi.updateFieldOptions(select.id, {
         kind: "select",
         options: [
-          newSelectOption(lang === "zh-CN" ? "选项 1" : "Option 1"),
-          newSelectOption(lang === "zh-CN" ? "选项 2" : "Option 2"),
+          newSelectOption(t("field.exampleOption", { n: 1 })),
+          newSelectOption(t("field.exampleOption", { n: 2 })),
         ],
       });
       await databaseApi.createRow(newView.id);

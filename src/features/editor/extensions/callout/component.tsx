@@ -7,12 +7,42 @@ import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const COLOR_TOKENS: Record<CalloutColor, { bar: string; bg: string; border: string; name: string; dot: string }> = {
-  blue:   { bar: "bg-blue-400",    bg: "bg-blue-50",    border: "border-blue-200",    name: t("callout.colorBlue"),   dot: "bg-blue-500" },
-  green:  { bar: "bg-green-400",   bg: "bg-green-50",   border: "border-green-200",   name: t("callout.colorGreen"),  dot: "bg-green-500" },
-  orange: { bar: "bg-orange-400",  bg: "bg-orange-50",  border: "border-orange-200",  name: t("callout.colorOrange"), dot: "bg-orange-500" },
-  red:    { bar: "bg-red-400",     bg: "bg-red-50",     border: "border-red-200",     name: t("callout.colorRed"),    dot: "bg-red-500" },
-  purple: { bar: "bg-purple-400",  bg: "bg-purple-50",  border: "border-purple-200",  name: t("callout.colorPurple"), dot: "bg-purple-500" },
-  yellow: { bar: "bg-yellow-400",  bg: "bg-yellow-50",  border: "border-yellow-200",  name: t("callout.colorYellow"), dot: "bg-yellow-500" },
+  blue: {
+    bar: "bg-blue-400",
+    bg: "bg-blue-50",
+    border: "border-blue-200",
+    name: t("callout.colorBlue"),
+    dot: "bg-blue-500",
+  },
+  green: {
+    bar: "bg-green-400",
+    bg: "bg-green-50",
+    border: "border-green-200",
+    name: t("callout.colorGreen"),
+    dot: "bg-green-500",
+  },
+  orange: {
+    bar: "bg-orange-400",
+    bg: "bg-orange-50",
+    border: "border-orange-200",
+    name: t("callout.colorOrange"),
+    dot: "bg-orange-500",
+  },
+  red: { bar: "bg-red-400", bg: "bg-red-50", border: "border-red-200", name: t("callout.colorRed"), dot: "bg-red-500" },
+  purple: {
+    bar: "bg-purple-400",
+    bg: "bg-purple-50",
+    border: "border-purple-200",
+    name: t("callout.colorPurple"),
+    dot: "bg-purple-500",
+  },
+  yellow: {
+    bar: "bg-yellow-400",
+    bg: "bg-yellow-50",
+    border: "border-yellow-200",
+    name: t("callout.colorYellow"),
+    dot: "bg-yellow-500",
+  },
 };
 
 const COLORS = Object.keys(COLOR_TOKENS) as CalloutColor[];
@@ -56,7 +86,9 @@ export function CalloutNodeView(props: ReactNodeViewProps<HTMLElement>) {
           <PopoverContent align="start" side="right" sideOffset={6} className="w-auto p-2">
             {/* 上半部分：emoji 选择 */}
             <div className="mb-1.5 border-b border-neutral-200 pb-1.5">
-              <div className="mb-1 px-0.5 text-[11px] uppercase tracking-wide text-neutral-400">{t("callout.changeIcon")}</div>
+              <div className="mb-1 px-0.5 text-[11px] uppercase tracking-wide text-neutral-400">
+                {t("callout.changeIcon")}
+              </div>
               <div className="grid grid-cols-6 gap-1">
                 {EMOJIS.map((e) => (
                   <button
@@ -78,7 +110,9 @@ export function CalloutNodeView(props: ReactNodeViewProps<HTMLElement>) {
             </div>
             {/* 下半部分：颜色圆点横排（与 emoji 共用菜单） */}
             <div>
-              <div className="mb-1 px-0.5 text-[11px] uppercase tracking-wide text-neutral-400">{t("callout.changeColor")}</div>
+              <div className="mb-1 px-0.5 text-[11px] uppercase tracking-wide text-neutral-400">
+                {t("callout.changeColor")}
+              </div>
               <div className="flex items-center gap-1.5 px-1">
                 {COLORS.map((c) => (
                   <button
@@ -107,7 +141,7 @@ export function CalloutNodeView(props: ReactNodeViewProps<HTMLElement>) {
       </div>
       <button
         className="absolute right-2 top-2 hidden h-7 w-7 items-center justify-center rounded-md bg-neutral-900/70 text-white hover:bg-neutral-900 group-hover/callout:flex"
-        title="删除提示框"
+        title={t("callout.delete")}
         onClick={() => deleteNode()}
       >
         <X className="h-4 w-4" />

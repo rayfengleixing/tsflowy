@@ -7,6 +7,7 @@ import { newSelectOption } from "@/lib/database-values";
 import { buildTree, flattenTree } from "@/lib/tree";
 import { useSettingsStore } from "./settings";
 import { logger } from "@/lib/logger";
+import { t } from "@/lib/i18n";
 import { buildWelcomeDoc, welcomeDocTitle } from "@/lib/welcome-doc";
 
 export type Route = "workspace" | "trash" | "search" | "settings";
@@ -300,7 +301,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
           if (workspaces.length === 0) {
             // 首次启动种子数据：默认空间 + 欢迎文档（内容为全部功能的示例与使用说明）
             const lang = useSettingsStore.getState().lang;
-            const wsName = lang === "zh-CN" ? "我的工作区" : "My Workspace";
+            const wsName = t("workspace.defaultName");
             const ws = await workspaceApi.create(wsName);
             const welcome = await viewApi.create({
               workspace_id: ws.id,
@@ -402,8 +403,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     createView: async ({ parentId, layout }) => {
       const ws = get().currentWorkspaceId;
       if (!ws) return null;
-      const lang = useSettingsStore.getState().lang;
-      const name = lang === "zh-CN" ? "无标题页面" : "Untitled";
+      const name = t("common.untitled");
       const view = await viewApi.create({
         workspace_id: ws,
         parent_id: parentId,
@@ -413,7 +413,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       if (layout === "grid") {
         // Grid 预置默认字段（名称/数字/单选）+ 一个空行（项目说明书 5.1）
         try {
-          await seedGridFields(view.id, lang);
+          await seedGridFields(view.id);
         } catch (e) {
           logger.error("WorkspaceStore.createView", "seed grid fields failed", view.id, e);
         }
@@ -559,13 +559,13 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
 export const useWorkspaceStore = _useWorkspaceStore;
 
 /** Grid 默认字段 + 空行（名称/日期/单选；单选预置两个选项，日期供日历视图使用，单选供看板视图使用） */
-async function seedGridFields(viewId: string, lang: "zh-CN" | "en-US"): Promise<void> {
-  await databaseApi.createField(viewId, "text", lang === "zh-CN" ? "名称" : "Name");
-  await databaseApi.createField(viewId, "date", lang === "zh-CN" ? "日期" : "Date");
-  const select = await databaseApi.createField(viewId, "single_select", lang === "zh-CN" ? "单选" : "Select");
+async function seedGridFields(viewId: string): Promise<void> {
+  await databaseApi.createField(viewId, "text", t("field.exampleName"));
+  await databaseApi.createField(viewId, "date", t("field.exampleDate"));
+  const select = await databaseApi.createField(viewId, "single_select", t("field.exampleSelect"));
   await databaseApi.updateFieldOptions(select.id, {
     kind: "select",
-    options: [newSelectOption("选项 1"), newSelectOption("选项 2")],
+    options: [newSelectOption(t("field.exampleOption", { n: 1 })), newSelectOption(t("field.exampleOption", { n: 2 }))],
   });
   await databaseApi.createRow(viewId);
 }

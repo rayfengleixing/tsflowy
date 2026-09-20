@@ -121,11 +121,11 @@ function nodeToHtml(node: JSONContent): string {
     }
     case "attachment": {
       const src = escapeAttr(attrStr(node, "src"));
-      const name = escapeHtml(firstNonEmpty(attrStr(node, "name"), attrStr(node, "src"), "附件"));
+      const name = escapeHtml(firstNonEmpty(attrStr(node, "name"), attrStr(node, "src"), t("attachment.defaultName")));
       return `<p class="attachment"><a href="${src}">${name}</a></p>`;
     }
     case "databaseView": {
-      const name = escapeHtml(firstNonEmpty(attrStr(node, "name"), "数据库视图"));
+      const name = escapeHtml(firstNonEmpty(attrStr(node, "name"), t("databaseView.defaultName")));
       return `<div class="database-view">${name}</div>`;
     }
     case "toggle": {

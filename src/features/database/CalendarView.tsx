@@ -354,7 +354,7 @@ function CalCard(props: {
   const value = primaryField ? (cells[row.id]?.[primaryField.id] ?? null) : null;
   const title = primaryField
     ? formatCellValue(primaryField.field_type, value, parseFieldOptions(primaryField.options))
-    : `行 ${row.position + 1}`;
+    : t("row.detailName", { n: row.position + 1 });
 
   // 副信息：只取前 1 个可见单/多选/数字（紧凑）
   const subField = visibleFields

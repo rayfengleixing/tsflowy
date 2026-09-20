@@ -13,7 +13,7 @@ export function AttachmentNodeView(props: ReactNodeViewProps<HTMLElement>) {
   const [busy, setBusy] = useState(false);
 
   const raw = (node.attrs.src as string | undefined) ?? "";
-  const name = (node.attrs.name as string | undefined) || raw.split("/").pop() || "附件";
+  const name = (node.attrs.name as string | undefined) || raw.split("/").pop() || t("attachment.defaultName");
 
   const open = async () => {
     if (!raw || busy) return;

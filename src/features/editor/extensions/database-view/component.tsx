@@ -5,6 +5,7 @@ import type { DatabaseField, DatabaseRow, CellValue } from "@/types/database";
 import { databaseApi } from "@/lib/database";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { logger } from "@/lib/logger";
+import { t } from "@/lib/i18n";
 import { useWorkspaceStore } from "@/stores/workspace";
 
 // databaseView 只读渲染：加载目标视图的字段/行/单元格，展示前若干行
@@ -44,7 +45,7 @@ export function DatabaseViewNodeView(props: ReactNodeViewProps<HTMLElement>) {
         className="my-3 rounded-lg border border-neutral-300 p-3 text-[13px] text-neutral-400"
         data-drag-handle
       >
-        数据库视图（未选择）
+        {t("databaseView.unselected")}
       </NodeViewWrapper>
     );
   }
@@ -59,18 +60,18 @@ export function DatabaseViewNodeView(props: ReactNodeViewProps<HTMLElement>) {
       <div className="flex items-center gap-2 border-b border-neutral-200 bg-neutral-100/70 px-3 py-2">
         <Table2 className="h-4 w-4 text-neutral-500" />
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-neutral-800">
-          {(node.attrs.name as string | undefined) || "数据库"}
+          {(node.attrs.name as string | undefined) || t("databaseView.defaultName")}
         </span>
         <button
           className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[12px] text-brand-600 hover:bg-brand-100"
           onClick={() => viewId && openView(viewId)}
         >
           <ExternalLink className="h-3.5 w-3.5" />
-          打开
+          {t("databaseView.open")}
         </button>
       </div>
       {fields.length === 0 ? (
-        <div className="px-3 py-4 text-center text-[12px] text-neutral-400">目标视图暂无字段</div>
+        <div className="px-3 py-4 text-center text-[12px] text-neutral-400">{t("databaseView.noFields")}</div>
       ) : (
         <table className="w-full border-collapse">
           <thead>
@@ -89,7 +90,7 @@ export function DatabaseViewNodeView(props: ReactNodeViewProps<HTMLElement>) {
             {rows.length === 0 && (
               <tr>
                 <td colSpan={fields.length} className="px-2 py-3 text-center text-[12px] text-neutral-400">
-                  暂无数据
+                  {t("databaseView.noRows")}
                 </td>
               </tr>
             )}

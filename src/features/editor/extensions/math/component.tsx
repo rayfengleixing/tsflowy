@@ -63,7 +63,7 @@ export function MathNodeView(props: ReactNodeViewProps<HTMLElement>) {
             }}
           />
           <div className="mt-1 flex justify-end gap-1 text-[11px] text-neutral-400">
-            <span>Ctrl/Cmd + Enter 保存 · Esc 取消</span>
+            <span>{t("editor.saveHint")}</span>
           </div>
         </div>
       ) : (
@@ -100,7 +100,7 @@ export function MathNodeView(props: ReactNodeViewProps<HTMLElement>) {
         ) : (
           <button
             className="flex h-7 w-7 items-center justify-center rounded-md bg-neutral-900/70 text-white hover:bg-neutral-900"
-            title="删除公式"
+            title={t("math.delete")}
             onClick={() => deleteNode()}
           >
             <X className="h-4 w-4" />

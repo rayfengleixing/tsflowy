@@ -68,7 +68,9 @@ export function ImageGalleryNodeView(props: ReactNodeViewProps<HTMLElement>) {
           <ImagePlus className="h-3.5 w-3.5" />
           <span>
             {t("slash.imageGallery")}
-            {empty ? " · " + t("imageGallery.empty").split("，")[0] : ` · ${node.childCount} 张`}
+            {empty
+              ? " · " + t("imageGallery.empty").split("，")[0]
+              : ` · ${t("imageGallery.count", { n: node.childCount })}`}
           </span>
         </div>
         <div className="flex items-center gap-0.5">

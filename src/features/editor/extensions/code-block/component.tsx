@@ -52,7 +52,7 @@ export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
         ) : (
           <span
             className="cursor-text px-1 text-[11px] font-medium text-neutral-600 hover:bg-neutral-200"
-            title="双击修改语言"
+            title={t("codeBlock.changeLang")}
             onDoubleClick={() => {
               setLangDraft(lang);
               setEditingLang(true);

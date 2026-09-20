@@ -38,7 +38,7 @@ function AddOptionInput({ onAdd }: { onAdd: (name: string) => string | null }) {
       <Plus className="h-3.5 w-3.5 text-neutral-400" />
       <input
         className="flex-1 border-none bg-transparent text-[13px] outline-none placeholder:text-neutral-400"
-        placeholder="添加选项…"
+        placeholder={t("select.addOption")}
         value={name}
         onChange={(e) => setName(e.target.value)}
         onMouseDown={(e) => e.stopPropagation()}
@@ -157,11 +157,16 @@ export function SelectCellEditor({ field, value, onCommit, onCancel, onAddOption
     <div className="absolute inset-0 z-10" onMouseDown={(e) => e.stopPropagation()}>
       <div className="h-full w-full bg-white" />
       <div className="absolute inset-x-0 top-full z-20 mt-0.5 max-h-56 overflow-y-auto rounded-lg border border-neutral-300 bg-white p-1 shadow-lg [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
-        {options.length === 0 && <div className="px-2 py-1.5 text-[12px] text-neutral-400">暂无选项</div>}
+        {options.length === 0 && (
+          <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.noOptionsShort")}</div>
+        )}
         {options.map((o) => (
           <button
             key={o.id}
-            className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-neutral-200/60", selected === o.id && "bg-brand-100")}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-neutral-200/60",
+              selected === o.id && "bg-brand-100",
+            )}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               onCommit(o.id);
@@ -190,7 +195,7 @@ export function SelectCellEditor({ field, value, onCommit, onCancel, onAddOption
           onClick={() => onCommit(null)}
         >
           <X className="h-3.5 w-3.5" />
-          清除
+          {t("common.clear")}
         </button>
         {onAddOption && (
           <div className="mt-0.5 border-t border-neutral-200 pt-0.5">
@@ -229,22 +234,27 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
         {/* 顶部已选胶囊预览（方便用户看到改动；点击胶囊 X 也可移除） */}
         {draft.size > 0 && (
           <div className="mb-1 flex flex-wrap items-center gap-1 rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5">
-            <span className="mr-1 text-[11px] text-neutral-400">{t("field.selected")} {draft.size}</span>
+            <span className="mr-1 text-[11px] text-neutral-400">
+              {t("field.selected")} {draft.size}
+            </span>
             {[...draft].map((id) => {
               const o = options.find((x) => x.id === id);
               if (!o) return null;
-              return (
-                <OptionChip key={id} option={o} compact onRemove={() => toggle(id)} />
-              );
+              return <OptionChip key={id} option={o} compact onRemove={() => toggle(id)} />;
             })}
           </div>
         )}
-        {options.length === 0 && <div className="px-2 py-1.5 text-[12px] text-neutral-400">暂无选项</div>}
+        {options.length === 0 && (
+          <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.noOptionsShort")}</div>
+        )}
         {options.map((o) => (
           <button
             key={o.id}
             type="button"
-            className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-neutral-200/60", draft.has(o.id) && "bg-brand-100")}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-neutral-200/60",
+              draft.has(o.id) && "bg-brand-100",
+            )}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => toggle(o.id)}
           >
@@ -273,16 +283,18 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
             onClick={() => setDraft(new Set())}
           >
             <X className="h-3.5 w-3.5" />
-            清除全部
+            {t("common.clearAll")}
           </button>
         )}
         {onAddOption && (
           <div className="mt-0.5 border-t border-neutral-200 pt-0.5">
-            <AddOptionInput onAdd={(name) => {
-              const newId = onAddOption(name);
-              if (newId) setDraft((prev) => new Set([...prev, newId]));
-              return newId;
-            }} />
+            <AddOptionInput
+              onAdd={(name) => {
+                const newId = onAddOption(name);
+                if (newId) setDraft((prev) => new Set([...prev, newId]));
+                return newId;
+              }}
+            />
           </div>
         )}
       </div>
@@ -295,11 +307,13 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
 /** 复选框（checkbox）：点击即切换 */
 export function CheckboxCellEditor({ field: _field, value, onCommit }: CellEditorProps) {
   return (
-    <button
-      className="flex h-full w-full items-center justify-center"
-      onClick={() => onCommit(value !== true)}
-    >
-      <span className={cn("flex h-4 w-4 items-center justify-center rounded border", value === true ? "border-brand-500 bg-brand-500 text-white" : "border-neutral-300 bg-white")}>
+    <button className="flex h-full w-full items-center justify-center" onClick={() => onCommit(value !== true)}>
+      <span
+        className={cn(
+          "flex h-4 w-4 items-center justify-center rounded border",
+          value === true ? "border-brand-500 bg-brand-500 text-white" : "border-neutral-300 bg-white",
+        )}
+      >
         {value === true && <Check className="h-3 w-3" />}
       </span>
     </button>
@@ -340,9 +354,27 @@ export function CellEditorSlot(props: {
     case "checkbox":
       return <CheckboxCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
     case "single_select":
-      return <SelectCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} onAddOption={onAddOption} onDeleteOption={onDeleteOption} />;
+      return (
+        <SelectCellEditor
+          field={field}
+          value={value}
+          onCommit={onCommit}
+          onCancel={onCancel}
+          onAddOption={onAddOption}
+          onDeleteOption={onDeleteOption}
+        />
+      );
     case "multi_select":
-      return <MultiSelectCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} onAddOption={onAddOption} onDeleteOption={onDeleteOption} />;
+      return (
+        <MultiSelectCellEditor
+          field={field}
+          value={value}
+          onCommit={onCommit}
+          onCancel={onCancel}
+          onAddOption={onAddOption}
+          onDeleteOption={onDeleteOption}
+        />
+      );
     default:
       return <TextCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
   }
@@ -353,7 +385,15 @@ export { isReadonlyType };
 export { ChevronDown };
 
 /** 选项彩色胶囊（单元格显示单选/多选值，带背景色）；compact 用于卡片内紧凑显示；onRemove 提供"输入框中胶囊点 X 删除" */
-export function OptionChip({ option, compact = false, onRemove }: { option?: SelectOption; compact?: boolean; onRemove?: () => void }) {
+export function OptionChip({
+  option,
+  compact = false,
+  onRemove,
+}: {
+  option?: SelectOption;
+  compact?: boolean;
+  onRemove?: () => void;
+}) {
   if (!option) return null;
   const colors: Record<string, string> = {
     blue: "bg-brand-100 text-brand-600",
@@ -364,11 +404,15 @@ export function OptionChip({ option, compact = false, onRemove }: { option?: Sel
     yellow: "bg-yellow-100 text-yellow-700",
     gray: "bg-neutral-200 text-neutral-600",
   };
-  const size = compact
-    ? "px-1 py-[1px] text-[10px]"
-    : "px-2 py-0.5 text-[11px]";
+  const size = compact ? "px-1 py-[1px] text-[10px]" : "px-2 py-0.5 text-[11px]";
   return (
-    <span className={cn("inline-flex items-center gap-1 rounded-full font-medium group/chip", size, colors[option.color] ?? "bg-neutral-200 text-neutral-600")}>
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full font-medium group/chip",
+        size,
+        colors[option.color] ?? "bg-neutral-200 text-neutral-600",
+      )}
+    >
       <span className="max-w-[180px] truncate">{option.name}</span>
       {onRemove && (
         <button
@@ -420,11 +464,7 @@ export function SelectChips({
           key={id}
           option={opts.options.find((x) => x.id === id)}
           compact={compact}
-          onRemove={
-            onRemove
-              ? () => onRemove(ids.filter((x) => x !== id))
-              : undefined
-          }
+          onRemove={onRemove ? () => onRemove(ids.filter((x) => x !== id)) : undefined}
         />
       ))}
     </span>
