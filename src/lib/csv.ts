@@ -1,4 +1,5 @@
-import type { CellValue, DatabaseField, DatabaseRow, FieldType } from "@/types/database";
+import type { CellValue, DatabaseField, DatabaseRow, FieldType, SelectOption } from "@/types/database";
+import { parseFieldOptions } from "./database-values";
 
 // CSV 导入导出（项目说明书 10-M4）。解析/生成/类型推断为纯函数，便于单测。
 
@@ -169,6 +170,45 @@ export function cellToCsv(_type: FieldType, value: CellValue): string {
   return String(value);
 }
 
+/** 选择类单元格 → 选项名串（单元格存的是选项 id，导出必须翻译回名字才能与按名解析的粘贴闭环） */
+function selectCellToText(value: CellValue, options: SelectOption[]): string {
+  if (value === null) return "";
+  const nameOf = new Map(options.map((o) => [o.id, o.name]));
+  const one = (v: CellValue) => (typeof v === "string" ? (nameOf.get(v) ?? v) : String(v));
+  if (Array.isArray(value)) return value.map(one).join("; ");
+  return one(value);
+}
+
+/** 文本 → 选择类字段的选项 id：单选取整串，多选按 ; | 分列。
+ *  未匹配的名字进 missing，由调用方决定新建（TSV 粘贴路径会补建选项）。 */
+export function resolveSelectRefs(
+  type: FieldType,
+  raw: string,
+  options: SelectOption[],
+): { ids: string[]; missing: string[] } {
+  const names =
+    type === "multi_select"
+      ? raw
+          .split(/[;|]/)
+          .map((x) => x.trim())
+          .filter(Boolean)
+      : raw.trim() === ""
+        ? []
+        : [raw.trim()];
+  const byName = new Map(options.map((o) => [o.name, o.id]));
+  const ids: string[] = [];
+  const missing: string[] = [];
+  for (const name of names) {
+    const id = byName.get(name);
+    if (id !== undefined) {
+      if (!ids.includes(id)) ids.push(id);
+    } else if (!missing.includes(name)) {
+      missing.push(name);
+    }
+  }
+  return { ids, missing };
+}
+
 /** 导出当前视图：首行表头，之后每行一个数据库行 */
 export function buildCsvExport(
   fields: DatabaseField[],
@@ -177,7 +217,16 @@ export function buildCsvExport(
 ): string {
   const visible = fields.filter((f) => f.is_hidden === 0);
   const header = visible.map((f) => f.name);
-  const body = rows.map((r) => visible.map((f) => cellToCsv(f.field_type, cells[r.id]?.[f.id] ?? null)));
+  const body = rows.map((r) =>
+    visible.map((f) => {
+      const value = cells[r.id]?.[f.id] ?? null;
+      const opts = parseFieldOptions(f.options);
+      if (opts.kind === "select" && (f.field_type === "single_select" || f.field_type === "multi_select")) {
+        return selectCellToText(value, opts.options);
+      }
+      return cellToCsv(f.field_type, value);
+    }),
+  );
   return toCsv([header, ...body]);
 }
 

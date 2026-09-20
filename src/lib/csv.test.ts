@@ -1,10 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { buildCsvExport, cellToCsv, csvValueToCell, inferFieldType, parseCsv, planImport, toCsv } from "./csv";
-import type { DatabaseField, DatabaseRow } from "@/types/database";
+import {
+  buildCsvExport,
+  cellToCsv,
+  csvValueToCell,
+  inferFieldType,
+  parseCsv,
+  planImport,
+  resolveSelectRefs,
+  toCsv,
+} from "./csv";
+import type { DatabaseField, DatabaseRow, SelectOption } from "@/types/database";
 
 describe("parseCsv", () => {
   it("parses simple rows", () => {
-    expect(parseCsv("a,b,c\r\n1,2,3")).toEqual([["a", "b", "c"], ["1", "2", "3"]]);
+    expect(parseCsv("a,b,c\r\n1,2,3")).toEqual([
+      ["a", "b", "c"],
+      ["1", "2", "3"],
+    ]);
   });
 
   it("handles quoted fields with commas and escaped quotes", () => {
@@ -20,7 +32,10 @@ describe("parseCsv", () => {
   });
 
   it("round-trips with toCsv", () => {
-    const rows = [["name", "note"], ["张三", 'has "quotes", and comma']];
+    const rows = [
+      ["name", "note"],
+      ["张三", 'has "quotes", and comma'],
+    ];
     expect(parseCsv(toCsv(rows))).toEqual(rows);
   });
 });
@@ -51,9 +66,36 @@ describe("csvValueToCell", () => {
 
 describe("cellToCsv / buildCsvExport", () => {
   const fields: DatabaseField[] = [
-    { id: "f1", database_view_id: "v", name: "名称", field_type: "text", options: "{}", width: 180, is_hidden: 0, position: 0 },
-    { id: "f2", database_view_id: "v", name: "数量", field_type: "number", options: "{}", width: 180, is_hidden: 1, position: 1 },
-    { id: "f3", database_view_id: "v", name: "标签", field_type: "multi_select", options: "{}", width: 180, is_hidden: 0, position: 2 },
+    {
+      id: "f1",
+      database_view_id: "v",
+      name: "名称",
+      field_type: "text",
+      options: "{}",
+      width: 180,
+      is_hidden: 0,
+      position: 0,
+    },
+    {
+      id: "f2",
+      database_view_id: "v",
+      name: "数量",
+      field_type: "number",
+      options: "{}",
+      width: 180,
+      is_hidden: 1,
+      position: 1,
+    },
+    {
+      id: "f3",
+      database_view_id: "v",
+      name: "标签",
+      field_type: "multi_select",
+      options: "{}",
+      width: 180,
+      is_hidden: 0,
+      position: 2,
+    },
   ];
   const rows: DatabaseRow[] = [
     { id: "r1", database_view_id: "v", position: 0, document_id: null, created_at: 0, updated_at: 0 },
@@ -65,6 +107,59 @@ describe("cellToCsv / buildCsvExport", () => {
     expect(out).toBe("名称,标签\r\n苹果,水果; 红色\r\n");
     expect(cellToCsv("checkbox", true)).toBe("true");
     expect(cellToCsv("text", null)).toBe("");
+  });
+});
+
+describe("resolveSelectRefs / 选择类导出", () => {
+  const options: SelectOption[] = [
+    { id: "o1", name: "水果", color: "green" },
+    { id: "o2", name: "蔬菜", color: "blue" },
+  ];
+
+  it("maps single select name to option id", () => {
+    expect(resolveSelectRefs("single_select", "蔬菜", options)).toEqual({ ids: ["o2"], missing: [] });
+    expect(resolveSelectRefs("single_select", "   ", options)).toEqual({ ids: [], missing: [] });
+    expect(resolveSelectRefs("single_select", "新品类", options)).toEqual({ ids: [], missing: ["新品类"] });
+  });
+
+  it("splits multi select, dedupes ids and reports unknown names", () => {
+    expect(resolveSelectRefs("multi_select", "水果; 蔬菜|水果", options)).toEqual({ ids: ["o1", "o2"], missing: [] });
+    expect(resolveSelectRefs("multi_select", "水果; 新品类", options)).toEqual({ ids: ["o1"], missing: ["新品类"] });
+  });
+
+  it("exports select cells as option names (ids translated back)", () => {
+    const selectFields: DatabaseField[] = [
+      {
+        id: "s1",
+        database_view_id: "v",
+        name: "类别",
+        field_type: "single_select",
+        options: JSON.stringify({ kind: "select", options }),
+        width: 180,
+        is_hidden: 0,
+        position: 0,
+      },
+      {
+        id: "m1",
+        database_view_id: "v",
+        name: "标签",
+        field_type: "multi_select",
+        options: JSON.stringify({ kind: "select", options }),
+        width: 180,
+        is_hidden: 0,
+        position: 1,
+      },
+    ];
+    const out = buildCsvExport(
+      selectFields,
+      [
+        { id: "r1", database_view_id: "v", position: 0, document_id: null, created_at: 0, updated_at: 0 },
+        { id: "r2", database_view_id: "v", position: 1, document_id: null, created_at: 0, updated_at: 0 },
+      ],
+      { r1: { s1: "o2", m1: ["o1", "x9"] } },
+    );
+    // 失效 id（x9）原样保留，避免静默丢数据；空单元格导出为空串而不是 "null"
+    expect(out).toBe("类别,标签\r\n蔬菜,水果; x9\r\n,\r\n");
   });
 });
 

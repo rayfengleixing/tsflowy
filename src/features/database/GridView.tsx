@@ -4,6 +4,8 @@ import {
   ChevronRight,
   Download,
   ExternalLink,
+  Eye,
+  EyeOff,
   FileUp,
   Filter,
   GripVertical,
@@ -21,7 +23,7 @@ import { viewApi, newId } from "@/lib/db";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { UNGROUPED, applyFilters, canGroupBy, groupRowsForGrid, sortRows, type SortSpec } from "@/lib/database-query";
 import { aggregateValue, normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
-import { buildCsvExport, csvValueToCell, parseCsv, planImport, parseTsv } from "@/lib/csv";
+import { buildCsvExport, csvValueToCell, parseCsv, planImport, parseTsv, resolveSelectRefs } from "@/lib/csv";
 import { computeFormula } from "@/lib/database-formula";
 import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
@@ -32,6 +34,14 @@ import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
 import { CellEditorSlot, SelectChips } from "./editors";
 import { RowDetailPanel } from "./RowDetail";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
@@ -60,6 +70,8 @@ export function GridView({
   const [optionsEditorFor, setOptionsEditorFor] = useState<DatabaseField | null>(null);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
+  // 待确认删除的行（行删除不可撤销，先确认再落库）
+  const [deleteRowTarget, setDeleteRowTarget] = useState<DatabaseRow | null>(null);
   const [draggingField, setDraggingField] = useState<string | null>(null);
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
   const [groupFieldId, setGroupFieldId] = useState<string | null>(() => readViewConfig(view).groupFieldId ?? null);
@@ -189,7 +201,8 @@ export function GridView({
   const onFieldDrop = (targetId: string) => {
     if (!draggingField || draggingField === targetId) return;
     if (draggingField === primaryField?.id || targetId === primaryField?.id) return;
-    const sortable = visibleFields.filter((f) => f.id !== primaryField?.id).map((f) => f.id);
+    // 全量重排（含隐藏列）：传 visibleFields 会把隐藏字段从 store.fields 里剔除
+    const sortable = fields.filter((f) => f.id !== primaryField?.id).map((f) => f.id);
     const from = sortable.indexOf(draggingField);
     const to = sortable.indexOf(targetId);
     if (from < 0 || to < 0) return;
@@ -201,7 +214,8 @@ export function GridView({
   // 行拖拽排序
   const onRowDrop = (targetId: string) => {
     if (!draggingRow || draggingRow === targetId) return;
-    const ids = displayRows.map((r) => r.id);
+    // 全量重排（store 顺序 = position 顺序）：传 displayRows 会把被筛选掉的行从 store.rows 里剔除
+    const ids = rows.map((r) => r.id);
     const from = ids.indexOf(draggingRow);
     const to = ids.indexOf(targetId);
     if (from < 0 || to < 0) return;
@@ -210,11 +224,11 @@ export function GridView({
     setDraggingRow(null);
   };
 
-  // CSV 导出（公式列在导出前注入算好的值）
+  // CSV 导出（公式列在导出前注入算好的值；只导出当前筛选/排序后的可见行）
   const exportCsv = async () => {
     try {
       const cellsWithFormula = { ...cells };
-      for (const row of rows) {
+      for (const row of displayRows) {
         for (const f of fields) {
           if (f.field_type !== "formula") continue;
           const v = computeFormula(f, cells[row.id] ?? {}, fields);
@@ -223,7 +237,8 @@ export function GridView({
           }
         }
       }
-      const content = buildCsvExport(fields, rows, cellsWithFormula);
+      // 前置 BOM：Excel 打开 UTF-8 CSV 才不会把中文显示成乱码
+      const content = "\uFEFF" + buildCsvExport(fields, displayRows, cellsWithFormula);
       const target = await save({
         defaultPath: (source.name || "export").replace(/[\\/:*?"<>|]/g, "_") + ".csv",
         filters: [{ name: "CSV", extensions: ["csv"] }],
@@ -273,6 +288,25 @@ export function GridView({
           }
           if (isReadonlyType(field.field_type)) {
             skipped++; // 公式/系统字段跳过
+            continue;
+          }
+          if (field.field_type === "single_select" || field.field_type === "multi_select") {
+            // 选择类单元格存选项 id：按名字解析，缺的选项就地补建（导出侧把 id 翻回名字，两边闭环）
+            // 每格都取 store 最新字段：上一格补建的选项要参与下一格的解析，避免同名重复建选项
+            const fresh = useDatabaseStore.getState().fields.find((f) => f.id === field.id) ?? field;
+            const opts = parseFieldOptions(fresh.options);
+            if (opts.kind !== "select") {
+              skipped++;
+              continue;
+            }
+            const { ids, missing } = resolveSelectRefs(field.field_type, grid[i][j], opts.options);
+            for (const name of missing) {
+              const created = await store.addSelectOption(field.id, name);
+              if (created) ids.push(created);
+              else skipped++;
+            }
+            await store.setCell(rowQueue[i], field.id, field.field_type === "multi_select" ? ids : (ids[0] ?? null));
+            filled++;
             continue;
           }
           const cell = csvValueToCell(field.field_type, grid[i][j]);
@@ -370,7 +404,7 @@ export function GridView({
         <button
           className="absolute right-0.5 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-neutral-400 hover:bg-red-100 hover:text-red-500 group-hover/row:flex dark:hover:bg-red-500/10"
           title={t("row.delete")}
-          onClick={() => void store.removeRow(row.id)}
+          onClick={() => setDeleteRowTarget(row)}
         >
           <Trash2 className="h-3 w-3" />
         </button>
@@ -518,6 +552,7 @@ export function GridView({
               </select>
             </div>
           )}
+          <HiddenColumnsMenu fields={fields} onShow={(id) => void store.toggleFieldHidden(id)} />
           <Button
             variant="ghost"
             size="sm"
@@ -749,6 +784,25 @@ export function GridView({
         />
       )}
 
+      <ConfirmDialog
+        open={deleteRowTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteRowTarget(null);
+        }}
+        title={t("row.deleteConfirmTitle")}
+        description={t("row.deleteConfirmDesc")}
+        confirmLabel={t("common.delete")}
+        onConfirm={() => {
+          const row = deleteRowTarget;
+          setDeleteRowTarget(null);
+          if (!row) return;
+          store
+            .removeRow(row.id)
+            .then(() => toast.success(t("row.deleted")))
+            .catch((e: unknown) => toast.error(t("error.db", { message: String(e) })));
+        }}
+      />
+
       {/* 行详情右侧滑出面板（说明书 6.1：宽 400px） */}
       {rowDetail && <RowDetailPanel row={rowDetail.row} view={rowDetail.view} onClose={closeRowDetail} />}
     </div>
@@ -769,6 +823,33 @@ function RenameInput(props: { initial: string; onCommit: (name: string) => void;
       }}
       onBlur={() => props.onCommit(draft)}
     />
+  );
+}
+
+/** 隐藏列恢复入口：FieldMenu 只挂在可见列头上，列一旦隐藏就再没有打开的入口，
+ *  这里按"点对象本身"的方式列出来，点一下即恢复该列。 */
+function HiddenColumnsMenu({ fields, onShow }: { fields: DatabaseField[]; onShow: (id: string) => void }) {
+  const hidden = fields.filter((f) => f.is_hidden === 1);
+  if (hidden.length === 0) return null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="sm" title={t("field.hiddenColumns")}>
+          <EyeOff className="h-3.5 w-3.5" />
+          {t("field.hiddenColumns")}
+          <span className="ml-1 rounded-full bg-neutral-200 px-1.5 text-[10px] text-neutral-600">{hidden.length}</span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuLabel>{t("field.hiddenColumns")}</DropdownMenuLabel>
+        {hidden.map((f) => (
+          <DropdownMenuItem key={f.id} onSelect={() => onShow(f.id)}>
+            <Eye className="mr-2 h-3.5 w-3.5" />
+            <span className="truncate">{f.name}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
