@@ -27,10 +27,19 @@ export const FirstHeadingLock = Extension.create({
   onUpdate() {
     syncOnce(this);
   },
+  onDestroy() {
+    // 卸载（切视图/关标签）前把待写的重命名落下去，否则最后一次输入会丢
+    flushRename();
+  },
 });
 
 let lastSyncText = "";
 let lastSyncViewId: string | null = null;
+
+/** 每按键一次 renameView 就是一次 IPC + 落库 + 树刷新 → 合并到静止后再写 */
+const RENAME_DEBOUNCE_MS = 400;
+let renameTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingRename: { id: string; text: string } | null = null;
 
 function syncOnce(ctx: {
   editor: { isDestroyed: boolean; state?: { doc?: ProseMirrorNode } };
@@ -49,14 +58,28 @@ function syncOnce(ctx: {
   if (lastSyncViewId === id && lastSyncText === text) return;
   lastSyncViewId = id;
   lastSyncText = text;
-  // 微任务：避免在 Tiptap 同步回调中 dispatch 引起循环
+  pendingRename = { id, text };
+  if (renameTimer) clearTimeout(renameTimer);
+  renameTimer = setTimeout(flushRename, RENAME_DEBOUNCE_MS);
+}
+
+/** 微任务里写库，避免在 Tiptap 同步回调中触发 store 变更引起循环 */
+function flushRename() {
+  if (renameTimer) {
+    clearTimeout(renameTimer);
+    renameTimer = null;
+  }
+  const pending = pendingRename;
+  pendingRename = null;
+  if (!pending) return;
   queueMicrotask(() => {
-    if (editor.isDestroyed) return;
     const store = useWorkspaceStore.getState();
     const current = store.currentViewId ? store.tree.find((v) => v.id === store.currentViewId) : null;
     const vName = current?.name ?? "";
-    if (text === vName) return;
-    store.renameView(id, text).catch((e) => logger.error("FirstHeadingLock", "rename failed", id, text, e));
+    if (pending.text === vName) return;
+    store
+      .renameView(pending.id, pending.text)
+      .catch((e) => logger.error("FirstHeadingLock", "rename failed", pending.id, pending.text, e));
   });
 }
 

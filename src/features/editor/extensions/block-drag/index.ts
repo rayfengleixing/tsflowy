@@ -35,10 +35,15 @@ function listTopBlocks(view: EditorView): { dom: HTMLElement; top: number; botto
     if (SKIP_BLOCK_TYPES.has(child.getAttribute("data-node-type") ?? "")) continue;
     const r = child.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) continue;
-    const center = { left: r.left + Math.max(r.width / 2, 10), top: r.top + 4 };
-    const posRes = view.posAtCoords(center);
-    if (!posRes) continue;
-    const $ = view.state.doc.resolve(posRes.pos);
+    // posAtDOM 是 DOM→文档位置的直接映射；posAtCoords（坐标命中）要跑一次完整
+    // hit-test，这里每个块都调一次，在 mousemove 热路径上代价过大
+    let inner: number;
+    try {
+      inner = view.posAtDOM(child, 0);
+    } catch {
+      continue;
+    }
+    const $ = view.state.doc.resolve(inner);
     const pos = $.depth >= 1 ? $.before(Math.min($.depth, 1)) : $.pos;
     // 文档结构锁定块（首行 H1 标题 / 第二行分割线）：不显示手柄、不作为拖拽目标
     if (isProtectedStructureBlock(view, pos)) continue;
@@ -100,6 +105,9 @@ class BlockDragView {
   /** 拖拽目标：前/后 */
   dropTarget: { type: "before" | "after"; sibling: HTMLElement; pos: number } | null = null;
   dropIndicator: HTMLDivElement;
+  /** 普通 hover 的 rAF 合并（mousemove 高频事件里全量扫描顶层块代价高） */
+  private hoverRaf = 0;
+  private lastHoverEvent: MouseEvent | null = null;
 
   constructor(view: EditorView, editor: Editor) {
     this.view = view;
@@ -189,7 +197,18 @@ class BlockDragView {
       this.updateDropTarget(e.clientY);
       return;
     }
-    // 普通 hover：在 editor 范围内显示手柄
+    // 普通 hover：按帧合并（回调里再判断是否在 editor 范围内）
+    this.lastHoverEvent = e;
+    if (this.hoverRaf) return;
+    this.hoverRaf = requestAnimationFrame(() => {
+      this.hoverRaf = 0;
+      const ev = this.lastHoverEvent;
+      if (ev) this.updateHover(ev);
+    });
+  };
+
+  /** 普通 hover：在 editor 范围内显示手柄 */
+  updateHover(e: MouseEvent) {
     const root = this.view.dom.getBoundingClientRect();
     if (
       e.clientX < root.left - 60 ||
@@ -217,7 +236,7 @@ class BlockDragView {
       return;
     }
     this.showHandle(target.dom);
-  };
+  }
 
   onMouseUp = (_e: MouseEvent) => {
     if (!this.dragging) return;
@@ -233,6 +252,11 @@ class BlockDragView {
 
   onScroll = () => {
     // 滚动时隐藏 handle 并取消未完成的拖拽会话（下次 mousemove 再重新定位）
+    if (this.hoverRaf) {
+      cancelAnimationFrame(this.hoverRaf);
+      this.hoverRaf = 0;
+    }
+    this.lastHoverEvent = null;
     this.hideHandle();
     this.clearDropTarget();
     if (this.dragging && !this.dragging.moved) this.dragging = null;
@@ -376,6 +400,7 @@ class BlockDragView {
   }
 
   destroy() {
+    if (this.hoverRaf) cancelAnimationFrame(this.hoverRaf);
     this.handle.removeEventListener("mousedown", this.onHandleMouseDown);
     window.removeEventListener("mousemove", this.onMouseMove, true);
     window.removeEventListener("mouseup", this.onMouseUp, true);

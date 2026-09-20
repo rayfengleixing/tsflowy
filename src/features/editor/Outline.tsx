@@ -21,6 +21,15 @@ const TK = {
   empty: "sidebar.outline.empty",
 } as const;
 
+/** 标题列表是否等价（pos/level/text 全等；忽略 cachedDom 缓存） */
+function sameHeadings(a: HeadingItem[], b: HeadingItem[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].pos !== b[i].pos || a[i].level !== b[i].level || a[i].text !== b[i].text) return false;
+  }
+  return true;
+}
+
 /**
  * 大纲侧栏 Tab（Phase 3.1）：
  *
@@ -66,7 +75,18 @@ export function DocumentOutline() {
           list.push({ pos, level, text });
         }
       });
-      setHeadings(list);
+      // 引用不变 → 不触发重渲染，也避免下方 IntersectionObserver effect 在每次按键时重建
+      setHeadings((prev) => (sameHeadings(prev, list) ? prev : list));
+    };
+
+    // 打字热路径：update 每个按键都触发，全文档遍历 + IO 重建代价高 → 节流到 ~200ms
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleCollect = () => {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        collect();
+      }, 200);
     };
 
     const onSelectionChange = () => {
@@ -80,10 +100,11 @@ export function DocumentOutline() {
     };
 
     collect();
-    editor.on("update", collect);
+    editor.on("update", scheduleCollect);
     editor.on("selectionUpdate", onSelectionChange);
     return () => {
-      editor.off("update", collect);
+      if (timer) clearTimeout(timer);
+      editor.off("update", scheduleCollect);
       editor.off("selectionUpdate", onSelectionChange);
     };
   }, [editor, isDocument]);
