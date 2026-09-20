@@ -143,10 +143,7 @@ function RowPropertyField({
             value={value}
             onCommit={commit}
             onCancel={() => setEditing(false)}
-            onAddOption={(name) => {
-              void addSelectOption(field.id, name);
-              return null;
-            }}
+            onAddOption={(name) => addSelectOption(field.id, name)}
             onDeleteOption={(optId) => void removeSelectOption(field.id, optId)}
           />
         ) : (

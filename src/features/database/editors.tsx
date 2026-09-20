@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Plus, X } from "lucide-react";
+import { Check, ChevronDown, Plus, Trash2, X } from "lucide-react";
 import type { CellValue, DatabaseField, SelectOption } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { parseFieldOptions } from "@/lib/database-values";
@@ -14,36 +14,76 @@ export interface CellEditorProps {
   value: CellValue;
   onCommit: (value: CellValue) => void;
   onCancel: () => void;
-  /** 在选项下拉里直接新建选项（单选/多选），返回新选项 id 供选中 */
-  onAddOption?: (name: string) => string | null;
+  /** 在选项下拉里直接新建选项（单选/多选），resolve 新选项 id 供创建后直接选中；失败为 null */
+  onAddOption?: (name: string) => Promise<string | null>;
   /** 删除一个选项（单选/多选），引用该选项的单元格会被清空 */
   onDeleteOption?: (optionId: string) => void;
 }
 
-/** 下拉内的"添加选项"输入 */
-function AddOptionInput({ onAdd }: { onAdd: (name: string) => string | null }) {
-  const [name, setName] = useState("");
+/** 下拉搜索：按输入子串过滤选项，并给出精确匹配（回车是"选中已有"还是"新建"据此决定） */
+function matchOptions(options: SelectOption[], query: string) {
+  const text = query.trim();
+  const lower = text.toLowerCase();
+  const list = lower ? options.filter((o) => o.name.toLowerCase().includes(lower)) : options;
+  const exact = lower ? options.find((o) => o.name.toLowerCase() === lower) : undefined;
+  return { text, list, exact };
+}
+
+/** 下拉里的选项行：彩色胶囊展示本体；选中打勾；删除按钮仅在鼠标悬停该行时浮现（防误点） */
+function SelectOptionRow({
+  option,
+  active,
+  onPick,
+  onDelete,
+}: {
+  option: SelectOption;
+  active: boolean;
+  onPick: () => void;
+  onDelete?: () => void;
+}) {
   return (
-    <form
-      className="flex items-center gap-1.5 px-2 py-1.5"
-      onSubmit={(e) => {
-        e.preventDefault();
-        const v = name.trim();
-        if (v) {
-          onAdd(v);
-          setName("");
-        }
-      }}
+    <button
+      type="button"
+      className={cn(
+        "group flex w-full items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-neutral-200/60",
+        active && "bg-brand-100",
+      )}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onPick}
     >
-      <Plus className="h-3.5 w-3.5 text-neutral-400" />
-      <input
-        className="flex-1 border-none bg-transparent text-[13px] outline-none placeholder:text-neutral-400"
-        placeholder={t("select.addOption")}
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        onMouseDown={(e) => e.stopPropagation()}
-      />
-    </form>
+      <span className="flex min-w-0 flex-1 items-center">
+        <OptionChip option={option} />
+      </span>
+      {active && <Check className="h-3.5 w-3.5 shrink-0 text-brand-600" />}
+      {onDelete && (
+        <span
+          title={t("common.delete")}
+          className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-neutral-400 opacity-0 hover:bg-neutral-200 hover:text-red-500 group-hover:opacity-100"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+        >
+          <Trash2 className="h-3 w-3" />
+        </span>
+      )}
+    </button>
+  );
+}
+
+/** "新建 xxx" 行：输入与现有选项无精确匹配时出现，把输入文本建成新选项并直接选中 */
+function CreateOptionRow({ name, onCreate }: { name: string; onCreate: () => void }) {
+  return (
+    <button
+      type="button"
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-neutral-500 hover:bg-neutral-200/60"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onCreate}
+    >
+      <Plus className="h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">{t("select.createNew", { name })}</span>
+    </button>
   );
 }
 
@@ -148,60 +188,68 @@ export function DateCellEditor({ field, value, onCommit, onCancel }: CellEditorP
   );
 }
 
-/** 单选（single_select）：Popover 选项列表 */
+/** 单选（single_select）：顶部搜索——输入即筛选，回车选中精确匹配或新建 */
 export function SelectCellEditor({ field, value, onCommit, onCancel, onAddOption, onDeleteOption }: CellEditorProps) {
   const opts = parseFieldOptions(field.options);
   const options = opts.kind === "select" ? opts.options : [];
   const selected = typeof value === "string" ? value : null;
+  const [query, setQuery] = useState("");
+  const inputRef = useAutoFocus<HTMLInputElement>();
+  const { text, list, exact } = matchOptions(options, query);
+
+  const createFromQuery = () => {
+    if (!text || !onAddOption) return;
+    void onAddOption(text).then((id) => {
+      if (id) onCommit(id);
+    });
+  };
+
+  const submitQuery = () => {
+    if (!text) return;
+    if (exact) onCommit(exact.id);
+    else if (list.length > 0) onCommit(list[0].id);
+    else createFromQuery();
+  };
+
   return (
     <div className="absolute inset-0 z-10" onMouseDown={(e) => e.stopPropagation()}>
       <div className="h-full w-full bg-white" />
-      <div className="absolute inset-x-0 top-full z-20 mt-0.5 max-h-56 overflow-y-auto rounded-lg border border-neutral-300 bg-white p-1 shadow-lg [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
-        {options.length === 0 && (
-          <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.noOptionsShort")}</div>
-        )}
-        {options.map((o) => (
+      <div className="absolute inset-x-0 top-full z-20 mt-0.5 flex max-h-64 flex-col rounded-lg border border-neutral-300 bg-white p-1 shadow-lg">
+        <input
+          ref={inputRef}
+          className="mb-1 h-7 shrink-0 rounded-md border border-neutral-200 px-2 text-[13px] outline-none placeholder:text-neutral-400 focus:border-brand-500"
+          placeholder={t("select.searchOrCreate")}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submitQuery();
+            if (e.key === "Escape") onCancel();
+          }}
+        />
+        <div className="min-h-0 flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
+          {!text && options.length === 0 && (
+            <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.noOptionsShort")}</div>
+          )}
+          {list.map((o) => (
+            <SelectOptionRow
+              key={o.id}
+              option={o}
+              active={selected === o.id}
+              onPick={() => onCommit(o.id)}
+              onDelete={onDeleteOption ? () => onDeleteOption(o.id) : undefined}
+            />
+          ))}
+          {text && !exact && onAddOption && <CreateOptionRow name={text} onCreate={createFromQuery} />}
           <button
-            key={o.id}
-            className={cn(
-              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-neutral-200/60",
-              selected === o.id && "bg-brand-100",
-            )}
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-neutral-500 hover:bg-neutral-200/60"
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              onCommit(o.id);
-            }}
+            onClick={() => onCommit(null)}
           >
-            <OptionDot option={o} />
-            <span className="flex-1">{o.name}</span>
-            {selected === o.id && <Check className="h-3.5 w-3.5 text-brand-600" />}
-            {onDeleteOption && (
-              <span
-                className="flex h-4 w-4 items-center justify-center rounded text-neutral-300 hover:bg-neutral-200 hover:text-red-500"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDeleteOption(o.id);
-                }}
-              >
-                <X className="h-3 w-3" />
-              </span>
-            )}
+            <X className="h-3.5 w-3.5" />
+            {t("common.clear")}
           </button>
-        ))}
-        <button
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-neutral-500 hover:bg-neutral-200/60"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => onCommit(null)}
-        >
-          <X className="h-3.5 w-3.5" />
-          {t("common.clear")}
-        </button>
-        {onAddOption && (
-          <div className="mt-0.5 border-t border-neutral-200 pt-0.5">
-            <AddOptionInput onAdd={onAddOption} />
-          </div>
-        )}
+        </div>
       </div>
       {/* 点击外部取消 */}
       <div className="fixed inset-0 z-10" onMouseDown={() => onCancel()} />
@@ -209,12 +257,17 @@ export function SelectCellEditor({ field, value, onCommit, onCancel, onAddOption
   );
 }
 
-/** 多选（multi_select）：Popover 勾选多个选项；"连点不关闭"——用 draftSet 跟踪，outside-click 遮罩才 commit */
+/** 多选（multi_select）：顶部搜索；点击/回车加选，连点不关闭——outside-click/Esc 才提交 */
 export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onDeleteOption }: CellEditorProps) {
   const opts = parseFieldOptions(field.options);
   const options = opts.kind === "select" ? opts.options : [];
   // 使用本地 draft：切换时不立即 commit，直到 outside-click 才提交并关闭
   const [draft, setDraft] = useState<Set<string>>(() => new Set(Array.isArray(value) ? value : []));
+  const [query, setQuery] = useState("");
+  const inputRef = useAutoFocus<HTMLInputElement>();
+  const { text, list, exact } = matchOptions(options, query);
+
+  const addToDraft = (id: string) => setDraft((prev) => new Set([...prev, id]));
 
   const toggle = (id: string) => {
     setDraft((prev) => {
@@ -227,13 +280,45 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
 
   const commit = () => onCommit([...draft]);
 
+  const createFromQuery = () => {
+    if (!text || !onAddOption) return;
+    void onAddOption(text).then((id) => {
+      if (id) {
+        addToDraft(id);
+        setQuery("");
+      }
+    });
+  };
+
+  const submitQuery = () => {
+    if (!text) return;
+    const pick = exact?.id ?? list[0]?.id;
+    if (pick) {
+      addToDraft(pick);
+      setQuery("");
+    } else {
+      createFromQuery();
+    }
+  };
+
   return (
     <div className="absolute inset-0 z-10" onMouseDown={(e) => e.stopPropagation()}>
       <div className="h-full w-full bg-white" />
-      <div className="absolute inset-x-0 top-full z-20 mt-0.5 max-h-64 overflow-y-auto rounded-lg border border-neutral-300 bg-white p-1 shadow-lg [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
-        {/* 顶部已选胶囊预览（方便用户看到改动；点击胶囊 X 也可移除） */}
+      <div className="absolute inset-x-0 top-full z-20 mt-0.5 flex max-h-64 flex-col rounded-lg border border-neutral-300 bg-white p-1 shadow-lg">
+        <input
+          ref={inputRef}
+          className="mb-1 h-7 shrink-0 rounded-md border border-neutral-200 px-2 text-[13px] outline-none placeholder:text-neutral-400 focus:border-brand-500"
+          placeholder={t("select.searchOrCreate")}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submitQuery();
+            if (e.key === "Escape") commit();
+          }}
+        />
+        {/* 已选胶囊预览（方便用户看到改动；点击胶囊 X 也可移除） */}
         {draft.size > 0 && (
-          <div className="mb-1 flex flex-wrap items-center gap-1 rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5">
+          <div className="mb-1 flex shrink-0 flex-wrap items-center gap-1 rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5">
             <span className="mr-1 text-[11px] text-neutral-400">
               {t("field.selected")} {draft.size}
             </span>
@@ -244,59 +329,32 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
             })}
           </div>
         )}
-        {options.length === 0 && (
-          <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.noOptionsShort")}</div>
-        )}
-        {options.map((o) => (
-          <button
-            key={o.id}
-            type="button"
-            className={cn(
-              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-neutral-200/60",
-              draft.has(o.id) && "bg-brand-100",
-            )}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => toggle(o.id)}
-          >
-            <OptionDot option={o} />
-            <span className="flex-1">{o.name}</span>
-            {draft.has(o.id) && <Check className="h-3.5 w-3.5 text-brand-600" />}
-            {onDeleteOption && (
-              <span
-                className="flex h-4 w-4 items-center justify-center rounded text-neutral-300 hover:bg-neutral-200 hover:text-red-500"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDeleteOption(o.id);
-                }}
-              >
-                <X className="h-3 w-3" />
-              </span>
-            )}
-          </button>
-        ))}
-        {draft.size > 0 && (
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-neutral-500 hover:bg-neutral-200/60"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setDraft(new Set())}
-          >
-            <X className="h-3.5 w-3.5" />
-            {t("common.clearAll")}
-          </button>
-        )}
-        {onAddOption && (
-          <div className="mt-0.5 border-t border-neutral-200 pt-0.5">
-            <AddOptionInput
-              onAdd={(name) => {
-                const newId = onAddOption(name);
-                if (newId) setDraft((prev) => new Set([...prev, newId]));
-                return newId;
-              }}
+        <div className="min-h-0 flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
+          {!text && options.length === 0 && (
+            <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.noOptionsShort")}</div>
+          )}
+          {list.map((o) => (
+            <SelectOptionRow
+              key={o.id}
+              option={o}
+              active={draft.has(o.id)}
+              onPick={() => toggle(o.id)}
+              onDelete={onDeleteOption ? () => onDeleteOption(o.id) : undefined}
             />
-          </div>
-        )}
+          ))}
+          {text && !exact && onAddOption && <CreateOptionRow name={text} onCreate={createFromQuery} />}
+          {draft.size > 0 && (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-neutral-500 hover:bg-neutral-200/60"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setDraft(new Set())}
+            >
+              <X className="h-3.5 w-3.5" />
+              {t("common.clearAll")}
+            </button>
+          )}
+        </div>
       </div>
       {/* 点击外部：提交当前 draft 并关闭编辑器 */}
       <div className="fixed inset-0 z-10" onMouseDown={() => commit()} />
@@ -335,14 +393,7 @@ export function OptionDot({ option }: { option: SelectOption }) {
 }
 
 /** 按字段类型分派编辑器（GridView 单元格 + 行详情属性区共用） */
-export function CellEditorSlot(props: {
-  field: DatabaseField;
-  value: CellValue;
-  onCommit: (v: CellValue) => void;
-  onCancel: () => void;
-  onAddOption?: (name: string) => string | null;
-  onDeleteOption?: (optionId: string) => void;
-}) {
+export function CellEditorSlot(props: CellEditorProps) {
   const { field, value, onCommit, onCancel, onAddOption, onDeleteOption } = props;
   switch (field.field_type) {
     case "number":

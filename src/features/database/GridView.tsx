@@ -736,10 +736,7 @@ export function GridView({
                     value={cells[row.id]?.[field.id] ?? null}
                     onCommit={(v) => void commitCell(row.id, field.id, v)}
                     onCancel={() => setEditing(null)}
-                    onAddOption={(name) => {
-                      void store.addSelectOption(field.id, name);
-                      return null;
-                    }}
+                    onAddOption={(name) => store.addSelectOption(field.id, name)}
                     onDeleteOption={(optId) => void store.removeSelectOption(field.id, optId)}
                   />
                 </div>
