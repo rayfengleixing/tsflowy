@@ -56,6 +56,12 @@ export const databaseApi = {
     return invoke<DatabaseRow>("row_create", { viewId, id: newId() });
   },
 
+  /** 批量建行（TSV 粘贴补行）：一次 IPC 一个事务，返回按 position 顺序的新行 */
+  async createRows(viewId: string, count: number): Promise<DatabaseRow[]> {
+    const ids = Array.from({ length: count }, () => newId());
+    return invoke<DatabaseRow[]>("row_create_many", { viewId, ids });
+  },
+
   /** 按 id 读单个行（行详情重开时需要最新 document_id） */
   async getRow(rowId: string): Promise<DatabaseRow | null> {
     return invoke<DatabaseRow | null>("row_get", { rowId });
@@ -87,5 +93,12 @@ export const databaseApi = {
 
   async setCell(rowId: string, fieldId: string, value: CellValue): Promise<void> {
     return invoke("cell_set", { rowId, fieldId, value: JSON.stringify(value) });
+  },
+
+  /** 批量写单元格（TSV 粘贴）：嵌套 payload 必须传 snake_case 键（同 csv_import 契约） */
+  async setCellsMany(updates: { rowId: string; fieldId: string; value: CellValue }[]): Promise<number> {
+    return invoke<number>("cell_set_many", {
+      updates: updates.map((u) => ({ row_id: u.rowId, field_id: u.fieldId, value: JSON.stringify(u.value) })),
+    });
   },
 };

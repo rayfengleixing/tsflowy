@@ -35,6 +35,13 @@ import { CellEditorSlot, SelectChips } from "./editors";
 import { RowDetailPanel } from "./RowDetail";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+
+/** 窗口化阈值：行数超过它才启用（小表保持全量渲染，零行为差异） */
+const VIRTUAL_MIN_ROWS = 150;
+/** 行高兜底值（td h-8 = 32px）：首次测量前用，测量后以真实行高为准 */
+const ROW_H_FALLBACK = 32;
+/** 视口上下各多渲染的行数：抵消快速滚动时的白屏 */
+const VIRTUAL_OVERSCAN = 12;
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -104,7 +111,7 @@ export function GridView({
       const width = clamp(startWidth + ev.clientX - startX);
       void store.setFieldWidth(fieldId, width).catch((err: unknown) => {
         col.style.width = ""; // 落库失败：去掉本地预览宽度，回退 store 旧值
-        console.error("set field width failed", err);
+        logger.error("set field width failed", err);
         toast.error(t("error.db", { message: String(err) }));
       });
     };
@@ -135,6 +142,61 @@ export function GridView({
   // 搜索命中定位：折叠键作 revision，命中行所在分组一展开就能重新定位
   const collapsedKey = groups ? [...collapsedGroups].join("|") : "";
   const { scrollerRef, focusRowId } = useRowFocus(collapsedKey);
+
+  // ---------- 大表窗口化 ----------
+  // 行高固定（td h-8），行数超阈值时只渲染视口附近的行，上下用占位行撑住滚动条；
+  // 阈值以下走原路径，小表零行为变化。分组视图不窗口化（组头/小计参与纵向布局）。
+  const tbodyRef = useRef<HTMLTableSectionElement | null>(null);
+  const rowHeightRef = useRef(ROW_H_FALLBACK);
+  const [win, setWin] = useState<{ start: number; end: number } | null>(null);
+  const virtual = !groups && displayRows.length > VIRTUAL_MIN_ROWS;
+
+  // 量出"数据区在滚动内容里的 y 偏移"再折算窗口：表头高度随缩放/字体变化，写死常量会越滚越偏
+  const measureWindow = useCallback(() => {
+    const el = scrollerRef.current;
+    const body = tbodyRef.current;
+    if (!el || !body) return;
+    const first = body.querySelector<HTMLElement>("tr[data-row-id]");
+    if (first?.offsetHeight) rowHeightRef.current = first.offsetHeight;
+    const h = rowHeightRef.current;
+    const dataTop = body.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+    const total = displayRows.length;
+    const start = Math.max(0, Math.floor((el.scrollTop - dataTop) / h) - VIRTUAL_OVERSCAN);
+    const end = Math.min(total, Math.ceil((el.scrollTop - dataTop + el.clientHeight) / h) + VIRTUAL_OVERSCAN);
+    const next = { start, end: Math.max(end, Math.min(total, start + 1)) };
+    setWin((prev) => (prev?.start === next.start && prev.end === next.end ? prev : next));
+  }, [scrollerRef, displayRows.length]);
+
+  useEffect(() => {
+    if (!virtual) {
+      setWin(null);
+      return;
+    }
+    const el = scrollerRef.current;
+    if (!el) return;
+    measureWindow();
+    const onScroll = () => measureWindow();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    const ro = new ResizeObserver(() => measureWindow());
+    ro.observe(el);
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      ro.disconnect();
+    };
+  }, [virtual, measureWindow, scrollerRef]);
+
+  // 命中行在窗口外时先滚过去，等下一帧 useRowFocus 的 DOM 查询才找得到它
+  useEffect(() => {
+    if (!focusRowId || !virtual) return;
+    const idx = displayRows.findIndex((r) => r.id === focusRowId);
+    const el = scrollerRef.current;
+    const body = tbodyRef.current;
+    if (idx < 0 || !el || !body) return;
+    if (win && idx >= win.start && idx < win.end) return;
+    const dataTop = body.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+    el.scrollTop = Math.max(0, dataTop + idx * rowHeightRef.current - el.clientHeight / 2);
+  }, [focusRowId, virtual, displayRows, win, scrollerRef]);
+
   useEffect(() => {
     if (!focusRowId || !groups) return;
     const hit = groups.find((g) => g.rows.some((r) => r.id === focusRowId));
@@ -170,7 +232,7 @@ export function GridView({
       try {
         await store.setCell(rowId, fieldId, value);
       } catch (e) {
-        console.error("set cell failed", e);
+        logger.error("set cell failed", e);
         toast.error(t("error.db", { message: String(e) }));
       }
     },
@@ -192,7 +254,7 @@ export function GridView({
     try {
       await store.addRow();
     } catch (e) {
-      console.error("add row failed", e);
+      logger.error("add row failed", e);
       toast.error(t("error.db", { message: String(e) }));
     }
   };
@@ -247,7 +309,7 @@ export function GridView({
       await invoke("write_text_file", { path: target, content });
       toast.success(t("csv.exported"));
     } catch (e) {
-      console.error("csv export failed", e);
+      logger.error("csv export failed", e);
       toast.error(t("error.csv", { message: String(e) }));
     }
   };
@@ -271,15 +333,17 @@ export function GridView({
     if (startRow < 0 || startCol < 0) return;
     try {
       let skipped = 0;
-      let filled = 0;
-      // 预取行队列：现有行 + 粘贴时按需新建
+      // 预取行队列：现有行 + 粘贴时按需新建（一次 IPC 建全部缺行，不再逐行 await）
       const rowQueue: string[] = displayRows.slice(startRow).map((r) => r.id);
+      const missingRows = grid.length - rowQueue.length;
+      if (missingRows > 0) {
+        const created = await store.addRows(missingRows);
+        if (created.length !== missingRows) return;
+        rowQueue.push(...created.map((r) => r.id));
+      }
+      // 单元格写入先攒后写：一次 cell_set_many 落整片粘贴（选项补建仍逐条，但那是低频路径）
+      const updates: { rowId: string; fieldId: string; value: CellValue }[] = [];
       for (let i = 0; i < grid.length; i++) {
-        while (rowQueue.length <= i) {
-          const created = await store.addRow();
-          if (!created) return;
-          rowQueue.push(created.id);
-        }
         for (let j = 0; j < grid[i].length; j++) {
           const field = visibleFields[startCol + j];
           if (!field) {
@@ -305,19 +369,27 @@ export function GridView({
               if (created) ids.push(created);
               else skipped++;
             }
-            await store.setCell(rowQueue[i], field.id, field.field_type === "multi_select" ? ids : (ids[0] ?? null));
-            filled++;
+            updates.push({
+              rowId: rowQueue[i],
+              fieldId: field.id,
+              value: field.field_type === "multi_select" ? ids : (ids[0] ?? null),
+            });
             continue;
           }
-          const cell = csvValueToCell(field.field_type, grid[i][j]);
-          await store.setCell(rowQueue[i], field.id, cell);
-          filled++;
+          updates.push({
+            rowId: rowQueue[i],
+            fieldId: field.id,
+            value: csvValueToCell(field.field_type, grid[i][j]),
+          });
         }
       }
+      // 选择类补建过选项时会刷新 fields，但 cells 只在这里写一次，顺序上不冲突
+      await store.setCellsMany(updates);
+      const filled = updates.length;
       if (filled > 0) toast.success(t("csv.pasted", { n: String(filled) }));
       if (skipped > 0) toast.warning(t("csv.pasteSkipped", { n: String(skipped) }));
     } catch (err) {
-      console.error("tsv paste failed", err);
+      logger.error("tsv paste failed", err);
       toast.error(t("error.csv", { message: String(err) }));
     }
   };
@@ -370,7 +442,7 @@ export function GridView({
       useWorkspaceStore.getState().openView(newView.id);
       toast.success(t("csv.imported", { count: String(parsed.length - 1) }));
     } catch (e) {
-      console.error("csv import failed", e);
+      logger.error("csv import failed", e);
       toast.error(t("error.csv", { message: String(e) }));
     }
   };
@@ -500,6 +572,13 @@ export function GridView({
   };
 
   /** 分组小计行：只铺已配置汇总的列，其余列留空 */
+  // 窗口外的行用一条占位行撑住高度：列宽由 colgroup 决定，占位不参与渲染
+  const renderSpacer = (height: number) => (
+    <tr aria-hidden style={{ height }}>
+      <td colSpan={visibleFields.length + 2} className="border-0 p-0" />
+    </tr>
+  );
+
   const renderSubtotal = (groupRows: DatabaseRow[]) => {
     const rowIds = groupRows.map((r) => r.id);
     return (
@@ -700,7 +779,7 @@ export function GridView({
               </th>
             </tr>
           </thead>
-          <tbody>
+          <tbody ref={tbodyRef}>
             {groups
               ? groups.map((group) => {
                   const collapsed = collapsedGroups.has(group.key);
@@ -732,7 +811,20 @@ export function GridView({
                     </Fragment>
                   );
                 })
-              : displayRows.map(renderRow)}
+              : virtual
+                ? (() => {
+                    // 首次 commit 还没量过窗口：先渲染开头一段，effect 量完立刻纠正
+                    const start = win?.start ?? 0;
+                    const end = win?.end ?? Math.min(displayRows.length, VIRTUAL_OVERSCAN * 4);
+                    return (
+                      <>
+                        {start > 0 && renderSpacer(start * rowHeightRef.current)}
+                        {displayRows.slice(start, end).map(renderRow)}
+                        {end < displayRows.length && renderSpacer((displayRows.length - end) * rowHeightRef.current)}
+                      </>
+                    );
+                  })()
+                : displayRows.map(renderRow)}
             <tr>
               {/* 新建行：跨整行底部，避免无字段时挤在窄列里 */}
               <td
@@ -875,7 +967,7 @@ function AddFieldButton() {
             await store.addField(type, name);
             setOpen(false);
           } catch (e) {
-            console.error("add field failed", e);
+            logger.error("add field failed", e);
             toast.error(t("error.db", { message: String(e) }));
           }
         }}

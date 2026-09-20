@@ -47,11 +47,15 @@ interface DatabaseState {
 
   // 行
   addRow: () => Promise<DatabaseRow | null>;
+  /** 批量建行（TSV 粘贴）：一次 IPC 一个事务 */
+  addRows: (count: number) => Promise<DatabaseRow[]>;
   removeRow: (id: string) => Promise<void>;
   reorderRows: (orderedIds: string[]) => Promise<void>;
 
   // 单元格
   setCell: (rowId: string, fieldId: string, value: CellValue) => Promise<void>;
+  /** 批量写单元格（TSV 粘贴）：一次 IPC 一个事务 */
+  setCellsMany: (updates: { rowId: string; fieldId: string; value: CellValue }[]) => Promise<void>;
 
   // 行详情（右侧滑出面板）
   rowDetail: { row: DatabaseRow; view: View } | null;
@@ -271,6 +275,14 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
     return row;
   },
 
+  addRows: async (count) => {
+    const viewId = get().viewId;
+    if (!viewId || count <= 0) return [];
+    const created = await databaseApi.createRows(viewId, count);
+    set({ rows: [...get().rows, ...created] });
+    return created;
+  },
+
   removeRow: async (id) => {
     await databaseApi.deleteRow(id);
     set({ rows: get().rows.filter((r) => r.id !== id) });
@@ -287,6 +299,19 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
     await databaseApi.setCell(rowId, fieldId, value);
     const cells = { ...get().cells };
     (cells[rowId] ??= {})[fieldId] = value;
+    set({ cells });
+  },
+
+  setCellsMany: async (updates) => {
+    if (updates.length === 0) return;
+    await databaseApi.setCellsMany(updates);
+    const cells = { ...get().cells };
+    for (const u of updates) {
+      // 逐行浅拷贝后替换：不原地改上一份 state 里的对象
+      const rowCells = { ...(cells[u.rowId] ?? {}) };
+      rowCells[u.fieldId] = u.value;
+      cells[u.rowId] = rowCells;
+    }
     set({ cells });
   },
 
@@ -317,7 +342,7 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
         set({ rowDetail: { row, view } });
       }
     } catch (e) {
-      console.error("open row detail failed", e);
+      logger.error("open row detail failed", e);
       toast.error(t("error.db", { message: String(e) }));
     }
   },
