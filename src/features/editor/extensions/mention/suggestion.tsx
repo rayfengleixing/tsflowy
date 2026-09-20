@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-  useState,
-  type Ref,
-} from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import type { MentionOptions } from "@tiptap/extension-mention";
 import { ReactRenderer } from "@tiptap/react";
 import { FileText, Table2 } from "lucide-react";
@@ -18,12 +11,13 @@ import { newSelectOption } from "@/lib/database-values";
 import { useSettingsStore } from "@/stores/settings";
 import type { View } from "@/types/models";
 import { t } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 
 // —— 数据类型（@tiptap/extension-mention 自定义 item）——
 export interface MentionItem {
-  id: string;       // viewId
-  label: string;    // 页面名
+  id: string; // viewId
+  label: string; // 页面名
   view?: View;
 }
 
@@ -110,7 +104,7 @@ export function MentionList(props: MentionListProps) {
       // 3. 再 reload 更新目录树
       await ws.reload();
     } catch (e) {
-      console.error("create doc from mention failed", e);
+      logger.error("create doc from mention failed", e);
       toast.error(t("error.db", { message: String(e) }));
     }
   };
@@ -129,7 +123,10 @@ export function MentionList(props: MentionListProps) {
       const select = await databaseApi.createField(newView.id, "single_select", lang === "zh-CN" ? "单选" : "Select");
       await databaseApi.updateFieldOptions(select.id, {
         kind: "select",
-        options: [newSelectOption(lang === "zh-CN" ? "选项 1" : "Option 1"), newSelectOption(lang === "zh-CN" ? "选项 2" : "Option 2")],
+        options: [
+          newSelectOption(lang === "zh-CN" ? "选项 1" : "Option 1"),
+          newSelectOption(lang === "zh-CN" ? "选项 2" : "Option 2"),
+        ],
       });
       await databaseApi.createRow(newView.id);
       // 3. 先插入 mention 节点（此时 editor 还活着）
@@ -137,7 +134,7 @@ export function MentionList(props: MentionListProps) {
       // 4. 再 reload 更新目录树
       await ws.reload();
     } catch (e) {
-      console.error("create table from mention failed", e);
+      logger.error("create table from mention failed", e);
       toast.error(t("error.db", { message: String(e) }));
     }
   };
@@ -243,7 +240,7 @@ export function buildMentionSuggestion(): MentionOptions["suggestion"] {
           view: v,
         }));
       } catch (e) {
-        console.error("mention.items failed", e);
+        logger.error("mention.items failed", e);
         return [];
       }
     },

@@ -6,6 +6,7 @@ import { documentApi, type SnapshotRow } from "@/lib/documents";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { toast } from "sonner";
 import { t } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
 import type { View } from "@/types/models";
 
 interface HistoryDialogProps {
@@ -36,7 +37,7 @@ export function HistoryDialog({ view, open, onOpenChange }: HistoryDialogProps) 
       .listSnapshots(view.id)
       .then(setSnapshots)
       .catch((e) => {
-        console.error("list snapshots failed", e);
+        logger.error("list snapshots failed", e);
         toast.error(t("error.db", { message: String(e) }));
       })
       .finally(() => setLoading(false));
@@ -52,7 +53,7 @@ export function HistoryDialog({ view, open, onOpenChange }: HistoryDialogProps) 
       toast.success(t("history.restored"));
       onOpenChange(false);
     } catch (e) {
-      console.error("restore snapshot failed", e);
+      logger.error("restore snapshot failed", e);
       toast.error(t("error.db", { message: String(e) }));
     } finally {
       setRestoring(null);

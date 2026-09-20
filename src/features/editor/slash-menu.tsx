@@ -34,6 +34,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { t, type MessageKey } from "@/lib/i18n";
 import { pinyinInitials } from "@/lib/pinyin-initials";
+import { logger } from "@/lib/logger";
 import { INSERT_DATABASE_VIEW_EVENT } from "./DatabaseViewPicker";
 import { INSERT_EMOJI_EVENT } from "./EmojiPickerDialog";
 
@@ -48,7 +49,7 @@ async function uploadAttachment(): Promise<string | null> {
     if (typeof selected !== "string") return null;
     return await invoke<string>("save_asset", { sourcePath: selected });
   } catch (e) {
-    console.error("upload attachment failed", e);
+    logger.error("upload attachment failed", e);
     toast.error(t("error.upload", { message: String(e) }));
     return null;
   }
@@ -144,7 +145,7 @@ export const slashItems: SlashItem[] = [
           .insertContent({ type: "image", attrs: { src: relative, alt: "" } })
           .run();
       } catch (err) {
-        console.error("upload image failed", err);
+        logger.error("upload image failed", err);
         toast.error(t("error.upload", { message: String(err) }));
       }
     },

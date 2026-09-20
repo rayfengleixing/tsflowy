@@ -5,9 +5,10 @@ import type { Editor } from "@tiptap/core";
 import { Node as PMNode } from "@tiptap/pm/model";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 
 interface HeadingEntry {
-  pos: number;        // 文档中的绝对 position（0-based，node start）
+  pos: number; // 文档中的绝对 position（0-based，node start）
   level: 1 | 2 | 3;
   text: string;
 }
@@ -60,7 +61,7 @@ export function OutlineNodeView(props: ReactNodeViewProps<HTMLElement>) {
         target?.scrollIntoView({ block: "center", behavior: "smooth" });
       });
     } catch (e) {
-      console.error("outline scrollTo failed", e);
+      logger.error("outline scrollTo failed", e);
     }
   };
 
@@ -95,7 +96,9 @@ export function OutlineNodeView(props: ReactNodeViewProps<HTMLElement>) {
               <span className="w-4 shrink-0 text-neutral-400">
                 {h.level === 1 ? "H1" : h.level === 2 ? "H2" : "H3"}
               </span>
-              <span className="min-w-0 truncate">{h.text || <em className="text-neutral-300">(未命名 {t(`outline.h${h.level}`)})</em>}</span>
+              <span className="min-w-0 truncate">
+                {h.text || <em className="text-neutral-300">(未命名 {t(`outline.h${h.level}`)})</em>}
+              </span>
             </button>
           ))}
         </nav>

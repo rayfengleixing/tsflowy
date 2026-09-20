@@ -15,6 +15,7 @@ import type { EditorView } from "@tiptap/pm/view";
 import { Slice, Fragment, Node as PMNode } from "@tiptap/pm/model";
 import type { Editor } from "@tiptap/core";
 import { BLOCK_MENU_EVENT, type BlockMenuPayload } from "@/features/editor/block-menu";
+import { logger } from "@/lib/logger";
 
 const PLUGIN_KEY = new PluginKey<{ draggingDom: HTMLElement | null }>("block-drag");
 
@@ -372,7 +373,7 @@ class BlockDragView {
       // 不 scrollIntoView：删除+插入后映射的选区常落在文档首尾，会导致滚动跳到顶部/底部
       this.view.dispatch(tr2);
     } catch (err) {
-      console.warn("block drag drop failed", err);
+      logger.warn("block drag drop failed", err);
     }
   }
 

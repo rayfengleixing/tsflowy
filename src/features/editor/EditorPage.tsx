@@ -25,6 +25,7 @@ import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown"
 import { pickImageExt, uploadImageBytes } from "@/lib/assets";
 import { registerCloseFlush } from "@/lib/close-flush";
 import { t } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
 import type { View } from "@/types/models";
 import { SlashMenu } from "./slash-menu";
 import { TableContextMenu } from "./table-context-menu";
@@ -117,7 +118,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         }
       },
       (e: unknown) => {
-        console.error("autosave failed", view.id, e);
+        logger.error("autosave failed", view.id, e);
         toast.error(t("error.saveDoc", { message: String(e) }));
         throw e;
       },
@@ -303,7 +304,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
                       const node = ed.state.schema.nodes.image.create({ src: assetPath });
                       ed.view.dispatch(ed.state.tr.replaceSelectionWith(node).scrollIntoView());
                     } catch (e) {
-                      console.error("paste image failed", e);
+                      logger.error("paste image failed", e);
                       toast.error(t("editor.imageUploadFailed"));
                     }
                   }
@@ -331,7 +332,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
               view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView());
               return true;
             } catch (e) {
-              console.error("markdown paste failed, fallback to default", e);
+              logger.error("markdown paste failed, fallback to default", e);
             }
           }
           return false;
@@ -346,7 +347,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
           view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView());
           return true;
         } catch (e) {
-          console.error("plain text paste failed, fallback to default", e);
+          logger.error("plain text paste failed, fallback to default", e);
           return false;
         }
       },
@@ -394,16 +395,16 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
               editor.commands.setContent(json, { emitUpdate: false });
             } else {
               // 只读期间输入不可能到达，理论上不可达；一旦发生宁可告警也不覆盖
-              console.error("document load skipped: editor not empty", view.id);
+              logger.error("document load skipped: editor not empty", view.id);
             }
           } catch (e: unknown) {
-            console.error("parse document content failed", view.id, e);
+            logger.error("parse document content failed", view.id, e);
             toast.error(t("error.db", { message: String(e) }));
           }
         }
       })
       .catch((e: unknown) => {
-        console.error("load document failed", view.id, e);
+        logger.error("load document failed", view.id, e);
         toast.error(t("error.db", { message: String(e) }));
       })
       .finally(() => {

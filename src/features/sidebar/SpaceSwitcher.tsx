@@ -13,6 +13,7 @@ import { Check, ChevronsUpDown, Pencil, Plus, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 
 /** 空间区（高 32px）：当前空间 + 下拉（切换/新建/重命名/删除当前空间） */
@@ -38,7 +39,7 @@ export function SpaceSwitcher() {
     try {
       await createWorkspace(name);
     } catch (e: unknown) {
-      console.error("create workspace failed", e);
+      logger.error("create workspace failed", e);
       toast.error(t("error.db", { message: String(e) }));
     }
   };
@@ -51,7 +52,7 @@ export function SpaceSwitcher() {
     try {
       await renameWorkspace(id, name);
     } catch (e: unknown) {
-      console.error("rename workspace failed", e);
+      logger.error("rename workspace failed", e);
       toast.error(t("error.db", { message: String(e) }));
     }
   };

@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { t, type MessageKey } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
 import { TEXT_COLORS, HIGHLIGHT_COLORS, SwatchPalette, IconBtn } from "./floating-menu";
 import { clampXToEditor } from "./float-clamp";
 
@@ -284,7 +285,7 @@ export function BlockMenu() {
       await navigator.clipboard.writeText(text);
       toast.success(t("blockMenu.copied"));
     } catch (e) {
-      console.error("copy block failed", e);
+      logger.error("copy block failed", e);
     } finally {
       close();
     }

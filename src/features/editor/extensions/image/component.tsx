@@ -5,6 +5,7 @@ import { Maximize2, X } from "lucide-react";
 import { resolveAssetUrl } from "@/lib/assets";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
 
 // 图片节点渲染（M3：显示 + 说明文字编辑 + 移除/放大按钮；caption 存 attr，节点为 atom）
 //
@@ -34,7 +35,7 @@ export function ImageNodeView(props: ReactNodeViewProps<HTMLElement>) {
           if (alive) setSrc(url);
         })
         .catch((e: unknown) => {
-          console.error("resolve asset failed", raw, e);
+          logger.error("resolve asset failed", raw, e);
           if (alive) setSrc(raw);
         });
     } else {

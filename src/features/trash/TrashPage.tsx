@@ -5,6 +5,7 @@ import { viewIcon } from "@/components/view-icon";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 
 /** 回收站页（说明书 5.1：恢复 / 彻底删除 / 清空） */
@@ -17,7 +18,7 @@ export function TrashPage() {
   const [purgeTarget, setPurgeTarget] = useState<string | null>(null);
 
   const onFail = (e: unknown) => {
-    console.error("trash operation failed", e);
+    logger.error("trash operation failed", e);
     toast.error(t("error.db", { message: String(e) }));
   };
   const handleRestore = (id: string) => restoreView(id).catch(onFail);

@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { t } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
 
 export function ImageGalleryNodeView(props: ReactNodeViewProps<HTMLElement>) {
   const { node, editor, deleteNode, getPos } = props;
@@ -25,7 +26,7 @@ export function ImageGalleryNodeView(props: ReactNodeViewProps<HTMLElement>) {
           try {
             return await invoke<string>("save_asset", { sourcePath: s });
           } catch (e) {
-            console.error("gallery upload single failed", e);
+            logger.error("gallery upload single failed", e);
             return null;
           }
         }),
@@ -51,7 +52,7 @@ export function ImageGalleryNodeView(props: ReactNodeViewProps<HTMLElement>) {
       // 不 scrollIntoView：selection 常停留在文档其他位置（如末尾），插入图片后会把页面滚走
       editor.view.dispatch(tr);
     } catch (e) {
-      console.error("gallery upload failed", e);
+      logger.error("gallery upload failed", e);
       toast.error(t("error.upload", { message: String(e) }));
     }
   };

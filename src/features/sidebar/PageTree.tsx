@@ -6,6 +6,7 @@ import { PageTreeItem, type DropHint } from "./PageTreeItem";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { dropTarget, filterTreeByTag, flattenTree, isDescendant, type DropZone } from "@/lib/tree";
 import { t } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 
 /** 页面树：递归渲染 + 鼠标事件链拖拽（HTML5 drag 在 WebView2 下不可靠，与编辑器块拖拽同方案）。
@@ -35,7 +36,7 @@ export function PageTree() {
   const displayTree = useMemo(() => (tagFilter ? filterTreeByTag(tree, tagFilter) : tree), [tree, tagFilter]);
 
   const onMoveFail = (e: unknown) => {
-    console.error("move view failed", e);
+    logger.error("move view failed", e);
     toast.error(t("error.db", { message: String(e) }));
   };
 
