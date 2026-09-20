@@ -76,6 +76,11 @@ export const databaseApi = {
     return invoke("row_delete", { rowId }); // cells 级联
   },
 
+  /** 批量删行（多选删除）：一次 IPC 一个事务，返回实际删除行数 */
+  async deleteRows(rowIds: string[]): Promise<number> {
+    return invoke<number>("row_delete_many", { rowIds });
+  },
+
   async reorderRows(viewId: string, orderedIds: string[]): Promise<void> {
     return invoke("row_reorder", { viewId, orderedIds });
   },

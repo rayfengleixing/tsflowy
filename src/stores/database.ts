@@ -50,6 +50,10 @@ interface DatabaseState {
   /** 批量建行（TSV 粘贴）：一次 IPC 一个事务 */
   addRows: (count: number) => Promise<DatabaseRow[]>;
   removeRow: (id: string) => Promise<void>;
+  /** 批量删行（多选删除）：一次 IPC 一个事务 */
+  removeRows: (ids: string[]) => Promise<number>;
+  /** 复制所选行：新建行并复制其单元格值（含公式引用之外的存储值），返回新行 */
+  duplicateRows: (ids: string[]) => Promise<DatabaseRow[]>;
   reorderRows: (orderedIds: string[]) => Promise<void>;
 
   // 单元格
@@ -286,6 +290,45 @@ export const useDatabaseStore = create<DatabaseState>()((set, get) => ({
   removeRow: async (id) => {
     await databaseApi.deleteRow(id);
     set({ rows: get().rows.filter((r) => r.id !== id) });
+  },
+
+  removeRows: async (ids) => {
+    if (ids.length === 0) return 0;
+    const gone = new Set(ids);
+    const n = await databaseApi.deleteRows(ids);
+    const cells = { ...get().cells };
+    for (const id of ids) delete cells[id];
+    set({ rows: get().rows.filter((r) => !gone.has(r.id)), cells });
+    return n;
+  },
+
+  duplicateRows: async (ids) => {
+    const viewId = get().viewId;
+    if (!viewId || ids.length === 0) return [];
+    // 新行顺序按当前表格行序（store 顺序 = position 顺序，与选择顺序无关）
+    const src = new Set(ids);
+    const ordered = get().rows.filter((r) => src.has(r.id));
+    if (ordered.length === 0) return [];
+    const created = await databaseApi.createRows(viewId, ordered.length);
+    // 逐行搬运存储值：新行 id 与源行 id 一一对应
+    const updates: { rowId: string; fieldId: string; value: CellValue }[] = [];
+    for (let i = 0; i < ordered.length; i++) {
+      const rowCells = get().cells[ordered[i].id] ?? {};
+      for (const [fieldId, value] of Object.entries(rowCells)) {
+        updates.push({ rowId: created[i].id, fieldId, value });
+      }
+    }
+    if (updates.length > 0) {
+      await databaseApi.setCellsMany(updates);
+      const cells = { ...get().cells };
+      for (const u of updates) {
+        cells[u.rowId] = { ...(cells[u.rowId] ?? {}), [u.fieldId]: u.value };
+      }
+      set({ rows: [...get().rows, ...created], cells });
+    } else {
+      set({ rows: [...get().rows, ...created] });
+    }
+    return created;
   },
 
   reorderRows: async (orderedIds) => {

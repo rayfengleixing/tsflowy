@@ -1,8 +1,10 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   ArrowUpDown,
+  CheckSquare,
   ChevronDown,
   ChevronRight,
+  Copy,
   Download,
   ExternalLink,
   Eye,
@@ -11,7 +13,9 @@ import {
   Filter,
   GripVertical,
   Plus,
+  Square,
   Trash2,
+  X,
 } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -82,6 +86,9 @@ export function GridView({
   const [sortOpen, setSortOpen] = useState(false);
   // 待确认删除的行（行删除不可撤销，先确认再落库）
   const [deleteRowTarget, setDeleteRowTarget] = useState<DatabaseRow | null>(null);
+  // 多选行（序号列勾选框）：键为 rowId；实际生效集合每次按可见行求交，行被删/被筛走都不会残留
+  const [checkedRows, setCheckedRows] = useState<Set<string>>(new Set());
+  const [deleteSelectedOpen, setDeleteSelectedOpen] = useState(false);
   const [draggingField, setDraggingField] = useState<string | null>(null);
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
   const [groupFieldId, setGroupFieldId] = useState<string | null>(() => readViewConfig(view).groupFieldId ?? null);
@@ -94,6 +101,7 @@ export function GridView({
 
   useEffect(() => {
     store.load(view).catch((e) => logger.error("grid.load", e));
+    setCheckedRows(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.id]);
 
@@ -130,6 +138,52 @@ export function GridView({
     const filtered = applyFilters(rows, cells, filters, fields, filterMode);
     return sortRows(filtered, cells, sorts);
   }, [rows, cells, filters, fields, filterMode, sorts]);
+
+  // 多选：只认当前可见（筛选 + 排序后）且仍存在的行
+  const selectedIds = useMemo(
+    () => displayRows.filter((r) => checkedRows.has(r.id)).map((r) => r.id),
+    [displayRows, checkedRows],
+  );
+  const allSelected = displayRows.length > 0 && selectedIds.length === displayRows.length;
+
+  const toggleRowChecked = (rowId: string) => {
+    setCheckedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setCheckedRows(allSelected ? new Set() : new Set(displayRows.map((r) => r.id)));
+  };
+
+  const deleteSelected = async () => {
+    const ids = selectedIds;
+    if (ids.length === 0) return;
+    try {
+      const n = await store.removeRows(ids);
+      setCheckedRows(new Set());
+      toast.success(t("row.deletedMany", { count: String(n) }));
+    } catch (e) {
+      logger.error("delete rows failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
+  };
+
+  const duplicateSelected = async () => {
+    const ids = selectedIds;
+    if (ids.length === 0) return;
+    try {
+      const created = await store.duplicateRows(ids);
+      setCheckedRows(new Set());
+      toast.success(t("row.duplicated", { count: String(created.length) }));
+    } catch (e) {
+      logger.error("duplicate rows failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
+  };
 
   // 分组字段被删除或改成不可分组的类型时，自动回落成不分组（配置留着，改回来还在）
   const groupField = useMemo(
@@ -469,12 +523,38 @@ export function GridView({
       className={cn(
         "group/row hover:bg-neutral-100 dark:hover:bg-neutral-800/60",
         draggingRow === row.id && "opacity-40",
+        checkedRows.has(row.id) && "bg-brand-50/70 dark:bg-brand-500/10",
         focusRowId === row.id && ROW_FOCUS_CLASS,
       )}
     >
       <td className="sticky left-0 z-[5] border-b border-r border-neutral-200 bg-white px-2 text-center text-[11px] text-neutral-400 group-hover/row:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-500 dark:group-hover/row:bg-neutral-800/60">
         <span className="flex items-center justify-center gap-1">
-          <GripVertical className="h-3 w-3 cursor-grab text-neutral-200 group-hover/row:text-neutral-400 dark:text-neutral-700 dark:group-hover/row:text-neutral-500" />
+          {checkedRows.has(row.id) ? (
+            <button
+              className="flex h-4 w-4 items-center justify-center rounded text-brand-600 hover:bg-brand-100 dark:hover:bg-brand-500/10"
+              title={t("row.select")}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleRowChecked(row.id);
+              }}
+            >
+              <CheckSquare className="h-3.5 w-3.5" />
+            </button>
+          ) : (
+            <>
+              <button
+                className="hidden h-4 w-4 items-center justify-center rounded text-neutral-300 hover:text-brand-600 group-hover/row:flex dark:text-neutral-600"
+                title={t("row.select")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleRowChecked(row.id);
+                }}
+              >
+                <Square className="h-3 w-3" />
+              </button>
+              <GripVertical className="h-3 w-3 cursor-grab text-neutral-200 group-hover/row:hidden dark:text-neutral-700" />
+            </>
+          )}
           {row.position + 1}
         </span>
         <button
@@ -617,6 +697,32 @@ export function GridView({
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-6">
         <div className="flex min-w-0 flex-1 items-center">{tabs}</div>
         <div className="flex shrink-0 items-center gap-1">
+          {/* 多选操作条：勾了行才出现，避免常驻占位 */}
+          {selectedIds.length > 0 && (
+            <div className="mr-1 flex items-center gap-1 rounded-md border border-brand-200 bg-brand-50 px-2 py-0.5 text-xs text-brand-700 dark:border-brand-500/40 dark:bg-brand-500/10 dark:text-brand-300">
+              <span data-testid="selected-count">{t("row.selected", { count: String(selectedIds.length) })}</span>
+              <Button variant="ghost" size="sm" onClick={duplicateSelected}>
+                <Copy className="h-3.5 w-3.5" />
+                {t("row.duplicateSelected")}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-red-600 hover:bg-red-100 hover:text-red-600 dark:text-red-400 dark:hover:bg-red-500/10"
+                onClick={() => setDeleteSelectedOpen(true)}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                {t("row.deleteSelected")}
+              </Button>
+              <button
+                className="flex h-5 w-5 items-center justify-center rounded text-brand-500 hover:bg-brand-100 dark:hover:bg-brand-500/20"
+                title={t("row.selectionClear")}
+                onClick={() => setCheckedRows(new Set())}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
           {/* 分组字段切换 */}
           {groupableFields.length > 0 && (
             <div className="flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700">
@@ -698,7 +804,17 @@ export function GridView({
           <thead>
             <tr>
               <th className="sticky left-0 z-[6] border-b border-r border-neutral-200 bg-neutral-100 px-2 text-[11px] font-normal text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400">
-                #
+                <button
+                  className="mx-auto flex h-4 w-4 items-center justify-center rounded text-neutral-500 hover:text-brand-600 dark:text-neutral-400"
+                  title={t("row.selectAll")}
+                  onClick={toggleSelectAll}
+                >
+                  {allSelected ? (
+                    <CheckSquare className="h-3.5 w-3.5 text-brand-600" />
+                  ) : (
+                    <Square className="h-3 w-3" />
+                  )}
+                </button>
               </th>
               {visibleFields.map((field) => {
                 const sortIndex = sorts.findIndex((s) => s.field_id === field.id);
@@ -921,6 +1037,15 @@ export function GridView({
             .then(() => toast.success(t("row.deleted")))
             .catch((e: unknown) => toast.error(t("error.db", { message: String(e) })));
         }}
+      />
+
+      <ConfirmDialog
+        open={deleteSelectedOpen}
+        onOpenChange={setDeleteSelectedOpen}
+        title={t("row.deleteSelectedConfirmTitle")}
+        description={t("row.deleteSelectedConfirmDesc", { count: String(selectedIds.length) })}
+        confirmLabel={t("common.delete")}
+        onConfirm={() => void deleteSelected()}
       />
 
       {/* 行详情右侧滑出面板（说明书 6.1：宽 400px） */}

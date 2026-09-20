@@ -257,6 +257,19 @@ pub fn delete_row(conn: &Connection, row_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 批量删行（多选删除）：一个事务，任何一行缺 id 不影响其余行。
+pub fn delete_rows(conn: &Connection, ids: &[String]) -> Result<usize, String> {
+    let tx = conn.unchecked_transaction().map_err(dberr("delete rows"))?;
+    let mut n = 0;
+    for id in ids {
+        n += tx
+            .execute("DELETE FROM database_rows WHERE id = ?1", params![id])
+            .map_err(dberr("delete rows"))?;
+    }
+    tx.commit().map_err(dberr("delete rows (commit)"))?;
+    Ok(n)
+}
+
 pub fn reorder_rows(conn: &Connection, view_id: &str, ordered_ids: &[&str]) -> Result<(), String> {
     let host = data_view_id(conn, view_id)?;
     let view_id = host.as_str();
@@ -697,6 +710,30 @@ mod tests {
         assert!(err.contains("UNIQUE"), "{err}");
         let ids: Vec<String> = list_rows(&conn, "v1").unwrap().into_iter().map(|r| r.id).collect();
         assert_eq!(ids, vec!["r1", "r2", "r3"], "整批回滚：r4 不落库");
+    }
+
+    #[test]
+    fn delete_rows_removes_all_and_cascades_cells() {
+        let conn = setup();
+        create_field(&conn, "v1", "f1", "text", None).unwrap();
+        create_rows(&conn, "v1", &["r1".into(), "r2".into(), "r3".into()]).unwrap();
+        set_cells_many(
+            &conn,
+            &[
+                CellSetIn { row_id: "r2".into(), field_id: "f1".into(), value: r#""x""#.into() },
+                CellSetIn { row_id: "r3".into(), field_id: "f1".into(), value: r#""y""#.into() },
+            ],
+        )
+        .unwrap();
+
+        // 多选删除：已不存在的 id 不计入、也不中断整批
+        let n = delete_rows(&conn, &["r2".into(), "ghost".into()]).unwrap();
+        assert_eq!(n, 1);
+        let ids: Vec<String> = list_rows(&conn, "v1").unwrap().into_iter().map(|r| r.id).collect();
+        assert_eq!(ids, vec!["r1", "r3"]);
+        let left = cells_of(&conn, "f1");
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].row_id, "r3", "r2 的单元格随行级联删除");
     }
 
     // ---------- CSV 导入 ----------

@@ -228,6 +228,7 @@ pub fn run() {
             commands::db::row_get,
             commands::db::row_set_document_id,
             commands::db::row_delete,
+            commands::db::row_delete_many,
             commands::db::row_reorder,
             commands::db::cells_load,
             commands::db::cell_set,

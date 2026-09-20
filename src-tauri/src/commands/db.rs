@@ -432,6 +432,14 @@ pub async fn row_delete(db: State<'_, Db>, row_id: String) -> Result<(), String>
     db::database::delete_row(&conn, &row_id)
 }
 
+/// 批量删行（多选删除）：一次 IPC 一个事务；返回实际删除的行数。
+#[tauri::command]
+pub async fn row_delete_many(db: State<'_, Db>, row_ids: Vec<String>) -> Result<i64, String> {
+    let conn = db.write_conn()?;
+    let n = db::database::delete_rows(&conn, &row_ids)?;
+    Ok(n as i64)
+}
+
 #[tauri::command]
 pub async fn row_reorder(
     db: State<'_, Db>,

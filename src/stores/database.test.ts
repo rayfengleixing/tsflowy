@@ -7,6 +7,9 @@ const api = vi.hoisted(() => ({
   renameField: vi.fn(),
   updateFieldOptions: vi.fn(),
   setCell: vi.fn(),
+  deleteRows: vi.fn(),
+  createRows: vi.fn(),
+  setCellsMany: vi.fn(),
 }));
 const toastError = vi.hoisted(() => vi.fn());
 
@@ -15,7 +18,7 @@ vi.mock("@/lib/view-config", () => ({ readViewConfig: () => ({}), patchViewConfi
 vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn() } }));
 
 import { useDatabaseStore } from "@/stores/database";
-import type { DatabaseField } from "@/types/database";
+import type { DatabaseField, DatabaseRow } from "@/types/database";
 import type { View } from "@/types/models";
 
 function deferred<T>() {
@@ -145,6 +148,63 @@ describe("database store 字段改名", () => {
 
     expect(api.updateFieldOptions).not.toHaveBeenCalled();
     expect(store.getState().fields.map((f) => f.name)).toEqual(["甲改", "乙"]);
+  });
+});
+
+describe("数据库 store 多选行操作", () => {
+  const row = (id: string, position: number) =>
+    ({ id, database_view_id: "v1", position, document_id: null, created_at: 1, updated_at: 1 }) as DatabaseRow;
+
+  it("批量删行：一次 IPC，行与单元格缓存同步清掉", async () => {
+    const store = useDatabaseStore;
+    store.setState({
+      viewId: "v1",
+      rows: [row("r1", 0), row("r2", 1), row("r3", 2)],
+      cells: { r1: { f1: "a" }, r2: { f1: "b" } },
+    });
+    api.deleteRows.mockResolvedValue(2);
+
+    const n = await store.getState().removeRows(["r1", "r2"]);
+
+    expect(api.deleteRows).toHaveBeenCalledWith(["r1", "r2"]);
+    expect(n).toBe(2);
+    expect(store.getState().rows.map((r) => r.id)).toEqual(["r3"]);
+    expect(store.getState().cells).toEqual({});
+  });
+
+  it("复制所选行：按表格行序建行并搬运单元格值（与勾选顺序无关）", async () => {
+    const store = useDatabaseStore;
+    store.setState({
+      viewId: "v1",
+      rows: [row("r1", 0), row("r2", 1), row("r3", 2)],
+      cells: { r1: { f1: "a" }, r2: { f1: "b", f2: 2 }, r3: { f1: "c" } },
+    });
+    api.createRows.mockResolvedValue([row("n1", 3), row("n2", 4)]);
+    api.setCellsMany.mockResolvedValue(3);
+
+    const created = await store.getState().duplicateRows(["r2", "r1"]);
+
+    expect(api.createRows).toHaveBeenCalledWith("v1", 2);
+    // 勾选顺序是 r2、r1，但落库顺序按表格行序：n1 ← r1，n2 ← r2
+    expect(api.setCellsMany).toHaveBeenCalledWith([
+      { rowId: "n1", fieldId: "f1", value: "a" },
+      { rowId: "n2", fieldId: "f1", value: "b" },
+      { rowId: "n2", fieldId: "f2", value: 2 },
+    ]);
+    expect(created.map((r) => r.id)).toEqual(["n1", "n2"]);
+    expect(store.getState().rows.map((r) => r.id)).toEqual(["r1", "r2", "r3", "n1", "n2"]);
+    expect(store.getState().cells.n2).toEqual({ f1: "b", f2: 2 });
+  });
+
+  it("复制空行：不产生多余的单元格写入", async () => {
+    const store = useDatabaseStore;
+    store.setState({ viewId: "v1", rows: [row("r1", 0)], cells: {} });
+    api.createRows.mockResolvedValue([row("n1", 1)]);
+
+    await store.getState().duplicateRows(["r1"]);
+
+    expect(api.setCellsMany).not.toHaveBeenCalled();
+    expect(store.getState().rows.map((r) => r.id)).toEqual(["r1", "n1"]);
   });
 });
 
