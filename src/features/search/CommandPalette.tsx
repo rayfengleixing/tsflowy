@@ -170,9 +170,13 @@ export function CommandPalette() {
 
   return (
     <Dialog open={paletteOpen} onOpenChange={(open) => (open ? undefined : closePalette())}>
-      <DialogContent className="top-[15%] w-[560px] max-w-[90vw] p-0" showCloseButton={false}>
+      {/* 顶部锚定 + 视口高度约束：基类是居中(-translate-y-1/2)，面板变高会把输入框顶出窗口 */}
+      <DialogContent
+        className="top-[12%] flex max-h-[76vh] w-[560px] max-w-[90vw] translate-y-0 flex-col gap-0 p-0"
+        showCloseButton={false}
+      >
         <DialogTitle className="sr-only">{t("search.title")}</DialogTitle>
-        <div className="flex items-center gap-2 border-b border-neutral-200 px-4 py-3">
+        <div className="flex shrink-0 items-center gap-2 border-b border-neutral-200 px-4 py-3">
           <Search className="h-4 w-4 shrink-0 text-neutral-400" />
           <input
             ref={inputRef}
@@ -186,7 +190,7 @@ export function CommandPalette() {
             ESC
           </kbd>
         </div>
-        <div className="max-h-[380px] min-h-[60px] overflow-y-auto p-1.5">
+        <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
           {actionMatches.length > 0 && (
             <>
               <p className="px-2.5 py-1 text-[11px] text-neutral-400">{t("palette.actions.title")}</p>
