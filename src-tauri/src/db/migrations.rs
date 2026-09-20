@@ -123,6 +123,8 @@ fn ensure_sqlx_compat(conn: &rusqlite::Connection) -> Result<(), String> {
 }
 
 pub fn ensure_migrated_with(conn: &rusqlite::Connection, migrations: &[Migration]) -> Result<(), String> {
+    use rusqlite::OptionalExtension;
+
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
            version INTEGER PRIMARY KEY,
@@ -131,33 +133,79 @@ pub fn ensure_migrated_with(conn: &rusqlite::Connection, migrations: &[Migration
          );",
     )
     .map_err(|e| format!("create schema_migrations: {e}"))?;
+    ensure_checksum_column(conn)?;
     seed_sqlx_baseline(conn)?;
 
     for m in migrations {
-        let applied: i64 = conn
+        let checksum = migration_checksum(m.sql);
+        let stored: Option<Option<String>> = conn
             .query_row(
-                "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
+                "SELECT checksum FROM schema_migrations WHERE version = ?1",
                 [m.version],
                 |r| r.get(0),
             )
+            .optional()
             .map_err(|e| format!("read schema_migrations: {e}"))?;
-        if applied > 0 {
-            continue;
+        match stored {
+            None => {
+                if let Err(e) = apply_one(conn, m, &checksum) {
+                    // 版本行与 DDL 同事务：失败即整体回滚，schema 保持未应用状态，下次启动干净重试
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    return Err(format!("migration {} ({}): {e}", m.version, m.description));
+                }
+                tracing::info!(version = m.version, description = m.description, "migration applied");
+            }
+            // 老库补写：此前没有指纹列，用当前文件字节回填，此后的改动才可检测
+            Some(None) => {
+                conn.execute(
+                    "UPDATE schema_migrations SET checksum = ?1 WHERE version = ?2 AND checksum IS NULL",
+                    rusqlite::params![checksum, m.version],
+                )
+                .map_err(|e| format!("backfill checksum {}: {e}", m.version))?;
+            }
+            Some(Some(recorded)) if recorded != checksum => {
+                // 不阻断启动：库里数据是完整的，只是文件内容与当初应用的不一致（改过已发布的迁移）
+                tracing::error!(
+                    version = m.version,
+                    description = m.description,
+                    "migration file changed after being applied; schema may differ from a fresh install"
+                );
+            }
+            Some(Some(_)) => {}
         }
-        if let Err(e) = apply_one(conn, m) {
-            // 版本行与 DDL 同事务：失败即整体回滚，schema 保持未应用状态，下次启动干净重试
-            let _ = conn.execute_batch("ROLLBACK;");
-            return Err(format!("migration {} ({}): {e}", m.version, m.description));
-        }
-        tracing::info!(version = m.version, description = m.description, "migration applied");
     }
     Ok(())
 }
 
-fn apply_one(conn: &rusqlite::Connection, m: &Migration) -> rusqlite::Result<()> {
+/// schema_migrations 的内容指纹：迁移 SQL 的 SHA384 十六进制。
+/// 只按 version 判重时，改过的迁移文件对已应用的库静默不生效（新装库却是新 schema），
+/// 指纹让这种偏差在启动日志里现形（对齐 sqlx 的 checksum 契约，同源为文件字节）。
+fn migration_checksum(sql: &str) -> String {
+    use sha2::{Digest, Sha384};
+    Sha384::digest(sql.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 老库的 schema_migrations 建表时没有 checksum 列，这里幂等补列（SQLite 无 IF NOT EXISTS 加列语法）
+fn ensure_checksum_column(conn: &rusqlite::Connection) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(schema_migrations)")
+        .map_err(|e| format!("inspect schema_migrations: {e}"))?;
+    let cols = stmt
+        .query_map([], |r| r.get::<_, String>(1))
+        .map_err(|e| format!("inspect schema_migrations: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("inspect schema_migrations: {e}"))?;
+    if cols.iter().any(|c| c == "checksum") {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE schema_migrations ADD COLUMN checksum TEXT;")
+        .map_err(|e| format!("add schema_migrations.checksum: {e}"))
+}
+
+fn apply_one(conn: &rusqlite::Connection, m: &Migration, checksum: &str) -> rusqlite::Result<()> {
     let batch = format!(
-        "BEGIN IMMEDIATE;\n{}\nINSERT INTO schema_migrations(version, description, applied_at) VALUES ({}, '{}', {});\nCOMMIT;",
-        m.sql, m.version, m.description, super::now_ms()
+        "BEGIN IMMEDIATE;\n{}\nINSERT INTO schema_migrations(version, description, applied_at, checksum) VALUES ({}, '{}', {}, '{}');\nCOMMIT;",
+        m.sql, m.version, m.description, super::now_ms(), checksum
     );
     conn.execute_batch(&batch)
 }
@@ -239,6 +287,62 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, MIGRATIONS.len() as i64);
+    }
+
+    #[test]
+    fn applied_migrations_record_checksums_and_detect_drift() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_migrated(&conn).unwrap();
+        // 应用时写入指纹：全部非空且与文件字节一致
+        let nulls: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations WHERE checksum IS NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(nulls, 0);
+        let recorded: String = conn
+            .query_row("SELECT checksum FROM schema_migrations WHERE version = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(recorded, migration_checksum(MIGRATIONS[0].sql));
+
+        // 文件被改过（库里指纹与当前文件不符）→ 启动不报错（数据完好），但偏差可被检出
+        conn.execute("UPDATE schema_migrations SET checksum = 'deadbeef' WHERE version = 2", [])
+            .unwrap();
+        ensure_migrated(&conn).unwrap();
+        let stale: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations WHERE checksum = 'deadbeef'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stale, 1, "指纹不被回填覆盖（否则偏差永远检不出）");
+    }
+
+    #[test]
+    fn legacy_table_without_checksum_column_is_backfilled_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        // 模拟升级前的库：老结构的 schema_migrations + 已应用全部迁移
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (
+               version INTEGER PRIMARY KEY,
+               description TEXT NOT NULL,
+               applied_at INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+        for m in MIGRATIONS {
+            conn.execute_batch(m.sql).unwrap();
+            conn.execute(
+                "INSERT INTO schema_migrations(version, description, applied_at) VALUES (?1, ?2, 1)",
+                rusqlite::params![m.version, m.description],
+            )
+            .unwrap();
+        }
+        ensure_migrated(&conn).unwrap();
+        // 补列 + 回填：升级后第一次启动就把老库的指纹补齐
+        let nulls: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations WHERE checksum IS NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(nulls, 0);
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, MIGRATIONS.len() as i64, "老库不重跑迁移");
     }
 
     /// 建与 sqlx-sqlite 相同结构的 _sqlx_migrations（模拟存量安装的记账表）

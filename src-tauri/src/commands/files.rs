@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{BufReader, BufWriter, Cursor, Read, Write};
+use std::io::{self, BufReader, BufWriter, Cursor};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -387,9 +387,8 @@ fn write_backup_zip(target: &Path, snap: &Path, data_dir: &Path, assets: &Path) 
     zip.start_file(DB_FILE, options)
         .map_err(|e| format!("zip start db failed: {e}"))?;
     let mut f = fs::File::open(snap).map_err(|e| format!("open db snapshot failed: {e}"))?;
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf).map_err(|e| format!("read db failed: {e}"))?;
-    zip.write_all(&buf).map_err(|e| format!("zip write db failed: {e}"))?;
+    // 流式拷贝：库+附件可能上百 MB，整份读进内存会顶高峰值占用
+    io::copy(&mut f, &mut zip).map_err(|e| format!("zip write db failed: {e}"))?;
 
     // 2. 遍历 assets/
     if assets.is_dir() {
@@ -404,9 +403,7 @@ fn write_backup_zip(target: &Path, snap: &Path, data_dir: &Path, assets: &Path) 
             zip.start_file(name.clone(), options)
                 .map_err(|e| format!("zip start {name} failed: {e}"))?;
             let mut f = fs::File::open(path).map_err(|e| format!("open asset failed: {e}"))?;
-            let mut buf = Vec::new();
-            f.read_to_end(&mut buf).map_err(|e| format!("read asset failed: {e}"))?;
-            zip.write_all(&buf).map_err(|e| format!("zip write asset failed: {e}"))?;
+            io::copy(&mut f, &mut zip).map_err(|e| format!("zip write asset failed: {e}"))?;
         }
     }
 
@@ -475,7 +472,49 @@ fn import_backup_into(data_dir: &Path, src: &Path) -> Result<(), String> {
             "backup zip does not contain valid database file (previous data kept at *.bak-{suffix})"
         ));
     }
+    // 恢复成功：清掉更早的历史备份（导入会不断产生 .bak-*，不清理会无限堆积）
+    prune_stale_backups(&data_dir);
     Ok(())
+}
+
+/// 保留的历史备份组数（同一次导入产生的 db/assets 备份后缀相同，算一组）
+const KEEP_BAK_GROUPS: usize = 3;
+
+/// 清理数据目录里过期的 `*.bak-<时间戳>` 备份，只留最新 KEEP_BAK_GROUPS 组。
+/// 纯增益动作：目录读不了、条目名不合规、删除失败都静默跳过，绝不因此中断主流程。
+fn prune_stale_backups(data_dir: &Path) {
+    let Ok(entries) = fs::read_dir(data_dir) else {
+        return;
+    };
+    let mut items: Vec<(u64, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // 形如 appflowy.db.bak-1730000000、appflowy.db.bak-1730000000-wal、assets.bak-1730000000
+        let Some(suffix) = name.rsplit_once(".bak-").map(|(_, s)| s) else {
+            continue;
+        };
+        let Some(stamp) = suffix.split('-').next().and_then(|s| s.parse::<u64>().ok()) else {
+            continue;
+        };
+        items.push((stamp, entry.path()));
+    }
+    items.sort_by(|a, b| b.0.cmp(&a.0)); // 新的在前
+    let mut kept: Vec<u64> = Vec::new();
+    for (stamp, path) in items {
+        if kept.contains(&stamp) {
+            continue; // 同组的其余文件跟着这一组一起留
+        }
+        if kept.len() < KEEP_BAK_GROUPS {
+            kept.push(stamp);
+            continue;
+        }
+        if path.is_dir() {
+            let _ = fs::remove_dir_all(&path);
+        } else {
+            let _ = fs::remove_file(&path);
+        }
+    }
 }
 
 /// 导入前置校验（不写任何文件）：能打开、无路径穿越条目、含数据库文件
@@ -529,9 +568,8 @@ fn extract_backup_zip(src: &Path, data_dir: &Path) -> Result<(), String> {
                 fs::create_dir_all(parent).map_err(|e| format!("mkdir parent {name}: {e}"))?;
             }
             let mut out = fs::File::create(&target).map_err(|e| format!("write {name}: {e}"))?;
-            let mut buf = Vec::new();
-            entry.read_to_end(&mut buf).map_err(|e| format!("read {name}: {e}"))?;
-            out.write_all(&buf).map_err(|e| format!("write {name}: {e}"))?;
+            // 流式解压：单个附件可能很大，整份读进内存没有意义
+            io::copy(&mut entry, &mut out).map_err(|e| format!("write {name}: {e}"))?;
         }
     }
     Ok(())
@@ -821,6 +859,7 @@ fn _unused() -> Option<Cursor<Vec<u8>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     fn temp_case(name: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
         let base = std::env::temp_dir().join(format!("tsflowy-reset-{}-{name}", std::process::id()));
@@ -884,6 +923,38 @@ mod tests {
         assert!(resolve_asset_path(&default, "assets/missing.pdf").is_err());
         // 关键不变量：库文件仍在原位
         assert_eq!(fs::read(default.join("appflowy.db")).unwrap(), b"secret");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn prune_stale_backups_keeps_newest_groups_only() {
+        let base = std::env::temp_dir().join(format!("tsflowy-prune-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let dir = base.join("data");
+        fs::create_dir_all(&dir).unwrap();
+
+        // 4 次导入的残留：db + assets 各一组（后缀 = 秒级时间戳，越大越新）
+        for stamp in ["100", "200", "300", "400"] {
+            fs::write(dir.join(format!("{DB_FILE}.bak-{stamp}")), b"x").unwrap();
+            fs::create_dir_all(dir.join(format!("{ASSETS_DIR}.bak-{stamp}"))).unwrap();
+        }
+        // 同组的侧车文件：跟组走，不单独计数
+        fs::write(dir.join(format!("{DB_FILE}.bak-400-wal")), b"x").unwrap();
+        // 不合规名字：不认识就不动
+        fs::write(dir.join("notes.txt"), b"keep").unwrap();
+        fs::write(dir.join("weird.bak-abc"), b"keep").unwrap();
+
+        prune_stale_backups(&dir);
+
+        for stamp in ["400", "300", "200"] {
+            assert!(dir.join(format!("{DB_FILE}.bak-{stamp}")).is_file(), "保留 {stamp}");
+            assert!(dir.join(format!("{ASSETS_DIR}.bak-{stamp}")).is_dir(), "保留 {stamp} 的 assets");
+        }
+        assert!(dir.join(format!("{DB_FILE}.bak-400-wal")).is_file(), "同组侧车跟着保留");
+        assert!(!dir.join(format!("{DB_FILE}.bak-100")).exists(), "最旧一组被清掉");
+        assert!(!dir.join(format!("{ASSETS_DIR}.bak-100")).exists());
+        assert!(dir.join("notes.txt").is_file());
+        assert!(dir.join("weird.bak-abc").is_file());
         let _ = fs::remove_dir_all(&base);
     }
 
