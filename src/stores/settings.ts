@@ -526,6 +526,44 @@ function loadAccent(): AccentColor {
   }
 }
 
+const LANG_KEY = "tsflowy-lang";
+const THEME_KEY = "tsflowy-theme";
+const FONT_KEY = "tsflowy-font";
+
+type Lang = "zh-CN" | "en-US";
+
+function loadLang(): Lang {
+  try {
+    const v = localStorage.getItem(LANG_KEY);
+    return v === "zh-CN" || v === "en-US" ? v : "zh-CN";
+  } catch {
+    return "zh-CN";
+  }
+}
+
+function loadTheme(): ThemeMode {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    return v === "light" || v === "dark" || v === "system" ? v : "light";
+  } catch {
+    return "light";
+  }
+}
+
+function loadFont(): FontFamily {
+  try {
+    const v = localStorage.getItem(FONT_KEY);
+    return v === "sans" || v === "serif" || v === "mono" ? v : "sans";
+  } catch {
+    return "sans";
+  }
+}
+
+/** 同步 <html lang>（无障碍 / 断行规则）；文案切换的重渲染由 App 订阅 lang 触发 */
+export function applyLangToDocument(lang: Lang) {
+  document.documentElement.lang = lang;
+}
+
 function persist(key: string, value: string) {
   try {
     localStorage.setItem(key, value);
@@ -613,18 +651,23 @@ export function applyEditorWidthToDocument(w: EditorWidth) {
 }
 
 export const useSettingsStore = create<SettingsState>()((set) => ({
-  lang: "zh-CN",
-  theme: "light",
+  lang: loadLang(),
+  theme: loadTheme(),
   themePreset: loadThemePreset(),
   accent: loadAccent(),
-  font: "sans",
+  font: loadFont(),
   fontSize: loadFontSize(),
   lineHeight: loadLineHeight(),
   editorWidth: loadEditorWidth(),
 
-  setLang: (lang) => set({ lang }),
+  setLang: (lang) => {
+    set({ lang });
+    persist(LANG_KEY, lang);
+    applyLangToDocument(lang);
+  },
   setTheme: (theme) => {
     set({ theme });
+    persist(THEME_KEY, theme);
     void applyThemeToDocument(theme);
   },
   setThemePreset: (themePreset) => {
@@ -644,6 +687,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   },
   setFont: (font) => {
     set({ font });
+    persist(FONT_KEY, font);
     applyFontToDocument(font);
   },
   setFontSize: (fontSize) => {
@@ -678,6 +722,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
 /** App 启动时用 settings 存储当前值立即写一次（避免第一次进入才有效果） */
 export function bootstrapVisualSettings() {
   const s = useSettingsStore.getState();
+  applyLangToDocument(s.lang);
   applyThemePresetToDocument(s.themePreset);
   applyAccentToDocument(s.accent);
   applyFontToDocument(s.font);

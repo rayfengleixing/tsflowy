@@ -102,6 +102,9 @@ const zh = {
   "editor.placeholderHeading": "标题",
   "editor.saved": "已保存",
   "error.saveDoc": "保存文档失败：{message}",
+  "close.failedTitle": "有内容尚未保存",
+  "close.failedDesc": "部分内容保存失败（可能是数据库被占用或磁盘问题）。仍要关闭窗口吗？取消可留在应用内重试。",
+  "close.failedConfirm": "仍要关闭",
   "error.renameView": "重命名失败：{message}",
   "error.upload": "图片上传失败：{message}",
   "slash.text": "文本",
@@ -173,6 +176,7 @@ const zh = {
   "field.optionsTitle": "设置：{name}",
   "field.hide": "隐藏列",
   "field.show": "显示列",
+  "field.hiddenColumns": "隐藏的列",
   "field.new": "新建字段",
   "field.defaultName": "字段",
   "field.newName": "字段名称…",
@@ -233,6 +237,9 @@ const zh = {
   "dbView.delete": "删除视图",
   "row.new": "新建行",
   "row.delete": "删除行",
+  "row.deleteConfirmTitle": "删除这一行？",
+  "row.deleteConfirmDesc": "该行的全部单元格数据将被删除，无法恢复。",
+  "row.deleted": "已删除该行",
   "row.openDetail": "打开行详情",
   "rowDetail.title": "行详情：{name}",
   "rowDetail.enlarge": "放大显示",
@@ -547,6 +554,10 @@ const en: Record<MessageKey, string> = {
   "editor.placeholderHeading": "Heading",
   "editor.saved": "Saved",
   "error.saveDoc": "Failed to save document: {message}",
+  "close.failedTitle": "Some content is not saved",
+  "close.failedDesc":
+    "Some content failed to save (database busy or disk issue). Close the window anyway? Cancel to stay and retry.",
+  "close.failedConfirm": "Close anyway",
   "error.renameView": "Failed to rename: {message}",
   "error.upload": "Failed to upload image: {message}",
   "slash.text": "Text",
@@ -618,6 +629,7 @@ const en: Record<MessageKey, string> = {
   "field.optionsTitle": "Settings: {name}",
   "field.hide": "Hide column",
   "field.show": "Show column",
+  "field.hiddenColumns": "Hidden columns",
   "field.new": "New field",
   "field.defaultName": "Field",
   "field.newName": "Field name…",
@@ -679,6 +691,9 @@ const en: Record<MessageKey, string> = {
   "dbView.delete": "Delete view",
   "row.new": "New row",
   "row.delete": "Delete row",
+  "row.deleteConfirmTitle": "Delete this row?",
+  "row.deleteConfirmDesc": "All cell data in this row will be deleted permanently.",
+  "row.deleted": "Row deleted",
   "row.openDetail": "Open row detail",
   "rowDetail.title": "Row detail: {name}",
   "rowDetail.enlarge": "Enlarge",
@@ -907,4 +922,12 @@ export function t(key: MessageKey, params?: Record<string, string | number>): st
     }
   }
   return s;
+}
+
+/**
+ * 订阅当前语言。t() 读 getState 不建立订阅，切换语言后必须由某个已挂载组件
+ * 订阅 lang 才能触发重渲染刷新文案——在 App 顶层调用一次，整棵树（无 memo 边界）随之更新。
+ */
+export function useLanguage(): "zh-CN" | "en-US" {
+  return useSettingsStore((s) => s.lang);
 }
