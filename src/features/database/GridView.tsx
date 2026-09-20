@@ -92,6 +92,8 @@ export function GridView({
   const [draggingField, setDraggingField] = useState<string | null>(null);
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
   const [groupFieldId, setGroupFieldId] = useState<string | null>(() => readViewConfig(view).groupFieldId ?? null);
+  // 键盘光标（↑↓←→/Tab 移动、Enter 编辑、Delete 清空、Esc 退出）
+  const [cursor, setCursor] = useState<{ rowId: string; fieldId: string } | null>(null);
   const [aggregates, setAggregates] = useState<Record<string, AggregateFn>>(
     () => readViewConfig(view).aggregates ?? {},
   );
@@ -102,6 +104,7 @@ export function GridView({
   useEffect(() => {
     store.load(view).catch((e) => logger.error("grid.load", e));
     setCheckedRows(new Set());
+    setCursor(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.id]);
 
@@ -268,6 +271,123 @@ export function GridView({
   // 字段类型可能已经变了：历史选择不在候选里就回落成计数
   const aggregateOf = (field: DatabaseField) => normalizeAggregate(field.field_type, aggregates[field.id]);
   const hasAggregates = visibleFields.some((f) => aggregateOf(f));
+
+  // ---------- 键盘导航 ----------
+  const cellSelector = (c: { rowId: string; fieldId: string }) =>
+    `[data-cell-row="${c.rowId}"][data-cell-field="${c.fieldId}"]`;
+
+  /** 光标移动：越界即夹紧；虚拟窗口外的行先滚过去，渲染完成后再聚焦 */
+  const moveCursorTo = (rowIndex: number, colIndex: number) => {
+    const ri = Math.max(0, Math.min(displayRows.length - 1, rowIndex));
+    const ci = Math.max(0, Math.min(visibleFields.length - 1, colIndex));
+    if (displayRows.length === 0 || visibleFields.length === 0) return;
+    const row = displayRows[ri];
+    const field = visibleFields[ci];
+    if (virtual && (ri < (win?.start ?? 0) || ri >= (win?.end ?? Infinity))) {
+      const el = scrollerRef.current;
+      const body = tbodyRef.current;
+      if (el && body) {
+        const dataTop = body.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+        el.scrollTop = Math.max(0, dataTop + ri * rowHeightRef.current - el.clientHeight / 2);
+      }
+    }
+    setCursor({ rowId: row.id, fieldId: field.id });
+  };
+
+  // 光标落定后聚焦对应单元格；虚拟化下目标行可能还没渲染，重试几帧
+  useEffect(() => {
+    if (!cursor || editing) return;
+    const el = scrollerRef.current;
+    if (!el) return;
+    let raf = 0;
+    const attempt = (tries: number) => {
+      const td = el.querySelector<HTMLElement>(cellSelector(cursor));
+      if (td) {
+        td.focus({ preventScroll: true });
+        td.scrollIntoView({ block: "nearest", inline: "nearest" });
+        return;
+      }
+      if (tries > 0) raf = requestAnimationFrame(() => attempt(tries - 1));
+    };
+    attempt(3);
+    return () => cancelAnimationFrame(raf);
+  }, [cursor, editing, scrollerRef]);
+
+  // TSV 粘贴锚点跟随键盘光标：键盘选好位置后直接 Ctrl+V 就有落点
+  useEffect(() => {
+    if (!cursor) return;
+    const field = visibleFields.find((f) => f.id === cursor.fieldId);
+    if (field && !isReadonlyType(field.field_type)) pasteAnchorRef.current = cursor;
+  }, [cursor, visibleFields]);
+
+  const onGridKeyDown = (e: React.KeyboardEvent) => {
+    if (editing || !cursor) return;
+    const target = e.target;
+    if (!(target instanceof HTMLElement) || !target.closest("td[data-cell-row]")) return;
+    const ri = displayRows.findIndex((r) => r.id === cursor.rowId);
+    const ci = visibleFields.findIndex((f) => f.id === cursor.fieldId);
+    if (ri < 0 || ci < 0) return;
+    const field = visibleFields.find((f) => f.id === cursor.fieldId);
+    // 空单元格在 cells 里没有键，取值可能是 undefined；断言让这里如实反映
+    const readCell = (rowId: string, fieldId: string): CellValue | undefined => {
+      const rowCells = cells[rowId] as Record<string, CellValue> | undefined;
+      return rowCells?.[fieldId];
+    };
+    switch (e.key) {
+      case "ArrowUp":
+        e.preventDefault();
+        moveCursorTo(ri - 1, ci);
+        break;
+      case "ArrowDown":
+        e.preventDefault();
+        moveCursorTo(ri + 1, ci);
+        break;
+      case "ArrowLeft":
+        e.preventDefault();
+        moveCursorTo(ri, ci - 1);
+        break;
+      case "ArrowRight":
+        e.preventDefault();
+        moveCursorTo(ri, ci + 1);
+        break;
+      case "Tab": {
+        // 行尾 Tab 跳到下一行行首（表格连续感）
+        e.preventDefault();
+        const next = ci + (e.shiftKey ? -1 : 1);
+        if (next >= visibleFields.length) moveCursorTo(ri + 1, 0);
+        else if (next < 0) moveCursorTo(ri - 1, visibleFields.length - 1);
+        else moveCursorTo(ri, next);
+        break;
+      }
+      case "Enter": {
+        if (!field || isReadonlyType(field.field_type)) break;
+        e.preventDefault();
+        if (field.field_type === "checkbox") {
+          void commitCell(cursor.rowId, field.id, readCell(cursor.rowId, field.id) !== true);
+        } else {
+          setEditing({ rowId: cursor.rowId, fieldId: field.id });
+        }
+        break;
+      }
+      case " ": {
+        if (field?.field_type !== "checkbox") break;
+        e.preventDefault();
+        void commitCell(cursor.rowId, field.id, readCell(cursor.rowId, field.id) !== true);
+        break;
+      }
+      case "Delete": {
+        if (!field || isReadonlyType(field.field_type) || readCell(cursor.rowId, field.id) == null) break;
+        e.preventDefault();
+        void commitCell(cursor.rowId, field.id, null);
+        break;
+      }
+      case "Escape":
+        e.preventDefault();
+        setCursor(null);
+        if (target instanceof HTMLElement) target.blur();
+        break;
+    }
+  };
 
   const changeGroupField = (id: string | null) => {
     setGroupFieldId(id);
@@ -576,9 +696,13 @@ export function GridView({
         return (
           <td
             key={field.id}
+            data-cell-row={row.id}
+            data-cell-field={field.id}
+            tabIndex={-1}
             className={cn(
-              "relative h-8 border-b border-r border-neutral-200 p-0 align-middle dark:border-neutral-700",
+              "relative h-8 border-b border-r border-neutral-200 p-0 align-middle outline-none dark:border-neutral-700",
               isEditing && "z-10 ring-1 ring-inset ring-brand-500 dark:ring-brand-500",
+              !isEditing && "focus:z-10 focus:ring-1 focus:ring-inset focus:ring-brand-500",
               // 冻结主列：跟随序号列（44px）右侧
               isPrimary && "sticky left-[44px] z-[5] bg-white dark:bg-neutral-900",
               isPrimary && "cursor-pointer",
@@ -586,13 +710,15 @@ export function GridView({
             onClick={() => {
               if (isPrimary) {
                 // 名称列：单击编辑值（编辑框后的"打开"图标/双击打开所属页面）
+                setCursor({ rowId: row.id, fieldId: field.id });
                 setEditing({ rowId: row.id, fieldId: field.id });
                 pasteAnchorRef.current = { rowId: row.id, fieldId: field.id };
                 return;
               }
-              // TSV 粘贴锚点：任何可编辑格都记录
+              // TSV 粘贴锚点与键盘光标：任何可编辑格都记录
               if (!isReadonlyType(field.field_type)) pasteAnchorRef.current = { rowId: row.id, fieldId: field.id };
               if (isReadonlyType(field.field_type) || isEditing) return;
+              setCursor({ rowId: row.id, fieldId: field.id });
               if (field.field_type === "checkbox") {
                 // 复选框：单击直接切换勾选
                 void commitCell(row.id, field.id, cells[row.id]?.[field.id] !== true);
@@ -792,7 +918,12 @@ export function GridView({
       )}
 
       {/* 表格（横向滚动；TSV 剪贴板粘贴见 onPasteTsv） */}
-      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto" onPaste={(e) => void onPasteTsv(e)}>
+      <div
+        ref={scrollerRef}
+        className="min-h-0 flex-1 overflow-auto outline-none"
+        onPaste={(e) => void onPasteTsv(e)}
+        onKeyDown={onGridKeyDown}
+      >
         <table ref={tableRef} className="border-separate border-spacing-0">
           <colgroup>
             <col style={{ width: 44 }} />
