@@ -13,6 +13,9 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 use crate::db::{Db, DB_FILE};
 
 // 自定义 Tauri 命令（项目说明书 9.2：文件读写、导出导入等走 Rust 侧）
+//
+// 注：涉及磁盘读写的命令一律声明为 async。Tauri 的同步命令跑在主线程上，
+// 打包备份/解压导入/整库目录复制这类秒级 I/O 会卡住 UI；async 命令在运行时线程池执行。
 
 const ASSETS_DIR: &str = "assets";
 /// 存放 config.json 的独立子目录名（放在 config 系统目录下，避免被"重命名默认数据目录为备份"一起搬走）
@@ -187,7 +190,7 @@ fn open_path_in_system(path: &Path) -> Result<(), String> {
 /// 把用户选择的图片复制进数据目录的 assets/ 下，返回相对路径（如 "assets/xxx.png"）。
 /// 前端经 asset 协议（convertFileSrc）加载；备份打包 data.db + assets 即可整体迁移。
 #[tauri::command]
-pub fn save_asset(app: tauri::AppHandle, source_path: String) -> Result<String, String> {
+pub async fn save_asset(app: tauri::AppHandle, source_path: String) -> Result<String, String> {
     let data_dir = app_data_dir(&app)?;
     let assets_dir = data_dir.join(ASSETS_DIR);
     fs::create_dir_all(&assets_dir).map_err(|e| format!("failed to create assets dir: {e}"))?;
@@ -213,7 +216,7 @@ pub fn save_asset(app: tauri::AppHandle, source_path: String) -> Result<String, 
 /// 保存前端传入的字节流到 assets 目录（用于编辑器粘贴/拖拽图片上传，省去写临时文件）。
 /// 返回相对路径 `assets/{nanos}.{ext}`，前端用 `resolveAssetUrl` 转可加载 URL。
 #[tauri::command]
-pub fn save_asset_bytes(app: tauri::AppHandle, bytes: Vec<u8>, ext: String) -> Result<String, String> {
+pub async fn save_asset_bytes(app: tauri::AppHandle, bytes: Vec<u8>, ext: String) -> Result<String, String> {
     let data_dir = app_data_dir(&app)?;
     let assets_dir = data_dir.join(ASSETS_DIR);
     fs::create_dir_all(&assets_dir).map_err(|e| format!("failed to create assets dir: {e}"))?;
@@ -280,31 +283,31 @@ pub fn open_asset(app: tauri::AppHandle, relative: String) -> Result<(), String>
 
 /// 读取任意 UTF-8 文本文件（CSV 导入用；路径来自文件对话框，不受 fs 插件 scope 限制）
 #[tauri::command]
-pub fn read_text_file(path: String) -> Result<String, String> {
+pub async fn read_text_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| format!("failed to read {path}: {e}"))
 }
 
 /// 写入任意 UTF-8 文本文件（CSV 导出用）
 #[tauri::command]
-pub fn write_text_file(path: String, content: String) -> Result<(), String> {
+pub async fn write_text_file(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| format!("failed to write {path}: {e}"))
 }
 
 /// 写入任意二进制文件（长图导出 PNG 用；路径来自文件对话框）
 #[tauri::command]
-pub fn write_binary_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
+pub async fn write_binary_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
     fs::write(&path, &bytes).map_err(|e| format!("failed to write {path}: {e}"))
 }
 
 /// 递归创建目录（整库导出 Markdown 文件夹用；路径来自目录选择对话框，不受 fs 插件 scope 限制）
 #[tauri::command]
-pub fn mkdir_all(path: String) -> Result<(), String> {
+pub async fn mkdir_all(path: String) -> Result<(), String> {
     fs::create_dir_all(&path).map_err(|e| format!("failed to create dir {path}: {e}"))
 }
 
 /// 读取 assets/ 下文件的字节（长图/PDF 导出把图片内联为 data URL 用，绕开 asset 协议跨源抓取）。
 #[tauri::command]
-pub fn read_asset_bytes(app: tauri::AppHandle, relative: String) -> Result<Vec<u8>, String> {
+pub async fn read_asset_bytes(app: tauri::AppHandle, relative: String) -> Result<Vec<u8>, String> {
     read_asset_bytes_inner(&app_data_dir(&app)?, &relative)
 }
 
@@ -333,7 +336,7 @@ pub fn open_data_dir(app: tauri::AppHandle) -> Result<(), String> {
 /// WAL 模式下直接复制主库文件会丢掉尚未 checkpoint 的事务（appflowy.db-wal），
 /// 因此先 VACUUM INTO 出一致性快照（读快照包含全部已提交事务，输出自包含完整库）再打包。
 #[tauri::command]
-pub fn export_backup(app: tauri::AppHandle, target_path: String) -> Result<(), String> {
+pub async fn export_backup(app: tauri::AppHandle, target_path: String) -> Result<(), String> {
     let data_dir = app_data_dir(&app)?;
     let db = data_dir.join(DB_FILE);
     let assets = data_dir.join(ASSETS_DIR);
@@ -416,7 +419,7 @@ fn write_backup_zip(target: &Path, snap: &Path, data_dir: &Path, assets: &Path) 
 /// 恢复前后对 Db 做整体 close/reopen：Windows 下连接未关时主库/-wal 无法改名/覆盖；
 /// 也因此不再要求"先关应用再导入"。
 #[tauri::command]
-pub fn import_backup(
+pub async fn import_backup(
     app: tauri::AppHandle,
     db: tauri::State<'_, Db>,
     source_path: String,
@@ -435,14 +438,22 @@ pub fn import_backup(
 
 fn import_backup_inner(app: tauri::AppHandle, source_path: &str) -> Result<(), String> {
     let data_dir = app_data_dir(&app)?;
-    fs::create_dir_all(&data_dir).map_err(|e| format!("create data dir: {e}"))?;
+    import_backup_into(&data_dir, Path::new(source_path))
+}
 
-    let src = Path::new(source_path);
+/// 导入实现（数据目录显式传入便于测试）：校验 → stash → 解压 → 失败回滚
+fn import_backup_into(data_dir: &Path, src: &Path) -> Result<(), String> {
+    fs::create_dir_all(data_dir).map_err(|e| format!("create data dir: {e}"))?;
+
     if !src.is_file() {
         return Err(format!("backup file not found: {}", src.display()));
     }
 
-    // 前置：备份现有数据（即便失败用户也能手工回滚）
+    // 先校验后破坏：zip 必须能打开、含数据库文件、无路径穿越条目，全部通过才动现有数据。
+    // 否则选错文件（非 zip / 无 db）会留下一个"全新空库"，原数据只剩 .bak 且应用内无法恢复。
+    validate_backup_zip(src)?;
+
+    // 备份现有数据（失败时统一回滚）
     let suffix = timestamp_suffix();
     let db = data_dir.join(DB_FILE);
     let assets_dir = data_dir.join(ASSETS_DIR);
@@ -452,10 +463,49 @@ fn import_backup_inner(app: tauri::AppHandle, source_path: &str) -> Result<(), S
         fs::rename(&assets_dir, &bak).map_err(|e| format!("backup assets failed: {e}"))?;
     }
 
-    // 解 zip
+    // 解 zip；任何一步失败都回滚到导入前状态（含解压了一半的文件）
+    if let Err(e) = extract_backup_zip(src, &data_dir) {
+        rollback_import_stash(&data_dir, &suffix);
+        return Err(e);
+    }
+    // 必须有数据库文件，否则视为恢复失败，回滚备份
+    if !db.is_file() {
+        rollback_import_stash(&data_dir, &suffix);
+        return Err(format!(
+            "backup zip does not contain valid database file (previous data kept at *.bak-{suffix})"
+        ));
+    }
+    Ok(())
+}
+
+/// 导入前置校验（不写任何文件）：能打开、无路径穿越条目、含数据库文件
+fn validate_backup_zip(src: &Path) -> Result<(), String> {
     let file = fs::File::open(src).map_err(|e| format!("open backup: {e}"))?;
-    let mut archive = ZipArchive::new(BufReader::new(file))
-        .map_err(|e| format!("invalid zip archive: {e}"))?;
+    let mut archive =
+        ZipArchive::new(BufReader::new(file)).map_err(|e| format!("invalid zip archive: {e}"))?;
+    let mut has_db = false;
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i).map_err(|e| format!("read zip entry: {e}"))?;
+        let name = entry.name().to_string();
+        let rel = Path::new(&name);
+        if rel.is_absolute() || rel.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            return Err(format!("invalid zip entry (path traversal): {name}"));
+        }
+        if name == DB_FILE {
+            has_db = true;
+        }
+    }
+    if !has_db {
+        return Err("backup zip does not contain valid database file".to_string());
+    }
+    Ok(())
+}
+
+/// 解压备份 zip 到数据目录（写入前再校验一次条目安全；调用方负责失败回滚）
+fn extract_backup_zip(src: &Path, data_dir: &Path) -> Result<(), String> {
+    let file = fs::File::open(src).map_err(|e| format!("open backup: {e}"))?;
+    let mut archive =
+        ZipArchive::new(BufReader::new(file)).map_err(|e| format!("invalid zip archive: {e}"))?;
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| format!("read zip entry: {e}"))?;
@@ -484,31 +534,31 @@ fn import_backup_inner(app: tauri::AppHandle, source_path: &str) -> Result<(), S
             out.write_all(&buf).map_err(|e| format!("write {name}: {e}"))?;
         }
     }
-
-    // 必须有数据库文件，否则视为恢复失败，不删备份
-    if !db.is_file() {
-        // 回滚：清掉刚解压的 assets，把 bak 改回原名（含 -wal/-shm）
-        let _ = fs::remove_dir_all(&assets_dir);
-        let db_bak = data_dir.join(format!("{DB_FILE}.bak-{suffix}"));
-        if db_bak.is_file() {
-            let _ = fs::rename(&db_bak, &db);
-        }
-        for ext in ["-wal", "-shm"] {
-            let from = data_dir.join(format!("{DB_FILE}.bak-{suffix}{ext}"));
-            let to = data_dir.join(format!("{DB_FILE}{ext}"));
-            if from.is_file() {
-                let _ = fs::rename(&from, &to);
-            }
-        }
-        let assets_bak = data_dir.join(format!("{ASSETS_DIR}.bak-{suffix}"));
-        if assets_bak.is_dir() {
-            let _ = fs::rename(&assets_bak, &assets_dir);
-        }
-        return Err(format!(
-            "backup zip does not contain valid database file (previous data kept at *.bak-{suffix})"
-        ));
-    }
     Ok(())
+}
+
+/// 回滚导入：清掉可能解压出的 db/assets，再把 stash 的 .bak 改回原名（含 -wal/-shm 侧车）
+fn rollback_import_stash(data_dir: &Path, suffix: &str) {
+    let db = data_dir.join(DB_FILE);
+    let assets_dir = data_dir.join(ASSETS_DIR);
+    let _ = fs::remove_dir_all(&assets_dir);
+    // 半解压出的新库必须清掉：Windows 下 rename 不能覆盖已存在文件，留着会让 .bak 还原失败
+    let _ = fs::remove_file(&db);
+    let db_bak = data_dir.join(format!("{DB_FILE}.bak-{suffix}"));
+    if db_bak.is_file() {
+        let _ = fs::rename(&db_bak, &db);
+    }
+    for ext in ["-wal", "-shm"] {
+        let from = data_dir.join(format!("{DB_FILE}.bak-{suffix}{ext}"));
+        let to = data_dir.join(format!("{DB_FILE}{ext}"));
+        if from.is_file() {
+            let _ = fs::rename(&from, &to);
+        }
+    }
+    let assets_bak = data_dir.join(format!("{ASSETS_DIR}.bak-{suffix}"));
+    if assets_bak.is_dir() {
+        let _ = fs::rename(&assets_bak, &assets_dir);
+    }
 }
 
 /// 把旧 db 的 -wal/-shm 改名到 .bak-{suffix} 同名后缀。
@@ -591,7 +641,7 @@ pub struct ChangeDataDirResult {
 /// 修改数据保存位置：(1) 把现有 default data_dir 条目复制到 new_path；(2) 写入 config custom_data_dir；
 /// 下次启动会把 default app_data_dir 建成指向 new_path 的 junction/symlink，SQL 插件相对路径即透明生效。
 #[tauri::command]
-pub fn change_data_dir(
+pub async fn change_data_dir(
     app: tauri::AppHandle,
     new_path: String,
     move_current: bool,
@@ -640,7 +690,7 @@ pub fn change_data_dir(
 /// 恢复默认数据目录（清除 custom_data_dir；若 move_back=true 则把 custom 下最新数据复制回 default 路径，供下次启动直接读取）。
 /// move_back 会改名/替换 default 目录 → 前后对 Db 做整体 close/reopen（应用运行中即可完成）。
 #[tauri::command]
-pub fn reset_data_dir_default(
+pub async fn reset_data_dir_default(
     app: tauri::AppHandle,
     db: tauri::State<'_, Db>,
     move_back: bool,
@@ -938,6 +988,82 @@ mod tests {
         assert_eq!(fs::read(default.join("appflowy.db")).unwrap(), b"new");
         assert_eq!(fs::read(default.join("assets").join("a.png")).unwrap(), b"img");
         assert_eq!(fs::read(bak.join("appflowy.db")).unwrap(), b"old");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = fs::File::create(path).unwrap();
+        let mut zip = ZipWriter::new(file);
+        let opts = FileOptions::default();
+        for (name, bytes) in entries {
+            zip.start_file(*name, opts).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn import_backup_rejects_bad_source_without_touching_data() {
+        let base = std::env::temp_dir().join(format!("tsflowy-import-{}-bad", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let data = base.join("data");
+        fs::create_dir_all(data.join("assets")).unwrap();
+        fs::write(data.join(DB_FILE), b"precious").unwrap();
+        fs::write(data.join("assets/pic.png"), b"png").unwrap();
+
+        // 1) 非 zip 文件（用户选错文件）
+        let not_zip = base.join("not-a-backup.zip");
+        fs::write(&not_zip, b"definitely not a zip").unwrap();
+        let err = import_backup_into(&data, &not_zip).unwrap_err();
+        assert!(err.contains("invalid zip archive"), "{err}");
+
+        // 2) zip 可打开但不含数据库文件
+        let no_db = base.join("no-db.zip");
+        write_zip(&no_db, &[("assets/pic.png", b"other")]);
+        let err = import_backup_into(&data, &no_db).unwrap_err();
+        assert!(err.contains("does not contain valid database file"), "{err}");
+
+        // 3) 含路径穿越条目
+        let traversal = base.join("traversal.zip");
+        write_zip(&traversal, &[("../evil.txt", b"x"), (DB_FILE, b"newdb")]);
+        let err = import_backup_into(&data, &traversal).unwrap_err();
+        assert!(err.contains("path traversal"), "{err}");
+
+        // 关键不变量：三次失败后原数据分毫未动，也没有 .bak 残留（校验先于 stash）
+        assert_eq!(fs::read(data.join(DB_FILE)).unwrap(), b"precious");
+        assert_eq!(fs::read(data.join("assets/pic.png")).unwrap(), b"png");
+        let leftovers: Vec<String> = fs::read_dir(&data)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains(".bak-"))
+            .collect();
+        assert!(leftovers.is_empty(), "unexpected .bak leftovers: {leftovers:?}");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn import_backup_replaces_data_and_keeps_previous_as_bak() {
+        let base = std::env::temp_dir().join(format!("tsflowy-import-{}-ok", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let data = base.join("data");
+        fs::create_dir_all(data.join("assets")).unwrap();
+        fs::write(data.join(DB_FILE), b"old-db").unwrap();
+        fs::write(data.join("assets/old.png"), b"old-asset").unwrap();
+
+        let good = base.join("good.zip");
+        write_zip(&good, &[(DB_FILE, b"new-db"), ("assets/new.png", b"new-asset")]);
+
+        import_backup_into(&data, &good).unwrap();
+
+        assert_eq!(fs::read(data.join(DB_FILE)).unwrap(), b"new-db");
+        assert_eq!(fs::read(data.join("assets/new.png")).unwrap(), b"new-asset");
+        assert!(!data.join("assets/old.png").exists());
+        let names: Vec<String> = fs::read_dir(&data)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(names.iter().any(|n| n.starts_with(&format!("{DB_FILE}.bak-"))), "{names:?}");
+        assert!(names.iter().any(|n| n.starts_with(&format!("{ASSETS_DIR}.bak-"))), "{names:?}");
         let _ = fs::remove_dir_all(&base);
     }
 }
