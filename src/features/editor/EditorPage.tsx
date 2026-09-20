@@ -50,6 +50,8 @@ import "highlight.js/styles/github.css";
 import { FirstHeadingLock } from "./extensions/first-heading-lock";
 import { BlockDrag } from "./extensions/block-drag";
 import { LockedHeading, DocumentStructureLock, STRUCTURE_SYNC_META } from "./extensions/document-structure-lock";
+import { FindReplace } from "./extensions/find-replace";
+import { FindReplaceBar } from "./FindReplaceBar";
 
 const AUTOSAVE_MS = 800;
 /** 光标所在行相对编辑区高度的上限：超过就把内容上滚，保证当前行留在 70% 线以上 */
@@ -95,6 +97,8 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   const latestJsonRef = useRef<JSONContent | null>(null);
   // 编辑区滚动容器（隐藏滚动条 + 光标行 70% 规则都挂在它上面）
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // 文档内查找替换面板（Ctrl+F）
+  const [findOpen, setFindOpen] = useState(false);
   // 上一次选区变化是否来自键盘：鼠标点击不触发上滚，否则点到下半屏会把视图顶飞
   const keyNavRef = useRef(false);
   const caretRafRef = useRef<number | null>(null);
@@ -212,6 +216,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       ...(hideSlash ? [] : [SlashMenu]),
       FirstHeadingLock.configure({ viewId: view.id }),
       BlockDrag,
+      FindReplace,
     ],
 
     [hideSlash, view.id],
@@ -235,6 +240,12 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       handleKeyDown: (_view, event) => {
         keyNavRef.current = true;
         const metaOrCtrl = event.ctrlKey || event.metaKey;
+        // — 文档内查找替换：Ctrl+F 打开面板（面板内 Enter/Shift+Enter 走各自输入框）—
+        if (metaOrCtrl && !event.shiftKey && event.key.toLowerCase() === "f") {
+          event.preventDefault();
+          setFindOpen(true);
+          return true;
+        }
         // — 快捷键 1：Ctrl+S 手动保存 —
         if (metaOrCtrl && event.key.toLowerCase() === "s") {
           event.preventDefault();
@@ -475,6 +486,18 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     return () => window.removeEventListener("keydown", onKey);
   }, [flush]);
 
+  // 全局 Ctrl+F（编辑器未聚焦时也能打开查找面板）；Ctrl+Shift+F 是全局搜索，不拦
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setFindOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // 反链面板：view.id 变化或文档保存后刷新（mentions 表在 scheduleSave→rebuildFor 时已更新）。
   // 切页时先清空旧数据，避免上一个文档的反链短暂残留。
   useEffect(() => {
@@ -605,6 +628,8 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
           <div style={{ height: "var(--editor-tail, 0px)" }} />
         </div>
       </div>
+
+      {findOpen && <FindReplaceBar editor={editor} onClose={() => setFindOpen(false)} />}
 
       {/* 反链面板：底部固定，可收起 */}
       {backlinks.length > 0 && (

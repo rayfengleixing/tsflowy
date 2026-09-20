@@ -516,3 +516,12 @@ body,
   color: #006eaa !important;
   text-decoration-style: solid;
 }
+
+/* — 文档内查找替换命中高亮（Ctrl+F，见 extensions/find-replace.ts） — */
+.find-hit {
+  background-color: rgba(250, 204, 21, 0.35);
+  border-radius: 2px;
+}
+.find-hit-active {
+  background-color: rgba(249, 115, 22, 0.5);
+}
