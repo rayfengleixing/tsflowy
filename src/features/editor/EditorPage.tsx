@@ -22,6 +22,7 @@ import { useEditorStore } from "@/stores/editor";
 import { documentApi } from "@/lib/documents";
 import { mentionsApi, type MentionRow } from "@/lib/mentions";
 import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown";
+import { pickImageExt, uploadImageBytes } from "@/lib/assets";
 import { registerCloseFlush } from "@/lib/close-flush";
 import { t } from "@/lib/i18n";
 import type { View } from "@/types/models";
@@ -97,7 +98,8 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   const keyNavRef = useRef(false);
   const caretRafRef = useRef<number | null>(null);
 
-  // 返回落库 promise：关窗冲刷（close-flush）需要 await 真正写完；平时调用方忽略即可
+  // 返回落库 promise：关窗冲刷（close-flush）需要 await 真正写完；平时调用方忽略即可。
+  // 成功才清脏标记：失败时保留，下一次 flush（含关窗前的冲刷）可以重试同一份内容。
   const flush = useCallback((): Promise<void> => {
     if (saveTimer.current !== null) {
       window.clearTimeout(saveTimer.current);
@@ -105,14 +107,27 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     }
     // 用缓存的最新 JSON 落库：卸载时 editor 可能已被销毁，不能依赖 editor 实例
     if (!dirtyRef.current || !latestJsonRef.current) return Promise.resolve();
-    dirtyRef.current = false;
     const json = latestJsonRef.current;
-    latestJsonRef.current = null;
-    return documentApi.save(view.id, JSON.stringify(json)).catch((e) => {
-      console.error("autosave failed", view.id, e);
-      toast.error(t("error.saveDoc", { message: String(e) }));
-    });
+    return documentApi.save(view.id, JSON.stringify(json)).then(
+      () => {
+        // 期间若有更新内容进 latestJsonRef，不能误清（下一轮 flush 会带上它）
+        if (latestJsonRef.current === json) {
+          latestJsonRef.current = null;
+          dirtyRef.current = false;
+        }
+      },
+      (e: unknown) => {
+        console.error("autosave failed", view.id, e);
+        toast.error(t("error.saveDoc", { message: String(e) }));
+        throw e;
+      },
+    );
   }, [view.id]);
+
+  /** 非关窗路径的落库调用（卸载/隐藏/防抖）：失败已 toast，吞掉 rejection 防止 unhandled */
+  const flushQuietly = useCallback(() => {
+    void flush().catch(() => undefined);
+  }, [flush]);
 
   const scheduleSave = useCallback(() => {
     const editor = editorRef.current;
@@ -120,8 +135,8 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     latestJsonRef.current = editor.getJSON();
     dirtyRef.current = true;
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(flush, AUTOSAVE_MS);
-  }, [flush]);
+    saveTimer.current = window.setTimeout(flushQuietly, AUTOSAVE_MS);
+  }, [flushQuietly]);
 
   // 光标行不低于编辑区 70%：rAF 里量（等浏览器的原生光标滚动先落地，否则会被它覆盖回去）
   const clampCaretSoon = useCallback(() => {
@@ -222,8 +237,9 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         // — 快捷键 1：Ctrl+S 手动保存 —
         if (metaOrCtrl && event.key.toLowerCase() === "s") {
           event.preventDefault();
-          flush();
-          toast.success(t("editor.saved"));
+          flush()
+            .then(() => toast.success(t("editor.saved")))
+            .catch(() => undefined);
           return true;
         }
         // — M6 修复 5：Ctrl+T 插入 3×3 表格（带表头）—
@@ -278,18 +294,16 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
                 reader.onload = async () => {
                   const buf = reader.result;
                   if (buf instanceof ArrayBuffer) {
-                    const bytes = new Uint8Array(buf);
-                    const ext = file.type.split("/")[1] || "png";
-                    const filename = `paste-${Date.now()}.${ext}`;
                     try {
-                      const { invoke } = await import("@tauri-apps/api/core");
-                      const assetPath = await invoke<string>("save_asset_bytes", {
-                        bytes: Array.from(bytes),
-                        filename,
-                      });
-                      const node = view.state.schema.nodes.image.create({ src: assetPath });
-                      view.dispatch(view.state.tr.replaceSelectionWith(node).scrollIntoView());
+                      const assetPath = await uploadImageBytes(new Uint8Array(buf), pickImageExt(file));
+                      // 异步期间选区/文档可能已变：用当前 editor 状态构造事务，
+                      // 不能再用闭包捕获的 view.state（会触发 ProseMirror mismatched transaction）
+                      const ed = editorRef.current;
+                      if (!ed || ed.isDestroyed) return;
+                      const node = ed.state.schema.nodes.image.create({ src: assetPath });
+                      ed.view.dispatch(ed.state.tr.replaceSelectionWith(node).scrollIntoView());
                     } catch (e) {
+                      console.error("paste image failed", e);
                       toast.error(t("editor.imageUploadFailed"));
                     }
                   }
@@ -430,29 +444,30 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   // 卸载/切页/关闭前 flush；页面隐藏时也 flush
   useEffect(() => {
     const onVisibility = () => {
-      if (document.visibilityState === "hidden") flush();
+      if (document.visibilityState === "hidden") flushQuietly();
     };
-    const onBeforeUnload = () => flush();
+    const onBeforeUnload = () => flushQuietly();
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("beforeunload", onBeforeUnload);
-      flush();
+      flushQuietly();
     };
-  }, [flush]);
+  }, [flushQuietly]);
 
   // 关窗冲刷：Tauri 关窗时 beforeunload 里的异步落库可能被中断，
   // 由 App 的 onCloseRequested 统一 await（见 lib/close-flush.ts）
   useEffect(() => registerCloseFlush(flush), [flush]);
 
-  // 全局 Ctrl+S（编辑器未聚焦时也保存）
+  // 全局 Ctrl+S（编辑器未聚焦时也保存）：成功才提示已保存
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        flush();
-        toast.success(t("editor.saved"));
+        flush()
+          .then(() => toast.success(t("editor.saved")))
+          .catch(() => undefined);
       }
     };
     window.addEventListener("keydown", onKey);
