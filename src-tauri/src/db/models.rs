@@ -207,3 +207,12 @@ pub struct CsvRowIn {
     pub id: String,
     pub cells: Vec<CsvCellIn>,
 }
+
+/// cell_set_many 入参。嵌套 payload 必须传 snake_case 键（同 CsvRowIn 契约），
+/// value 为 JS 侧 serializeValue 产出的 JSON 字符串。
+#[derive(Debug, Clone, Deserialize)]
+pub struct CellSetIn {
+    pub row_id: String,
+    pub field_id: String,
+    pub value: String,
+}

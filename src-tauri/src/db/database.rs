@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::models::{
-    CellLoadRow, CsvFieldIn, CsvRowIn, DatabaseFieldRow, DatabaseRowRow,
+    CellLoadRow, CellSetIn, CsvFieldIn, CsvRowIn, DatabaseFieldRow, DatabaseRowRow,
 };
 use super::views::data_view_id;
 use super::{dberr, now_ms};
@@ -311,6 +311,50 @@ pub fn set_cell(conn: &Connection, row_id: &str, field_id: &str, value: &str) ->
     Ok(())
 }
 
+/// 批量 upsert 单元格：一个事务内落全部写入，替代逐格 IPC（TSV 粘贴路径）。
+/// 与 set_cell 同语义（只 upsert，不校验 row/field 归属：调用方给的 id 来自已加载数据）。
+pub fn set_cells_many(conn: &Connection, updates: &[CellSetIn]) -> Result<usize, String> {
+    let tx = conn.unchecked_transaction().map_err(dberr("set cells many"))?;
+    for u in updates {
+        tx.execute(
+            "INSERT INTO database_cells(row_id, field_id, value) VALUES (?1, ?2, ?3)
+             ON CONFLICT(row_id, field_id) DO UPDATE SET value = ?3",
+            params![u.row_id, u.field_id, u.value],
+        )
+        .map_err(dberr("set cells many"))?;
+    }
+    tx.commit().map_err(dberr("set cells many (commit)"))?;
+    Ok(updates.len())
+}
+
+/// 批量追加行：一个事务内按入参顺序建行并返回（position 连续，同 create_row 语义）。
+pub fn create_rows(conn: &Connection, view_id: &str, ids: &[String]) -> Result<Vec<DatabaseRowRow>, String> {
+    let host = data_view_id(conn, view_id)?;
+    let view_id = host.as_str();
+    let tx = conn.unchecked_transaction().map_err(dberr("create rows"))?;
+    let mut start = next_position(conn, "database_rows", view_id)?;
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let t = now_ms();
+        tx.execute(
+            "INSERT INTO database_rows(id, database_view_id, position, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+            params![id, view_id, start, t],
+        )
+        .map_err(dberr("create rows"))?;
+        out.push(DatabaseRowRow {
+            id: id.clone(),
+            database_view_id: view_id.to_string(),
+            position: start,
+            document_id: None,
+            created_at: t,
+            updated_at: t,
+        });
+        start += 1;
+    }
+    tx.commit().map_err(dberr("create rows (commit)"))?;
+    Ok(out)
+}
+
 /// CSV 导入单命令：一个事务内落全部字段/行/单元格（替代旧 JS 侧 N+1 IPC 循环）。
 /// 字段默认 options 在 Rust 侧生成；position 按入参顺序 0..n-1。
 pub fn csv_import(
@@ -604,6 +648,55 @@ mod tests {
         let conn = setup();
         let err = set_cell(&conn, "ghost-row", "ghost-field", "1").unwrap_err();
         assert!(err.contains("FOREIGN KEY"), "{err}");
+    }
+
+    // ---------- 批量写（TSV 粘贴路径） ----------
+
+    fn cell_set_in(row: &str, field: &str, value: &str) -> CellSetIn {
+        CellSetIn { row_id: row.into(), field_id: field.into(), value: value.into() }
+    }
+
+    #[test]
+    fn set_cells_many_upserts_and_rolls_back_atomically() {
+        let conn = setup();
+        create_field(&conn, "v1", "f1", "text", None).unwrap();
+        create_row(&conn, "v1", "r1").unwrap();
+
+        let n = set_cells_many(
+            &conn,
+            &[
+                cell_set_in("r1", "f1", r#""a""#),
+                cell_set_in("r1", "f1", r#""b""#), // 同格后写覆盖先写
+            ],
+        )
+        .unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(cells_of(&conn, "f1")[0].value, r#""b""#);
+
+        // 任一条 FK 违例 → 整批回滚，先写入的合法项也不落库
+        let err = set_cells_many(
+            &conn,
+            &[cell_set_in("r1", "f1", r#""c""#), cell_set_in("ghost", "f1", "1")],
+        )
+        .unwrap_err();
+        assert!(err.contains("FOREIGN KEY"), "{err}");
+        assert_eq!(cells_of(&conn, "f1")[0].value, r#""b""#);
+    }
+
+    #[test]
+    fn create_rows_appends_positions_and_rolls_back_on_duplicate() {
+        let conn = setup();
+        create_row(&conn, "v1", "r1").unwrap();
+
+        let made = create_rows(&conn, "v1", &["r2".into(), "r3".into()]).unwrap();
+        assert_eq!(made.iter().map(|r| r.position).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(made[1].database_view_id, "v1");
+        assert_eq!(list_rows(&conn, "v1").unwrap().len(), 3);
+
+        let err = create_rows(&conn, "v1", &["r4".into(), "r2".into()]).unwrap_err();
+        assert!(err.contains("UNIQUE"), "{err}");
+        let ids: Vec<String> = list_rows(&conn, "v1").unwrap().into_iter().map(|r| r.id).collect();
+        assert_eq!(ids, vec!["r1", "r2", "r3"], "整批回滚：r4 不落库");
     }
 
     // ---------- CSV 导入 ----------

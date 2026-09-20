@@ -10,8 +10,9 @@
 use tauri::State;
 
 use crate::db::{
-    self, BacklinkRow, CellLoadRow, CsvFieldIn, CsvRowIn, DatabaseFieldRow, DatabaseRowRow, Db,
-    DocRowOut, MentionRowIn, PagePropertyOut, SearchRowOut, ViewRow, WorkspaceRow,
+    self, BacklinkRow, CellLoadRow, CellSetIn, CsvFieldIn, CsvRowIn, DatabaseFieldRow,
+    DatabaseRowRow, Db, DocRowOut, MentionRowIn, PagePropertyOut, SearchRowOut, ViewRow,
+    WorkspaceRow,
 };
 
 // ---------- workspace ----------
@@ -458,6 +459,25 @@ pub async fn cell_set(
     // value 为 JS 侧 serializeValue 产出的 JSON 字符串
     let conn = db.write_conn()?;
     db::database::set_cell(&conn, &row_id, &field_id, &value)
+}
+
+/// 批量写单元格（TSV 粘贴）：一次 IPC 一个事务，替代逐格 cell_set 循环。
+#[tauri::command]
+pub async fn cell_set_many(db: State<'_, Db>, updates: Vec<CellSetIn>) -> Result<i64, String> {
+    let conn = db.write_conn()?;
+    let n = db::database::set_cells_many(&conn, &updates)?;
+    Ok(n as i64)
+}
+
+/// 批量建行（TSV 粘贴补行）：一次 IPC 一个事务。
+#[tauri::command]
+pub async fn row_create_many(
+    db: State<'_, Db>,
+    view_id: String,
+    ids: Vec<String>,
+) -> Result<Vec<DatabaseRowRow>, String> {
+    let conn = db.write_conn()?;
+    db::database::create_rows(&conn, &view_id, &ids)
 }
 
 #[tauri::command]

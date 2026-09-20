@@ -224,12 +224,14 @@ pub fn run() {
             commands::db::field_change_type,
             commands::db::row_list,
             commands::db::row_create,
+            commands::db::row_create_many,
             commands::db::row_get,
             commands::db::row_set_document_id,
             commands::db::row_delete,
             commands::db::row_reorder,
             commands::db::cells_load,
             commands::db::cell_set,
+            commands::db::cell_set_many,
             commands::db::csv_import,
         ])
         .run(tauri::generate_context!());
