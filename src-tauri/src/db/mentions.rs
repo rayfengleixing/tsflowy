@@ -3,7 +3,7 @@ use rusqlite::{params, Connection};
 use super::models::{BacklinkRow, MentionRowIn, ViewRow};
 use super::{dberr, now_ms};
 
-/// 单事务重建某文档的 mentions 行：先删 src 全部旧行，再整批写入。
+/// 单事务重建某文档的 mentions 行：先删 src 全部旧行，再整批写入；指向已删除视图的死链跳过不写。
 /// 自引用过滤与 id 生成在 JS 侧完成（collectMentions / newId()）；updated_at 统一取本次调用时刻。
 pub fn rebuild_for(conn: &Connection, view_id: &str, rows: &[MentionRowIn]) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(dberr("rebuild mentions"))?;
@@ -11,9 +11,11 @@ pub fn rebuild_for(conn: &Connection, view_id: &str, rows: &[MentionRowIn]) -> R
         .map_err(dberr("rebuild mentions"))?;
     let t = now_ms();
     for row in rows {
+        // 目标视图可能已被彻底删除（文档里仍留着 mention 节点）：跳过而不是整批失败，
+        // 否则该文档的 mentions 索引会因为一条死链永远停在旧版本（FK 违例让事务整体回滚）。
         tx.execute(
             "INSERT INTO mentions(id, src_view_id, target_view_id, context_text, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+             SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM views WHERE id = ?3)",
             params![row.id, view_id, row.target_view_id, row.context_text, t],
         )
         .map_err(dberr("rebuild mentions"))?;
@@ -142,16 +144,21 @@ mod tests {
     }
 
     #[test]
-    fn rebuild_rolls_back_on_fk_violation() {
+    fn rebuild_skips_dangling_targets() {
         let conn = setup();
         seed_view(&conn, "s", "源");
         seed_view(&conn, "t1", "目标1");
 
         rebuild_for(&conn, "s", &[row("m1", "t1")]).unwrap();
-        // 指向不存在 view 的行触发 FK → 整个事务回滚，旧行保持完整
-        let err = rebuild_for(&conn, "s", &[row("m2", "t1"), row("m3", "ghost")]).unwrap_err();
-        assert!(err.contains("FOREIGN KEY"), "{err}");
-        assert_eq!(mention_count_for(&conn, "s"), 1);
+        // 指向不存在 view 的行被跳过（死链不再让整批重建失败），其余行照常替换旧索引
+        rebuild_for(&conn, "s", &[row("m2", "t1"), row("m3", "ghost")]).unwrap();
+        let targets: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT target_view_id FROM mentions WHERE src_view_id = 's'")
+                .unwrap();
+            stmt.query_map([], |r| r.get(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
+        };
+        assert_eq!(targets, vec!["t1".to_string()]);
     }
 
     #[test]
