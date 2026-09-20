@@ -3,9 +3,28 @@ import type { JSONContent } from "@tiptap/core";
 // Markdown 粘贴转换（项目说明书 8.2/10-M3：粘贴 markdown 文本自动转成块）。
 // 纯函数：文本 → TipTap JSON，便于 Vitest 单测。
 
-/** 行内语法：加粗/斜体/行内代码/删除线/图片/链接 */
+/** 行内语法：mention/数据库链接/加粗/斜体/行内代码/删除线/高亮/图片/链接 */
 const INLINE_RE =
-  /(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(`[^`\n]+`)|(~~[^~\n]+~~)|(!\[[^\]]*\]\([^)\n]+\))|(\[[^\]]+\]\([^)\n]+\))/g;
+  /(@\[[^\]]*\]\(view:[^)\n]+\))|(→\[[^\]]*\]\(db:[^)\n]+\))|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(`[^`\n]+`)|(~~[^~\n]+~~)|(==[^=\n]+==)|(!\[[^\]]*\]\([^)\n]+\))|(\[[^\]]+\]\([^)\n]+\))/g;
+
+// 导出时 escapeInline 会给特殊符号加反斜杠；导入解析前先把 `\X` 换成私用区占位符，
+// 否则 `\*literal\*` 会被当成斜体匹配，解析完再还原（正文不会出现私用区字符）。
+const ESCAPE_CHARS = "`*_[]()#+-!~\\>=";
+const ESCAPE_PLACEHOLDER = 0xe000;
+
+function protectEscapes(text: string): string {
+  return text.replace(/\\([`*_[\]()#+\-!~\\>=])/g, (_m, ch: string) =>
+    String.fromCharCode(ESCAPE_PLACEHOLDER + ESCAPE_CHARS.indexOf(ch)),
+  );
+}
+
+function restoreEscapes(text: string): string {
+  const last = ESCAPE_PLACEHOLDER + ESCAPE_CHARS.length - 1;
+  return text.replace(new RegExp(`[\\u${ESCAPE_PLACEHOLDER.toString(16)}-\\u${last.toString(16)}]`, "g"), (ch) => {
+    const idx = ch.charCodeAt(0) - ESCAPE_PLACEHOLDER;
+    return ESCAPE_CHARS[idx] ?? ch;
+  });
+}
 
 const CODE_FENCE_RE = /^```(\w*)\s*$/;
 const MERMAID_FENCE_RE = /^```mermaid\s*$/i;
@@ -19,26 +38,51 @@ const MATH_ONE_LINE_RE = /^\$\$(.+)\$\$$/;
 const DETAILS_RE = /^<details\b[^>]*>$/i;
 const DETAILS_CLOSE_RE = /^<\/details>$/i;
 const SUMMARY_RE = /^<summary>(.*)<\/summary>$/i;
+const TABLE_ROW_RE = /^\|.*\|$/;
+const TABLE_SEP_RE = /^\|[\s:|-]+\|$/;
+const COLUMNS_RE = /^<!--\s*columns\s*\((\d+)\)\s*-->$/;
+const COLUMN_RE = /^<!--\s*column\s+(\d+)\s*\/\s*(\d+)\s*-->$/;
+const COLUMNS_END_RE = /^<!--\s*\/columns\s*-->$/;
+const DB_VIEW_RE = /^→\[([^\]]*)\]\(db:([^)\n]+)\)$/;
+/** 附件导出格式 `[name](attach:src)` 的协议前缀 */
+const ATTACH_PREFIX = "attach:";
 
 function textWithMarks(text: string, marks: JSONContent["marks"] = []): JSONContent {
   return marks.length ? { type: "text", text, marks } : { type: "text", text };
 }
 
-/** 行内解析：普通文本 + 粗/斜/删/码/链接/图片 */
+/** 行内解析：mention/数据库链接/普通文本 + 粗/斜/删/高亮/码/链接/图片 */
 export function parseInline(text: string): JSONContent[] {
   const out: JSONContent[] = [];
+  const source = protectEscapes(text);
+  const push = (value: string, marks: JSONContent["marks"] = []) => {
+    if (value === "") return;
+    out.push(textWithMarks(restoreEscapes(value), marks));
+  };
   let last = 0;
   let m: RegExpExecArray | null;
   INLINE_RE.lastIndex = 0;
-  while ((m = INLINE_RE.exec(text)) !== null) {
-    if (m.index > last) out.push(textWithMarks(text.slice(last, m.index)));
+  while ((m = INLINE_RE.exec(source)) !== null) {
+    if (m.index > last) push(source.slice(last, m.index));
     last = m.index + m[0].length;
     const raw = m[0];
-    if (raw.startsWith("**")) {
-      out.push(textWithMarks(raw.slice(2, -2), [{ type: "bold" }]));
+    if (raw.startsWith("@[")) {
+      // mention 导出格式 @[label](view:id)；id 为空则按普通文本处理（无法还原成 mention）
+      const mm = /^@\[([^\]]*)\]\(view:([^)\n]+)\)$/.exec(raw);
+      if (mm?.[2]) out.push({ type: "mention", attrs: { id: mm[2], label: mm[1] } });
+      else push(raw);
+    } else if (raw.startsWith("→[")) {
+      // 数据库视图引用（导出格式 →[label](db:viewId)）：行内出现时按纯文本保留，
+      // 独占一段的由 markdownToJson 直接还原成 databaseView 块
+      push(raw);
+    } else if (raw.startsWith("**")) {
+      push(raw.slice(2, -2), [{ type: "bold" }]);
     } else if (raw.startsWith("~~")) {
-      out.push(textWithMarks(raw.slice(2, -2), [{ type: "strike" }]));
+      push(raw.slice(2, -2), [{ type: "strike" }]);
+    } else if (raw.startsWith("==")) {
+      push(raw.slice(2, -2), [{ type: "highlight" }]);
     } else if (raw.startsWith("`")) {
+      // 行内代码内容不做转义还原（导出时也不转义）
       out.push(textWithMarks(raw.slice(1, -1), [{ type: "code" }]));
     } else if (raw.startsWith("!")) {
       const inner = raw.slice(2, -1); // [alt](src)
@@ -54,14 +98,14 @@ export function parseInline(text: string): JSONContent[] {
       const close = inner.indexOf("](");
       const label = inner.slice(0, close);
       const href = inner.slice(close + 2);
-      out.push(textWithMarks(label, [{ type: "link", attrs: { href } }]));
+      push(label, [{ type: "link", attrs: { href } }]);
     } else if (raw.startsWith("*")) {
-      out.push(textWithMarks(raw.slice(1, -1), [{ type: "italic" }]));
+      push(raw.slice(1, -1), [{ type: "italic" }]);
     } else {
-      out.push(textWithMarks(raw));
+      push(raw);
     }
   }
-  if (last < text.length) out.push(textWithMarks(text.slice(last)));
+  if (last < source.length) push(source.slice(last));
   return out;
 }
 
@@ -181,6 +225,52 @@ export function markdownToJson(md: string): JSONContent {
       continue;
     }
 
+    // 分栏：<!-- columns (n) --> … <!-- column i/n --> … <!-- /columns -->（jsonToMarkdown 的导出格式）
+    if (COLUMNS_RE.test(trimmed)) {
+      i++;
+      const cols: JSONContent[] = [];
+      let cur: string[] = [];
+      let collecting = false;
+      while (i < lines.length && !COLUMNS_END_RE.test(lines[i].trim())) {
+        if (COLUMN_RE.test(lines[i].trim())) {
+          if (collecting) cols.push(columnToJson(cur));
+          cur = [];
+          collecting = true;
+          i++;
+          continue;
+        }
+        cur.push(lines[i]);
+        i++;
+      }
+      i++; // 跳过 <!-- /columns -->
+      if (collecting) cols.push(columnToJson(cur));
+      blocks.push({
+        type: "columns",
+        content: cols.length > 0 ? cols : [{ type: "column", content: [{ type: "paragraph" }] }],
+      });
+      continue;
+    }
+
+    // 数据库视图：→[name](db:viewId)（jsonToMarkdown 的导出格式）
+    const dbView = DB_VIEW_RE.exec(trimmed);
+    if (dbView) {
+      blocks.push({ type: "databaseView", attrs: { viewId: dbView[2], name: dbView[1] } });
+      i++;
+      continue;
+    }
+
+    // 表格：| a | b | 表头行 + |---|---| 分隔行（jsonToMarkdown 的导出格式）
+    if (TABLE_ROW_RE.test(trimmed) && TABLE_SEP_RE.test(lines[i + 1]?.trim() ?? "")) {
+      const rows: string[][] = [splitTableRow(trimmed)];
+      i += 2;
+      while (i < lines.length && TABLE_ROW_RE.test(lines[i].trim())) {
+        rows.push(splitTableRow(lines[i].trim()));
+        i++;
+      }
+      blocks.push(tableToJson(rows));
+      continue;
+    }
+
     // 标题 1-3
     const h = HEADING_RE.exec(trimmed);
     if (h) {
@@ -259,10 +349,59 @@ export function markdownToJson(md: string): JSONContent {
       buf.push(lines[i].trim());
       i++;
     }
-    blocks.push({ type: "paragraph", content: parseInline(buf.join(" ")) });
+    const inline = parseInline(buf.join(" "));
+    // 独占一段的 attachment 还原为块级节点（导出时它在块级位置）
+    const soloLink = inline.length === 1 ? inline[0] : undefined;
+    if (soloLink?.type === "text" && soloLink.marks?.length === 1) {
+      const mark = soloLink.marks[0];
+      const href = String(mark.attrs?.href ?? "");
+      if (mark.type === "link" && href.startsWith(ATTACH_PREFIX)) {
+        blocks.push({
+          type: "attachment",
+          attrs: { src: href.slice(ATTACH_PREFIX.length), name: soloLink.text ?? "" },
+        });
+        continue;
+      }
+    }
+    blocks.push({ type: "paragraph", content: inline });
   }
 
   return { type: "doc", content: blocks };
+}
+
+/** 表格行 `| a | b |` → 单元格文本数组 */
+function splitTableRow(line: string): string[] {
+  return line
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((c) => c.trim());
+}
+
+/** 单元格文本 → 单元格内容：导出时单元格内多块用 <br> 连接，导回时还原为 hardBreak */
+function cellContent(text: string): JSONContent[] {
+  const inline: JSONContent[] = [];
+  text.split(/<br\s*\/?>/i).forEach((part, idx) => {
+    if (idx > 0) inline.push({ type: "hardBreak" });
+    inline.push(...parseInline(part));
+  });
+  return [{ type: "paragraph", content: inline }];
+}
+
+function tableToJson(rows: string[][]): JSONContent {
+  if (rows.length === 0) return { type: "table", content: [] };
+  const [header, ...body] = rows;
+  const makeRow = (cells: string[], type: "tableHeader" | "tableCell"): JSONContent => ({
+    type: "tableRow",
+    content: cells.map((c) => ({ type, content: cellContent(c) })),
+  });
+  return { type: "table", content: [makeRow(header, "tableHeader"), ...body.map((r) => makeRow(r, "tableCell"))] };
+}
+
+/** 分栏内容行 → column 节点（递归走 markdownToJson，空列补空段落） */
+function columnToJson(lines: string[]): JSONContent {
+  const inner = markdownToJson(lines.join("\n")).content ?? [];
+  return { type: "column", content: inner.length > 0 ? inner : [{ type: "paragraph" }] };
 }
 
 /** <details> 内部行 → toggle 节点：<summary> 还原为标题段落，其余递归走 markdownToJson */
@@ -296,9 +435,9 @@ function decodeHtmlEntities(s: string): string {
 //
 // 设计原则：
 //   - 纯函数，便于 Vitest 单测。
-//   - 对 TipTap 原生块做精确映射；对高级块（columns/callout/toggle/math/gallery 等）
-//     不追求无损 MD 往返，输出 HTML 注释 `<!-- unsupported block: X -->` 占位。
-//   - mention 输出自定义语法 `@[label](view:<id>)`（导入时可解析回来或显示为纯文本）。
+//   - 对 TipTap 原生块做精确映射；可往返块（table/columns/toggle/math/mermaid/databaseView/attachment）
+//     的导出格式与 markdownToJson 的解析一一对应；callout/gallery/outline 输出占位注释。
+//   - mention 输出自定义语法 `@[label](view:<id>)`，数据库视图块（databaseView）输出 `→[label](db:<id>)`（可导入还原）。
 // ——————————————————————————————————————
 
 const ESCAPE_MD_RE = /([`*_\[\]()#+\-!~\\>])/g;
@@ -380,10 +519,6 @@ function renderInline(nodes: JSONContent[] | undefined): string {
       const alt = (n.attrs?.alt as string) ?? "";
       const w = (n.attrs?.width as number | undefined) ?? 100;
       out += `![${alt}](${src}${w !== 100 ? `{width=${w}%}` : ""})`;
-    } else if (n.type === "database-link") {
-      const id = (n.attrs?.viewId as string) ?? "";
-      const label = (n.attrs?.label as string) ?? id;
-      out += `→[${label}](db:${id})`;
     } else {
       // 其他 inline（date/relations/hardBreak emoji 等）：回退到 textContent
       if (typeof n.text === "string") out += escapeInline(n.text);
@@ -462,7 +597,7 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
       // TipTap table: content = tableRow (header then body)
       // cell 内可能是多块（段落 + 图片/附件等），块级子节点逐块渲染，块间用 <br>（表格内换行惯例）
       // 历史数据/测试里 cell 也可能直接挂 inline 节点（text/image…），一并按 inline 渲染
-      const inlineish = new Set(["text", "image", "mention", "database-link", "hardBreak"]);
+      const inlineish = new Set(["text", "image", "mention", "hardBreak"]);
       const rows = (node.content ?? []).map((row) =>
         (row.content ?? []).map((cell) =>
           (cell.content ?? [])
@@ -499,21 +634,20 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
       return `\`\`\`mermaid\n${code}\n\`\`\``;
     }
 
-    case "database-view": {
+    case "databaseView": {
       const viewId = (node.attrs?.viewId as string) ?? "";
-      return `<!-- database view: ${viewId} -->`;
+      const name = (node.attrs?.name as string) || "数据库";
+      return `→[${name}](db:${viewId})`;
     }
 
     case "columns": {
-      const count = (node.content ?? []).length;
-      const parts = (node.content ?? []).map((col, i) => {
-        const inner = renderChildren(col.content, "    ");
-        return `  <!-- column ${i + 1}/${count} -->\n${inner}`;
-      });
-      return `<!-- columns (${count}) -->\n${parts.join("\n")}`;
+      // 带标记与结束标记：导入时可无损还原（见 markdownToJson 的分栏分支）
+      const cols = node.content ?? [];
+      const parts = cols.map((col, i) => `<!-- column ${i + 1}/${cols.length} -->\n${renderChildren(col.content, "")}`);
+      return `<!-- columns (${cols.length}) -->\n${parts.join("\n")}\n<!-- /columns -->`;
     }
 
-    case "image-gallery": {
+    case "imageGallery": {
       // gallery 无 attrs（子节点是 image，content: "image*"）；遍历子节点导出图片引用
       const srcs = (node.content ?? []).map((img) => (img.attrs?.src as string) ?? "");
       return `<!-- image gallery (${srcs.length} images) -->\n${srcs.map((u) => `![](${u})`).join("\n")}`;
@@ -523,9 +657,10 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
       return "<!-- outline block -->";
 
     case "attachment": {
+      // 附件节点 attrs 是 src/name（见 extensions/attachment/node.ts）
       const name = (node.attrs?.name as string) ?? "";
-      const url = (node.attrs?.url as string) ?? "";
-      return `[${name}](${url})`;
+      const src = (node.attrs?.src as string) ?? "";
+      return `[${name}](${ATTACH_PREFIX}${src})`;
     }
 
     // 兜底：未知类型 → HTML 注释占位，避免导出时丢失结构
@@ -553,15 +688,10 @@ function renderListItem(item: JSONContent, index: number, ordered: boolean, inde
 
 function renderChildren(children: JSONContent[] | undefined, indent: string): string {
   if (!children || children.length === 0) return "";
-  // 如果所有子节点都是"内联级"（text/mention/image/database-link 等，非块类型），
+  // 如果所有子节点都是"内联级"（text/mention/image 等，非块类型），
   // 直接拼接内联渲染结果；避免 markdownToJson 生成的 blockquote.content: [{type:'text',...}] 被当作未知块。
   const allInline = children.every(
-    (n) =>
-      n.type === "text" ||
-      n.type === "mention" ||
-      n.type === "image" ||
-      n.type === "database-link" ||
-      n.type === "hardBreak",
+    (n) => n.type === "text" || n.type === "mention" || n.type === "image" || n.type === "hardBreak",
   );
   if (allInline) return indent + renderInline(children);
   const parts: string[] = [];
@@ -574,9 +704,9 @@ function renderChildren(children: JSONContent[] | undefined, indent: string): st
  * TipTap doc JSON → Markdown 文本（Phase 4.1）。
  *
  * 支持：paragraph / heading / horizontalRule / blockquote / codeBlock /
- *       bulletList / orderedList / taskList / table / image / mention / math / toggle / attachment；
- * 高级块（callout/columns/database-view/gallery/outline）输出可读占位注释，
- * 不保证与 markdownToJson 严格往返对称，但内容可读不丢失。
+ *       bulletList / orderedList / taskList / table / image / mention / math / mermaid /
+ *       toggle / attachment / columns / databaseView（可往返）；
+ * 高级块（callout/gallery/outline）输出可读占位注释，不保证严格往返，但内容可读不丢失。
  */
 export function jsonToMarkdown(json: JSONContent): string {
   const root = json.type === "doc" ? json : { type: "doc", content: [json] };

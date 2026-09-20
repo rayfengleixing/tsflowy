@@ -34,6 +34,16 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/** 取字符串属性（attrs 是 unknown 值域，先做类型收窄再进模板串） */
+function attrStr(node: JSONContent, key: string): string {
+  const v = node.attrs?.[key];
+  return typeof v === "string" ? v : "";
+}
+
+function firstNonEmpty(...vals: string[]): string {
+  return vals.find((v) => v !== "") ?? "";
+}
+
 /** 转义 HTML 属性值（src/href 等），防止 `"` 与 `javascript:` 破坏标签或触发 XSS */
 function escapeAttr(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
@@ -52,6 +62,19 @@ function jsonToHTML(nodes: JSONContent[], title: string): string {
   blockquote { border-left: 3px solid #ddd; margin: 0; padding-left: 16px; color: #666; }
   table { border-collapse: collapse; } td, th { border: 1px solid #ddd; padding: 6px 12px; }
   img { max-width: 100%; }
+  .math { text-align: center; font-family: "Cambria Math", Georgia, serif; font-size: 1.1em; margin: 1em 0; }
+  .mermaid { background: #fafafa; border: 1px dashed #ddd; }
+  .attachment a { display: inline-block; border: 1px solid #ddd; border-radius: 8px; padding: 8px 12px; text-decoration: none; color: #333; }
+  .database-view { border: 1px solid #e5e5e5; border-radius: 8px; padding: 10px 14px; color: #666; background: #fafafa; }
+  .mention { color: #2563eb; }
+  details { border: 1px solid #eee; border-radius: 6px; padding: 8px 12px; margin: 1em 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  aside.callout { display: flex; gap: 10px; border-left: 3px solid #93c5fd; background: #f8fafc; padding: 10px 14px; border-radius: 6px; }
+  .callout-emoji { flex: none; }
+  .columns { display: flex; gap: 20px; align-items: flex-start; }
+  .columns > .column { flex: 1 1 0; min-width: 0; }
+  .gallery { display: flex; flex-wrap: wrap; gap: 8px; }
+  .gallery img { max-height: 240px; border-radius: 6px; }
 </style></head>
 <body>${body}</body></html>`;
 }
@@ -88,6 +111,52 @@ function nodeToHtml(node: JSONContent): string {
       return `<hr/>`;
     case "table":
       return renderTableHtml(node);
+    case "math": {
+      // 导出文件不加载 KaTeX，直接输出 TeX 源码（居中衬线体，语义可读不丢失）
+      return `<div class="math">${escapeHtml(attrStr(node, "tex"))}</div>`;
+    }
+    case "mermaid": {
+      // 用 <pre class="mermaid"> 保留源码：页面不引 mermaid.js 时按代码块展示，引了即可渲染
+      return `<pre class="mermaid">${escapeHtml(attrStr(node, "code"))}</pre>`;
+    }
+    case "attachment": {
+      const src = escapeAttr(attrStr(node, "src"));
+      const name = escapeHtml(firstNonEmpty(attrStr(node, "name"), attrStr(node, "src"), "附件"));
+      return `<p class="attachment"><a href="${src}">${name}</a></p>`;
+    }
+    case "databaseView": {
+      const name = escapeHtml(firstNonEmpty(attrStr(node, "name"), "数据库视图"));
+      return `<div class="database-view">${name}</div>`;
+    }
+    case "toggle": {
+      const blocks = node.content ?? [];
+      const first = blocks.length > 0 ? blocks[0] : undefined;
+      const firstIsTitle = first?.type === "paragraph" || first?.type === "heading";
+      const title = first && firstIsTitle ? inlineHtml(first) : "";
+      const body = (firstIsTitle ? blocks.slice(1) : blocks).map(nodeToHtml).join("");
+      return `<details${node.attrs?.collapsed ? "" : " open"}><summary>${title}</summary>${body}</details>`;
+    }
+    case "callout": {
+      const emoji = escapeHtml(firstNonEmpty(attrStr(node, "emoji"), "💡"));
+      return `<aside class="callout"><span class="callout-emoji">${emoji}</span>${(node.content ?? [])
+        .map(nodeToHtml)
+        .join("")}</aside>`;
+    }
+    case "columns": {
+      const cols = (node.content ?? []).map(
+        (col) => `<div class="column">${(col.content ?? []).map(nodeToHtml).join("")}</div>`,
+      );
+      return `<div class="columns">${cols.join("")}</div>`;
+    }
+    case "imageGallery": {
+      const imgs = (node.content ?? [])
+        .map((img) => `<img src="${escapeAttr(attrStr(img, "src"))}" alt="${escapeHtml(attrStr(img, "alt"))}"/>`)
+        .join("");
+      return `<div class="gallery">${imgs}</div>`;
+    }
+    case "outline":
+      // 大纲是编辑辅助块，导出时省略
+      return "";
     default:
       return inlineHtml(node);
   }

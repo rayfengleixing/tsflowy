@@ -472,13 +472,113 @@ describe("jsonToMarkdown", () => {
     expect(md).toContain("</details>");
   });
 
-  it("outputs placeholder comments for advanced blocks without crashing", () => {
+  it("round-trips databaseView and keeps outline as placeholder", () => {
     const md = jsonToMarkdown({
       type: "doc",
-      content: [{ type: "database-view", attrs: { viewId: "db-1" } }, { type: "outline" }],
+      content: [{ type: "databaseView", attrs: { viewId: "db-1", name: "任务表" } }, { type: "outline" }],
     });
-    expect(md).toContain("<!-- database view: db-1 -->");
+    expect(md).toContain("→[任务表](db:db-1)");
     expect(md).toContain("<!-- outline block -->");
+    expect(markdownToJson("→[任务表](db:db-1)")).toEqual({
+      type: "doc",
+      content: [{ type: "databaseView", attrs: { viewId: "db-1", name: "任务表" } }],
+    });
+  });
+
+  it("round-trips mention: json → md → json", () => {
+    const json = {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "mention", attrs: { id: "v1", label: "目标页" } }] }],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("@[目标页](view:v1)");
+    expect(markdownToJson(md)).toEqual(json);
+  });
+
+  it("round-trips attachment with src/name: json → md → json", () => {
+    const json = {
+      type: "doc",
+      content: [{ type: "attachment", attrs: { src: "assets/报告.pdf", name: "报告.pdf" } }],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("[报告.pdf](attach:assets/报告.pdf)");
+    expect(markdownToJson(md)).toEqual(json);
+  });
+
+  it("parses highlight and keeps it through a round trip", () => {
+    const json = markdownToJson("前 ==重点== 后");
+    expect(json.content?.[0]?.content).toEqual([
+      { type: "text", text: "前 " },
+      { type: "text", text: "重点", marks: [{ type: "highlight" }] },
+      { type: "text", text: " 后" },
+    ]);
+    expect(jsonToMarkdown(json)).toContain("==重点==");
+  });
+
+  it("unescapes backslash text instead of re-parsing it as markup", () => {
+    const json = {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "*字面星号* 与 [方括号]" }] }],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("\\*字面星号\\*");
+    expect(markdownToJson(md)).toEqual(json);
+  });
+
+  it("round-trips a table: json → md → json", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [
+                { type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "A" }] }] },
+                { type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "B" }] }] },
+              ],
+            },
+            {
+              type: "tableRow",
+              content: [
+                { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "1" }] }] },
+                { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "2" }] }] },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("| A | B |");
+    expect(markdownToJson(md)).toEqual(json);
+  });
+
+  it("round-trips columns: json → md → json", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "columns",
+          content: [
+            {
+              type: "column",
+              content: [{ type: "paragraph", content: [{ type: "text", text: "左栏" }] }],
+            },
+            {
+              type: "column",
+              content: [{ type: "paragraph", content: [{ type: "text", text: "右栏" }] }],
+            },
+          ],
+        },
+      ],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("<!-- columns (2) -->");
+    expect(md).toContain("<!-- column 2/2 -->");
+    expect(md).toContain("<!-- /columns -->");
+    expect(markdownToJson(md)).toEqual(json);
   });
 
   it("round-trips basic markdown through markdownToJson → jsonToMarkdown", () => {
