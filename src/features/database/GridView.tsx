@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
+  ArrowUpDown,
   ChevronDown,
   ChevronRight,
   Download,
@@ -29,6 +30,7 @@ import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
 import { NewFieldDialog } from "./NewFieldDialog";
 import { FilterBar } from "./FilterBar";
+import { SortBar } from "./SortBar";
 import { AggregateMenu } from "./AggregateMenu";
 import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
 import { CellEditorSlot, SelectChips } from "./editors";
@@ -77,6 +79,7 @@ export function GridView({
   const [optionsEditorFor, setOptionsEditorFor] = useState<DatabaseField | null>(null);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [sortOpen, setSortOpen] = useState(false);
   // 待确认删除的行（行删除不可撤销，先确认再落库）
   const [deleteRowTarget, setDeleteRowTarget] = useState<DatabaseRow | null>(null);
   const [draggingField, setDraggingField] = useState<string | null>(null);
@@ -240,13 +243,14 @@ export function GridView({
     [store],
   );
 
+  // 表头单击：没排过 → 追加升序；升序 → 转降序；降序 → 取消该字段（其余字段保持）
   const cycleSort = (fieldId: string) => {
     const current = sorts.find((s) => s.field_id === fieldId);
     const next: SortSpec[] = !current
-      ? [{ field_id: fieldId, dir: "asc" }]
+      ? [...sorts, { field_id: fieldId, dir: "asc" }]
       : current.dir === "asc"
-        ? [{ field_id: fieldId, dir: "desc" }]
-        : [];
+        ? sorts.map((s) => (s.field_id === fieldId ? { ...s, dir: "desc" as const } : s))
+        : sorts.filter((s) => s.field_id !== fieldId);
     store.setSorts(next);
   };
 
@@ -644,6 +648,18 @@ export function GridView({
               <span className="ml-1 rounded-full bg-brand-500 px-1.5 text-[10px] text-white">{filters.length}</span>
             )}
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSortOpen((v) => !v)}
+            className={cn(sortOpen && "bg-brand-100 text-brand-600")}
+          >
+            <ArrowUpDown className="h-3.5 w-3.5" />
+            {t("sort.title")}
+            {sorts.length > 0 && (
+              <span className="ml-1 rounded-full bg-brand-500 px-1.5 text-[10px] text-white">{sorts.length}</span>
+            )}
+          </Button>
           <Button variant="ghost" size="sm" onClick={importCsv}>
             <FileUp className="h-3.5 w-3.5" />
             {t("csv.import")}
@@ -665,6 +681,10 @@ export function GridView({
         />
       )}
 
+      {sortOpen && (
+        <SortBar fields={fields} sorts={sorts} onChange={store.setSorts} onClose={() => setSortOpen(false)} />
+      )}
+
       {/* 表格（横向滚动；TSV 剪贴板粘贴见 onPasteTsv） */}
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto" onPaste={(e) => void onPasteTsv(e)}>
         <table ref={tableRef} className="border-separate border-spacing-0">
@@ -681,7 +701,8 @@ export function GridView({
                 #
               </th>
               {visibleFields.map((field) => {
-                const sort = sorts.find((s) => s.field_id === field.id);
+                const sortIndex = sorts.findIndex((s) => s.field_id === field.id);
+                const sort = sortIndex === -1 ? null : sorts[sortIndex];
                 const isPrimary = field.id === primaryField?.id;
                 return (
                   <th
@@ -720,8 +741,15 @@ export function GridView({
                       <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-neutral-800 dark:text-neutral-100">
                         {field.name}
                       </span>
-                      <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[10px] text-brand-600 dark:text-brand-500">
-                        {sort ? (sort.dir === "asc" ? "↑" : "↓") : ""}
+                      <span className="flex h-4 min-w-4 shrink-0 items-center justify-center gap-0.5 text-[10px] text-brand-600 dark:text-brand-500">
+                        {sort && (
+                          <>
+                            <span>{sort.dir === "asc" ? "↑" : "↓"}</span>
+                            {sorts.length > 1 && (
+                              <span className="text-[9px] text-neutral-400 dark:text-neutral-500">{sortIndex + 1}</span>
+                            )}
+                          </>
+                        )}
                       </span>
                       <FieldMenu
                         fieldName={field.name}
