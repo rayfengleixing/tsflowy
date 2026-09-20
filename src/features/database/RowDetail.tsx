@@ -12,6 +12,7 @@ import { CellEditorSlot, SelectChips } from "./editors";
 import { fieldIcon } from "./field-icon";
 import { FieldTypeMenu } from "./FieldTypeMenu";
 import { t } from "@/lib/i18n";
+import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 
 /** 新行默认名去重：统一叫「字段/字段 2/字段 3…」，避免同屏同名歧义 */
@@ -58,7 +59,7 @@ function RowPropertyField({
     const next = nameDraft.trim();
     if (!next || next === field.name) return;
     void renameField(field.id, next).catch((e: unknown) => {
-      console.error("rename field failed", e);
+      logger.error("rename field failed", e);
       toast.error(t("error.db", { message: String(e) }));
     });
   };
@@ -96,7 +97,7 @@ function RowPropertyField({
           current={field.field_type}
           onSelect={(type) =>
             void changeFieldType(field.id, type as FieldType).catch((e: unknown) => {
-              console.error("change field type failed", e);
+              logger.error("change field type failed", e);
               toast.error(t("error.db", { message: String(e) }));
             })
           }
@@ -172,7 +173,7 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
     try {
       await addField("text", name);
     } catch (e: unknown) {
-      console.error("add field failed", e);
+      logger.error("add field failed", e);
       toast.error(t("error.db", { message: String(e) }));
     }
   };
@@ -229,7 +230,9 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
         </div>
         {/* 正文文档：行详情不需要"添加属性"区（属性已在面板顶部编辑） */}
         <div className="min-h-0 flex-1 overflow-hidden">
-          <EditorPage view={view} hideSlash />
+          {/* key 与 App.tsx 主编辑区一致：换行文档时必须新建编辑器实例，
+              EditorPage 的加载效应只在 editor 为空时 setContent，复用实例会拒绝加载新文档 */}
+          <EditorPage key={view.id} view={view} hideSlash />
         </div>
       </div>
     </div>

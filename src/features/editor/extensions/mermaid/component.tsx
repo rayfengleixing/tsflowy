@@ -23,7 +23,10 @@ async function renderMermaid(code: string): Promise<string> {
   const dark = document.documentElement.classList.contains("dark");
   mermaid.initialize({
     startOnLoad: false,
-    securityLevel: "loose",
+    // 必须 strict：loose 会让 mermaid 跳过对输出 SVG 的 DOMPurify 清洗，
+    // 渲染结果又直接进 dangerouslySetInnerHTML，导入不可信备份即可执行脚本。
+    // securityLevel 在 mermaid 的 secure 白名单里，图表内 %%{init}%% 覆盖不了它。
+    securityLevel: "strict",
     theme: dark ? "dark" : "default",
     fontFamily: "inherit",
   });
