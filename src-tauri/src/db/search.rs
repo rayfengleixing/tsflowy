@@ -143,11 +143,13 @@ pub fn search(conn: &Connection, workspace_id: &str, raw_query: &str) -> Result<
     )?);
 
     if q.chars().count() < 3 {
+        // 纯文本走 document_text 派生视图（与 FTS 索引同源），不用 documents.content 原文，
+        // 否则 JSON 结构字符（`{"type":` 等）也会参与 LIKE 命中
         rows.extend(like_rows(
             conn,
-            "documents d",
+            "documents d JOIN document_text dt ON dt.view_id = d.view_id",
             "d.view_id",
-            "d.content",
+            "dt.txt",
             "NULL",
             workspace_id,
             &like,

@@ -73,22 +73,63 @@ mod tests {
         assert_eq!(get(&conn, "nope").unwrap(), None);
     }
 
+    /// 真实形态的 TipTap 单段文档
+    fn tiptap(text: &str) -> String {
+        format!(
+            r#"{{"type":"doc","content":[{{"type":"paragraph","content":[{{"type":"text","text":"{text}"}}]}}]}}"#
+        )
+    }
+
     #[test]
     fn save_upserts_and_fts_stays_in_sync() {
         let conn = setup();
         seed_view(&conn, "v1", "标题A");
 
-        save(&conn, "v1", r#"{"content":"第一版"}"#).unwrap();
-        assert_eq!(get(&conn, "v1").unwrap().unwrap(), r#"{"content":"第一版"}"#);
+        let first = tiptap("第一版");
+        save(&conn, "v1", &first).unwrap();
+        assert_eq!(get(&conn, "v1").unwrap().unwrap(), first);
 
-        // 同一 view 再次保存 → 覆盖；触发器同步刷新 FTS content 列
-        save(&conn, "v1", r#"{"content":"第二版独特词组"}"#).unwrap();
+        // 同一 view 再次保存 → 覆盖；触发器刷新 FTS 的是纯文本，不是 JSON 原文
+        save(&conn, "v1", &tiptap("第二版独特词组")).unwrap();
         let fts_content: String = conn
             .query_row("SELECT content FROM documents_fts WHERE view_id = 'v1'", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(fts_content, r#"{"content":"第二版独特词组"}"#);
+        assert_eq!(fts_content, "第二版独特词组");
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
+    }
+
+    /// 索引里只留用户看得见的文字：正文 text 叶子 + mention 显示名（attrs.label）；
+    /// 节点类型/id 等结构字段（type/attrs/id）不进索引，否则搜 "paragraph" 会命中一片
+    #[test]
+    fn fts_indexes_visible_text_only() {
+        let conn = setup();
+        seed_view(&conn, "v1", "标题A");
+        save(
+            &conn,
+            "v1",
+            r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"正文一段"}]},{"type":"mention","attrs":{"id":"m1","label":"目标页面名"}}]}"#,
+        )
+        .unwrap();
+        let fts_content: String = conn
+            .query_row("SELECT content FROM documents_fts WHERE view_id = 'v1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fts_content, "正文一段 目标页面名");
+        assert!(
+            super::super::search::search(&conn, "w1", "paragraph").unwrap().is_empty(),
+            "结构关键字不该被索引"
+        );
+    }
+
+    /// 非 JSON 脏数据（历史版本/异常写入）退回原文，仍可被检索到，不能因抽取失败而丢索引
+    #[test]
+    fn invalid_json_content_falls_back_to_raw_text() {
+        let conn = setup();
+        seed_view(&conn, "v1", "标题A");
+        save(&conn, "v1", "他说 你好 之后离开").unwrap();
+        let hits = super::super::search::search(&conn, "w1", "之后离开").unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].snippet.contains("<em>之后离开</em>"), "{}", hits[0].snippet);
     }
 
     #[test]

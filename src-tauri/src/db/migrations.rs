@@ -53,6 +53,16 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "tags_and_snapshots",
         sql: include_str!("../../../migrations/009_tags_and_snapshots.sql"),
     },
+    Migration {
+        version: 10,
+        description: "documents_plain_text_fts",
+        sql: include_str!("../../../migrations/010_documents_plain_text_fts.sql"),
+    },
+    Migration {
+        version: 11,
+        description: "database_fts_rowid",
+        sql: include_str!("../../../migrations/011_database_fts_rowid.sql"),
+    },
 ];
 
 pub fn ensure_migrated(conn: &rusqlite::Connection) -> Result<(), String> {
@@ -397,6 +407,143 @@ mod tests {
         )
         .unwrap();
         assert_eq!(indexed(), 2, "升级后的新单元格由触发器入索引");
+    }
+
+    /// 存量库（1–9 已应用，documents_fts 里存的是 TipTap JSON 原文）升到 010：
+    /// 索引整表重建为纯文本；升级后的写入由新触发器继续抽文本。
+    #[test]
+    fn migration_010_rebuilds_document_index_as_plain_text() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_older_than(&conn, 10);
+        conn.execute(
+            "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ('w1','W',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at)
+             VALUES ('v1','w1','笔记','document','{}',0,1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO documents(view_id, content, updated_at)
+               VALUES ('v1', '{"type":"doc","content":[{"type":"text","text":"周末爬山计划"}]}', 1)"#,
+            [],
+        )
+        .unwrap();
+        let before: String = conn
+            .query_row("SELECT content FROM documents_fts WHERE view_id = 'v1'", [], |r| r.get(0))
+            .unwrap();
+        assert!(before.contains("\"type\""), "旧索引里是 JSON 原文：{before}");
+
+        ensure_migrated(&conn).unwrap();
+
+        let after: String = conn
+            .query_row("SELECT content FROM documents_fts WHERE view_id = 'v1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, "周末爬山计划");
+
+        // 升级后的写入继续走同一条抽取路径
+        conn.execute(
+            r#"UPDATE documents SET content = '{"type":"doc","content":[{"type":"text","text":"改成海边露营"}]}'
+               WHERE view_id = 'v1'"#,
+            [],
+        )
+        .unwrap();
+        let updated: String = conn
+            .query_row("SELECT content FROM documents_fts WHERE view_id = 'v1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(updated, "改成海边露营");
+    }
+
+    /// 存量库（1–10 已应用，索引行的 rowid 与 database_cells.rowid 无对应关系）升到 011：
+    /// 索引整表重建建立映射，之后按 rowid 的增删改必须命中正确的行（错位会删掉别人的索引）。
+    #[test]
+    fn migration_011_rebuilds_cell_index_rowids() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_older_than(&conn, 11);
+        conn.execute(
+            "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ('w1','W',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at)
+             VALUES ('v1','w1','任务表','grid','{}',0,1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO database_fields(id, database_view_id, name, field_type, options, width, is_hidden, position)
+             VALUES ('f1','v1','标题','text','{}',180,0,0)",
+            [],
+        )
+        .unwrap();
+        for r in ["r1", "r2"] {
+            conn.execute(
+                "INSERT INTO database_rows(id, database_view_id, position, created_at, updated_at)
+                 VALUES (?1,'v1',0,1,1)",
+                [r],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            r#"INSERT INTO database_cells(row_id, field_id, value) VALUES ('r1','f1','"甲"')"#,
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO database_cells(row_id, field_id, value) VALUES ('r2','f1','"乙"')"#,
+            [],
+        )
+        .unwrap();
+        // 故意把升级前索引行的 rowid 挪到与 database_cells.rowid 不同的值
+        conn.execute("DELETE FROM database_fts", []).unwrap();
+        conn.execute(
+            "INSERT INTO database_fts(rowid, view_id, row_id, field_id, content)
+             SELECT 1000 + c.rowid, t.view_id, t.row_id, t.field_id, t.txt
+             FROM database_cell_text t
+             JOIN database_cells c ON c.row_id = t.row_id AND c.field_id = t.field_id",
+            [],
+        )
+        .unwrap();
+
+        ensure_migrated(&conn).unwrap();
+
+        // 映射已重建：每一行索引的 rowid 都等于对应单元格的 rowid
+        let mismatched: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM database_fts f JOIN database_cells c ON c.rowid = f.rowid
+                  WHERE f.row_id <> c.row_id OR f.field_id <> c.field_id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(mismatched, 0, "升级后 rowid 映射必须与单元格一一对应");
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM database_fts", [], |r| r.get(0)).unwrap();
+        assert_eq!(total, 2);
+
+        // 删除走 rowid：只能带走自己的索引行
+        conn.execute("DELETE FROM database_cells WHERE row_id = 'r1' AND field_id = 'f1'", []).unwrap();
+        let left: Vec<String> = conn
+            .prepare("SELECT row_id FROM database_fts ORDER BY row_id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(left, vec!["r2"], "删单元格不能误删其它行的索引（rowid 错位）");
+
+        // 更新走同一条路径：内容刷新到正确的行，且不新增索引行
+        conn.execute("UPDATE database_cells SET value = '\"丙\"' WHERE row_id = 'r2' AND field_id = 'f1'", [])
+            .unwrap();
+        let txt: String = conn
+            .query_row("SELECT content FROM database_fts WHERE row_id = 'r2'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(txt, "丙");
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM database_fts", [], |r| r.get(0)).unwrap();
+        assert_eq!(total, 1);
     }
 
     #[test]
