@@ -1,6 +1,6 @@
 /// 迁移运行器：自管 `schema_migrations` 表。
-/// 存量安装（tauri-plugin-sql 时代）通过检测 `_sqlx_migrations` 做基线，不重跑 001-006；
-/// 全新安装依序应用全部迁移。每个迁移与其版本行在同一事务内原子提交。
+/// 存量安装（tauri-plugin-sql 时代）通过 `_sqlx_migrations` 做一次性基线导入（只读），
+/// 此后该表成为惰性遗留；全新安装直接依序应用全部迁移。每个迁移与其版本行在同一事务内原子提交。
 pub struct Migration {
     pub version: i64,
     pub description: &'static str,
@@ -66,60 +66,7 @@ pub const MIGRATIONS: &[Migration] = &[
 ];
 
 pub fn ensure_migrated(conn: &rusqlite::Connection) -> Result<(), String> {
-    ensure_migrated_with(conn, MIGRATIONS)?;
-    ensure_sqlx_compat(conn)
-}
-
-/// 全新安装兼容：A–C 阶段 tauri-plugin-sql 仍负责 documents/mentions 等路径，
-/// 它首次 Database.load 时会按 `_sqlx_migrations` 逐版本校验 checksum（SHA384(sql 字节)）。
-/// 我们抢先迁移后若不补写该表，插件会对已存在的表重复 CREATE TABLE 直接报错。
-/// 因此对"我们已应用、_sqlx_migrations 缺席"的版本补写等价行（checksum 与插件同源，
-/// 均为 include_str! 文件字节的 SHA384）。存量安装该表已存在 → 只读不写。
-fn ensure_sqlx_compat(conn: &rusqlite::Connection) -> Result<(), String> {
-    use sha2::{Digest, Sha384};
-
-    let has_sqlx: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
-            [],
-            |r| r.get(0),
-        )
-        .map_err(|e| format!("check _sqlx_migrations: {e}"))?;
-    if has_sqlx > 0 {
-        return Ok(());
-    }
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS _sqlx_migrations (
-           version BIGINT PRIMARY KEY,
-           description TEXT NOT NULL,
-           installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-           success BOOLEAN NOT NULL,
-           checksum BLOB NOT NULL,
-           execution_time BIGINT NOT NULL
-         );",
-    )
-    .map_err(|e| format!("create _sqlx_migrations: {e}"))?;
-    for m in MIGRATIONS {
-        let applied: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
-                [m.version],
-                |r| r.get(0),
-            )
-            .map_err(|e| format!("read schema_migrations: {e}"))?;
-        if applied == 0 {
-            continue;
-        }
-        let checksum = Sha384::digest(m.sql.as_bytes());
-        conn.execute(
-            "INSERT INTO _sqlx_migrations(version, description, success, checksum, execution_time)
-             VALUES (?1, ?2, TRUE, ?3, 0)",
-            rusqlite::params![m.version, m.description, checksum.as_slice()],
-        )
-        .map_err(|e| format!("seed _sqlx_migrations {}: {e}", m.version))?;
-    }
-    tracing::info!("seeded _sqlx_migrations for tauri-plugin-sql coexistence");
-    Ok(())
+    ensure_migrated_with(conn, MIGRATIONS)
 }
 
 pub fn ensure_migrated_with(conn: &rusqlite::Connection, migrations: &[Migration]) -> Result<(), String> {
@@ -210,8 +157,8 @@ fn apply_one(conn: &rusqlite::Connection, m: &Migration, checksum: &str) -> rusq
     conn.execute_batch(&batch)
 }
 
-/// 存量安装基线：库里已有 sqlx 的 `_sqlx_migrations` 且我们的表为空 → 把已应用版本搬进来。
-/// 双表并存时以我们的表为准（sqlx 表从此成为惰性遗留，不写不删）。
+/// 存量安装一次性基线：库里已有 sqlx 的 `_sqlx_migrations` 且我们的表为空 → 把已应用版本搬进来，
+/// 避免对存量库重跑建表迁移。只读该表，不写不删（tauri-plugin-sql 已移除，它只是历史记账）。
 fn seed_sqlx_baseline(conn: &rusqlite::Connection) -> Result<(), String> {
     let has_sqlx: i64 = conn
         .query_row(
@@ -245,7 +192,6 @@ fn seed_sqlx_baseline(conn: &rusqlite::Connection) -> Result<(), String> {
 mod tests {
     use super::*;
     use rusqlite::Connection;
-    use sha2::{Digest, Sha384};
 
     #[test]
     fn fresh_applies_all() {
@@ -386,29 +332,7 @@ mod tests {
         // 若发生重复应用，001 的裸 CREATE TABLE 会让 ensure_migrated 报错 —— 上面 unwrap 已证明未发生
     }
 
-    /// 模拟 tauri-plugin-sql 首次 Database.load 的校验路径：
-    /// 读 _sqlx_migrations 的 (version, checksum)，逐行与 SHA384(迁移文件字节) 对账。
-    fn assert_plugin_validation_passes(conn: &Connection) {
-        let mut stmt = conn
-            .prepare("SELECT version, checksum FROM _sqlx_migrations ORDER BY version")
-            .unwrap();
-        let rows: Vec<(i64, Vec<u8>)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap();
-        assert_eq!(rows.len(), MIGRATIONS.len(), "plugin sees all versions");
-        for (i, (version, checksum)) in rows.iter().enumerate() {
-            assert_eq!(*version, MIGRATIONS[i].version);
-            assert_eq!(
-                checksum,
-                &Sha384::digest(MIGRATIONS[i].sql.as_bytes()).to_vec(),
-                "checksum mismatch for version {version}"
-            );
-        }
-    }
-
-    /// 模拟存量库：建 `_sqlx_migrations` 记账表，并只应用 version 之前的迁移
+    /// 存量库：建 `_sqlx_migrations` 记账表，并只应用 version 之前的迁移
     fn apply_older_than(conn: &Connection, version: i64) {
         create_sqlx_table(conn);
         for m in MIGRATIONS.iter().take_while(|m| m.version < version) {
@@ -651,10 +575,17 @@ mod tests {
     }
 
     #[test]
-    fn fresh_install_seeds_sqlx_rows_the_plugin_will_validate() {
+    fn fresh_install_does_not_create_legacy_sqlx_table() {
         let conn = Connection::open_in_memory().unwrap();
         ensure_migrated(&conn).unwrap();
-        assert_plugin_validation_passes(&conn);
+        let has_sqlx: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_sqlx, 0, "tauri-plugin-sql 已移除，全新安装不该出现遗留记账表");
     }
 
     #[test]
@@ -666,7 +597,7 @@ mod tests {
             record_sqlx_migration(&conn, m);
         }
         ensure_migrated(&conn).unwrap();
-        // 插件表的行保持原样：不产生 6+N 重复行，占位 checksum 也未被改写
+        // 遗留表的行保持原样：不产生重复行，占位 checksum 也未被改写（基线导入是只读的）
         let n: i64 = conn
             .query_row("SELECT COUNT(*) FROM _sqlx_migrations", [], |r| r.get(0))
             .unwrap();

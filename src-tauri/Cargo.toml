@@ -28,14 +28,14 @@ tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# 0.32 对齐依赖树里 sqlx 0.8 的 libsqlite3-sys 0.30，避免重复编译 C 库
+# SQLite 绑定（bundled：随应用编译分发，杜绝系统库版本差异）
 rusqlite = { version = "0.32", features = ["bundled"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 walkdir = "2"
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-# 迁移兼容：存量安装的 _sqlx_migrations 基线/对账用（tauri-plugin-sql 已移除，表成为惰性遗留）
+# 迁移指纹：schema_migrations.checksum（SHA384(sql 字节)，沿用 sqlx 的 checksum 契约）
 sha2 = "0.10"
 tauri-plugin-single-instance = "2.4.5"
 tauri-plugin-window-state = "2.4.1"

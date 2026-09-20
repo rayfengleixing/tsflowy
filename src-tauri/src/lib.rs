@@ -10,7 +10,7 @@ use tauri_plugin_window_state::StateFlags;
 use tracing_subscriber::{fmt, EnvFilter};
 
 /// 启动前：若用户设置了 custom_data_dir，把 default data dir 目录重命名为备份后，
-/// 建成指向 custom 的 junction/symlink，使 Rust 侧 Db::open 的相对路径 `sqlite:appflowy.db`
+/// 建成指向 custom 的 junction/symlink，使 app_data_dir（数据库、assets 等全部落点）
 /// 透明落到 custom_data_dir 下。
 fn bootstrap_custom_data_dir() {
     let cfg = commands::files::load_config_raw();

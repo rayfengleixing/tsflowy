@@ -28,7 +28,7 @@ const BUNDLE_IDENTIFIER: &str = "com.tsflowy.app";
 pub struct AppConfig {
     /// 用户自定义数据目录（Windows/macOS/Linux 跨平台绝对路径）。
     /// 下一次启动时会把默认 app_data_dir 建为指向该路径的 junction/symlink，
-    /// 使 tauri-plugin-sql 的相对路径 `sqlite:appflowy.db` 透明访问自定义位置。
+    /// 使 app_data_dir（数据库、assets 等全部落点）透明访问自定义位置。
     pub custom_data_dir: Option<String>,
 }
 
