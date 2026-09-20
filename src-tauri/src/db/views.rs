@@ -348,38 +348,83 @@ pub fn restore(conn: &Connection, id: &str) -> Result<(), String> {
     .map(|_| ())
 }
 
-/// 彻底删除：子树递归硬删（documents/database_* 经 FK 级联 + FTS delete 触发器；
-/// 数据库表的派生视图经 views.source_id 的 FK 级联随之删除）
+/// 彻底删除：只硬删回收站中的子树部分 + 被显式指定的根节点；
+/// 子树里"已被单独恢复出回收站"的后代改挂到根节点的父级，不陪葬（回收站可以单独恢复子页，
+/// 若这里按整棵子树硬删，会把已经回到树里的页面连同文档一起删除）。
+/// documents/database_* 经 FK 级联 + FTS delete 触发器；派生视图经 views.source_id 的 FK 级联删除。
 pub fn purge(conn: &Connection, id: &str) -> Result<(), String> {
-    with_recursive_subtree(
-        conn,
-        "DELETE FROM views WHERE id IN (SELECT id FROM sub)",
-        id,
-        None,
-        "purge view",
+    let tx = conn.unchecked_transaction().map_err(dberr("purge view"))?;
+    // 1) 回收站外的后代先改挂到根的父级（del = 将被删除的行；keep = 保留下来的行）
+    tx.execute(
+        "WITH RECURSIVE sub(id) AS (
+           SELECT id FROM views WHERE id = ?1
+           UNION ALL
+           SELECT v.id FROM views v JOIN sub ON v.parent_id = sub.id
+         ),
+         del(id) AS (SELECT id FROM sub WHERE is_trash = 1 OR id = ?1),
+         keep(id) AS (SELECT id FROM sub WHERE id NOT IN (SELECT id FROM del))
+         UPDATE views
+         SET parent_id = (SELECT parent_id FROM views WHERE id = ?1)
+         WHERE id IN (
+           SELECT k.id FROM keep k JOIN views kv ON kv.id = k.id
+           WHERE kv.parent_id IN (SELECT id FROM del)
+         )",
+        params![id],
     )
-    .map(|_| ())
+    .map_err(dberr("purge view (reparent survivors)"))?;
+    // 2) 删除回收站部分
+    tx.execute(
+        "WITH RECURSIVE sub(id) AS (
+           SELECT id FROM views WHERE id = ?1
+           UNION ALL
+           SELECT v.id FROM views v JOIN sub ON v.parent_id = sub.id
+         )
+         DELETE FROM views WHERE id IN (SELECT id FROM sub WHERE is_trash = 1 OR id = ?1)",
+        params![id],
+    )
+    .map_err(dberr("purge view (delete)"))?;
+    tx.commit().map_err(dberr("purge view (commit)"))?;
+    Ok(())
 }
 
 pub fn purge_trash(conn: &Connection, workspace_id: &str) -> Result<(), String> {
-    conn.execute(
+    let tx = conn.unchecked_transaction().map_err(dberr("purge trash"))?;
+    tx.execute(
         "DELETE FROM views WHERE workspace_id = ?1 AND is_trash = 1",
         params![workspace_id],
     )
     .map_err(dberr("purge trash"))?;
+    reparent_orphans_in_workspace(&tx, workspace_id)?;
+    tx.commit().map_err(dberr("purge trash (commit)"))?;
     Ok(())
 }
 
 /// 永久删除回收站中 deleted_at 早于 deadline_ms（毫秒时间戳）的视图，返回删除行数（30 天自动清空）
 pub fn purge_expired_trash(conn: &Connection, workspace_id: &str, deadline_ms: i64) -> Result<i64, String> {
-    let n = conn
+    let tx = conn.unchecked_transaction().map_err(dberr("purge expired trash"))?;
+    let n = tx
         .execute(
             "DELETE FROM views WHERE workspace_id = ?1 AND is_trash = 1
                AND deleted_at IS NOT NULL AND deleted_at < ?2",
             params![workspace_id, deadline_ms],
         )
         .map_err(dberr("purge expired trash"))?;
+    reparent_orphans_in_workspace(&tx, workspace_id)?;
+    tx.commit().map_err(dberr("purge expired trash (commit)"))?;
     Ok(n as i64)
+}
+
+/// 把"父已被永久删除、自己还在树里"的页面挂回根级，避免悬挂 parent_id
+/// （回收站支持单独恢复子页：父被清空后子页会落在这种情况）
+fn reparent_orphans_in_workspace(conn: &Connection, workspace_id: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE views SET parent_id = NULL
+         WHERE workspace_id = ?1 AND is_trash = 0 AND parent_id IS NOT NULL
+           AND parent_id NOT IN (SELECT id FROM views)",
+        params![workspace_id],
+    )
+    .map_err(dberr("reparent orphans"))?;
+    Ok(())
 }
 
 // ---------- 移动 / 重排（tree.ts computeRenumber 的 Rust 镜像，单命令单事务） ----------
@@ -693,12 +738,73 @@ mod tests {
         assert_eq!(t, 0);
 
         purge(&conn, "c1").unwrap();
-        for id in ["c1", "d1"] {
-            let n: i64 = conn.query_row("SELECT COUNT(*) FROM views WHERE id = ?1", params![id], |r| r.get(0)).unwrap();
-            assert_eq!(n, 0, "{id} purged");
-        }
+        // c1 被彻底删除；d1 在 restore 后已回到树里，不陪葬（改挂到 c1 的父级 r1）
+        let c1: i64 = conn.query_row("SELECT COUNT(*) FROM views WHERE id = 'c1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(c1, 0, "c1 purged");
+        let (d1, d1_parent): (i64, Option<String>) = conn
+            .query_row("SELECT COUNT(*), MAX(parent_id) FROM views WHERE id = 'd1'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(d1, 1, "restored descendant survives parent purge");
+        assert_eq!(d1_parent.as_deref(), Some("r1"));
         let r1: i64 = conn.query_row("SELECT COUNT(*) FROM views WHERE id='r1'", [], |r| r.get(0)).unwrap();
         assert_eq!(r1, 1);
+    }
+
+    #[test]
+    fn purge_keeps_child_restored_from_trash() {
+        // 报告场景：删父页 → 在回收站单独恢复子页 → 彻底删除父页，子页及其文档必须存活
+        let conn = setup();
+        seed_default_fixture(&conn);
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at)
+             VALUES ('d1', 'w1', 'c1', 'd1', 'document', '{}', 0, 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO documents(view_id, content, updated_at) VALUES ('d1', '{\"type\":\"doc\"}', 1)",
+            [],
+        )
+        .unwrap();
+
+        soft_delete(&conn, "c1").unwrap();
+        restore(&conn, "d1").unwrap();
+        purge(&conn, "c1").unwrap();
+
+        let doc: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents WHERE view_id = 'd1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(doc, 1, "restored child document must survive");
+        let parent: Option<String> = conn
+            .query_row("SELECT parent_id FROM views WHERE id = 'd1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(parent.as_deref(), Some("r1"), "child re-attached to grandparent");
+    }
+
+    #[test]
+    fn purge_trash_reparents_restored_children_instead_of_leaving_dangling_parent() {
+        let conn = setup();
+        seed_default_fixture(&conn);
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at)
+             VALUES ('d1', 'w1', 'c1', 'd1', 'document', '{}', 0, 1, 1)",
+            [],
+        )
+        .unwrap();
+
+        soft_delete(&conn, "c1").unwrap();
+        restore(&conn, "d1").unwrap();
+        purge_trash(&conn, "w1").unwrap();
+
+        let (survives, parent): (i64, Option<String>) = conn
+            .query_row("SELECT COUNT(*), MAX(parent_id) FROM views WHERE id = 'd1'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(survives, 1, "restored child survives empty-trash");
+        assert_eq!(parent, None, "no dangling parent_id after empty-trash");
     }
 
     #[test]
