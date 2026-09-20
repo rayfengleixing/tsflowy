@@ -26,6 +26,7 @@ import { importMarkdownFolder } from "@/lib/import-folder";
 import { exportMarkdownFolder } from "@/lib/export-folder";
 import { t, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 
 const ACCENT_HEX: Record<AccentColor, string> = {
   blue: "#2563eb",
@@ -41,6 +42,19 @@ const ACCENT_HEX: Record<AccentColor, string> = {
 interface ShortcutGroup {
   titleKey: string;
   items: { label: string; key: string }[];
+}
+
+/** get_data_dir_info 返回结构（Rust 侧字段名即 JSON 键名） */
+interface DataDirInfo {
+  default: string;
+  custom: string | null;
+  will_change_after_restart: boolean;
+}
+
+/** change_data_dir / reset_data_dir_default 返回结构 */
+interface ChangeDataDirResult {
+  need_restart: boolean;
+  copied: boolean;
 }
 
 /** 设置页（M6）：外观/语言/数据目录/备份/快捷键 */
@@ -65,6 +79,10 @@ export function SettingsPage() {
   } = useSettingsStore();
 
   const [dataDir, setDataDir] = useState<string>("");
+  const [dataDirInfo, setDataDirInfo] = useState<DataDirInfo | null>(null);
+  const [moveCurrent, setMoveCurrent] = useState(true);
+  const [moveBack, setMoveBack] = useState(true);
+  const [busyDir, setBusyDir] = useState(false);
   const [busyExport, setBusyExport] = useState(false);
   const [busyImport, setBusyImport] = useState(false);
   const [busyImportFolder, setBusyImportFolder] = useState(false);
@@ -74,7 +92,8 @@ export function SettingsPage() {
   useEffect(() => {
     invoke<string>("data_dir_path")
       .then(setDataDir)
-      .catch((e) => console.error("failed to get data dir", e));
+      .catch((e) => logger.error("failed to get data dir", e));
+    refreshDataDirInfo();
   }, []);
 
   const shortcutGroups: ShortcutGroup[] = [
@@ -180,6 +199,44 @@ export function SettingsPage() {
       await invoke<void>("open_data_dir");
     } catch (e) {
       toast.error(t("error.db", { message: String(e) }));
+    }
+  };
+
+  const refreshDataDirInfo = () => {
+    invoke<DataDirInfo>("get_data_dir_info")
+      .then(setDataDirInfo)
+      .catch((e: unknown) => logger.error("failed to get data dir info", e));
+  };
+
+  /** 选新目录 → change_data_dir（下次启动生效；可勾选把现有数据复制过去） */
+  const chooseDataDir = async () => {
+    const picked = await open({ directory: true, multiple: false });
+    if (typeof picked !== "string") return;
+    setBusyDir(true);
+    try {
+      await invoke<ChangeDataDirResult>("change_data_dir", { newPath: picked, moveCurrent });
+      toast.success(t("settings.changeDirOk"));
+      refreshDataDirInfo();
+    } catch (e) {
+      logger.error("change data dir failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    } finally {
+      setBusyDir(false);
+    }
+  };
+
+  /** 恢复默认数据目录（可勾选把自定义目录最新数据复制回默认位置） */
+  const resetDataDir = async () => {
+    setBusyDir(true);
+    try {
+      const r = await invoke<ChangeDataDirResult>("reset_data_dir_default", { moveBack });
+      if (r.need_restart) toast.success(t("settings.resetDirOk"));
+      refreshDataDirInfo();
+    } catch (e) {
+      logger.error("reset data dir failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    } finally {
+      setBusyDir(false);
     }
   };
 
@@ -326,6 +383,7 @@ export function SettingsPage() {
 
         <Section title={t("settings.dataDir")}>
           <p className="mb-3 max-w-lg text-xs text-neutral-500">{t("settings.dataDirHint")}</p>
+          <div className="mb-1 text-[11px] text-neutral-500">{t("settings.dataDirEffective")}</div>
           <div className="flex items-stretch gap-2">
             <input
               readOnly
@@ -337,6 +395,34 @@ export function SettingsPage() {
               {t("settings.openDir")}
             </Button>
           </div>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-1.5 text-[11px] text-neutral-600">
+              <input type="checkbox" checked={moveCurrent} onChange={(e) => setMoveCurrent(e.target.checked)} />
+              {t("settings.moveCurrentData")}
+            </label>
+            <Button size="sm" variant="outline" onClick={chooseDataDir} disabled={busyDir}>
+              <FolderInput className="mr-1 h-3.5 w-3.5" />
+              {t("settings.chooseDir")}
+            </Button>
+          </div>
+          {dataDirInfo?.custom && (
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <span className="text-[11px] text-neutral-500">
+                {t("settings.dataDirCustom")}：<span className="font-mono">{dataDirInfo.custom}</span>
+                {dataDirInfo.will_change_after_restart && (
+                  <span className="ml-1 text-amber-600">{t("settings.willChangeHint")}</span>
+                )}
+              </span>
+              <label className="flex items-center gap-1.5 text-[11px] text-neutral-600">
+                <input type="checkbox" checked={moveBack} onChange={(e) => setMoveBack(e.target.checked)} />
+                {t("settings.moveBackData")}
+              </label>
+              <Button size="sm" variant="outline" onClick={resetDataDir} disabled={busyDir}>
+                <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                {t("settings.resetDir")}
+              </Button>
+            </div>
+          )}
         </Section>
 
         <Section title={t("settings.backup")}>
