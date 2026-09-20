@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { TabBar } from "@/features/tabs/TabBar";
 import { TrashPage } from "@/features/trash/TrashPage";
@@ -11,13 +11,14 @@ import { SearchResultsPage } from "@/features/search/SearchResultsPage";
 import { DatabaseViewPicker } from "@/features/editor/DatabaseViewPicker";
 import { EmojiPickerDialog } from "@/features/editor/EmojiPickerDialog";
 import { Toaster } from "@/components/ui/sonner";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { bootstrapVisualSettings } from "@/stores/settings";
 import { findNode } from "@/lib/tree";
 import { mentionsApi } from "@/lib/mentions";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
-import { t } from "@/lib/i18n";
+import { t, useLanguage } from "@/lib/i18n";
 import { flushAllForClose, registerCloseFlush } from "@/lib/close-flush";
 import { flushPendingUiPersist } from "@/stores/workspace";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -30,6 +31,13 @@ function App() {
   const route = useWorkspaceStore((s) => s.route);
   const currentViewId = useWorkspaceStore((s) => s.currentViewId);
   const tree = useWorkspaceStore((s) => s.tree);
+
+  // 订阅语言：t() 读 getState 不订阅，切换语言后靠这里触发整树重渲染刷新文案
+  useLanguage();
+  // 关窗时保存失败 → 弹确认框；closeDecisionRef 持有用户的决定（true=仍要关闭）
+  const [closeBlocked, setCloseBlocked] = useState(false);
+  const closeDecisionRef = useRef<((proceed: boolean) => void) | null>(null);
+  const resolveClose = (proceed: boolean) => closeDecisionRef.current?.(proceed);
 
   // 应用设置（主题/强调色/字体）：启动立即写一次，返回 unsubscribe（system 模式下监听 matchMedia）
   useEffect(() => {
@@ -78,13 +86,27 @@ function App() {
 
   // 关窗前统一落盘：preventDefault 拦住关窗 → await 所有注册的冲刷（5s 看门狗兜底，
   // 落库卡死也保证窗口最终能关）→ destroy。destroy 不再触发 close-requested，无二次拦截。
+  // 有内容落库失败时弹确认框：用户可取消关闭、留在应用内重试，而不是静默丢数据。
   useEffect(() => {
     const unregisterUi = registerCloseFlush(flushPendingUiPersist);
     let disposed = false;
     const listening = getCurrentWindow().onCloseRequested(async (event) => {
       event.preventDefault();
-      await Promise.race([flushAllForClose(), new Promise((r) => setTimeout(r, 5000))]);
+      if (closeDecisionRef.current) return; // 确认框已弹出，忽略重复的关闭请求
+      const flushed = await Promise.race([
+        flushAllForClose(),
+        new Promise<boolean>((r) => setTimeout(() => r(false), 5000)),
+      ]);
       if (disposed) return;
+      if (!flushed) {
+        const proceed = await new Promise<boolean>((resolve) => {
+          closeDecisionRef.current = resolve;
+          setCloseBlocked(true);
+        });
+        closeDecisionRef.current = null;
+        setCloseBlocked(false);
+        if (!proceed) return; // 用户选择留在应用内
+      }
       try {
         await getCurrentWindow().destroy();
       } catch (e) {
@@ -130,6 +152,16 @@ function App() {
       <CommandPalette />
       <DatabaseViewPicker />
       <EmojiPickerDialog />
+      <ConfirmDialog
+        open={closeBlocked}
+        onOpenChange={(open) => {
+          if (!open) resolveClose(false);
+        }}
+        title={t("close.failedTitle")}
+        description={t("close.failedDesc")}
+        confirmLabel={t("close.failedConfirm")}
+        onConfirm={() => resolveClose(true)}
+      />
       <Toaster />
     </div>
   );

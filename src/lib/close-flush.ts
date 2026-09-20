@@ -14,7 +14,8 @@ export function registerCloseFlush(fn: CloseFlush): () => void {
   };
 }
 
-/** 冲刷所有注册项；单项失败不阻断其余（关窗路径另有看门狗兜底） */
-export async function flushAllForClose(): Promise<void> {
-  await Promise.allSettled([...flushers].map((fn) => Promise.resolve(fn())));
+/** 冲刷所有注册项；单项失败不阻断其余。返回是否全部成功（失败项各自 toast，这里只汇总） */
+export async function flushAllForClose(): Promise<boolean> {
+  const results = await Promise.allSettled([...flushers].map((fn) => Promise.resolve(fn())));
+  return results.every((r) => r.status === "fulfilled");
 }
