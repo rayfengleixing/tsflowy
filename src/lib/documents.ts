@@ -42,25 +42,24 @@ async function runOrEnqueue(viewId: string, content: string): Promise<void> {
       // 每次运行结束，查 mailbox；若有新内容则接着用最新 content 继续跑下一轮（循环直到 mail 空）
       let latest = content;
       let more = true;
-      while (more) {
-        let done = false;
-        try {
+      try {
+        while (more) {
           await saveNow(viewId, latest);
-        } finally {
           // 跑完一圈，尝试取 mail；没有就结束循环
           const next = mailboxes.get(viewId);
           if (next === undefined) {
-            running.delete(viewId);
-            // 在 finally 内不能 break/return（ESLint no-unsafe-finally），
-            // 用两个标志位把退出挪到循环体后。
             more = false;
-            done = true;
           } else {
             latest = next;
             mailboxes.delete(viewId);
           }
         }
-        if (done) break;
+      } finally {
+        // 成败都要清理运行标记与残留 mail：worker 抛错后若留下 rejected promise，
+        // 后续 save 只会往 mailbox 写而无人消费，该文档本次会话的编辑将永不落库。
+        // 丢弃残留 mail 是安全的——save 是整篇快照，下一次 save 会带上全部内容。
+        mailboxes.delete(viewId);
+        running.delete(viewId);
       }
     })();
     running.set(viewId, worker);
