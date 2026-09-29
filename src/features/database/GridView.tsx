@@ -650,33 +650,37 @@ export function GridView({
     >
       <td className="sticky left-0 z-[5] border-b border-r border-neutral-200 bg-white px-2 text-center text-[11px] text-neutral-400 group-hover/row:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-500 dark:group-hover/row:bg-neutral-800/60">
         <span className="flex items-center justify-center gap-1">
-          {checkedRows.has(row.id) ? (
-            <button
-              className="flex h-4 w-4 items-center justify-center rounded text-brand-600 hover:bg-brand-100 dark:hover:bg-brand-500/10"
-              title={t("row.select")}
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleRowChecked(row.id);
-              }}
-            >
-              <CheckSquare className="h-3.5 w-3.5" />
-            </button>
-          ) : (
-            <>
+          {/* icon 区域固定 16px 宽：消除 GripVertical(12px) → Square/CheckSquare(16px) 的占位跳动 */}
+          <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+            {checkedRows.has(row.id) ? (
               <button
-                className="hidden h-4 w-4 items-center justify-center rounded text-neutral-300 hover:text-brand-600 group-hover/row:flex dark:text-neutral-600"
+                className="flex h-4 w-4 items-center justify-center rounded text-brand-600 hover:bg-brand-100 dark:hover:bg-brand-500/10"
                 title={t("row.select")}
                 onClick={(e) => {
                   e.stopPropagation();
                   toggleRowChecked(row.id);
                 }}
               >
-                <Square className="h-3 w-3" />
+                <CheckSquare className="h-3.5 w-3.5" />
               </button>
-              <GripVertical className="h-3 w-3 cursor-grab text-neutral-200 group-hover/row:hidden dark:text-neutral-700" />
-            </>
-          )}
-          {row.position + 1}
+            ) : (
+              <>
+                <button
+                  className="hidden h-4 w-4 items-center justify-center rounded text-neutral-300 hover:text-brand-600 group-hover/row:flex dark:text-neutral-600"
+                  title={t("row.select")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleRowChecked(row.id);
+                  }}
+                >
+                  <Square className="h-3 w-3" />
+                </button>
+                <GripVertical className="h-3 w-3 cursor-grab text-neutral-200 group-hover/row:hidden dark:text-neutral-700" />
+              </>
+            )}
+          </span>
+          {/* 序号等宽数字 + 固定宽度：防止 1(窄) vs 0/2-9(宽) 及位数变化导致的列宽抖动 */}
+          <span className="tabular-nums w-5 shrink-0 text-center">{row.position + 1}</span>
         </span>
         <button
           className="absolute right-0.5 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-neutral-400 hover:bg-red-100 hover:text-red-500 group-hover/row:flex dark:hover:bg-red-500/10"
