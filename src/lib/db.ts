@@ -9,6 +9,12 @@ export function newId(): string {
   return crypto.randomUUID();
 }
 
+/** 复制页面的返回：副本根视图 + 副本正文（用于重建反链索引） */
+export interface DuplicateResult {
+  view: View;
+  documents: { view_id: string; content: string }[];
+}
+
 // ---------- 空间 / 视图 / 设置（Phase A：持久化下沉 Rust 领域命令） ----------
 // 行结构由 Rust 侧 serde 结构体产出，字段名 == SQL 列名（snake_case），与旧 select 行形状一致。
 // 参数契约：顶层参数 camelCase（Tauri 2 自动映射到 Rust snake_case）。
@@ -85,6 +91,11 @@ export const viewApi = {
   /** 按 id 读单个视图（行详情文档等）；不存在返回 null */
   async get(id: string): Promise<View | null> {
     return invoke<View | null>("view_get", { id });
+  },
+
+  /** 复制页面整棵子树（子页面、正文、页面属性、数据库字段/行/单元格）；返回副本与副本正文 */
+  async duplicate(id: string, name: string): Promise<DuplicateResult> {
+    return invoke<DuplicateResult>("view_duplicate", { id, newId: newId(), name });
   },
 
   async rename(id: string, name: string): Promise<void> {

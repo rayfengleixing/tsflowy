@@ -202,6 +202,7 @@ pub fn run() {
             commands::db::view_touch_visited,
             commands::db::view_create,
             commands::db::view_get,
+            commands::db::view_duplicate,
             commands::db::view_rename,
             commands::db::view_set_icon,
             commands::db::view_update_extra,

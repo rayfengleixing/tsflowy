@@ -9,6 +9,8 @@ import { useSettingsStore } from "./settings";
 import { logger } from "@/lib/logger";
 import { t } from "@/lib/i18n";
 import { buildWelcomeDoc, welcomeDocTitle } from "@/lib/welcome-doc";
+import { mentionsApi } from "@/lib/mentions";
+import type { JSONContent } from "@tiptap/core";
 
 export type Route = "workspace" | "trash" | "search" | "settings";
 
@@ -36,6 +38,8 @@ interface WorkspaceState {
   deleteWorkspace: (id: string) => Promise<void>;
 
   createView: (opts: { parentId: string | null; layout: LayoutType }) => Promise<View | null>;
+  /** 复制页面整棵子树（子页面、正文、属性、数据库数据），副本排在同级末尾并自动打开 */
+  duplicateView: (id: string) => Promise<void>;
   renameView: (id: string, name: string) => Promise<void>;
   setViewIcon: (id: string, icon: string | null) => Promise<void>;
   /** 收藏/取消收藏（侧边栏收藏区） */
@@ -422,6 +426,23 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       set({ expanded: new Set(get().expanded).add(parentId ?? "") });
       get().openView(view.id);
       return view;
+    },
+
+    duplicateView: async (id) => {
+      const node = findInTree(get().tree, id);
+      if (!node) return;
+      const { view, documents } = await viewApi.duplicate(id, t("tree.duplicateName", { name: node.name }));
+      // 副本正文里的 @提及 按保存路径同样重建反链索引；单篇失败不阻断整次复制
+      for (const doc of documents) {
+        try {
+          await mentionsApi.rebuildFor(doc.view_id, JSON.parse(doc.content) as JSONContent);
+        } catch (e) {
+          logger.warn("WorkspaceStore.duplicateView", "rebuild mentions skipped", doc.view_id, e);
+        }
+      }
+      await get().reload();
+      set({ expanded: new Set(get().expanded).add(node.parent_id ?? "") });
+      get().openView(view.id);
     },
 
     renameView: async (id: string, name: string) => {

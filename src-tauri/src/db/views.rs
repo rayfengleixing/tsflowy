@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
-use super::models::ViewRow;
+use super::models::{DatabaseFieldRow, DatabaseRowRow, DocRowOut, ViewRow};
 use super::{dberr, now_ms};
 
 fn row_to_view(r: &rusqlite::Row<'_>) -> rusqlite::Result<ViewRow> {
@@ -205,6 +205,223 @@ pub fn create(
         source_id: source_id.map(|s| s.to_string()),
         tags: "[]".to_string(),
     })
+}
+
+/// 深拷贝一棵页面子树：副本挂在源节点的同一父级下、排在同级末尾，子树结构/名称/图标/正文/
+/// 页面属性/数据库字段·行·单元格整体复刻；收藏、回收站、最近访问、历史快照不继承。
+///
+/// - 根节点 id 由调用方（前端 newId()）传入，后代按 `{new_id}_{序号}` 派生——项目没有引入
+///   uuid 依赖，而 id 只要求全局唯一，派生串不会与任何前端生成的 id 相撞。
+/// - 子树按 parent_id 展开，因此挂在数据库页面下的行详情文档（extra.row_detail）同样会被复制，
+///   复制出来的行经 id 映射继续指向各自的副本文档。
+/// - 派生视图（多视图，source_id 非空）parent_id 为 NULL、不属于页面树，不在复制范围内：
+///   副本数据库只保留源根当前的 layout。
+/// - created_at / last_edited_at 的单元格不搬运，交给 002 的触发器在插行时写成新时间。
+/// - 单事务完成，任一步失败整体回滚；副本正文一并返回，供调用方重建 mentions 反链索引。
+pub fn duplicate(
+    conn: &Connection,
+    src_id: &str,
+    new_id: &str,
+    name: &str,
+) -> Result<(ViewRow, Vec<DocRowOut>), String> {
+    let src = match get(conn, src_id)? {
+        Some(v) => v,
+        None => return Err(format!("view not found: {src_id}")),
+    };
+    // 派生视图的数据挂在宿主上，复制它只会得到一张空表，直接拒绝
+    if src.source_id.is_some() {
+        return Err(format!("cannot duplicate a derived view: {src_id}"));
+    }
+
+    let t = now_ms();
+    let tx = conn.unchecked_transaction().map_err(dberr("duplicate view"))?;
+
+    // 副本排在同级末尾（与 create 同一口径）
+    let position: i64 = tx
+        .query_row(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM views WHERE workspace_id = ?1 AND parent_id IS ?2",
+            params![src.workspace_id, src.parent_id],
+            |r| r.get(0),
+        )
+        .map_err(dberr("duplicate view"))?;
+
+    // 第一遍：建视图行，同时积累 旧 id → 新 id 映射（后两遍都要用）
+    let mut pairs: Vec<(String, String)> = vec![(src_id.to_string(), new_id.to_string())];
+    tx.execute(
+        "INSERT INTO views(id, workspace_id, parent_id, name, icon, layout, extra, position,
+                            is_favorite, is_trash, deleted_at, created_at, updated_at, visited_at, source_id, tags)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 0, NULL, ?9, ?9, NULL, NULL, ?10)",
+        params![
+            new_id,
+            src.workspace_id,
+            src.parent_id,
+            name,
+            src.icon,
+            src.layout,
+            src.extra,
+            position,
+            t,
+            src.tags
+        ],
+    )
+    .map_err(dberr("duplicate view"))?;
+
+    let mut seq = 0usize;
+    let mut cursor = 0usize;
+    while cursor < pairs.len() {
+        let (old_id, new_vid) = pairs[cursor].clone();
+        cursor += 1;
+        let children = query_views(
+            &tx,
+            "SELECT * FROM views WHERE parent_id = ?1 ORDER BY position ASC",
+            params![old_id],
+            "duplicate view (children)",
+        )?;
+        for c in children {
+            seq += 1;
+            let child_new = format!("{new_id}_{seq}");
+            tx.execute(
+                "INSERT INTO views(id, workspace_id, parent_id, name, icon, layout, extra, position,
+                                    is_favorite, is_trash, deleted_at, created_at, updated_at, visited_at, source_id, tags)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 0, NULL, ?9, ?9, NULL, NULL, ?10)",
+                params![
+                    child_new,
+                    c.workspace_id,
+                    new_vid,
+                    c.name,
+                    c.icon,
+                    c.layout,
+                    c.extra,
+                    c.position,
+                    t,
+                    c.tags
+                ],
+            )
+            .map_err(dberr("duplicate view"))?;
+            pairs.push((c.id, child_new));
+        }
+    }
+
+    // 第二遍：正文与页面属性。documents 的 insert 触发器顺带把副本写进 FTS 索引
+    let mut copied_docs: Vec<DocRowOut> = Vec::new();
+    for (old_id, new_vid) in &pairs {
+        let content: Option<String> = tx
+            .query_row("SELECT content FROM documents WHERE view_id = ?1", params![old_id], |r| r.get(0))
+            .optional()
+            .map_err(dberr("duplicate view document"))?;
+        if let Some(content) = content {
+            tx.execute(
+                "INSERT INTO documents(view_id, content, updated_at) VALUES (?1, ?2, ?3)",
+                params![new_vid, content, t],
+            )
+            .map_err(dberr("duplicate view document"))?;
+            copied_docs.push(DocRowOut {
+                view_id: new_vid.clone(),
+                content,
+            });
+        }
+        tx.execute(
+            "INSERT INTO page_properties(view_id, key, value, field_type, position)
+             SELECT ?1, key, value, field_type, position FROM page_properties WHERE view_id = ?2",
+            params![new_vid, old_id],
+        )
+        .map_err(dberr("duplicate view properties"))?;
+    }
+
+    // 第三遍：数据库字段 / 行 / 单元格（只有宿主页面才带数据）。字段与行都要重映射 id，
+    // 单元格值原样搬运，database_cells 的 insert 触发器把文本同步进 database_fts。
+    for (old_id, new_vid) in &pairs {
+        let fields: Vec<DatabaseFieldRow> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, database_view_id, name, field_type, options, width, is_hidden, position
+                     FROM database_fields WHERE database_view_id = ?1 ORDER BY position ASC",
+                )
+                .map_err(dberr("duplicate view fields"))?;
+            let mapped = stmt
+                .query_map(params![old_id], |r| {
+                    Ok(DatabaseFieldRow {
+                        id: r.get(0)?,
+                        database_view_id: r.get(1)?,
+                        name: r.get(2)?,
+                        field_type: r.get(3)?,
+                        options: r.get(4)?,
+                        width: r.get(5)?,
+                        is_hidden: r.get(6)?,
+                        position: r.get(7)?,
+                    })
+                })
+                .map_err(dberr("duplicate view fields"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(dberr("duplicate view fields"))?;
+            mapped
+        };
+
+        let mut field_map: Vec<(String, String)> = Vec::new();
+        for (i, f) in fields.iter().enumerate() {
+            let new_fid = format!("{new_vid}_f{i}");
+            tx.execute(
+                "INSERT INTO database_fields(id, database_view_id, name, field_type, options, width, is_hidden, position)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![new_fid, new_vid, f.name, f.field_type, f.options, f.width, f.is_hidden, f.position],
+            )
+            .map_err(dberr("duplicate view fields"))?;
+            // 时间戳字段的单元格交给触发器写成新时间，不搬源值
+            if f.field_type != "created_at" && f.field_type != "last_edited_at" {
+                field_map.push((f.id.clone(), new_fid));
+            }
+        }
+
+        let rows: Vec<DatabaseRowRow> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, database_view_id, position, document_id, created_at, updated_at
+                     FROM database_rows WHERE database_view_id = ?1 ORDER BY position ASC",
+                )
+                .map_err(dberr("duplicate view rows"))?;
+            let mapped = stmt
+                .query_map(params![old_id], |r| {
+                    Ok(DatabaseRowRow {
+                        id: r.get(0)?,
+                        database_view_id: r.get(1)?,
+                        position: r.get(2)?,
+                        document_id: r.get(3)?,
+                        created_at: r.get(4)?,
+                        updated_at: r.get(5)?,
+                    })
+                })
+                .map_err(dberr("duplicate view rows"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(dberr("duplicate view rows"))?;
+            mapped
+        };
+
+        for (i, r) in rows.iter().enumerate() {
+            let new_rid = format!("{new_vid}_r{i}");
+            let new_doc = r
+                .document_id
+                .as_ref()
+                .and_then(|d| pairs.iter().find(|(old, _)| old == d).map(|(_, new)| new.clone()));
+            tx.execute(
+                "INSERT INTO database_rows(id, database_view_id, position, document_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                params![new_rid, new_vid, r.position, new_doc, t],
+            )
+            .map_err(dberr("duplicate view rows"))?;
+            for (old_fid, new_fid) in &field_map {
+                tx.execute(
+                    "INSERT INTO database_cells(row_id, field_id, value)
+                     SELECT ?1, ?2, value FROM database_cells WHERE row_id = ?3 AND field_id = ?4",
+                    params![new_rid, new_fid, r.id, old_fid],
+                )
+                .map_err(dberr("duplicate view cells"))?;
+            }
+        }
+    }
+
+    let view = get(&tx, new_id)?.ok_or_else(|| format!("duplicate view lost: {new_id}"))?;
+    tx.commit().map_err(dberr("duplicate view (commit)"))?;
+    Ok((view, copied_docs))
 }
 
 pub fn rename(conn: &Connection, id: &str, name: &str) -> Result<(), String> {
@@ -931,5 +1148,168 @@ mod tests {
         assert_eq!(l["r2"], (None, 1));
         // 派生视图没被当成根级兄弟参与重排：仍是 NULL 父级、position 独立
         assert_eq!(l["d1"], (None, 0));
+    }
+
+    #[test]
+    fn duplicate_copies_subtree_with_content_and_properties() {
+        let conn = setup();
+        seed_default_fixture(&conn); // r1(0)/r2(1)/r3(2)，c1..c3 挂在 r1 下
+        conn.execute("UPDATE views SET is_favorite = 1, tags = '[\"甲\"]' WHERE id = 'r1'", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO documents(view_id, content, updated_at) VALUES ('r1', '{\"text\":\"正文\"}', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO page_properties(view_id, key, value, field_type, position)
+             VALUES ('r1', '状态', 'done', 'text', 0)",
+            [],
+        )
+        .unwrap();
+
+        let (view, docs) = duplicate(&conn, "r1", "r1copy", "r1 副本").unwrap();
+
+        assert_eq!(view.name, "r1 副本");
+        assert_eq!(view.parent_id, None);
+        assert_eq!(view.position, 3, "副本排在同级末尾");
+        assert_eq!(view.is_favorite, 0, "收藏不继承");
+        let tags: String = conn
+            .query_row("SELECT tags FROM views WHERE id = 'r1copy'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(tags, "[\"甲\"]", "标签继承");
+
+        // 整棵子树：3 个子节点，父级指向副本根，名称与相对顺序保持
+        let l = layout(&conn);
+        assert_eq!(l["r1copy_1"], (Some("r1copy".into()), 0));
+        assert_eq!(l["r1copy_2"], (Some("r1copy".into()), 1));
+        assert_eq!(l["r1copy_3"], (Some("r1copy".into()), 2));
+        let child_name: String = conn
+            .query_row("SELECT name FROM views WHERE id = 'r1copy_1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(child_name, "c1");
+
+        // 正文：返回值供调用方重建反链，库里与 FTS 同步（触发器取副本名作 title）
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].view_id, "r1copy");
+        assert_eq!(docs[0].content, "{\"text\":\"正文\"}");
+        let fts_title: String = conn
+            .query_row("SELECT title FROM documents_fts WHERE view_id = 'r1copy'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fts_title, "r1 副本");
+
+        let pp: i64 = conn
+            .query_row("SELECT COUNT(*) FROM page_properties WHERE view_id = 'r1copy'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(pp, 1);
+
+        // 源节点与其子树未被改动
+        assert_eq!(layout(&conn)["r1"], (None, 0));
+        let src_children: i64 = conn
+            .query_row("SELECT COUNT(*) FROM views WHERE parent_id = 'r1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(src_children, 3);
+    }
+
+    #[test]
+    fn duplicate_copies_database_fields_rows_cells_and_row_documents() {
+        let conn = setup();
+        create(&conn, "g1", "w1", None, "表", "grid", "{}", None).unwrap();
+        conn.execute(
+            "INSERT INTO database_fields(id, database_view_id, name, field_type, options, width, is_hidden, position)
+             VALUES ('f1','g1','名称','text','{\"kind\":\"none\"}',180,0,0),
+                    ('f2','g1','创建时间','created_at','{\"kind\":\"none\"}',180,0,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO database_rows(id, database_view_id, position, created_at, updated_at)
+             VALUES ('r1','g1',0,1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO database_cells(row_id, field_id, value) VALUES ('r1','f1','\"甲\"')",
+            [],
+        )
+        .unwrap();
+        // 行详情文档：数据库页面的子节点（extra.row_detail 使其不进页面树，但仍在 parent_id 链上）
+        create(&conn, "rd1", "w1", Some("g1"), "行详情", "document", "{\"row_detail\":true}", None).unwrap();
+        conn.execute("UPDATE database_rows SET document_id = 'rd1' WHERE id = 'r1'", [])
+            .unwrap();
+        conn.execute("UPDATE documents SET content = '{\"text\":\"行正文\"}' WHERE view_id = 'rd1'", [])
+            .unwrap();
+
+        duplicate(&conn, "g1", "g1copy", "表 副本").unwrap();
+
+        let field_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM database_fields WHERE database_view_id = 'g1copy'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(field_count, 2);
+        let copied_type: String = conn
+            .query_row("SELECT field_type FROM database_fields WHERE id = 'g1copy_f0'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(copied_type, "text");
+
+        // 行：document_id 映射到复制出来的行详情文档（子树里唯一的子节点）
+        let (row_id, row_doc): (String, Option<String>) = conn
+            .query_row(
+                "SELECT id, document_id FROM database_rows WHERE database_view_id = 'g1copy'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let copied_rd = row_doc.expect("行详情文档应被映射到副本");
+        assert_eq!(copied_rd, "g1copy_1");
+        let rd_parent: Option<String> = conn
+            .query_row("SELECT parent_id FROM views WHERE id = ?1", params![copied_rd], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rd_parent.as_deref(), Some("g1copy"));
+        let rd_content: String = conn
+            .query_row("SELECT content FROM documents WHERE view_id = ?1", params![copied_rd], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rd_content, "{\"text\":\"行正文\"}");
+
+        // 单元格：普通字段值搬运，时间戳字段由触发器写成新时间
+        let copied_value: String = conn
+            .query_row(
+                "SELECT value FROM database_cells WHERE row_id = ?1 AND field_id = 'g1copy_f0'",
+                params![row_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(copied_value, "\"甲\"");
+        let ts_value: String = conn
+            .query_row(
+                "SELECT value FROM database_cells WHERE row_id = ?1 AND field_id = 'g1copy_f1'",
+                params![row_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(ts_value.contains('T'), "created_at 单元格应为新时间: {ts_value}");
+
+        // 源表不受影响：文本单元格 + 插行触发器写入的 created_at 单元格
+        let src_cells: i64 = conn
+            .query_row("SELECT COUNT(*) FROM database_cells WHERE row_id = 'r1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(src_cells, 2);
+    }
+
+    #[test]
+    fn duplicate_missing_source_and_derived_view_are_rejected() {
+        let conn = setup();
+        let err = duplicate(&conn, "ghost", "newcopy", "副本").unwrap_err();
+        assert!(err.contains("view not found"), "{err}");
+
+        create(&conn, "g1", "w1", None, "表", "grid", "{}", None).unwrap();
+        derive(&conn, "d1", "g1", "看板", "board");
+        let err = duplicate(&conn, "d1", "dcopy", "看板 副本").unwrap_err();
+        assert!(err.contains("derived view"), "{err}");
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM views WHERE id = 'dcopy'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "失败的复制不留下半成品");
     }
 }

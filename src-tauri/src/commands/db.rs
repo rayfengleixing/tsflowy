@@ -111,6 +111,26 @@ pub async fn view_get(db: State<'_, Db>, id: String) -> Result<Option<ViewRow>, 
     db::views::get(&conn, &id)
 }
 
+/// 复制页面整棵子树：返回副本根视图 + 副本正文（前端据此重建 mentions 反链索引）。
+#[derive(serde::Serialize)]
+pub struct ViewDuplicateResult {
+    pub view: ViewRow,
+    pub documents: Vec<DocRowOut>,
+}
+
+#[tauri::command]
+pub async fn view_duplicate(
+    db: State<'_, Db>,
+    id: String,
+    new_id: String,
+    name: String,
+) -> Result<ViewDuplicateResult, String> {
+    // new_id 由前端 newId() 生成（后代 id 在 Rust 侧派生）
+    let conn = db.write_conn()?;
+    let (view, documents) = db::views::duplicate(&conn, &id, &new_id, &name)?;
+    Ok(ViewDuplicateResult { view, documents })
+}
+
 #[tauri::command]
 pub async fn view_rename(db: State<'_, Db>, id: String, name: String) -> Result<(), String> {
     let conn = db.write_conn()?;
