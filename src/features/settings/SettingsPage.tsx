@@ -127,7 +127,7 @@ export function SettingsPage() {
         filters: [{ name: "ZIP", extensions: ["zip"] }],
       });
       if (!target) return;
-      await invoke<void>("export_backup", { target_path: target });
+      await invoke<void>("export_backup", { targetPath: target });
       toast.success(t("settings.exported"));
     } catch (e) {
       toast.error(t("error.db", { message: String(e) }));
@@ -146,7 +146,7 @@ export function SettingsPage() {
         filters: [{ name: "ZIP", extensions: ["zip"] }],
       });
       if (typeof src !== "string") return;
-      await invoke<void>("import_backup", { source_path: src });
+      await invoke<void>("import_backup", { sourcePath: src });
       toast.success(t("settings.imported"));
     } catch (e) {
       toast.error(t("error.db", { message: String(e) }));
