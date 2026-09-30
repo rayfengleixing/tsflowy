@@ -24,7 +24,8 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$APPDATA/assets/**"
+          "$APPDATA/assets/**",
+          "$DOCUMENT/TsFlowy/assets/**"
         ]
       }
     }

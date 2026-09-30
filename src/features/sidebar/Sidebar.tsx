@@ -101,7 +101,9 @@ export function Sidebar() {
       </div>
 
       {/* 内容区：根据 mainTab 切换 */}
-      <div className="min-h-0 flex-1 overflow-hidden">{mainTab === "tree" ? <PageTree /> : <DocumentOutline />}</div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {mainTab === "tree" ? <PageTree /> : <DocumentOutline />}
+      </div>
 
       {/* 底部固定区：回收站 / 设置 */}
       <div className="flex h-[60px] shrink-0 items-stretch border-t border-neutral-300">

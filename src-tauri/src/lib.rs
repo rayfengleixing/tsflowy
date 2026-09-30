@@ -9,46 +9,59 @@ use tauri::Manager;
 use tauri_plugin_window_state::StateFlags;
 use tracing_subscriber::{fmt, EnvFilter};
 
-/// 启动前：若用户设置了 custom_data_dir，把 default data dir 目录重命名为备份后，
-/// 建成指向 custom 的 junction/symlink，使 app_data_dir（数据库、assets 等全部落点）
-/// 透明落到 custom_data_dir 下。
-fn bootstrap_custom_data_dir() {
+/// 启动前：确定数据落点并建好联接。
+/// 目标目录 = 用户自定义目录（config.custom_data_dir）优先，否则默认为系统「文档」目录下的 TsFlowy。
+/// 若默认 app_data_dir 还是真实目录（老版本遗留），先把其中数据迁移到目标（不覆盖目标已有同名数据），
+/// 再把它建成指向目标的 junction/symlink，此后 app_data_dir（数据库、assets 等全部落点）透明落到目标。
+fn bootstrap_data_dir(app: &tauri::AppHandle) {
     let cfg = commands::files::load_config_raw();
-    let Some(custom) = cfg.custom_data_dir.clone() else {
-        return;
+    let target = match cfg.custom_data_dir.clone() {
+        Some(c) => PathBuf::from(c),
+        None => match commands::files::documents_data_dir(app) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!(error = %e, "bootstrap: resolve documents data dir failed");
+                return;
+            }
+        },
     };
-    let custom_pb = PathBuf::from(&custom);
-    if let Err(e) = fs::create_dir_all(&custom_pb) {
-        tracing::error!(path = %custom_pb.display(), error = %e, "bootstrap: create custom data dir failed");
+    let default = commands::files::default_data_dir_raw();
+    // 目标与默认目录同一位置，或默认目录已是指向目标的联接 → 无需处理
+    if same_path(&default, &target) || is_link_to(&default, &target) {
         return;
     }
-    let default = commands::files::default_data_dir_raw();
-    // 若 default 已经是指向 custom 的 symlink/junction，直接跳过
-    if is_link_to(&default, &custom_pb) {
+    if let Err(e) = fs::create_dir_all(&target) {
+        tracing::error!(path = %target.display(), error = %e, "bootstrap: create target data dir failed");
         return;
     }
     if default.exists() {
-        // 已经是 symlink（但指向别处）→ 删除旧 symlink
         if is_symlink(&default) {
+            // 已是联接（但指向别处）：只删联接本身，绝不动其目标数据
             let _ = fs::remove_dir(&default).or_else(|_| fs::remove_file(&default));
         } else {
-            // 真实目录：重命名为备份，避免丢失用户历史数据
-            let suf = chrono_like_timestamp_suffix();
-            let parent = default.parent().unwrap_or_else(|| Path::new("."));
-            let backup = parent.join(format!(
-                "tsflowy-{}-bak-{}",
-                default.file_name().and_then(|s| s.to_str()).unwrap_or("data"),
-                suf
-            ));
-            if let Err(e) = fs::rename(&default, &backup) {
-                tracing::error!(backup = %backup.display(), error = %e, "bootstrap: rename default data dir to backup failed");
+            // 真实目录：把旧数据迁移到目标，避免用户数据"消失"
+            if let Err(e) = commands::files::migrate_dir_entries(&default, &target) {
+                tracing::error!(from = %default.display(), to = %target.display(), error = %e, "bootstrap: migrate data failed");
                 return;
+            }
+            // 迁移后旧目录应已空 → 删除；若仍有残留（目标已存在同名数据被跳过）则整体改名备份
+            if fs::remove_dir(&default).is_err() {
+                let suf = chrono_like_timestamp_suffix();
+                let parent = default.parent().unwrap_or_else(|| Path::new("."));
+                let backup = parent.join(format!(
+                    "tsflowy-{}-bak-{}",
+                    default.file_name().and_then(|s| s.to_str()).unwrap_or("data"),
+                    suf
+                ));
+                if let Err(e) = fs::rename(&default, &backup) {
+                    tracing::error!(backup = %backup.display(), error = %e, "bootstrap: rename leftover default data dir failed");
+                    return;
+                }
             }
         }
     }
-    // 建 junction/symlink
-    if let Err(e) = ensure_dir_symlink(&default, &custom_pb) {
-        tracing::error!(default = %default.display(), custom = %custom_pb.display(), error = %e, "bootstrap: ensure_dir_symlink failed");
+    if let Err(e) = ensure_dir_symlink(&default, &target) {
+        tracing::error!(default = %default.display(), target = %target.display(), error = %e, "bootstrap: ensure_dir_symlink failed");
     }
 }
 
@@ -136,10 +149,8 @@ pub fn run() {
         )
         .try_init();
 
-    // 在 DB 打开之前，若用户配置了 custom_data_dir，
-    // 把 default data dir 建为 junction/symlink 指向 custom 路径。
-    bootstrap_custom_data_dir();
-
+    // 在 DB 打开之前，确定数据落点：自定义目录优先，否则默认落到系统「文档」目录下的 TsFlowy，
+    // 并把默认 app_data_dir 建为指向它的 junction（老版本的旧数据自动迁移过去）。
     let result = tauri::Builder::default()
         // 单实例必须第一个注册：第二次启动时回调里把已有窗口带到前台，新进程随即退出
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -159,8 +170,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            // Rust 侧独占 DB 连接（全部持久化命令）；
-            // junction 机制让 app_data_dir 透明落到 custom_data_dir。
+            // 先把数据落点确定好（默认「文档\TsFlowy」），再打开数据库；
+            // junction 机制让 app_data_dir 透明落到目标目录。
+            bootstrap_data_dir(app.handle());
             let dir = app
                 .path()
                 .app_data_dir()

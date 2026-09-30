@@ -126,6 +126,34 @@ fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("failed to resolve app data dir: {e}"))
 }
 
+/// 未设置自定义目录时的默认数据落点：系统「文档」目录下的 TsFlowy 子目录。
+/// 用 Tauri 的 document_dir() 解析，兼容中文本地化目录名与 OneDrive 重定向。
+pub fn documents_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .document_dir()
+        .map(|d| d.join("TsFlowy"))
+        .map_err(|e| format!("failed to resolve documents dir: {e}"))
+}
+
+/// 数据目录的真实落点：默认目录若是指向别处的 junction/symlink（自定义目录/文档目录），
+/// 返回其目标路径，供设置页展示与路径比较；否则返回目录本身。
+pub fn real_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app_data_dir(app)?;
+    match fs::read_link(&dir) {
+        Ok(target) => Ok(strip_verbatim_prefix(target)),
+        Err(_) => Ok(dir),
+    }
+}
+
+/// 去掉 Windows read_link 可能带上的 `\\?\` 前缀（否则路径展示很难看）
+fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest),
+        None => p,
+    }
+}
+
 /// 目录整体复制：所有条目从 src 复制到 dst（dst 若不存在则创建）。若 dst 下已存在同名文件且 non_empty=true 则报错。
 pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
     if !src.exists() {
@@ -147,6 +175,32 @@ pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
             }
             fs::copy(entry.path(), &target)
                 .map_err(|e| format!("copy {}: {e}", target.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// 把 src 下的顶层条目迁移到 dst：dst 已存在同名条目则跳过（绝不覆盖目标已有数据）。
+/// 优先 rename（同盘瞬间完成），跨盘 rename 失败时回退为「复制后删除」。
+/// 用于把旧数据目录整体搬到新的默认位置（文档\TsFlowy）。
+pub fn migrate_dir_entries(src: &Path, dst: &Path) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| format!("mkdir dst: {e}"))?;
+    let entries = fs::read_dir(src).map_err(|e| format!("read src dir {}: {e}", src.display()))?;
+    for entry in entries.flatten() {
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if to.exists() {
+            continue; // 目标已有同名条目：保留目标数据
+        }
+        if fs::rename(&from, &to).is_ok() {
+            continue;
+        }
+        if from.is_dir() {
+            copy_dir_all(&from, &to)?;
+            fs::remove_dir_all(&from).map_err(|e| format!("remove migrated dir: {e}"))?;
+        } else {
+            fs::copy(&from, &to).map_err(|e| format!("copy {}: {e}", from.display()))?;
+            fs::remove_file(&from).map_err(|e| format!("remove migrated file: {e}"))?;
         }
     }
     Ok(())
@@ -318,16 +372,16 @@ fn read_asset_bytes_inner(data_dir: &Path, relative: &str) -> Result<Vec<u8>, St
 
 // ---------- M6 设置页三个新命令 ----------
 
-/// 返回数据目录绝对路径（显示在设置页里）
+/// 返回数据目录绝对路径（显示在设置页里）：默认目录经 junction 落到「文档\TsFlowy」或自定义目录，展示真实落点
 #[tauri::command]
 pub fn data_dir_path(app: tauri::AppHandle) -> Result<String, String> {
-    Ok(app_data_dir(&app)?.to_string_lossy().to_string())
+    Ok(real_data_dir(&app)?.to_string_lossy().to_string())
 }
 
 /// 在系统文件管理器中打开数据目录
 #[tauri::command]
 pub fn open_data_dir(app: tauri::AppHandle) -> Result<(), String> {
-    let dir = app_data_dir(&app)?;
+    let dir = real_data_dir(&app)?;
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create data dir: {e}"))?;
     open_path_in_system(&dir)
 }
@@ -655,7 +709,7 @@ pub struct DataDirInfo {
 /// 获取当前数据目录信息（展示在设置页）
 #[tauri::command]
 pub fn get_data_dir_info(app: tauri::AppHandle) -> Result<DataDirInfo, String> {
-    let default = app_data_dir(&app)?.to_string_lossy().to_string();
+    let default = real_data_dir(&app)?.to_string_lossy().to_string();
     let cfg = load_app_config(&app);
     let custom = cfg.custom_data_dir.clone();
     let will_change_after_restart = custom
@@ -685,12 +739,13 @@ pub async fn change_data_dir(
     move_current: bool,
 ) -> Result<ChangeDataDirResult, String> {
     let default = app_data_dir(&app)?;
+    let real_default = real_data_dir(&app)?;
     let target = PathBuf::from(&new_path);
     if target.as_os_str().is_empty() {
         return Err("new_path is empty".to_string());
     }
-    // 禁止将默认路径本身设为自定义路径（无意义）
-    if same_path(&target, &default) {
+    // 禁止将默认路径本身（含 junction 落到「文档\TsFlowy」的真实位置）设为自定义路径（无意义）
+    if same_path(&target, &default) || same_path(&target, &real_default) {
         return Err("new_path cannot equal the default data dir".to_string());
     }
     // 禁止将自定义路径设置为默认路径的祖先（会导致 junction 死循环）
@@ -762,17 +817,18 @@ fn reset_data_dir_default_inner(
             copied: false,
         });
     };
-    let default = app_data_dir(&app)?;
+    let documents = documents_data_dir(&app)?;
     let custom_pb = PathBuf::from(&custom);
     let mut copied = false;
 
-    if move_back && custom_pb.exists() {
+    // 自定义位置与默认「文档」位置相同时无需搬动（历史配置），只清除配置即可
+    if move_back && custom_pb.exists() && !same_path(&custom_pb, &documents) {
         let suf = timestamp_suffix();
-        let bak = default
+        let bak = documents
             .parent()
-            .map(|p| p.join(format!("tsflowy-data-bak-{suf}")))
-            .unwrap_or_else(|| PathBuf::from(format!("./tsflowy-data-bak-{suf}")));
-        restore_custom_to_default(&default, &custom_pb, &bak)?;
+            .map(|p| p.join(format!("tsflowy-docs-bak-{suf}")))
+            .unwrap_or_else(|| PathBuf::from(format!("./tsflowy-docs-bak-{suf}")));
+        restore_custom_to_default(&documents, &custom_pb, &bak)?;
         copied = true;
     }
 

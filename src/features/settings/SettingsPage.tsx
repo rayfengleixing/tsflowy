@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { FolderOpen, Upload, Download, Settings2, RefreshCw, FolderInput, FolderOutput } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 
@@ -79,6 +80,7 @@ export function SettingsPage() {
   } = useSettingsStore();
 
   const [dataDir, setDataDir] = useState<string>("");
+  const [version, setVersion] = useState<string>("");
   const [dataDirInfo, setDataDirInfo] = useState<DataDirInfo | null>(null);
   const [moveCurrent, setMoveCurrent] = useState(true);
   const [moveBack, setMoveBack] = useState(true);
@@ -93,6 +95,9 @@ export function SettingsPage() {
     invoke<string>("data_dir_path")
       .then(setDataDir)
       .catch((e) => logger.error("failed to get data dir", e));
+    getVersion()
+      .then(setVersion)
+      .catch((e: unknown) => logger.error("failed to get app version", e));
     refreshDataDirInfo();
   }, []);
 
@@ -249,7 +254,7 @@ export function SettingsPage() {
           </div>
           <div>
             <h1 className="text-xl font-semibold text-neutral-900">{t("settings.title")}</h1>
-            <p className="text-xs text-neutral-500">TsFlowy · M6</p>
+            <p className="text-xs text-neutral-500">{version ? `TsFlowy · v${version}` : "TsFlowy"}</p>
           </div>
         </header>
 
