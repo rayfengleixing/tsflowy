@@ -24,6 +24,7 @@ import { mentionsApi, type MentionRow } from "@/lib/mentions";
 import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown";
 import { pickImageExt, uploadImageBytes } from "@/lib/assets";
 import { registerCloseFlush } from "@/lib/close-flush";
+import { onEscapeClose } from "@/lib/escape-close";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import type { View } from "@/types/models";
@@ -50,7 +51,7 @@ import "highlight.js/styles/github.css";
 import { FirstHeadingLock } from "./extensions/first-heading-lock";
 import { BlockDrag } from "./extensions/block-drag";
 import { LockedHeading, DocumentStructureLock, STRUCTURE_SYNC_META } from "./extensions/document-structure-lock";
-import { FindReplace } from "./extensions/find-replace";
+import { clearFind, FindReplace } from "./extensions/find-replace";
 import { FindReplaceBar } from "./FindReplaceBar";
 
 const AUTOSAVE_MS = 800;
@@ -522,6 +523,16 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // 全局 Esc（App 广播）：焦点在编辑区时也能关掉查找条，并清掉命中高亮
+  useEffect(() => {
+    if (!findOpen) return;
+    return onEscapeClose(() => {
+      const ed = editorRef.current;
+      if (ed && !ed.isDestroyed) clearFind(ed);
+      setFindOpen(false);
+    });
+  }, [findOpen]);
 
   // 反链面板：view.id 变化或文档保存后刷新（mentions 表在 scheduleSave→rebuildFor 时已更新）。
   // 切页时先清空旧数据，避免上一个文档的反链短暂残留。

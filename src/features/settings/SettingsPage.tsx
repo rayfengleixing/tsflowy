@@ -124,7 +124,10 @@ export function SettingsPage() {
       titleKey: t("settings.shortcuts.global"),
       items: [
         { label: t("settings.shortcuts.commandPalette"), key: "Ctrl / ⌘ + K" },
+        { label: t("settings.shortcuts.quickOpen"), key: "Ctrl / ⌘ + P" },
         { label: t("settings.shortcuts.search"), key: "Ctrl / ⌘ + Shift + F" },
+        { label: t("settings.shortcuts.switchTab"), key: "Ctrl + Tab" },
+        { label: t("settings.shortcuts.escape"), key: "Esc" },
         { label: t("settings.shortcuts.save"), key: "Ctrl / ⌘ + S" },
       ],
     },
