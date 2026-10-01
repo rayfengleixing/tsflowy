@@ -6,7 +6,7 @@ import { aggregateLabel } from "@/lib/database-aggregate";
 import { newSelectOption, parseFieldOptions } from "@/lib/database-values";
 import { buildRelationPickerFields, relationTarget, rollupFnsFor } from "@/lib/relation";
 import { flattenTree } from "@/lib/tree";
-import { useDatabaseStore } from "@/stores/database";
+import { useDbStore } from "@/stores/database-context";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useRelationStore } from "@/stores/relation";
 import { Button } from "@/components/ui/button";
@@ -28,11 +28,11 @@ export function FieldOptionsEditor(props: {
   const [options, setOptions] = useState<FieldOptions>(initial);
   const [optionName, setOptionName] = useState("");
   // 公式引用候选：同表其它字段名（数字/复选/文本均可引用，取值规则见 database-formula）
-  const fieldNames = useDatabaseStore((s) => s.fields.filter((f) => f.id !== field.id).map((f) => f.name));
+  const fieldNames = useDbStore((s) => s.fields.filter((f) => f.id !== field.id).map((f) => f.name));
   // 关联目标候选：工作区里所有宿主数据库表（排除本表，自己关联自己没有意义）
-  const currentViewId = useDatabaseStore((s) => s.view?.id ?? null);
+  const currentViewId = useDbStore((s) => s.view?.id ?? null);
   // rollup 的关联字段候选必须来自本表，且只能是 relation 字段
-  const allFields = useDatabaseStore((s) => s.fields);
+  const allFields = useDbStore((s) => s.fields);
   const relationFields = useMemo(() => allFields.filter((f) => f.field_type === "relation"), [allFields]);
   const tree = useWorkspaceStore((s) => s.tree);
   const relationData = useRelationStore((s) => s.data);

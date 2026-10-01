@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { Download, FileText, Image as ImageIcon, Plus, Printer, X } from "lucide-react";
+import { Columns2, Download, FileText, Image as ImageIcon, Plus, Printer, X } from "lucide-react";
 import { toast } from "sonner";
 import { viewIcon } from "@/components/view-icon";
 import {
@@ -23,8 +23,22 @@ export function TabBar() {
   const closeTab = useWorkspaceStore((s) => s.closeTab);
   const newTab = useWorkspaceStore((s) => s.newTab);
   const reorderTabs = useWorkspaceStore((s) => s.reorderTabs);
+  const splitViewId = useWorkspaceStore((s) => s.splitViewId);
+  const openInSplit = useWorkspaceStore((s) => s.openInSplit);
+  const closeSplit = useWorkspaceStore((s) => s.closeSplit);
   const dragIndex = useRef<number | null>(null);
   const currentView = tabs.find((v: View) => v.id === currentViewId) ?? null;
+
+  // 并排开关：已并排则取消；未并排时把「当前标签的下一个」放到右栏，一键形成对照
+  const toggleSplit = () => {
+    if (splitViewId) {
+      closeSplit();
+      return;
+    }
+    if (!currentViewId || tabs.length < 2) return;
+    const idx = tabs.findIndex((v) => v.id === currentViewId);
+    openInSplit(tabs[(idx + 1) % tabs.length].id);
+  };
 
   // 当前页导出：Markdown（先冲刷防抖中的编辑）/ 长图 PNG / PDF（系统打印对话框另存为）
   const handleExport = async (kind: "markdown" | "image" | "pdf") => {
@@ -103,8 +117,22 @@ export function TabBar() {
       >
         <Plus className="h-4 w-4" />
       </button>
-      {currentView?.layout === "document" && (
-        <div className="ml-auto flex shrink-0 items-center pr-1.5">
+      <div className="ml-auto flex shrink-0 items-center gap-0.5 pr-1.5">
+        {tabs.length >= 2 && (
+          <button
+            data-testid="split-toggle"
+            className={
+              "flex h-7 items-center gap-1 rounded-md px-2 text-[12px] " +
+              (splitViewId ? "bg-brand-100 text-brand-700" : "text-neutral-500 hover:bg-neutral-200/70")
+            }
+            title={splitViewId ? t("split.close") : t("split.openHint")}
+            onClick={toggleSplit}
+          >
+            <Columns2 className="h-3.5 w-3.5" />
+            {splitViewId ? t("split.close") : t("split.open")}
+          </button>
+        )}
+        {currentView?.layout === "document" && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -131,8 +159,8 @@ export function TabBar() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

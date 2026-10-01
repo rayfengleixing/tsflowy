@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Plus, ExternalLink, LayoutList } from "lucide-react";
 import { toast } from "sonner";
-import { useDatabaseStore } from "@/stores/database";
+import { useDbStore } from "@/stores/database-context";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { NO_GROUP, cellValueForGroup, defaultBoardField, groupRowsForBoard } from "@/lib/board-calendar";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
@@ -40,7 +40,7 @@ export function BoardView({
   /** 无单选字段时引导回到表格视图 */
   onGoGrid?: () => void;
 }) {
-  const store = useDatabaseStore();
+  const store = useDbStore();
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
 

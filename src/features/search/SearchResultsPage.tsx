@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Clock, FileSearch } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { useDatabaseStore } from "@/stores/database";
+import { useRowFocusStore } from "@/stores/row-focus";
 import { searchApi, type SearchHit } from "@/lib/search";
 import { pushSearchHistory } from "@/lib/search-history";
 import { viewApi } from "@/lib/db";
@@ -99,7 +99,7 @@ export function SearchResultsPage() {
   const openHit = (hit: { view_id: string; row_id?: string | null }) => {
     pushSearchHistory(searchQuery);
     // 单元格命中：先记下命中行，视图挂载后据此滚动定位
-    if (hit.row_id) useDatabaseStore.getState().setFocusRow(hit.row_id);
+    if (hit.row_id) useRowFocusStore.getState().setFocusRow(hit.row_id);
     openView(hit.view_id);
     setRoute("workspace");
   };

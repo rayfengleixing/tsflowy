@@ -32,6 +32,10 @@ interface WorkspaceState {
   trash: View[];
   tabs: View[]; // 当前空间打开的标签页（含顺序）
   currentViewId: string | null;
+  /** 并排对照：右侧副视图 id（null = 未拆分）；主视图仍是 currentViewId */
+  splitViewId: string | null;
+  /** 并排左右宽度比例：左栏占比（0.25~0.75） */
+  splitRatio: number;
   route: Route;
   /** 搜索结果页当前查询词 */
   searchQuery: string;
@@ -78,6 +82,12 @@ interface WorkspaceState {
 
   openView: (id: string) => void;
   closeTab: (id: string) => void;
+  /** 在右侧分栏打开（并排对照）；已在并排时替换右侧 */
+  openInSplit: (id: string) => void;
+  closeSplit: () => void;
+  /** 左右两栏互换 */
+  swapSplit: () => void;
+  setSplitRatio: (r: number) => void;
   newTab: () => Promise<void>;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   setRoute: (route: Route) => void;
@@ -291,7 +301,10 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       .filter(Boolean) as ViewNode[];
     let currentViewId = get().currentViewId;
     if (currentViewId && !byId.has(currentViewId)) currentViewId = tabs[0]?.id ?? null;
-    set({ tree, trash, tabs, currentViewId });
+    // 副视图（并排对照）对应的页面若已被删/移走，一并取消并排
+    let splitViewId = get().splitViewId;
+    if (splitViewId && !byId.has(splitViewId)) splitViewId = null;
+    set({ tree, trash, tabs, currentViewId, splitViewId });
     persistNow();
   };
 
@@ -307,7 +320,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     const tree = buildTree(views);
     const { tabs, currentViewId } = await loadTabsForWs(currentWorkspaceId, tree);
     if (seq !== treeSeq || get().currentWorkspaceId !== currentWorkspaceId) return;
-    set({ tree, trash, tabs, currentViewId });
+    set({ tree, trash, tabs, currentViewId, splitViewId: null });
     persistNow();
   };
 
@@ -319,6 +332,8 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     trash: [],
     tabs: [],
     currentViewId: null,
+    splitViewId: null,
+    splitRatio: 0.5,
     route: "workspace",
     searchQuery: "",
     paletteOpen: false,
@@ -389,7 +404,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       // 切换前立即把旧空间的 tabs 持久化（不等 300ms，避免丢失）
       await flushPendingUiPersist();
 
-      set({ currentWorkspaceId: id, tabs: [], currentViewId: null });
+      set({ currentWorkspaceId: id, tabs: [], currentViewId: null, splitViewId: null });
       await viewApi.setSetting("last_workspace_id", id);
       await patchTreeAndRestoreTabs();
       // 展开新空间根级页面
@@ -427,7 +442,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       set({ workspaces });
       if (get().currentWorkspaceId === id) {
         const next = workspaces[0] ?? null;
-        set({ currentWorkspaceId: next ? next.id : null, tabs: [], currentViewId: null });
+        set({ currentWorkspaceId: next ? next.id : null, tabs: [], currentViewId: null, splitViewId: null });
         if (next) {
           await viewApi.setSetting("last_workspace_id", next.id);
           await get().reload();
@@ -510,7 +525,9 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       const tabs = get().tabs.filter((v) => !affected.has(v.id));
       const current = get().currentViewId;
       const currentViewId = current && affected.has(current) ? (tabs[tabs.length - 1]?.id ?? null) : current;
-      set({ tabs, currentViewId });
+      const split = get().splitViewId;
+      const splitViewId = split && affected.has(split) ? null : split;
+      set({ tabs, currentViewId, splitViewId });
       await get().reload();
     },
 
@@ -564,9 +581,44 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
         const idx = get().tabs.findIndex((v) => v.id === id);
         currentViewId = tabs[Math.min(idx, tabs.length - 1)]?.id ?? null;
       }
-      set({ tabs, currentViewId });
+      // 关掉的是副视图则取消并排
+      const splitViewId = get().splitViewId === id ? null : get().splitViewId;
+      set({ tabs, currentViewId, splitViewId });
       persistNow();
     },
+
+    openInSplit: (id) => {
+      const { tree, tabs, currentViewId } = get();
+      const node = findInTree(tree, id);
+      if (!node) return;
+      // 还没有主视图时无从对照，退化为普通打开
+      if (!currentViewId) {
+        get().openView(id);
+        return;
+      }
+      const nextTabs = tabs.some((v) => v.id === id) ? tabs : [...tabs, node];
+      if (id === currentViewId) {
+        // 想让当前页去右侧：把另一个标签提上来当主视图；只有这一个视图则不做
+        const other = nextTabs.find((v) => v.id !== id);
+        if (!other) return;
+        set({ tabs: nextTabs, currentViewId: other.id, splitViewId: id, route: "workspace" });
+      } else {
+        set({ tabs: nextTabs, splitViewId: id, route: "workspace" });
+      }
+      persistNow();
+      void viewApi.touchVisited(id).catch(logger.catch("WorkspaceStore.openInSplit", "touchVisited failed", id));
+    },
+
+    closeSplit: () => set({ splitViewId: null }),
+
+    swapSplit: () => {
+      const { currentViewId, splitViewId } = get();
+      if (!currentViewId || !splitViewId) return;
+      set({ currentViewId: splitViewId, splitViewId: currentViewId });
+      persistNow();
+    },
+
+    setSplitRatio: (r) => set({ splitRatio: Math.min(0.75, Math.max(0.25, r)) }),
 
     newTab: async () => {
       await get().createView({ parentId: null, layout: "document" });

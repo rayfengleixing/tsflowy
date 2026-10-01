@@ -13,9 +13,12 @@ import { DatabaseViewPicker } from "@/features/editor/DatabaseViewPicker";
 import { EmojiPickerDialog } from "@/features/editor/EmojiPickerDialog";
 import { Toaster } from "@/components/ui/sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { viewIcon } from "@/components/view-icon";
+import { ArrowLeftRight, X } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { bootstrapVisualSettings } from "@/stores/settings";
 import { findNode } from "@/lib/tree";
+import type { ViewNode } from "@/types/models";
 import { mentionsApi } from "@/lib/mentions";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
@@ -34,6 +37,88 @@ function cycleTab(step: number) {
   openView(tabs[(idx + step + tabs.length) % tabs.length].id);
 }
 
+/** 按视图布局渲染主内容（单栏与左右分栏共用） */
+function renderView(view: ViewNode | null) {
+  if (view?.layout === "document") return <EditorPage key={view.id} view={view} />;
+  if (view && ["grid", "board", "calendar"].includes(view.layout)) {
+    return <DatabasePage key={view.id} view={view} />;
+  }
+  return <PlaceholderPage />;
+}
+
+/** 分栏单侧顶部条：显示页面图标与名称；副栏额外提供互换/取消并排 */
+function PaneHeader({ view, onSwap, onClose }: { view: ViewNode | null; onSwap?: () => void; onClose?: () => void }) {
+  return (
+    <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-neutral-200 bg-neutral-50 px-2 text-[12px] text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
+      <span className="flex w-4 shrink-0 items-center justify-center text-neutral-500">
+        {view ? viewIcon(view) : null}
+      </span>
+      <span className="min-w-0 flex-1 truncate">{view ? view.name : t("content.empty")}</span>
+      {onSwap && (
+        <button
+          className="flex h-5 w-5 items-center justify-center rounded text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-700"
+          title={t("split.swap")}
+          onClick={onSwap}
+        >
+          <ArrowLeftRight className="h-3.5 w-3.5" />
+        </button>
+      )}
+      {onClose && (
+        <button
+          className="flex h-5 w-5 items-center justify-center rounded text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-700"
+          title={t("split.close")}
+          onClick={onClose}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** 并排对照：左栏 = 当前视图，右栏 = 副视图，中间可拖拽调整比例 */
+function SplitView({ left, right }: { left: ViewNode | null; right: ViewNode }) {
+  const splitRatio = useWorkspaceStore((s) => s.splitRatio);
+  const setSplitRatio = useWorkspaceStore((s) => s.setSplitRatio);
+  const swapSplit = useWorkspaceStore((s) => s.swapSplit);
+  const closeSplit = useWorkspaceStore((s) => s.closeSplit);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const startDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const onMove = (ev: MouseEvent) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect || rect.width <= 0) return;
+      setSplitRatio((ev.clientX - rect.left) / rect.width);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  return (
+    <div ref={containerRef} className="flex min-h-0 flex-1">
+      <div className="flex min-w-0 flex-col" style={{ width: `${splitRatio * 100}%` }}>
+        <PaneHeader view={left} />
+        <div className="min-h-0 flex-1 overflow-hidden">{renderView(left)}</div>
+      </div>
+      <div
+        data-testid="split-divider"
+        className="w-1 shrink-0 cursor-col-resize bg-neutral-200 transition-colors hover:bg-brand-400 dark:bg-neutral-700"
+        title={t("split.dragHint")}
+        onMouseDown={startDrag}
+      />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <PaneHeader view={right} onSwap={swapSplit} onClose={closeSplit} />
+        <div className="min-h-0 flex-1 overflow-hidden">{renderView(right)}</div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   // Phase 4 修复 React 19 dev infinite-loop：
   // 从「返回 {a,b,c,d} 字面量 + shallow」改为「4 条原子 selector」，
@@ -41,6 +126,7 @@ function App() {
   const ready = useWorkspaceStore((s) => s.ready);
   const route = useWorkspaceStore((s) => s.route);
   const currentViewId = useWorkspaceStore((s) => s.currentViewId);
+  const splitViewId = useWorkspaceStore((s) => s.splitViewId);
   const tree = useWorkspaceStore((s) => s.tree);
 
   // 订阅语言：t() 读 getState 不订阅，切换语言后靠这里触发整树重渲染刷新文案
@@ -171,6 +257,7 @@ function App() {
   }
 
   const view = currentViewId ? findNode(tree, currentViewId) : null;
+  const splitView = splitViewId ? findNode(tree, splitViewId) : null;
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -185,13 +272,7 @@ function App() {
         ) : (
           <>
             <TabBar />
-            {view && view.layout === "document" ? (
-              <EditorPage key={view.id} view={view} />
-            ) : view && (view.layout === "grid" || view.layout === "board" || view.layout === "calendar") ? (
-              <DatabasePage key={view.id} view={view} />
-            ) : (
-              <PlaceholderPage />
-            )}
+            {splitView ? <SplitView left={view} right={splitView} /> : renderView(view)}
           </>
         )}
       </div>

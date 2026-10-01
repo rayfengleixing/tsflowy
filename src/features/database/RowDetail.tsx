@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Maximize2, Minimize2, Plus, X } from "lucide-react";
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { FIELD_TYPES, isReadonlyType, type FieldType } from "@/types/database";
-import { useDatabaseStore } from "@/stores/database";
+import { useDbStore } from "@/stores/database-context";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { computeFormula } from "@/lib/database-formula";
 import { computeRollup } from "@/lib/relation";
@@ -42,18 +42,18 @@ function RowPropertyField({
   const relationData = useRelationStore((s) => s.data);
   // 原子 selector：只订阅本行本字段值，其他行/字段变化不触发本组件重渲
   // 公式/汇总字段无存储值：按整行字段实时计算（结果为数字/字符串，引用稳定）
-  const value = useDatabaseStore((s) =>
+  const value = useDbStore((s) =>
     field.field_type === "formula"
       ? computeFormula(field, s.cells[row.id] ?? {}, s.fields)
       : field.field_type === "rollup"
         ? computeRollup(field, s.cells[row.id] ?? {}, s.fields, (id) => relationData[id])
         : (s.cells[row.id]?.[field.id] ?? null),
   );
-  const setCell = useDatabaseStore((s) => s.setCell);
-  const addSelectOption = useDatabaseStore((s) => s.addSelectOption);
-  const removeSelectOption = useDatabaseStore((s) => s.removeSelectOption);
-  const changeFieldType = useDatabaseStore((s) => s.changeFieldType);
-  const renameField = useDatabaseStore((s) => s.renameField);
+  const setCell = useDbStore((s) => s.setCell);
+  const addSelectOption = useDbStore((s) => s.addSelectOption);
+  const removeSelectOption = useDbStore((s) => s.removeSelectOption);
+  const changeFieldType = useDbStore((s) => s.changeFieldType);
+  const renameField = useDbStore((s) => s.renameField);
 
   const commit = (v: CellValue) => {
     setEditing(false);
@@ -165,8 +165,8 @@ function RowPropertyField({
 
 /** 行详情右侧滑出面板（说明书 6.1：宽 400px，右侧滑入 + 遮罩 + 滑入动画），复用 M3 编辑器 */
 export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view: View; onClose: () => void }) {
-  const fields = useDatabaseStore((s) => s.fields);
-  const addField = useDatabaseStore((s) => s.addField);
+  const fields = useDbStore((s) => s.fields);
+  const addField = useDbStore((s) => s.addField);
   const visibleFields = useMemo(() => fields.filter((f) => f.is_hidden === 0), [fields]);
   // 放大态：居中大尺寸面板（配合头部放大/缩小按钮切换）
   const [enlarged, setEnlarged] = useState(false);

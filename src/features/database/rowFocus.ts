@@ -1,9 +1,9 @@
 import { useEffect, useRef, type RefObject } from "react";
-import { useDatabaseStore } from "@/stores/database";
+import { useRowFocusStore } from "@/stores/row-focus";
 
 // 搜索命中的行定位（阶段 3 #5）：Rust 侧把命中的单元格 row_id 一起带出来，
-// 这里负责滚动到那一行并短时高亮。状态记在 database store 的 focusRowId 上，
-// 不放 lib/search.ts —— lib 模块不 import store。
+// 这里负责滚动到那一行并短时高亮。状态记在全局 row-focus store 上（搜索页与
+// 数据库页各自独立，靠它跨树传递），不放 lib/search.ts —— lib 模块不 import store。
 
 /** 高亮停留时长：够看清位置，又不至于常驻 */
 const FOCUS_MS = 2400;
@@ -29,7 +29,7 @@ export function useRowFocus(revision: unknown): {
   scrollerRef: RefObject<HTMLDivElement | null>;
   focusRowId: string | null;
 } {
-  const focusRowId = useDatabaseStore((s) => s.focusRowId);
+  const focusRowId = useRowFocusStore((s) => s.focusRowId);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -39,7 +39,7 @@ export function useRowFocus(revision: unknown): {
       scrollToRow(scrollerRef.current, focusRowId);
     });
     const timer = window.setTimeout(() => {
-      useDatabaseStore.getState().clearFocusRow();
+      useRowFocusStore.getState().clearFocusRow();
     }, FOCUS_MS);
     return () => {
       cancelAnimationFrame(raf);

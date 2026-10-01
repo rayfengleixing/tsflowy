@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Plus, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
-import { useDatabaseStore } from "@/stores/database";
+import { useDbStore } from "@/stores/database-context";
 import { applyFilters, sortRows } from "@/lib/database-query";
 import { buildCalendarMonth, cellValueForDate, defaultCalendarField, rowDateKey } from "@/lib/board-calendar";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
@@ -32,7 +32,7 @@ export function CalendarView({
   /** 无日期字段时引导回到表格视图 */
   onGoGrid?: () => void;
 }) {
-  const store = useDatabaseStore();
+  const store = useDbStore();
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
 

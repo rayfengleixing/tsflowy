@@ -4,7 +4,7 @@ import { Clock, CornerDownLeft, FilePlus, FileSearch, History, Search, Settings,
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { HighlightedTitle } from "@/components/highlighted-title";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { useDatabaseStore } from "@/stores/database";
+import { useRowFocusStore } from "@/stores/row-focus";
 import { useSettingsStore } from "@/stores/settings";
 import { searchApi, titleTier, TIER_BODY_ONLY, type SearchHit } from "@/lib/search";
 import { clearSearchHistory, loadSearchHistory, pushSearchHistory } from "@/lib/search-history";
@@ -122,7 +122,7 @@ export function CommandPalette() {
       case "hit":
         pushSearchHistory(trimmed);
         closePalette();
-        if (row.hit.row_id) useDatabaseStore.getState().setFocusRow(row.hit.row_id);
+        if (row.hit.row_id) useRowFocusStore.getState().setFocusRow(row.hit.row_id);
         openView(row.hit.view_id);
         break;
     }

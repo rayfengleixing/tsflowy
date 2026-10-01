@@ -4,6 +4,8 @@ import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { patchViewConfig, readViewConfig } from "@/lib/view-config";
 import { toast } from "sonner";
+import { createDatabaseStore } from "@/stores/database";
+import { DatabaseStoreProvider } from "@/stores/database-context";
 import { BoardView } from "./BoardView";
 import { CalendarView } from "./CalendarView";
 import { GridView } from "./GridView";
@@ -21,6 +23,9 @@ import type { View } from "@/types/models";
 export function DatabasePage({ view }: { view: View }) {
   const [rows, setRows] = useState<View[]>([view]);
   const [activeId, setActiveId] = useState(view.id);
+  // 每个数据库页（含并排对照的每一栏）持有一份独立的数据 store：
+  // 两栏同时打开不同数据库时各读各的字段/行/单元格，互不覆盖。
+  const [store] = useState(createDatabaseStore);
 
   useEffect(() => {
     let alive = true;
@@ -77,25 +82,33 @@ export function DatabasePage({ view }: { view: View }) {
 
   if (active.layout === "board") {
     return (
-      <BoardView
-        key={active.id}
-        view={active}
-        source={view}
-        tabs={tabs}
-        onGoGrid={grid ? () => select(grid.id) : undefined}
-      />
+      <DatabaseStoreProvider value={store}>
+        <BoardView
+          key={active.id}
+          view={active}
+          source={view}
+          tabs={tabs}
+          onGoGrid={grid ? () => select(grid.id) : undefined}
+        />
+      </DatabaseStoreProvider>
     );
   }
   if (active.layout === "calendar") {
     return (
-      <CalendarView
-        key={active.id}
-        view={active}
-        source={view}
-        tabs={tabs}
-        onGoGrid={grid ? () => select(grid.id) : undefined}
-      />
+      <DatabaseStoreProvider value={store}>
+        <CalendarView
+          key={active.id}
+          view={active}
+          source={view}
+          tabs={tabs}
+          onGoGrid={grid ? () => select(grid.id) : undefined}
+        />
+      </DatabaseStoreProvider>
     );
   }
-  return <GridView key={active.id} view={active} source={view} tabs={tabs} />;
+  return (
+    <DatabaseStoreProvider value={store}>
+      <GridView key={active.id} view={active} source={view} tabs={tabs} />
+    </DatabaseStoreProvider>
+  );
 }

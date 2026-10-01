@@ -6,7 +6,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ChevronRight, Copy, History, MoreHorizontal, Pencil, Plus, Star, Tag, Trash2, Download } from "lucide-react";
+import {
+  ChevronRight,
+  Columns2,
+  Copy,
+  History,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Star,
+  Tag,
+  Trash2,
+  Download,
+} from "lucide-react";
 import { toast } from "sonner";
 import type { ViewNode } from "@/types/models";
 import { viewIcon } from "@/components/view-icon";
@@ -47,6 +59,7 @@ export function PageTreeItem({ node, depth, draggingId, dropHint, onRowMouseDown
   const setViewIcon = useWorkspaceStore((s) => s.setViewIcon);
   const setViewFavorite = useWorkspaceStore((s) => s.setViewFavorite);
   const duplicateView = useWorkspaceStore((s) => s.duplicateView);
+  const openInSplit = useWorkspaceStore((s) => s.openInSplit);
   const deleteView = useWorkspaceStore((s) => s.deleteView);
   const hasChildren = node.children.length > 0;
 
@@ -177,6 +190,10 @@ export function PageTreeItem({ node, depth, draggingId, dropHint, onRowMouseDown
                 <DropdownMenuItem onSelect={() => void doDuplicate()}>
                   <Copy className="mr-2 h-3.5 w-3.5" />
                   {t("tree.duplicate")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openInSplit(node.id)}>
+                  <Columns2 className="mr-2 h-3.5 w-3.5" />
+                  {t("tree.openInSplit")}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => exportPage(node.id, node.name, "markdown")}>

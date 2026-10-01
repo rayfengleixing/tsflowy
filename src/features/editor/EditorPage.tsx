@@ -405,15 +405,18 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   });
   editorRef.current = editor;
 
-  // 推送 editor 到全局 store：侧边栏大纲（DocumentOutline）通过 useEditorStore 读取；
-  // 卸载/切换视图时清空，避免大纲读到已销毁实例
+  // 推送 editor 到全局 store：侧边栏大纲（DocumentOutline）与导出都从这里读取；
+  // 卸载/切换视图时清空，避免大纲读到已销毁实例。
+  // 并排对照时两栏各有一个编辑器，只让主视图（currentViewId）这一栏推送，
+  // 避免副栏抢占大纲与导出目标。
+  const isMainPane = useWorkspaceStore((s) => s.currentViewId === view.id);
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || !isMainPane) return;
     useEditorStore.getState().setEditor(editor, view.id);
     return () => {
       useEditorStore.getState().setEditor(null, null);
     };
-  }, [editor, view.id]);
+  }, [editor, view.id, isMainPane]);
 
   // 加载文档内容：加载完成（或失败）前编辑器保持只读；输入在解锁前无法发生，
   // 从根上消除加载与输入的竞态。失败也解锁，不让用户被锁死在空文档上。

@@ -22,7 +22,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
-import { useDatabaseStore } from "@/stores/database";
+import { useDbStore, useDbStoreApi } from "@/stores/database-context";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { viewApi, newId } from "@/lib/db";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
@@ -76,7 +76,8 @@ export function GridView({
   /** 顶栏左侧的视图标签栏（页内切换 grid/board/calendar） */
   tabs?: React.ReactNode;
 }) {
-  const store = useDatabaseStore();
+  const store = useDbStore();
+  const storeApi = useDbStoreApi();
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
 
@@ -141,15 +142,14 @@ export function GridView({
 
   // 关联/汇总要读目标库：把本表所有关联字段的目标视图拉进缓存（同一目标库只请求一次）
   const relationTargetIds = useMemo(
-    () =>
-      [
-        ...new Set(
-          fields
-            .filter((f) => f.field_type === "relation")
-            .map((f) => relationTarget(f))
-            .filter((id): id is string => Boolean(id)),
-        ),
-      ],
+    () => [
+      ...new Set(
+        fields
+          .filter((f) => f.field_type === "relation")
+          .map((f) => relationTarget(f))
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ],
     [fields],
   );
   const relationData = useRelationStore((s) => s.data);
@@ -572,7 +572,7 @@ export function GridView({
           if (field.field_type === "single_select" || field.field_type === "multi_select") {
             // 选择类单元格存选项 id：按名字解析，缺的选项就地补建（导出侧把 id 翻回名字，两边闭环）
             // 每格都取 store 最新字段：上一格补建的选项要参与下一格的解析，避免同名重复建选项
-            const fresh = useDatabaseStore.getState().fields.find((f) => f.id === field.id) ?? field;
+            const fresh = storeApi.getState().fields.find((f) => f.id === field.id) ?? field;
             const opts = parseFieldOptions(fresh.options);
             if (opts.kind !== "select") {
               skipped++;
@@ -1271,7 +1271,7 @@ function HiddenColumnsMenu({ fields, onShow }: { fields: DatabaseField[]; onShow
 }
 
 function AddFieldButton() {
-  const store = useDatabaseStore();
+  const store = useDbStore();
   const [open, setOpen] = useState(false);
 
   return (
