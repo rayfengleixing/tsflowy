@@ -698,17 +698,22 @@ fn stash_current_db(db: &Path, suffix: &str) -> Result<(), String> {
 
 #[derive(Serialize)]
 pub struct DataDirInfo {
-    /// 默认数据目录（Tauri app_data_dir，本次会话生效的实际位置）
+    /// 当前实际生效的数据目录（默认目录经联接落到「文档\TsFlowy」或自定义目录后的真实位置）
     pub default: String,
     /// 用户自定义路径（设置后下次启动生效）
     pub custom: Option<String>,
     /// 是否自定义路径会在下次启动生效
     pub will_change_after_restart: bool,
+    /// 默认目录（Tauri app_data_dir）是否为指向别处的目录联接（junction/symlink）
+    pub is_linked: bool,
+    /// 目录联接所在路径（即系统默认数据目录，如 %APPDATA%\com.tsflowy.app）
+    pub link_path: String,
 }
 
 /// 获取当前数据目录信息（展示在设置页）
 #[tauri::command]
 pub fn get_data_dir_info(app: tauri::AppHandle) -> Result<DataDirInfo, String> {
+    let link = app_data_dir(&app)?;
     let default = real_data_dir(&app)?.to_string_lossy().to_string();
     let cfg = load_app_config(&app);
     let custom = cfg.custom_data_dir.clone();
@@ -716,10 +721,15 @@ pub fn get_data_dir_info(app: tauri::AppHandle) -> Result<DataDirInfo, String> {
         .as_deref()
         .map(|c| c != default)
         .unwrap_or(false);
+    let is_linked = fs::symlink_metadata(&link)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
     Ok(DataDirInfo {
         default,
         custom,
         will_change_after_restart,
+        is_linked,
+        link_path: link.to_string_lossy().to_string(),
     })
 }
 

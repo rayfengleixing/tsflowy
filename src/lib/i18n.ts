@@ -405,8 +405,11 @@ const zh = {
   "settings.langEn": "English",
   "settings.dataDir": "数据目录",
   "settings.dataDirHint":
-    "所有空间、文档、数据库和附件都保存在这里。修改后需重启应用，应用会自动把默认目录建立为指向新位置的联接（junction），可随时点击「恢复默认」回退。",
+    "所有空间、文档、数据库和附件都保存在这里，默认位置是系统「文档」目录下的 TsFlowy。修改后需重启应用，应用会自动把默认目录建立为指向新位置的联接（junction），可随时点击「恢复默认」回退。",
   "settings.dataDirEffective": "当前路径",
+  "settings.dataDirLinked":
+    "数据实际存放在上方路径：系统默认目录 {path} 是指向它的目录联接，可直接对该文件夹做备份或放进同步盘。",
+  "settings.dataDirPlain": "数据直接存放在上方路径（未启用目录联接）。",
   "settings.dataDirCustom": "下次启动路径（自定义）",
   "settings.chooseDir": "浏览…",
   "settings.resetDir": "恢复默认",
@@ -881,8 +884,11 @@ const en: Record<MessageKey, string> = {
   "settings.langEn": "English",
   "settings.dataDir": "Data directory",
   "settings.dataDirHint":
-    "All workspaces, docs, database and attachments are stored here. After changing, restart the app — TsFlowy will transparently redirect the default data directory to your new location via a junction/symlink.",
+    "All workspaces, docs, database and attachments are stored here; the default location is the TsFlowy folder inside your system Documents directory. After changing, restart the app — TsFlowy will transparently redirect the default data directory to your new location via a junction/symlink.",
   "settings.dataDirEffective": "Current path",
+  "settings.dataDirLinked":
+    "Data actually lives at the path above: the system default folder {path} is a junction pointing to it, so you can back it up or sync that folder directly.",
+  "settings.dataDirPlain": "Data is stored directly at the path above (no junction in use).",
   "settings.dataDirCustom": "Next-start path (custom)",
   "settings.chooseDir": "Browse…",
   "settings.resetDir": "Reset to default",

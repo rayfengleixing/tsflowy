@@ -50,6 +50,10 @@ interface DataDirInfo {
   default: string;
   custom: string | null;
   will_change_after_restart: boolean;
+  /** 默认目录是否为指向别处的目录联接（junction/symlink） */
+  is_linked: boolean;
+  /** 目录联接所在路径（系统默认数据目录） */
+  link_path: string;
 }
 
 /** change_data_dir / reset_data_dir_default 返回结构 */
@@ -400,6 +404,13 @@ export function SettingsPage() {
               {t("settings.openDir")}
             </Button>
           </div>
+          {dataDirInfo && (
+            <div className="mt-1.5 text-[11px] text-neutral-500">
+              {dataDirInfo.is_linked
+                ? t("settings.dataDirLinked", { path: dataDirInfo.link_path })
+                : t("settings.dataDirPlain")}
+            </div>
+          )}
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <label className="flex items-center gap-1.5 text-[11px] text-neutral-600">
               <input type="checkbox" checked={moveCurrent} onChange={(e) => setMoveCurrent(e.target.checked)} />
