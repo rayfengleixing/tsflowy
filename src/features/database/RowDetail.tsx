@@ -5,10 +5,12 @@ import { FIELD_TYPES, isReadonlyType, type FieldType } from "@/types/database";
 import { useDatabaseStore } from "@/stores/database";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { computeFormula } from "@/lib/database-formula";
+import { computeRollup } from "@/lib/relation";
+import { useRelationStore } from "@/stores/relation";
 import { cn } from "@/lib/utils";
 import type { View } from "@/types/models";
 import { EditorPage } from "@/features/editor/EditorPage";
-import { CellEditorSlot, SelectChips } from "./editors";
+import { CellEditorSlot, RelationChips, SelectChips } from "./editors";
 import { fieldIcon } from "./field-icon";
 import { FieldTypeMenu } from "./FieldTypeMenu";
 import { t } from "@/lib/i18n";
@@ -36,12 +38,16 @@ function RowPropertyField({
   const [editing, setEditing] = useState(false);
   const [nameEditing, setNameEditing] = useState(false);
   const [nameDraft, setNameDraft] = useState(field.name);
+  // 关联/汇总要读目标库：目标库缓存变化时本组件也要重渲
+  const relationData = useRelationStore((s) => s.data);
   // 原子 selector：只订阅本行本字段值，其他行/字段变化不触发本组件重渲
-  // 公式字段无存储值：按整行字段实时计算（结果为数字，引用稳定）
+  // 公式/汇总字段无存储值：按整行字段实时计算（结果为数字/字符串，引用稳定）
   const value = useDatabaseStore((s) =>
     field.field_type === "formula"
       ? computeFormula(field, s.cells[row.id] ?? {}, s.fields)
-      : (s.cells[row.id]?.[field.id] ?? null),
+      : field.field_type === "rollup"
+        ? computeRollup(field, s.cells[row.id] ?? {}, s.fields, (id) => relationData[id])
+        : (s.cells[row.id]?.[field.id] ?? null),
   );
   const setCell = useDatabaseStore((s) => s.setCell);
   const addSelectOption = useDatabaseStore((s) => s.addSelectOption);
@@ -67,6 +73,9 @@ function RowPropertyField({
   const display = (() => {
     if (field.field_type === "single_select" || field.field_type === "multi_select") {
       return <SelectChips field={field} value={value} />;
+    }
+    if (field.field_type === "relation") {
+      return <RelationChips field={field} value={value} />;
     }
     const text = formatCellValue(field.field_type, value, parseFieldOptions(field.options));
     return (

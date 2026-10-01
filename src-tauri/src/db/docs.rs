@@ -92,10 +92,16 @@ mod tests {
         // 同一 view 再次保存 → 覆盖；触发器刷新 FTS 的是纯文本，不是 JSON 原文
         save(&conn, "v1", &tiptap("第二版独特词组")).unwrap();
         let fts_content: String = conn
-            .query_row("SELECT content FROM documents_fts WHERE view_id = 'v1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT content FROM documents_fts WHERE view_id = 'v1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(fts_content, "第二版独特词组");
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 1);
     }
 
@@ -112,11 +118,17 @@ mod tests {
         )
         .unwrap();
         let fts_content: String = conn
-            .query_row("SELECT content FROM documents_fts WHERE view_id = 'v1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT content FROM documents_fts WHERE view_id = 'v1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(fts_content, "正文一段 目标页面名");
         assert!(
-            super::super::search::search(&conn, "w1", "paragraph").unwrap().is_empty(),
+            super::super::search::search(&conn, "w1", "paragraph")
+                .unwrap()
+                .is_empty(),
             "结构关键字不该被索引"
         );
     }
@@ -129,7 +141,11 @@ mod tests {
         save(&conn, "v1", "他说 你好 之后离开").unwrap();
         let hits = super::super::search::search(&conn, "w1", "之后离开").unwrap();
         assert_eq!(hits.len(), 1);
-        assert!(hits[0].snippet.contains("<em>之后离开</em>"), "{}", hits[0].snippet);
+        assert!(
+            hits[0].snippet.contains("<em>之后离开</em>"),
+            "{}",
+            hits[0].snippet
+        );
     }
 
     #[test]
@@ -137,9 +153,14 @@ mod tests {
         let conn = setup();
         seed_view(&conn, "v1", "标题A");
         save(&conn, "v1", "{}").unwrap();
-        conn.execute("DELETE FROM views WHERE id = 'v1'", []).unwrap();
-        let docs: i64 = conn.query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0)).unwrap();
-        let fts: i64 = conn.query_row("SELECT COUNT(*) FROM documents_fts", [], |r| r.get(0)).unwrap();
+        conn.execute("DELETE FROM views WHERE id = 'v1'", [])
+            .unwrap();
+        let docs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0))
+            .unwrap();
+        let fts: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents_fts", [], |r| r.get(0))
+            .unwrap();
         assert_eq!((docs, fts), (0, 0));
     }
 
@@ -181,7 +202,8 @@ mod tests {
         let conn = setup();
         seed_view(&conn, "v1", "旧名字");
         save(&conn, "v1", r#"{"text":"无关内容"}"#).unwrap();
-        conn.execute("UPDATE views SET name = '全新标题' WHERE id = 'v1'", []).unwrap();
+        conn.execute("UPDATE views SET name = '全新标题' WHERE id = 'v1'", [])
+            .unwrap();
         let hits = super::super::search::search(&conn, "w1", "全新标题").unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title, "全新标题");
@@ -194,7 +216,9 @@ mod tests {
         save(&conn, "v1", r#"{"text":"独特内容串"}"#).unwrap();
         views::soft_delete(&conn, "v1").unwrap();
         views::purge(&conn, "v1").unwrap();
-        let fts: i64 = conn.query_row("SELECT COUNT(*) FROM documents_fts", [], |r| r.get(0)).unwrap();
+        let fts: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents_fts", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(fts, 0);
     }
 }

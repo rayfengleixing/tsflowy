@@ -4,8 +4,10 @@ import {
   CheckSquare,
   CircleDot,
   Clock,
+  Combine,
   Hash,
   History,
+  Link2,
   ListChecks,
   Mail,
   Phone,
@@ -43,5 +45,9 @@ export function fieldIcon(type: FieldType): ReactNode {
       return <Clock className={cls} />;
     case "last_edited_at":
       return <History className={cls} />;
+    case "relation":
+      return <Link2 className={cls} />;
+    case "rollup":
+      return <Combine className={cls} />;
   }
 }

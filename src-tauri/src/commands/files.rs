@@ -319,7 +319,11 @@ pub async fn save_asset(app: tauri::AppHandle, source_path: String) -> Result<St
 /// 保存前端传入的字节流到 assets 目录（用于编辑器粘贴/拖拽图片上传，省去写临时文件）。
 /// 返回相对路径 `assets/{nanos}.{ext}`，前端用 `resolveAssetUrl` 转可加载 URL。
 #[tauri::command]
-pub async fn save_asset_bytes(app: tauri::AppHandle, bytes: Vec<u8>, ext: String) -> Result<String, String> {
+pub async fn save_asset_bytes(
+    app: tauri::AppHandle,
+    bytes: Vec<u8>,
+    ext: String,
+) -> Result<String, String> {
     let data_dir = app_data_dir(&app)?;
     let assets_dir = data_dir.join(ASSETS_DIR);
     fs::create_dir_all(&assets_dir).map_err(|e| format!("failed to create assets dir: {e}"))?;
@@ -337,7 +341,8 @@ pub async fn save_asset_bytes(app: tauri::AppHandle, bytes: Vec<u8>, ext: String
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let file_name = format!("{nanos}.{ext}");
-    fs::write(assets_dir.join(&file_name), &bytes).map_err(|e| format!("failed to write asset: {e}"))?;
+    fs::write(assets_dir.join(&file_name), &bytes)
+        .map_err(|e| format!("failed to write asset: {e}"))?;
     Ok(format!("{ASSETS_DIR}/{file_name}"))
 }
 
@@ -469,8 +474,8 @@ pub async fn export_backup(app: tauri::AppHandle, target_path: String) -> Result
 
 /// 用独立的只读连接对库做 VACUUM INTO 快照（并发写不受影响，快照内容为执行时刻的一致状态）
 fn make_db_snapshot(db: &Path, snap: &Path) -> Result<(), String> {
-    let conn = rusqlite::Connection::open(db)
-        .map_err(|e| format!("open db for snapshot failed: {e}"))?;
+    let conn =
+        rusqlite::Connection::open(db).map_err(|e| format!("open db for snapshot failed: {e}"))?;
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| format!("set busy timeout failed: {e}"))?;
     conn.execute("VACUUM INTO ?1", [snap.to_string_lossy().as_ref()])
@@ -478,9 +483,13 @@ fn make_db_snapshot(db: &Path, snap: &Path) -> Result<(), String> {
         .map_err(|e| format!("create db snapshot failed: {e}"))
 }
 
-fn write_backup_zip(target: &Path, snap: &Path, data_dir: &Path, assets: &Path) -> Result<(), String> {
-    let file = fs::File::create(target)
-        .map_err(|e| format!("create backup file failed: {e}"))?;
+fn write_backup_zip(
+    target: &Path,
+    snap: &Path,
+    data_dir: &Path,
+    assets: &Path,
+) -> Result<(), String> {
+    let file = fs::File::create(target).map_err(|e| format!("create backup file failed: {e}"))?;
     let mut zip = ZipWriter::new(BufWriter::new(file));
     let options = FileOptions::default()
         .compression_method(CompressionMethod::Deflated)
@@ -501,7 +510,9 @@ fn write_backup_zip(target: &Path, snap: &Path, data_dir: &Path, assets: &Path) 
             if !path.is_file() {
                 continue;
             }
-            let rel = path.strip_prefix(data_dir).map_err(|e| format!("strip prefix failed: {e}"))?;
+            let rel = path
+                .strip_prefix(data_dir)
+                .map_err(|e| format!("strip prefix failed: {e}"))?;
             let name = rel.to_string_lossy().replace('\\', "/");
             zip.start_file(name.clone(), options)
                 .map_err(|e| format!("zip start {name} failed: {e}"))?;
@@ -510,7 +521,8 @@ fn write_backup_zip(target: &Path, snap: &Path, data_dir: &Path, assets: &Path) 
         }
     }
 
-    zip.finish().map_err(|e| format!("zip finish failed: {e}"))?;
+    zip.finish()
+        .map_err(|e| format!("zip finish failed: {e}"))?;
     Ok(())
 }
 
@@ -627,10 +639,16 @@ fn validate_backup_zip(src: &Path) -> Result<(), String> {
         ZipArchive::new(BufReader::new(file)).map_err(|e| format!("invalid zip archive: {e}"))?;
     let mut has_db = false;
     for i in 0..archive.len() {
-        let entry = archive.by_index(i).map_err(|e| format!("read zip entry: {e}"))?;
+        let entry = archive
+            .by_index(i)
+            .map_err(|e| format!("read zip entry: {e}"))?;
         let name = entry.name().to_string();
         let rel = Path::new(&name);
-        if rel.is_absolute() || rel.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        if rel.is_absolute()
+            || rel
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
             return Err(format!("invalid zip entry (path traversal): {name}"));
         }
         if name == DB_FILE {
@@ -650,11 +668,17 @@ fn extract_backup_zip(src: &Path, data_dir: &Path) -> Result<(), String> {
         ZipArchive::new(BufReader::new(file)).map_err(|e| format!("invalid zip archive: {e}"))?;
 
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).map_err(|e| format!("read zip entry: {e}"))?;
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("read zip entry: {e}"))?;
         let name = entry.name().to_string();
         // 安全校验：禁止路径穿越（../），只允许相对路径下的文件名或 assets/xxx
         let rel = Path::new(&name);
-        if rel.is_absolute() || rel.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        if rel.is_absolute()
+            || rel
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
             return Err(format!("invalid zip entry (path traversal): {name}"));
         }
         let target = data_dir.join(rel);
@@ -766,10 +790,7 @@ pub fn get_data_dir_info(app: tauri::AppHandle) -> Result<DataDirInfo, String> {
     let default = real_data_dir(&app)?.to_string_lossy().to_string();
     let cfg = load_app_config(&app);
     let custom = cfg.custom_data_dir.clone();
-    let will_change_after_restart = custom
-        .as_deref()
-        .map(|c| c != default)
-        .unwrap_or(false);
+    let will_change_after_restart = custom.as_deref().map(|c| c != default).unwrap_or(false);
     let is_linked = fs::symlink_metadata(&link)
         .map(|m| m.file_type().is_symlink())
         .unwrap_or(false);
@@ -914,8 +935,7 @@ fn backup_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 
 /// 文件名里的本地时间戳：auto-YYYYMMDD-HHMMSS.zip（取不到本地时区时退回 Unix 秒）
 fn backup_stamp() -> String {
-    let now =
-        time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
     const FMT: &[time::format_description::FormatItem<'_>] =
         time::macros::format_description!("[year][month][day]-[hour][minute][second]");
     now.format(FMT)
@@ -1106,7 +1126,10 @@ pub struct DbHealth {
 }
 
 #[tauri::command]
-pub async fn db_health(app: tauri::AppHandle, db: tauri::State<'_, Db>) -> Result<DbHealth, String> {
+pub async fn db_health(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, Db>,
+) -> Result<DbHealth, String> {
     let data_dir = real_data_dir(&app)?;
     let db_path = db.db_path();
     let backup = backup_dir(&app)?;
@@ -1120,7 +1143,9 @@ pub async fn db_health(app: tauri::AppHandle, db: tauri::State<'_, Db>) -> Resul
         data_dir: data_dir.to_string_lossy().to_string(),
         backup_dir: backup.to_string_lossy().to_string(),
         latest_backup: latest.as_ref().map(|(n, _, _)| n.clone()),
-        latest_backup_path: latest.as_ref().map(|(_, p, _)| p.to_string_lossy().to_string()),
+        latest_backup_path: latest
+            .as_ref()
+            .map(|(_, p, _)| p.to_string_lossy().to_string()),
         latest_backup_time: latest.as_ref().map(|(_, _, t)| format_local_time(*t)),
     })
 }
@@ -1152,7 +1177,10 @@ fn same_path(a: &Path, b: &Path) -> bool {
                 .join(&pb);
         }
         // 去除末尾分隔符
-        let s = pb.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
+        let s = pb
+            .to_string_lossy()
+            .trim_end_matches(['/', '\\'])
+            .to_string();
         Some(PathBuf::from(s))
     }
     let (x, y) = (norm(a), norm(b));
@@ -1179,10 +1207,7 @@ fn is_dir_safely_empty(dir: &Path) -> Result<bool, String> {
     }
     for e in fs::read_dir(dir).map_err(|e| format!("read_dir target: {e}"))? {
         let e = e.map_err(|e| format!("entry: {e}"))?;
-        let name = e
-            .file_name()
-            .to_string_lossy()
-            .to_ascii_lowercase();
+        let name = e.file_name().to_string_lossy().to_ascii_lowercase();
         if matches!(name.as_str(), ".ds_store" | "thumbs.db" | "desktop.ini") {
             continue;
         }
@@ -1204,7 +1229,8 @@ mod tests {
     use std::io::Write;
 
     fn temp_case(name: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
-        let base = std::env::temp_dir().join(format!("tsflowy-reset-{}-{name}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("tsflowy-reset-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let default = base.join("default");
         let custom = base.join("custom");
@@ -1289,11 +1315,23 @@ mod tests {
         prune_stale_backups(&dir);
 
         for stamp in ["400", "300", "200"] {
-            assert!(dir.join(format!("{DB_FILE}.bak-{stamp}")).is_file(), "保留 {stamp}");
-            assert!(dir.join(format!("{ASSETS_DIR}.bak-{stamp}")).is_dir(), "保留 {stamp} 的 assets");
+            assert!(
+                dir.join(format!("{DB_FILE}.bak-{stamp}")).is_file(),
+                "保留 {stamp}"
+            );
+            assert!(
+                dir.join(format!("{ASSETS_DIR}.bak-{stamp}")).is_dir(),
+                "保留 {stamp} 的 assets"
+            );
         }
-        assert!(dir.join(format!("{DB_FILE}.bak-400-wal")).is_file(), "同组侧车跟着保留");
-        assert!(!dir.join(format!("{DB_FILE}.bak-100")).exists(), "最旧一组被清掉");
+        assert!(
+            dir.join(format!("{DB_FILE}.bak-400-wal")).is_file(),
+            "同组侧车跟着保留"
+        );
+        assert!(
+            !dir.join(format!("{DB_FILE}.bak-100")).exists(),
+            "最旧一组被清掉"
+        );
         assert!(!dir.join(format!("{ASSETS_DIR}.bak-100")).exists());
         assert!(dir.join("notes.txt").is_file());
         assert!(dir.join("weird.bak-abc").is_file());
@@ -1319,7 +1357,8 @@ mod tests {
 
     #[test]
     fn stash_moves_db_sidecars_to_bak() {
-        let base = std::env::temp_dir().join(format!("tsflowy-stash-{}-sidecars", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("tsflowy-stash-{}-sidecars", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let dir = base.join("data");
         fs::create_dir_all(&dir).unwrap();
@@ -1371,7 +1410,8 @@ mod tests {
 
     #[test]
     fn stash_current_db_clears_orphan_wal_shm_when_db_missing() {
-        let base = std::env::temp_dir().join(format!("tsflowy-stash-{}-orphan", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("tsflowy-stash-{}-orphan", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let dir = base.join("data");
         fs::create_dir_all(&dir).unwrap();
@@ -1399,7 +1439,10 @@ mod tests {
 
         // default 现在是 custom 的内容；旧数据完整保留在 bak
         assert_eq!(fs::read(default.join("appflowy.db")).unwrap(), b"new");
-        assert_eq!(fs::read(default.join("assets").join("a.png")).unwrap(), b"img");
+        assert_eq!(
+            fs::read(default.join("assets").join("a.png")).unwrap(),
+            b"img"
+        );
         assert_eq!(fs::read(bak.join("appflowy.db")).unwrap(), b"old");
         let _ = fs::remove_dir_all(&base);
     }
@@ -1434,7 +1477,10 @@ mod tests {
         let no_db = base.join("no-db.zip");
         write_zip(&no_db, &[("assets/pic.png", b"other")]);
         let err = import_backup_into(&data, &no_db).unwrap_err();
-        assert!(err.contains("does not contain valid database file"), "{err}");
+        assert!(
+            err.contains("does not contain valid database file"),
+            "{err}"
+        );
 
         // 3) 含路径穿越条目
         let traversal = base.join("traversal.zip");
@@ -1450,7 +1496,10 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .filter(|n| n.contains(".bak-"))
             .collect();
-        assert!(leftovers.is_empty(), "unexpected .bak leftovers: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "unexpected .bak leftovers: {leftovers:?}"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -1464,7 +1513,10 @@ mod tests {
         fs::write(data.join("assets/old.png"), b"old-asset").unwrap();
 
         let good = base.join("good.zip");
-        write_zip(&good, &[(DB_FILE, b"new-db"), ("assets/new.png", b"new-asset")]);
+        write_zip(
+            &good,
+            &[(DB_FILE, b"new-db"), ("assets/new.png", b"new-asset")],
+        );
 
         import_backup_into(&data, &good).unwrap();
 
@@ -1475,8 +1527,18 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
-        assert!(names.iter().any(|n| n.starts_with(&format!("{DB_FILE}.bak-"))), "{names:?}");
-        assert!(names.iter().any(|n| n.starts_with(&format!("{ASSETS_DIR}.bak-"))), "{names:?}");
+        assert!(
+            names
+                .iter()
+                .any(|n| n.starts_with(&format!("{DB_FILE}.bak-"))),
+            "{names:?}"
+        );
+        assert!(
+            names
+                .iter()
+                .any(|n| n.starts_with(&format!("{ASSETS_DIR}.bak-"))),
+            "{names:?}"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 }

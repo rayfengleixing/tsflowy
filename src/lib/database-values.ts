@@ -21,6 +21,7 @@ export function defaultValue(type: FieldType): CellValue {
     case "checkbox":
       return false;
     case "multi_select":
+    case "relation":
       return [];
     default:
       return null;
@@ -45,9 +46,13 @@ export function validateCellValue(type: FieldType, value: CellValue): boolean {
     case "formula":
       // 公式字段无存储值（展示时实时计算），此处仅防御性放行
       return typeof value === "number" && Number.isFinite(value);
+    case "rollup":
+      // 汇总字段同样无存储值；聚合结果按字符串展示，防御性放行
+      return typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
     case "checkbox":
       return typeof value === "boolean";
     case "multi_select":
+    case "relation":
       return Array.isArray(value) && value.every((v) => typeof v === "string");
   }
 }
@@ -87,6 +92,13 @@ export function formatCellValue(type: FieldType, value: CellValue, options?: Fie
       return value ? "✓" : "";
     case "multi_select":
       return Array.isArray(value) ? value.join(", ") : "";
+    // 关联单元格存的是对端行 id，真正展示要解析成行标题 —— 由 RelationChips 负责渲染，
+    // 这里只给一个不带解析的兜底文本（例如导出、无目标库缓存时的降级）。
+    case "relation":
+      return Array.isArray(value) ? value.join(", ") : "";
+    // 汇总值由 computeRollup 算好传入，已经是展示文本
+    case "rollup":
+      return String(value);
     case "date":
     case "created_at":
     case "last_edited_at": {

@@ -15,7 +15,9 @@ fn row_to_workspace(r: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceRow> {
 
 pub fn list(conn: &Connection) -> Result<Vec<WorkspaceRow>, String> {
     let mut stmt = conn
-        .prepare("SELECT id, name, icon, created_at, updated_at FROM workspaces ORDER BY created_at ASC")
+        .prepare(
+            "SELECT id, name, icon, created_at, updated_at FROM workspaces ORDER BY created_at ASC",
+        )
         .map_err(dberr("list workspaces"))?;
     let rows = stmt
         .query_map([], row_to_workspace)
@@ -97,11 +99,17 @@ mod tests {
 
         for (table, name) in [("workspaces", "w1"), ("views", "v1")] {
             let n: i64 = conn
-                .query_row(&format!("SELECT COUNT(*) FROM {table} WHERE id = ?1"), params![name], |r| r.get(0))
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE id = ?1"),
+                    params![name],
+                    |r| r.get(0),
+                )
                 .unwrap();
             assert_eq!(n, 0, "{table} cascade");
         }
-        let docs: i64 = conn.query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0)).unwrap();
+        let docs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(docs, 0, "documents cascade");
     }
 

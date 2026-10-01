@@ -153,7 +153,10 @@ mod tests {
         );
 
         let rows = list(&conn, "v1").unwrap();
-        assert!(rows.iter().any(|r| r.reason == "pre_restore"), "恢复前先备份当前版本");
+        assert!(
+            rows.iter().any(|r| r.reason == "pre_restore"),
+            "恢复前先备份当前版本"
+        );
     }
 
     #[test]
@@ -191,7 +194,11 @@ mod tests {
         seed_doc(&conn);
         maybe_snapshot(&conn, "v1", "{}").unwrap();
         views::soft_delete(&conn, "v1").unwrap();
-        assert_eq!(list(&conn, "v1").unwrap().len(), 1, "软删不清快照（可恢复）");
+        assert_eq!(
+            list(&conn, "v1").unwrap().len(),
+            1,
+            "软删不清快照（可恢复）"
+        );
         views::purge(&conn, "v1").unwrap();
         assert_eq!(list(&conn, "v1").unwrap().len(), 0, "硬删由触发器清理快照");
     }

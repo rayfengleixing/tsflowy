@@ -96,14 +96,14 @@ export function evaluateFilter(fieldType: FieldType, value: CellValue, op: Filte
   if (empty) return false; // 需要比较的运算符对空值一律不命中
   switch (op) {
     case "contains": {
-      if (fieldType === "multi_select") {
+      if (fieldType === "multi_select" || fieldType === "relation") {
         return Array.isArray(value) && typeof operand === "string" && value.includes(operand);
       }
       if (typeof value === "string") return value.toLowerCase().includes(String(operand ?? "").toLowerCase());
       return false;
     }
     case "not_contains": {
-      if (fieldType === "multi_select") {
+      if (fieldType === "multi_select" || fieldType === "relation") {
         return Array.isArray(value) && (!value.includes(String(operand ?? "")) || operand === null);
       }
       if (typeof value === "string") return !value.toLowerCase().includes(String(operand ?? "").toLowerCase());
@@ -147,7 +147,8 @@ export function applyFilters(
 /** 字段类型支持的比较符（筛选器 UI 用） */
 export function opsForType(type: FieldType): FilterOp[] {
   if (type === "checkbox") return ["checked", "unchecked"];
-  if (type === "multi_select") return ["is_empty", "is_not_empty", "contains", "not_contains"];
+  if (type === "multi_select" || type === "relation")
+    return ["is_empty", "is_not_empty", "contains", "not_contains"];
   if (type === "number") return ["is_empty", "is_not_empty", "equals", "not_equals", "gt", "gte", "lt", "lte"];
   if (type === "date" || type === "created_at" || type === "last_edited_at")
     return ["is_empty", "is_not_empty", "equals", "not_equals", "gt", "gte", "lt", "lte"];

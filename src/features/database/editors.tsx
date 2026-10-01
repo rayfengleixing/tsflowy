@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Plus, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, Link2, Plus, Search, Trash2, X } from "lucide-react";
 import type { CellValue, DatabaseField, SelectOption } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { parseFieldOptions } from "@/lib/database-values";
+import { relationRowIds, relationRowLabel, relationTarget, searchRelationRows } from "@/lib/relation";
+import { useRelationStore } from "@/stores/relation";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 
@@ -378,6 +380,112 @@ export function CheckboxCellEditor({ field: _field, value, onCommit }: CellEdito
   );
 }
 
+/**
+ * 关联（relation）：从目标库挑选若干行。
+ * 与多选同样的交互：点击/回车加选，不立即提交，outside-click / Esc 才落库。
+ */
+export function RelationCellEditor({ field, value, onCommit, onCancel }: CellEditorProps) {
+  const targetId = relationTarget(field);
+  const db = useRelationStore((s) => (targetId ? s.data[targetId] : undefined));
+  const ensure = useRelationStore((s) => s.ensure);
+  useEffect(() => {
+    if (targetId) ensure([targetId]);
+  }, [targetId, ensure]);
+
+  const [draft, setDraft] = useState<Set<string>>(() => new Set(relationRowIds(value)));
+  const [query, setQuery] = useState("");
+  const inputRef = useAutoFocus<HTMLInputElement>();
+  const candidates = db ? searchRelationRows(db, query).slice(0, 50) : [];
+
+  const toggle = (id: string) =>
+    setDraft((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const commit = () => onCommit([...draft]);
+
+  const labelOf = (id: string) => (db ? relationRowLabel(db, id) : null) ?? id;
+
+  return (
+    <div className="absolute inset-0 z-10" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="h-full w-full bg-white" />
+      <div className="absolute inset-x-0 top-full z-20 mt-0.5 flex max-h-64 flex-col rounded-lg border border-neutral-300 bg-white p-1 shadow-lg">
+        {!targetId ? (
+          <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.relationUnset")}</div>
+        ) : (
+          <>
+            <div className="relative mb-1 shrink-0">
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-neutral-400" />
+              <input
+                ref={inputRef}
+                className="h-7 w-full rounded-md border border-neutral-200 pl-7 pr-2 text-[13px] outline-none placeholder:text-neutral-400 focus:border-brand-500"
+                placeholder={t("field.relationSearch")}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && candidates[0]) {
+                    toggle(candidates[0].id);
+                    setQuery("");
+                  }
+                  if (e.key === "Escape") commit();
+                }}
+              />
+            </div>
+            {/* 已选预览：点胶囊上的 X 直接取消关联 */}
+            {draft.size > 0 && (
+              <div className="mb-1 flex shrink-0 flex-wrap items-center gap-1 rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5">
+                <span className="mr-1 text-[11px] text-neutral-400">
+                  {t("field.selected")} {draft.size}
+                </span>
+                {[...draft].map((id) => (
+                  <RelationChip key={id} label={labelOf(id)} onRemove={() => toggle(id)} />
+                ))}
+              </div>
+            )}
+            <div className="min-h-0 flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
+              {!db && <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("app.loading")}</div>}
+              {db && candidates.length === 0 && (
+                <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.relationEmpty")}</div>
+              )}
+              {candidates.map((row) => (
+                <button
+                  key={row.id}
+                  type="button"
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[13px] hover:bg-neutral-200/60",
+                    draft.has(row.id) && "bg-brand-100",
+                  )}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => toggle(row.id)}
+                >
+                  <span className="min-w-0 flex-1 truncate">{labelOf(row.id)}</span>
+                  {draft.has(row.id) && <Check className="h-3.5 w-3.5 shrink-0 text-brand-600" />}
+                </button>
+              ))}
+            </div>
+            {draft.size > 0 && (
+              <button
+                type="button"
+                className="flex w-full shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-neutral-500 hover:bg-neutral-200/60"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setDraft(new Set())}
+              >
+                <X className="h-3.5 w-3.5" />
+                {t("common.clearAll")}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+      {/* 点击外部：提交当前 draft 并关闭编辑器（目标未配置时等价于取消） */}
+      <div className="fixed inset-0 z-10" onMouseDown={() => (targetId ? commit() : onCancel())} />
+    </div>
+  );
+}
+
 /** 单选/多选选项彩色圆点 */
 export function OptionDot({ option }: { option: SelectOption }) {
   const colors: Record<string, string> = {
@@ -426,6 +534,8 @@ export function CellEditorSlot(props: CellEditorProps) {
           onDeleteOption={onDeleteOption}
         />
       );
+    case "relation":
+      return <RelationCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
     default:
       return <TextCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
   }
@@ -516,6 +626,74 @@ export function SelectChips({
           option={opts.options.find((x) => x.id === id)}
           compact={compact}
           onRemove={onRemove ? () => onRemove(ids.filter((x) => x !== id)) : undefined}
+        />
+      ))}
+    </span>
+  );
+}
+
+/** 关联行的展示胶囊（label 由调用方解析，目标行已删时为短 id 兜底） */
+export function RelationChip({
+  label,
+  compact = false,
+  onRemove,
+}: {
+  label: string;
+  compact?: boolean;
+  onRemove?: () => void;
+}) {
+  const size = compact ? "px-1 py-[1px] text-[10px]" : "px-2 py-0.5 text-[11px]";
+  return (
+    <span
+      className={cn(
+        "inline-flex max-w-[200px] items-center gap-1 rounded-full bg-neutral-100 font-medium text-neutral-600",
+        size,
+      )}
+    >
+      <Link2 className="h-3 w-3 shrink-0 text-neutral-400" />
+      <span className="truncate">{label}</span>
+      {onRemove && (
+        <button
+          type="button"
+          className="ml-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full text-neutral-400 hover:bg-black/10"
+          title={t("field.relationRemove")}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+        >
+          <X className="h-2.5 w-2.5" />
+        </button>
+      )}
+    </span>
+  );
+}
+
+/**
+ * 关联单元格的只读展示：单元格只存对端行 id，这里用目标库缓存解析成行标题。
+ * 目标库未加载或行已删除时降级显示（不隐藏，避免用户以为关联丢了）。
+ */
+export function RelationChips({
+  field,
+  value,
+  compact = false,
+}: {
+  field: DatabaseField;
+  value: CellValue;
+  compact?: boolean;
+}) {
+  const targetId = relationTarget(field);
+  const db = useRelationStore((s) => (targetId ? s.data[targetId] : undefined));
+  const ids = relationRowIds(value);
+  if (ids.length === 0) return null;
+  return (
+    <span className={cn("flex flex-wrap", compact ? "gap-0.5" : "gap-1")}>
+      {ids.map((id) => (
+        <RelationChip
+          key={id}
+          compact={compact}
+          label={(db ? relationRowLabel(db, id) : null) ?? (db ? t("field.relationMissing") : id)}
         />
       ))}
     </span>

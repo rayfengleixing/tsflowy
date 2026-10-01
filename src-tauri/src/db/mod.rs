@@ -85,12 +85,18 @@ impl Db {
     }
 
     pub fn write_conn(&self) -> Result<DbConnGuard<'_>, String> {
-        let guard = self.write.lock().map_err(|_| "db state poisoned".to_string())?;
+        let guard = self
+            .write
+            .lock()
+            .map_err(|_| "db state poisoned".to_string())?;
         DbConnGuard::new(guard).map_err(|e| self.with_init_error(e))
     }
 
     pub fn read_conn(&self) -> Result<DbConnGuard<'_>, String> {
-        let guard = self.read.lock().map_err(|_| "db state poisoned".to_string())?;
+        let guard = self
+            .read
+            .lock()
+            .map_err(|_| "db state poisoned".to_string())?;
         DbConnGuard::new(guard).map_err(|e| self.with_init_error(e))
     }
 
@@ -108,8 +114,14 @@ impl Db {
     /// 备份/恢复前调用：checkpoint 后整体关闭连接，此后 db 文件/数据目录在 Windows 上可改名删除。
     /// 持有任一连接的进行中命令会先执行完（它们握着锁），再轮到本函数。
     pub fn close_for_maintenance(&self) -> Result<(), String> {
-        let mut write = self.write.lock().map_err(|_| "db state poisoned".to_string())?;
-        let mut read = self.read.lock().map_err(|_| "db state poisoned".to_string())?;
+        let mut write = self
+            .write
+            .lock()
+            .map_err(|_| "db state poisoned".to_string())?;
+        let mut read = self
+            .read
+            .lock()
+            .map_err(|_| "db state poisoned".to_string())?;
         if let Some(conn) = write.as_ref() {
             let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
         }
@@ -186,9 +198,13 @@ mod tests {
     fn journal_mode_is_wal_and_foreign_keys_on() {
         let (_dir, db) = temp_db("pragma");
         let conn = db.write_conn().unwrap();
-        let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(mode, "wal");
-        let fk: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+        let fk: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(fk, 1);
     }
 

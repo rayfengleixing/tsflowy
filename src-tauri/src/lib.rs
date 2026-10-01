@@ -50,7 +50,10 @@ fn bootstrap_data_dir(app: &tauri::AppHandle) {
                 let parent = default.parent().unwrap_or_else(|| Path::new("."));
                 let backup = parent.join(format!(
                     "tsflowy-{}-bak-{}",
-                    default.file_name().and_then(|s| s.to_str()).unwrap_or("data"),
+                    default
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("data"),
                     suf
                 ));
                 if let Err(e) = fs::rename(&default, &backup) {

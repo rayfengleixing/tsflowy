@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use rusqlite::{params, Connection};
 
-use super::models::SearchRowOut;
 use super::dberr;
+use super::models::SearchRowOut;
 
 /// FTS5 查询转义：整体包成短语查询，内部双引号翻倍转义，杜绝语法错误/注入
 /// （原 search.ts escapeFts，下沉到 Rust——JS 侧不再持有）。
@@ -110,7 +110,11 @@ fn query_rows(
 ///
 /// 注意1：FTS5 MATCH 只接受位置参数（? / ?N），$N 编号参数会得到空串导致语法错误
 /// 注意2：FTS5 表不能加别名（MATCH/snippet/bm25 都无法解析别名），须用全名引用
-pub fn search(conn: &Connection, workspace_id: &str, raw_query: &str) -> Result<Vec<SearchRowOut>, String> {
+pub fn search(
+    conn: &Connection,
+    workspace_id: &str,
+    raw_query: &str,
+) -> Result<Vec<SearchRowOut>, String> {
     let q = raw_query.trim();
     if q.is_empty() {
         return Ok(Vec::new());
@@ -260,7 +264,11 @@ mod tests {
         let hits = search(&conn, "w1", "天气不错").unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].view_id, "v1");
-        assert!(hits[0].snippet.contains("<em>天气不错</em>"), "{}", hits[0].snippet);
+        assert!(
+            hits[0].snippet.contains("<em>天气不错</em>"),
+            "{}",
+            hits[0].snippet
+        );
         assert!(hits[0].rank < 1e9);
         assert_eq!(hits[0].row_id, None, "文档命中不该带行 id");
     }
@@ -277,7 +285,12 @@ mod tests {
     #[test]
     fn operator_looking_query_matched_literally() {
         let conn = setup();
-        seed_doc_view(&conn, "v1", "标题A", r#"{"text":"a OR b 真的出现在内容里"}"#);
+        seed_doc_view(
+            &conn,
+            "v1",
+            "标题A",
+            r#"{"text":"a OR b 真的出现在内容里"}"#,
+        );
         seed_doc_view(&conn, "v2", "标题B", r#"{"text":"完全无关的另一段文字"}"#);
         // 未转义时 "a OR b" 会被 FTS 解析为布尔表达式；包成短语后按字面子串匹配
         let hits = search(&conn, "w1", "a OR b").unwrap();
@@ -438,9 +451,17 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].view_id, "v1");
         assert_eq!(hits[0].layout, "grid");
-        assert!(hits[0].snippet.contains("<em>营收报告</em>"), "{}", hits[0].snippet);
+        assert!(
+            hits[0].snippet.contains("<em>营收报告</em>"),
+            "{}",
+            hits[0].snippet
+        );
         assert!(hits[0].rank < 1e9);
-        assert_eq!(hits[0].row_id.as_deref(), Some("r1"), "单元格命中必须带行 id，供页面定位");
+        assert_eq!(
+            hits[0].row_id.as_deref(),
+            Some("r1"),
+            "单元格命中必须带行 id，供页面定位"
+        );
     }
 
     #[test]
@@ -492,7 +513,11 @@ mod tests {
         seed_cell(&conn, "r1", "f1", "true");
         // "true"/"1" 不是用户看得见的文字（界面显示 ✓），不该进索引
         let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM database_fts WHERE content <> ''", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM database_fts WHERE content <> ''",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(n, 0);
     }
@@ -524,21 +549,30 @@ mod tests {
         assert_eq!(search(&conn, "w1", "营收报告").unwrap().len(), 1);
 
         // 删行：FK 级联删单元格，DELETE 触发器要把索引一起带走
-        conn.execute("DELETE FROM database_rows WHERE id = 'r1'", []).unwrap();
-        assert!(search(&conn, "w1", "营收报告").unwrap().is_empty(), "删行后不应残留命中");
+        conn.execute("DELETE FROM database_rows WHERE id = 'r1'", [])
+            .unwrap();
+        assert!(
+            search(&conn, "w1", "营收报告").unwrap().is_empty(),
+            "删行后不应残留命中"
+        );
 
         seed_row(&conn, "r1", "v1");
         seed_cell(&conn, "r1", "f1", r#""季度营收报告""#);
         assert_eq!(search(&conn, "w1", "营收报告").unwrap().len(), 1);
-        conn.execute("DELETE FROM database_fields WHERE id = 'f1'", []).unwrap();
-        assert!(search(&conn, "w1", "营收报告").unwrap().is_empty(), "删字段后不应残留命中");
+        conn.execute("DELETE FROM database_fields WHERE id = 'f1'", [])
+            .unwrap();
+        assert!(
+            search(&conn, "w1", "营收报告").unwrap().is_empty(),
+            "删字段后不应残留命中"
+        );
     }
 
     #[test]
     fn trashed_database_page_excluded() {
         let conn = setup();
         seed_one_cell_table(&conn, r#""季度营收报告""#);
-        conn.execute("UPDATE views SET is_trash = 1 WHERE id = 'v1'", []).unwrap();
+        conn.execute("UPDATE views SET is_trash = 1 WHERE id = 'v1'", [])
+            .unwrap();
         assert!(search(&conn, "w1", "营收报告").unwrap().is_empty());
     }
 
@@ -564,7 +598,11 @@ mod tests {
         let conn = setup();
         seed_one_cell_table(&conn, r#""季度营收""#);
         let hits = search(&conn, "w1", "营收").unwrap();
-        assert_eq!(hits.len(), 1, "2 字查询 trigram 索引必空，必须走单元格 LIKE 兜底");
+        assert_eq!(
+            hits.len(),
+            1,
+            "2 字查询 trigram 索引必空，必须走单元格 LIKE 兜底"
+        );
         assert_eq!(hits[0].view_id, "v1");
         assert_eq!(hits[0].rank, 1e9);
         assert_eq!(
@@ -586,7 +624,11 @@ mod tests {
         assert_eq!(hits.len(), 1, "非法 JSON 原样入索引，写入不能失败");
         assert_eq!(hits[0].view_id, "v1");
         let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM database_fts WHERE row_id = 'r2'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM database_fts WHERE row_id = 'r2'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(n, 1);
     }

@@ -1,8 +1,14 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import type { DatabaseField, FieldOptions, SelectOption } from "@/types/database";
+import type { AggregateFn } from "@/lib/database-aggregate";
+import { aggregateLabel } from "@/lib/database-aggregate";
 import { newSelectOption, parseFieldOptions } from "@/lib/database-values";
+import { buildRelationPickerFields, relationTarget, rollupFnsFor } from "@/lib/relation";
+import { flattenTree } from "@/lib/tree";
 import { useDatabaseStore } from "@/stores/database";
+import { useWorkspaceStore } from "@/stores/workspace";
+import { useRelationStore } from "@/stores/relation";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { OptionDot } from "./editors";
@@ -23,6 +29,31 @@ export function FieldOptionsEditor(props: {
   const [optionName, setOptionName] = useState("");
   // 公式引用候选：同表其它字段名（数字/复选/文本均可引用，取值规则见 database-formula）
   const fieldNames = useDatabaseStore((s) => s.fields.filter((f) => f.id !== field.id).map((f) => f.name));
+  // 关联目标候选：工作区里所有宿主数据库表（排除本表，自己关联自己没有意义）
+  const currentViewId = useDatabaseStore((s) => s.view?.id ?? null);
+  // rollup 的关联字段候选必须来自本表，且只能是 relation 字段
+  const allFields = useDatabaseStore((s) => s.fields);
+  const relationFields = useMemo(() => allFields.filter((f) => f.field_type === "relation"), [allFields]);
+  const tree = useWorkspaceStore((s) => s.tree);
+  const relationData = useRelationStore((s) => s.data);
+  const ensureRelationDbs = useRelationStore((s) => s.ensure);
+
+  const relationTargets = useMemo(
+    () => buildRelationPickerFields(flattenTree(tree)).filter((v) => v.id !== currentViewId),
+    [tree, currentViewId],
+  );
+
+  // rollup 依赖：所选关联字段指向的目标库（用于列出可汇总字段与适用的聚合函数）
+  const rollupTargetViewId = useMemo(() => {
+    if (options.kind !== "rollup" || !options.relation_field_id) return null;
+    const rel = relationFields.find((f) => f.id === options.relation_field_id);
+    return rel ? relationTarget(rel) : null;
+  }, [options, relationFields]);
+  useEffect(() => {
+    if (rollupTargetViewId) ensureRelationDbs([rollupTargetViewId]);
+  }, [rollupTargetViewId, ensureRelationDbs]);
+  const rollupDb = rollupTargetViewId ? relationData[rollupTargetViewId] : undefined;
+  const rollupFns: AggregateFn[] = rollupFnsFor(rollupDb, options.kind === "rollup" ? options.target_field_id : "");
 
   // 每次打开时重置
   const handleOpenChange = (next: boolean) => {
@@ -216,6 +247,87 @@ export function FieldOptionsEditor(props: {
                 ))}
               </div>
             )}
+          </div>
+        ) : field.field_type === "relation" ? (
+          <div className="flex flex-col gap-3">
+            <label className="flex flex-col gap-1 text-[12px] text-neutral-500">
+              {t("field.relationTarget")}
+              <select
+                className="h-8 rounded-md border border-neutral-300 bg-white px-2 text-[13px] outline-none focus:border-brand-500"
+                value={options.kind === "relation" ? options.target_view_id : ""}
+                onChange={(e) => setOptions({ kind: "relation", target_view_id: e.target.value })}
+              >
+                <option value="">{t("field.relationUnset")}</option>
+                {relationTargets.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name || t("common.untitled")}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="text-[11px] leading-5 text-neutral-400">{t("field.relationHint")}</p>
+          </div>
+        ) : field.field_type === "rollup" ? (
+          <div className="flex flex-col gap-3">
+            <label className="flex flex-col gap-1 text-[12px] text-neutral-500">
+              {t("field.rollupRelation")}
+              <select
+                className="h-8 rounded-md border border-neutral-300 bg-white px-2 text-[13px] outline-none focus:border-brand-500"
+                value={options.kind === "rollup" ? options.relation_field_id : ""}
+                onChange={(e) =>
+                  // 换关联字段 = 换了目标库：目标字段与聚合函数一并清零，避免留下悬空配置
+                  setOptions({ kind: "rollup", relation_field_id: e.target.value, target_field_id: "", fn: "count" })
+                }
+              >
+                <option value="">{t("field.rollupMissing")}</option>
+                {relationFields.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {rollupDb && (
+              <label className="flex flex-col gap-1 text-[12px] text-neutral-500">
+                {t("field.rollupTarget")}
+                <select
+                  className="h-8 rounded-md border border-neutral-300 bg-white px-2 text-[13px] outline-none focus:border-brand-500"
+                  value={options.kind === "rollup" ? options.target_field_id : ""}
+                  onChange={(e) =>
+                    setOptions({
+                      kind: "rollup",
+                      relation_field_id: options.kind === "rollup" ? options.relation_field_id : "",
+                      target_field_id: e.target.value,
+                      fn: "count",
+                    })
+                  }
+                >
+                  <option value="">{t("field.rollupMissing")}</option>
+                  {rollupDb.fields.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {options.kind === "rollup" && options.target_field_id && (
+              <label className="flex flex-col gap-1 text-[12px] text-neutral-500">
+                {t("field.rollupFn")}
+                <select
+                  className="h-8 rounded-md border border-neutral-300 bg-white px-2 text-[13px] outline-none focus:border-brand-500"
+                  value={options.fn}
+                  onChange={(e) => setOptions({ ...options, fn: e.target.value as AggregateFn })}
+                >
+                  {rollupFns.map((fn) => (
+                    <option key={fn} value={fn}>
+                      {aggregateLabel(fn)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <p className="text-[11px] leading-5 text-neutral-400">{t("field.rollupHint")}</p>
           </div>
         ) : (
           <p className="text-[13px] text-neutral-400">{t("field.noOptionsForType")}</p>

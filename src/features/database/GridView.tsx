@@ -30,6 +30,8 @@ import { UNGROUPED, applyFilters, canGroupBy, groupRowsForGrid, sortRows, type S
 import { aggregateValue, normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
 import { buildCsvExport, csvValueToCell, parseCsv, planImport, parseTsv, resolveSelectRefs } from "@/lib/csv";
 import { computeFormula } from "@/lib/database-formula";
+import { computeRollup, relationRowIds, relationRowLabel, relationTarget } from "@/lib/relation";
+import { useRelationStore } from "@/stores/relation";
 import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
 import { NewFieldDialog } from "./NewFieldDialog";
@@ -37,7 +39,7 @@ import { FilterBar } from "./FilterBar";
 import { SortBar } from "./SortBar";
 import { AggregateMenu } from "./AggregateMenu";
 import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
-import { CellEditorSlot, SelectChips } from "./editors";
+import { CellEditorSlot, RelationChips, SelectChips } from "./editors";
 import { RowDetailPanel } from "./RowDetail";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -136,6 +138,27 @@ export function GridView({
   const visibleFields = useMemo(() => fields.filter((f) => f.is_hidden === 0), [fields]);
   // 名称列（主列）：position 最小且不可隐藏，作为行详情入口
   const primaryField = visibleFields[0] ?? null;
+
+  // 关联/汇总要读目标库：把本表所有关联字段的目标视图拉进缓存（同一目标库只请求一次）
+  const relationTargetIds = useMemo(
+    () =>
+      [
+        ...new Set(
+          fields
+            .filter((f) => f.field_type === "relation")
+            .map((f) => relationTarget(f))
+            .filter((id): id is string => Boolean(id)),
+        ),
+      ],
+    [fields],
+  );
+  const relationData = useRelationStore((s) => s.data);
+  const ensureRelationDbs = useRelationStore((s) => s.ensure);
+  useEffect(() => {
+    if (relationTargetIds.length > 0) ensureRelationDbs(relationTargetIds);
+  }, [relationTargetIds, ensureRelationDbs]);
+  // 目标行 id → 显示标题；目标库未加载时返回 null，由调用方降级到原始 id
+  const relationDbOf = useCallback((viewId: string) => relationData[viewId], [relationData]);
 
   const displayRows = useMemo(() => {
     const filtered = applyFilters(rows, cells, filters, fields, filterMode);
@@ -469,11 +492,25 @@ export function GridView({
     try {
       const cellsWithFormula = { ...cells };
       for (const row of displayRows) {
+        const rowCells = cells[row.id] ?? {};
         for (const f of fields) {
-          if (f.field_type !== "formula") continue;
-          const v = computeFormula(f, cells[row.id] ?? {}, fields);
-          if (v !== null) {
-            cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: v };
+          if (f.field_type === "formula") {
+            const v = computeFormula(f, rowCells, fields);
+            if (v !== null) {
+              cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: v };
+            }
+          } else if (f.field_type === "rollup") {
+            const v = computeRollup(f, rowCells, fields, relationDbOf);
+            if (v !== null) {
+              cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: v };
+            }
+          } else if (f.field_type === "relation") {
+            // 导出成行标题而不是行 id：导出的 CSV 才对人可读
+            const db = relationDbOf(relationTarget(f) ?? "");
+            const text = relationRowIds(rowCells[f.id] ?? null)
+              .map((id) => (db ? relationRowLabel(db, id) : null) ?? id)
+              .join("; ");
+            cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: text };
           }
         }
       }
@@ -528,8 +565,8 @@ export function GridView({
             skipped++; // 超出最右列
             continue;
           }
-          if (isReadonlyType(field.field_type)) {
-            skipped++; // 公式/系统字段跳过
+          if (isReadonlyType(field.field_type) || field.field_type === "relation") {
+            skipped++; // 公式/汇总/系统字段与关联字段跳过（关联值是对端行 id，粘贴的文本无法直接对应）
             continue;
           }
           if (field.field_type === "single_select" || field.field_type === "multi_select") {
@@ -693,11 +730,13 @@ export function GridView({
       {visibleFields.map((field) => {
         const isPrimary = field.id === primaryField?.id;
         const isEditing = editing?.rowId === row.id && editing.fieldId === field.id;
-        // 公式字段无存储值：渲染时按表达式实时计算
+        // 公式/汇总字段无存储值：渲染时按表达式/关联行实时计算
         const value =
           field.field_type === "formula"
             ? computeFormula(field, cells[row.id] ?? {}, fields)
-            : (cells[row.id]?.[field.id] ?? null);
+            : field.field_type === "rollup"
+              ? computeRollup(field, cells[row.id] ?? {}, fields, relationDbOf)
+              : (cells[row.id]?.[field.id] ?? null);
         return (
           <td
             key={field.id}
@@ -1291,6 +1330,17 @@ function CellDisplay({
           <span className="text-neutral-300" />
         ) : (
           <SelectChips field={field} value={value} onRemove={onChipRemove} />
+        )}
+      </div>
+    );
+  }
+  if (field.field_type === "relation") {
+    return (
+      <div className="flex h-full w-full items-center truncate px-2">
+        {Array.isArray(value) && value.length === 0 ? (
+          <span className="text-neutral-300" />
+        ) : (
+          <RelationChips field={field} value={value} />
         )}
       </div>
     );

@@ -20,12 +20,21 @@ use super::{dberr, now_ms};
 /// 键序由 serde_json 字典序决定，消费方 parseFieldOptions 按键名读取，无顺序依赖。
 pub fn default_options_json(field_type: &str) -> String {
     match field_type {
-        "single_select" | "multi_select" => serde_json::json!({ "kind": "select", "options": [] }).to_string(),
+        "single_select" | "multi_select" => {
+            serde_json::json!({ "kind": "select", "options": [] }).to_string()
+        }
         "number" => serde_json::json!({
             "kind": "number", "format": "decimal", "precision": 2, "currency": "CNY"
         })
         .to_string(),
         "date" => serde_json::json!({ "kind": "date", "include_time": false }).to_string(),
+        // 关联：目标库（宿主数据库视图 id）由前端在字段设置里选择，先给空占位
+        "relation" => serde_json::json!({ "kind": "relation", "target_view_id": "" }).to_string(),
+        // 汇总：对关联行里的目标字段做聚合；三项配置都由前端在字段设置里选择
+        "rollup" => serde_json::json!({
+            "kind": "rollup", "relation_field_id": "", "target_field_id": "", "fn": "count"
+        })
+        .to_string(),
         _ => serde_json::json!({ "kind": "none" }).to_string(),
     }
 }
@@ -105,20 +114,29 @@ pub fn create_field(
 }
 
 pub fn rename_field(conn: &Connection, field_id: &str, name: &str) -> Result<(), String> {
-    conn.execute("UPDATE database_fields SET name = ?1 WHERE id = ?2", params![name, field_id])
-        .map_err(dberr("rename field"))?;
+    conn.execute(
+        "UPDATE database_fields SET name = ?1 WHERE id = ?2",
+        params![name, field_id],
+    )
+    .map_err(dberr("rename field"))?;
     Ok(())
 }
 
 pub fn delete_field(conn: &Connection, field_id: &str) -> Result<(), String> {
-    conn.execute("DELETE FROM database_fields WHERE id = ?1", params![field_id])
-        .map_err(dberr("delete field"))?; // cells 经 FK 级联
+    conn.execute(
+        "DELETE FROM database_fields WHERE id = ?1",
+        params![field_id],
+    )
+    .map_err(dberr("delete field"))?; // cells 经 FK 级联
     Ok(())
 }
 
 pub fn set_field_width(conn: &Connection, field_id: &str, width: i64) -> Result<(), String> {
-    conn.execute("UPDATE database_fields SET width = ?1 WHERE id = ?2", params![width, field_id])
-        .map_err(dberr("set field width"))?;
+    conn.execute(
+        "UPDATE database_fields SET width = ?1 WHERE id = ?2",
+        params![width, field_id],
+    )
+    .map_err(dberr("set field width"))?;
     Ok(())
 }
 
@@ -132,17 +150,30 @@ pub fn set_field_hidden(conn: &Connection, field_id: &str, hidden: bool) -> Resu
 }
 
 /// options 为已序列化 JSON 字符串（JS 侧 JSON.stringify 产出）。
-pub fn update_field_options(conn: &Connection, field_id: &str, options: &str) -> Result<(), String> {
-    conn.execute("UPDATE database_fields SET options = ?1 WHERE id = ?2", params![options, field_id])
-        .map_err(dberr("update field options"))?;
+pub fn update_field_options(
+    conn: &Connection,
+    field_id: &str,
+    options: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE database_fields SET options = ?1 WHERE id = ?2",
+        params![options, field_id],
+    )
+    .map_err(dberr("update field options"))?;
     Ok(())
 }
 
 /// 整列重排：ordered_ids 为最终顺序（position 0..n-1）。单事务避免中间态。
-pub fn reorder_fields(conn: &Connection, view_id: &str, ordered_ids: &[&str]) -> Result<(), String> {
+pub fn reorder_fields(
+    conn: &Connection,
+    view_id: &str,
+    ordered_ids: &[&str],
+) -> Result<(), String> {
     let host = data_view_id(conn, view_id)?;
     let view_id = host.as_str();
-    let tx = conn.unchecked_transaction().map_err(dberr("reorder fields"))?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(dberr("reorder fields"))?;
     for (i, id) in ordered_ids.iter().enumerate() {
         tx.execute(
             "UPDATE database_fields SET position = ?1 WHERE id = ?2 AND database_view_id = ?3",
@@ -158,7 +189,11 @@ pub fn reorder_fields(conn: &Connection, view_id: &str, ordered_ids: &[&str]) ->
 /// 同类型重选是 no-op：UI 已对当前类型禁用，这里兜底防止误清整列数据。
 pub fn change_field_type(conn: &Connection, field_id: &str, new_type: &str) -> Result<(), String> {
     let current: Option<String> = conn
-        .query_row("SELECT field_type FROM database_fields WHERE id = ?1", params![field_id], |r| r.get(0))
+        .query_row(
+            "SELECT field_type FROM database_fields WHERE id = ?1",
+            params![field_id],
+            |r| r.get(0),
+        )
         .optional()
         .map_err(dberr("change field type (read current)"))?;
     if current.as_deref() == Some(new_type) {
@@ -170,8 +205,11 @@ pub fn change_field_type(conn: &Connection, field_id: &str, new_type: &str) -> R
         params![new_type, options, field_id],
     )
     .map_err(dberr("change field type"))?;
-    conn.execute("UPDATE database_cells SET value = 'null' WHERE field_id = ?1", params![field_id])
-        .map_err(dberr("change field type (clear cells)"))?;
+    conn.execute(
+        "UPDATE database_cells SET value = 'null' WHERE field_id = ?1",
+        params![field_id],
+    )
+    .map_err(dberr("change field type (clear cells)"))?;
     Ok(())
 }
 
@@ -234,7 +272,9 @@ pub fn get_row(conn: &Connection, row_id: &str) -> Result<Option<DatabaseRowRow>
              FROM database_rows WHERE id = ?1",
         )
         .map_err(dberr("get row"))?;
-    let mut rows = stmt.query_map(params![row_id], row_from_row).map_err(dberr("get row"))?;
+    let mut rows = stmt
+        .query_map(params![row_id], row_from_row)
+        .map_err(dberr("get row"))?;
     match rows.next() {
         Some(r) => r.map(Some).map_err(dberr("get row")),
         None => Ok(None),
@@ -242,7 +282,11 @@ pub fn get_row(conn: &Connection, row_id: &str) -> Result<Option<DatabaseRowRow>
 }
 
 /// 绑定行详情文档 view（首次打开行详情时创建）。
-pub fn set_row_document_id(conn: &Connection, row_id: &str, document_id: &str) -> Result<(), String> {
+pub fn set_row_document_id(
+    conn: &Connection,
+    row_id: &str,
+    document_id: &str,
+) -> Result<(), String> {
     conn.execute(
         "UPDATE database_rows SET document_id = ?1 WHERE id = ?2",
         params![document_id, row_id],
@@ -273,7 +317,9 @@ pub fn delete_rows(conn: &Connection, ids: &[String]) -> Result<usize, String> {
 pub fn reorder_rows(conn: &Connection, view_id: &str, ordered_ids: &[&str]) -> Result<(), String> {
     let host = data_view_id(conn, view_id)?;
     let view_id = host.as_str();
-    let tx = conn.unchecked_transaction().map_err(dberr("reorder rows"))?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(dberr("reorder rows"))?;
     for (i, id) in ordered_ids.iter().enumerate() {
         tx.execute(
             "UPDATE database_rows SET position = ?1 WHERE id = ?2 AND database_view_id = ?3",
@@ -314,7 +360,12 @@ pub fn load_cells(conn: &Connection, view_id: &str) -> Result<Vec<CellLoadRow>, 
 }
 
 /// upsert 单元格。value 为已序列化 JSON 字符串（JS 侧 serializeValue 产出，与旧库字节一致）。
-pub fn set_cell(conn: &Connection, row_id: &str, field_id: &str, value: &str) -> Result<(), String> {
+pub fn set_cell(
+    conn: &Connection,
+    row_id: &str,
+    field_id: &str,
+    value: &str,
+) -> Result<(), String> {
     conn.execute(
         "INSERT INTO database_cells(row_id, field_id, value) VALUES (?1, ?2, ?3)
          ON CONFLICT(row_id, field_id) DO UPDATE SET value = ?3",
@@ -327,7 +378,9 @@ pub fn set_cell(conn: &Connection, row_id: &str, field_id: &str, value: &str) ->
 /// 批量 upsert 单元格：一个事务内落全部写入，替代逐格 IPC（TSV 粘贴路径）。
 /// 与 set_cell 同语义（只 upsert，不校验 row/field 归属：调用方给的 id 来自已加载数据）。
 pub fn set_cells_many(conn: &Connection, updates: &[CellSetIn]) -> Result<usize, String> {
-    let tx = conn.unchecked_transaction().map_err(dberr("set cells many"))?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(dberr("set cells many"))?;
     for u in updates {
         tx.execute(
             "INSERT INTO database_cells(row_id, field_id, value) VALUES (?1, ?2, ?3)
@@ -341,7 +394,11 @@ pub fn set_cells_many(conn: &Connection, updates: &[CellSetIn]) -> Result<usize,
 }
 
 /// 批量追加行：一个事务内按入参顺序建行并返回（position 连续，同 create_row 语义）。
-pub fn create_rows(conn: &Connection, view_id: &str, ids: &[String]) -> Result<Vec<DatabaseRowRow>, String> {
+pub fn create_rows(
+    conn: &Connection,
+    view_id: &str,
+    ids: &[String],
+) -> Result<Vec<DatabaseRowRow>, String> {
     let host = data_view_id(conn, view_id)?;
     let view_id = host.as_str();
     let tx = conn.unchecked_transaction().map_err(dberr("create rows"))?;
@@ -463,9 +520,23 @@ mod tests {
             default_options_json("number"),
             r#"{"currency":"CNY","format":"decimal","kind":"number","precision":2}"#
         );
-        assert_eq!(default_options_json("date"), r#"{"include_time":false,"kind":"date"}"#);
-        assert_eq!(default_options_json("multi_select"), r#"{"kind":"select","options":[]}"#);
+        assert_eq!(
+            default_options_json("date"),
+            r#"{"include_time":false,"kind":"date"}"#
+        );
+        assert_eq!(
+            default_options_json("multi_select"),
+            r#"{"kind":"select","options":[]}"#
+        );
         assert_eq!(default_options_json("checkbox"), r#"{"kind":"none"}"#);
+        assert_eq!(
+            default_options_json("relation"),
+            r#"{"kind":"relation","target_view_id":""}"#
+        );
+        assert_eq!(
+            default_options_json("rollup"),
+            r#"{"fn":"count","kind":"rollup","relation_field_id":"","target_field_id":""}"#
+        );
     }
 
     #[test]
@@ -565,7 +636,14 @@ mod tests {
         assert!(get_row(&conn, "ghost").unwrap().is_none());
 
         set_row_document_id(&conn, "r1", "doc-1").unwrap();
-        assert_eq!(get_row(&conn, "r1").unwrap().unwrap().document_id.as_deref(), Some("doc-1"));
+        assert_eq!(
+            get_row(&conn, "r1")
+                .unwrap()
+                .unwrap()
+                .document_id
+                .as_deref(),
+            Some("doc-1")
+        );
 
         delete_row(&conn, "r2").unwrap();
         let rows = list_rows(&conn, "v1").unwrap();
@@ -584,7 +662,11 @@ mod tests {
 
         let created = cells_of(&conn, "f-created");
         assert_eq!(created.len(), 1);
-        assert!(created[0].value.ends_with('Z'), "UTC ISO 秒级: {}", created[0].value);
+        assert!(
+            created[0].value.ends_with('Z'),
+            "UTC ISO 秒级: {}",
+            created[0].value
+        );
         let edited = cells_of(&conn, "f-edited");
         assert_eq!(edited.len(), 1);
     }
@@ -642,16 +724,27 @@ mod tests {
         create_row(&conn, "v1", "r1").unwrap();
 
         // 手动把 updated_at 设到过去，观察触发器是否刷回当前时间
-        conn.execute("UPDATE database_rows SET updated_at = 12345 WHERE id = 'r1'", []).unwrap();
+        conn.execute(
+            "UPDATE database_rows SET updated_at = 12345 WHERE id = 'r1'",
+            [],
+        )
+        .unwrap();
 
         set_cell(&conn, "r1", "f1", r#""a""#).unwrap(); // INSERT 路径
         assert_eq!(get_row(&conn, "r1").unwrap().unwrap().updated_at, 12345);
 
         set_cell(&conn, "r1", "f1", r#""b""#).unwrap(); // UPDATE 路径
-        assert!(get_row(&conn, "r1").unwrap().unwrap().updated_at > 12345, "触发器应刷新 updated_at");
+        assert!(
+            get_row(&conn, "r1").unwrap().unwrap().updated_at > 12345,
+            "触发器应刷新 updated_at"
+        );
 
         // 值相同再写一遍：WHEN old.value IS NOT new.value 不触发，不空转
-        conn.execute("UPDATE database_rows SET updated_at = 12345 WHERE id = 'r1'", []).unwrap();
+        conn.execute(
+            "UPDATE database_rows SET updated_at = 12345 WHERE id = 'r1'",
+            [],
+        )
+        .unwrap();
         set_cell(&conn, "r1", "f1", r#""b""#).unwrap();
         assert_eq!(get_row(&conn, "r1").unwrap().unwrap().updated_at, 12345);
     }
@@ -666,7 +759,11 @@ mod tests {
     // ---------- 批量写（TSV 粘贴路径） ----------
 
     fn cell_set_in(row: &str, field: &str, value: &str) -> CellSetIn {
-        CellSetIn { row_id: row.into(), field_id: field.into(), value: value.into() }
+        CellSetIn {
+            row_id: row.into(),
+            field_id: field.into(),
+            value: value.into(),
+        }
     }
 
     #[test]
@@ -689,7 +786,10 @@ mod tests {
         // 任一条 FK 违例 → 整批回滚，先写入的合法项也不落库
         let err = set_cells_many(
             &conn,
-            &[cell_set_in("r1", "f1", r#""c""#), cell_set_in("ghost", "f1", "1")],
+            &[
+                cell_set_in("r1", "f1", r#""c""#),
+                cell_set_in("ghost", "f1", "1"),
+            ],
         )
         .unwrap_err();
         assert!(err.contains("FOREIGN KEY"), "{err}");
@@ -702,13 +802,20 @@ mod tests {
         create_row(&conn, "v1", "r1").unwrap();
 
         let made = create_rows(&conn, "v1", &["r2".into(), "r3".into()]).unwrap();
-        assert_eq!(made.iter().map(|r| r.position).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(
+            made.iter().map(|r| r.position).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
         assert_eq!(made[1].database_view_id, "v1");
         assert_eq!(list_rows(&conn, "v1").unwrap().len(), 3);
 
         let err = create_rows(&conn, "v1", &["r4".into(), "r2".into()]).unwrap_err();
         assert!(err.contains("UNIQUE"), "{err}");
-        let ids: Vec<String> = list_rows(&conn, "v1").unwrap().into_iter().map(|r| r.id).collect();
+        let ids: Vec<String> = list_rows(&conn, "v1")
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
         assert_eq!(ids, vec!["r1", "r2", "r3"], "整批回滚：r4 不落库");
     }
 
@@ -720,8 +827,16 @@ mod tests {
         set_cells_many(
             &conn,
             &[
-                CellSetIn { row_id: "r2".into(), field_id: "f1".into(), value: r#""x""#.into() },
-                CellSetIn { row_id: "r3".into(), field_id: "f1".into(), value: r#""y""#.into() },
+                CellSetIn {
+                    row_id: "r2".into(),
+                    field_id: "f1".into(),
+                    value: r#""x""#.into(),
+                },
+                CellSetIn {
+                    row_id: "r3".into(),
+                    field_id: "f1".into(),
+                    value: r#""y""#.into(),
+                },
             ],
         )
         .unwrap();
@@ -729,7 +844,11 @@ mod tests {
         // 多选删除：已不存在的 id 不计入、也不中断整批
         let n = delete_rows(&conn, &["r2".into(), "ghost".into()]).unwrap();
         assert_eq!(n, 1);
-        let ids: Vec<String> = list_rows(&conn, "v1").unwrap().into_iter().map(|r| r.id).collect();
+        let ids: Vec<String> = list_rows(&conn, "v1")
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
         assert_eq!(ids, vec!["r1", "r3"]);
         let left = cells_of(&conn, "f1");
         assert_eq!(left.len(), 1);
@@ -742,27 +861,53 @@ mod tests {
     fn csv_import_lands_everything_in_one_transaction() {
         let conn = setup();
         let fields = vec![
-            CsvFieldIn { id: "f1".into(), name: "名称".into(), field_type: "text".into() },
-            CsvFieldIn { id: "f2".into(), name: "数量".into(), field_type: "number".into() },
+            CsvFieldIn {
+                id: "f1".into(),
+                name: "名称".into(),
+                field_type: "text".into(),
+            },
+            CsvFieldIn {
+                id: "f2".into(),
+                name: "数量".into(),
+                field_type: "number".into(),
+            },
         ];
         let rows = vec![
             CsvRowIn {
                 id: "r1".into(),
                 cells: vec![
-                    CsvCellIn { field_id: "f1".into(), value: r#""a""#.into() },
-                    CsvCellIn { field_id: "f2".into(), value: "1".into() },
+                    CsvCellIn {
+                        field_id: "f1".into(),
+                        value: r#""a""#.into(),
+                    },
+                    CsvCellIn {
+                        field_id: "f2".into(),
+                        value: "1".into(),
+                    },
                 ],
             },
-            CsvRowIn { id: "r2".into(), cells: vec![] },
+            CsvRowIn {
+                id: "r2".into(),
+                cells: vec![],
+            },
         ];
         let (nf, nr, nc) = csv_import(&conn, "v1", &fields, &rows).unwrap();
         assert_eq!((nf, nr, nc), (2, 2, 2));
 
         let fs = list_fields(&conn, "v1").unwrap();
-        assert_eq!(fs.iter().map(|f| f.position).collect::<Vec<_>>(), vec![0, 1]);
-        assert_eq!(fs[1].options, r#"{"currency":"CNY","format":"decimal","kind":"number","precision":2}"#);
+        assert_eq!(
+            fs.iter().map(|f| f.position).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert_eq!(
+            fs[1].options,
+            r#"{"currency":"CNY","format":"decimal","kind":"number","precision":2}"#
+        );
         let rs = list_rows(&conn, "v1").unwrap();
-        assert_eq!(rs.iter().map(|r| r.position).collect::<Vec<_>>(), vec![0, 1]);
+        assert_eq!(
+            rs.iter().map(|r| r.position).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
         assert_eq!(load_cells(&conn, "v1").unwrap().len(), 2);
     }
 
@@ -770,10 +915,21 @@ mod tests {
     fn csv_import_rolls_back_on_bad_field_type() {
         let conn = setup();
         let fields = vec![
-            CsvFieldIn { id: "f1".into(), name: "ok".into(), field_type: "text".into() },
-            CsvFieldIn { id: "f2".into(), name: "bad".into(), field_type: "ghost_type".into() }, // CHECK 约束拒绝
+            CsvFieldIn {
+                id: "f1".into(),
+                name: "ok".into(),
+                field_type: "text".into(),
+            },
+            CsvFieldIn {
+                id: "f2".into(),
+                name: "bad".into(),
+                field_type: "ghost_type".into(),
+            }, // CHECK 约束拒绝
         ];
-        let rows = vec![CsvRowIn { id: "r1".into(), cells: vec![] }];
+        let rows = vec![CsvRowIn {
+            id: "r1".into(),
+            cells: vec![],
+        }];
         let err = csv_import(&conn, "v1", &fields, &rows).unwrap_err();
         assert!(err.contains("CHECK"), "{err}");
         // 整体回滚：合法的 f1 也不存在
@@ -810,23 +966,42 @@ mod tests {
 
         let f = create_field(&conn, derived, "f1", "text", Some("名称")).unwrap();
         assert_eq!(f.database_view_id, "v1", "返回行报告真实归属");
-        assert_eq!(list_fields(&conn, derived).unwrap().len(), 1, "派生视图读得到宿主字段");
+        assert_eq!(
+            list_fields(&conn, derived).unwrap().len(),
+            1,
+            "派生视图读得到宿主字段"
+        );
 
         let r = create_row(&conn, derived, "r1").unwrap();
         assert_eq!(r.database_view_id, "v1");
         set_cell(&conn, "r1", "f1", r#""x""#).unwrap();
         assert_eq!(load_cells(&conn, derived).unwrap().len(), 1);
-        assert_eq!(list_rows(&conn, "v1").unwrap()[0].id, "r1", "宿主读得到派生视图建的行");
+        assert_eq!(
+            list_rows(&conn, "v1").unwrap()[0].id,
+            "r1",
+            "宿主读得到派生视图建的行"
+        );
 
         create_field(&conn, derived, "f2", "number", None).unwrap();
         reorder_fields(&conn, derived, &["f2", "f1"]).unwrap();
-        let order: Vec<String> = list_fields(&conn, "v1").unwrap().into_iter().map(|f| f.id).collect();
+        let order: Vec<String> = list_fields(&conn, "v1")
+            .unwrap()
+            .into_iter()
+            .map(|f| f.id)
+            .collect();
         assert_eq!(order, vec!["f2", "f1"]);
 
-        let fields = vec![CsvFieldIn { id: "f3".into(), name: "导入".into(), field_type: "text".into() }];
+        let fields = vec![CsvFieldIn {
+            id: "f3".into(),
+            name: "导入".into(),
+            field_type: "text".into(),
+        }];
         let rows = vec![CsvRowIn {
             id: "r3".into(),
-            cells: vec![CsvCellIn { field_id: "f3".into(), value: r#""v""#.into() }],
+            cells: vec![CsvCellIn {
+                field_id: "f3".into(),
+                value: r#""v""#.into(),
+            }],
         }];
         let (nf, nr, nc) = csv_import(&conn, derived, &fields, &rows).unwrap();
         assert_eq!((nf, nr, nc), (1, 1, 1));

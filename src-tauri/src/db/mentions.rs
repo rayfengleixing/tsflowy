@@ -6,9 +6,14 @@ use super::{dberr, now_ms};
 /// 单事务重建某文档的 mentions 行：先删 src 全部旧行，再整批写入；指向已删除视图的死链跳过不写。
 /// 自引用过滤与 id 生成在 JS 侧完成（collectMentions / newId()）；updated_at 统一取本次调用时刻。
 pub fn rebuild_for(conn: &Connection, view_id: &str, rows: &[MentionRowIn]) -> Result<(), String> {
-    let tx = conn.unchecked_transaction().map_err(dberr("rebuild mentions"))?;
-    tx.execute("DELETE FROM mentions WHERE src_view_id = ?1", params![view_id])
+    let tx = conn
+        .unchecked_transaction()
         .map_err(dberr("rebuild mentions"))?;
+    tx.execute(
+        "DELETE FROM mentions WHERE src_view_id = ?1",
+        params![view_id],
+    )
+    .map_err(dberr("rebuild mentions"))?;
     let t = now_ms();
     for row in rows {
         // 目标视图可能已被彻底删除（文档里仍留着 mention 节点）：跳过而不是整批失败，
@@ -138,7 +143,10 @@ mod tests {
             let mut stmt = conn
                 .prepare("SELECT target_view_id FROM mentions WHERE src_view_id = 's'")
                 .unwrap();
-            stmt.query_map([], |r| r.get(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
         };
         assert_eq!(targets, vec!["t2".to_string()]);
     }
@@ -156,7 +164,10 @@ mod tests {
             let mut stmt = conn
                 .prepare("SELECT target_view_id FROM mentions WHERE src_view_id = 's'")
                 .unwrap();
-            stmt.query_map([], |r| r.get(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
         };
         assert_eq!(targets, vec!["t1".to_string()]);
     }
@@ -207,11 +218,13 @@ mod tests {
         seed_view(&conn, "t", "目标");
         rebuild_for(&conn, "s", &[row("m1", "t")]).unwrap();
 
-        conn.execute("DELETE FROM views WHERE id = 't'", []).unwrap();
+        conn.execute("DELETE FROM views WHERE id = 't'", [])
+            .unwrap();
         assert_eq!(count(&conn).unwrap(), 0);
 
         rebuild_for(&conn, "s", &[row("m2", "s")]).unwrap(); // 自引用行也受 FK 保护
-        conn.execute("DELETE FROM views WHERE id = 's'", []).unwrap();
+        conn.execute("DELETE FROM views WHERE id = 's'", [])
+            .unwrap();
         assert_eq!(count(&conn).unwrap(), 0);
     }
 }

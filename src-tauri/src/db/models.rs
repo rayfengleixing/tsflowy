@@ -65,14 +65,32 @@ mod tests {
         };
         let obj = serde_json::to_value(&v).unwrap();
         // serde_json 的 Map 按字典序输出键：JS 侧按属性名取值，键序无关紧要，锁死键集合即可
-        let mut keys: Vec<&str> = obj.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+        let mut keys: Vec<&str> = obj
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
         keys.sort_unstable();
         assert_eq!(
             keys,
             vec![
-                "created_at", "deleted_at", "extra", "icon", "id", "is_favorite", "is_trash",
-                "layout", "name", "parent_id", "position", "source_id", "tags", "updated_at",
-                "visited_at", "workspace_id"
+                "created_at",
+                "deleted_at",
+                "extra",
+                "icon",
+                "id",
+                "is_favorite",
+                "is_trash",
+                "layout",
+                "name",
+                "parent_id",
+                "position",
+                "source_id",
+                "tags",
+                "updated_at",
+                "visited_at",
+                "workspace_id"
             ]
         );
         assert_eq!(obj["is_trash"], serde_json::json!(0));
@@ -90,7 +108,12 @@ mod tests {
             updated_at: 1,
         };
         let obj = serde_json::to_value(&w).unwrap();
-        let mut keys: Vec<&str> = obj.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+        let mut keys: Vec<&str> = obj
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
         keys.sort_unstable();
         assert_eq!(keys, vec!["created_at", "icon", "id", "name", "updated_at"]);
     }

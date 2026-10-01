@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
-use super::models::PagePropertyOut;
 use super::dberr;
+use super::models::PagePropertyOut;
 
 fn row_to_pp(r: &rusqlite::Row<'_>) -> rusqlite::Result<PagePropertyOut> {
     Ok(PagePropertyOut {
@@ -28,7 +28,13 @@ pub fn list(conn: &Connection, view_id: &str) -> Result<Vec<PagePropertyOut>, St
 
 /// 存在则只更新 value/field_type（保留 position）；不存在则 MAX+1 插入。
 /// 与旧实现一致：两步不做事务（单写连接下无并发窗口）。
-pub fn set(conn: &Connection, view_id: &str, key: &str, value: &str, field_type: &str) -> Result<(), String> {
+pub fn set(
+    conn: &Connection,
+    view_id: &str,
+    key: &str,
+    value: &str,
+    field_type: &str,
+) -> Result<(), String> {
     let existing: Option<i64> = conn
         .query_row(
             "SELECT position FROM page_properties WHERE view_id = ?1 AND key = ?2",
@@ -82,8 +88,15 @@ pub fn remove(conn: &Connection, view_id: &str, key: &str) -> Result<(), String>
 /// 重命名（JS 侧已拦截 !newKey.trim() || oldKey === newKey）。
 /// 与旧实现逐字一致：冲突检查用**未 trim** 的 newKey，落库更新用 trim 后的值；
 /// 目标已存在时语义为"删旧留目标"（合并）。
-pub fn rename(conn: &Connection, view_id: &str, old_key: &str, new_key: &str) -> Result<(), String> {
-    let tx = conn.unchecked_transaction().map_err(dberr("rename page property"))?;
+pub fn rename(
+    conn: &Connection,
+    view_id: &str,
+    old_key: &str,
+    new_key: &str,
+) -> Result<(), String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(dberr("rename page property"))?;
     let target_exists = tx
         .query_row(
             "SELECT 1 FROM page_properties WHERE view_id = ?1 AND key = ?2",
@@ -106,7 +119,8 @@ pub fn rename(conn: &Connection, view_id: &str, old_key: &str, new_key: &str) ->
         )
         .map_err(dberr("rename page property"))?;
     }
-    tx.commit().map_err(dberr("rename page property (commit)"))?;
+    tx.commit()
+        .map_err(dberr("rename page property (commit)"))?;
     Ok(())
 }
 
@@ -237,8 +251,11 @@ mod tests {
     fn delete_view_cascades_properties() {
         let conn = setup();
         set(&conn, "v1", "a", "1", "text").unwrap();
-        conn.execute("DELETE FROM views WHERE id = 'v1'", []).unwrap();
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM page_properties", [], |r| r.get(0)).unwrap();
+        conn.execute("DELETE FROM views WHERE id = 'v1'", [])
+            .unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM page_properties", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 0);
     }
 }

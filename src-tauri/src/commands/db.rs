@@ -24,7 +24,11 @@ pub async fn workspace_list(db: State<'_, Db>) -> Result<Vec<WorkspaceRow>, Stri
 }
 
 #[tauri::command]
-pub async fn workspace_create(db: State<'_, Db>, id: String, name: String) -> Result<WorkspaceRow, String> {
+pub async fn workspace_create(
+    db: State<'_, Db>,
+    id: String,
+    name: String,
+) -> Result<WorkspaceRow, String> {
     // id 由前端 newId() 生成后传入
     let conn = db.write_conn()?;
     db::workspaces::create(&conn, &id, &name)
@@ -37,7 +41,11 @@ pub async fn workspace_rename(db: State<'_, Db>, id: String, name: String) -> Re
 }
 
 #[tauri::command]
-pub async fn workspace_set_icon(db: State<'_, Db>, id: String, icon: Option<String>) -> Result<(), String> {
+pub async fn workspace_set_icon(
+    db: State<'_, Db>,
+    id: String,
+    icon: Option<String>,
+) -> Result<(), String> {
     let conn = db.write_conn()?;
     db::workspaces::set_icon(&conn, &id, icon.as_deref())
 }
@@ -51,26 +59,39 @@ pub async fn workspace_remove(db: State<'_, Db>, id: String) -> Result<(), Strin
 // ---------- view ----------
 
 #[tauri::command]
-pub async fn view_list_by_workspace(db: State<'_, Db>, workspace_id: String) -> Result<Vec<ViewRow>, String> {
+pub async fn view_list_by_workspace(
+    db: State<'_, Db>,
+    workspace_id: String,
+) -> Result<Vec<ViewRow>, String> {
     let conn = db.read_conn()?;
     db::views::list_by_workspace(&conn, &workspace_id)
 }
 
 #[tauri::command]
-pub async fn view_list_trash(db: State<'_, Db>, workspace_id: String) -> Result<Vec<ViewRow>, String> {
+pub async fn view_list_trash(
+    db: State<'_, Db>,
+    workspace_id: String,
+) -> Result<Vec<ViewRow>, String> {
     let conn = db.read_conn()?;
     db::views::list_trash(&conn, &workspace_id)
 }
 
 /// 一张数据库表的全部视图（宿主 + 派生，按 position 排序）：页面内视图标签栏数据源
 #[tauri::command]
-pub async fn view_list_for_source(db: State<'_, Db>, source_id: String) -> Result<Vec<ViewRow>, String> {
+pub async fn view_list_for_source(
+    db: State<'_, Db>,
+    source_id: String,
+) -> Result<Vec<ViewRow>, String> {
     let conn = db.read_conn()?;
     db::views::list_for_source(&conn, &source_id)
 }
 
 #[tauri::command]
-pub async fn view_list_recent(db: State<'_, Db>, workspace_id: String, limit: i64) -> Result<Vec<ViewRow>, String> {
+pub async fn view_list_recent(
+    db: State<'_, Db>,
+    workspace_id: String,
+    limit: i64,
+) -> Result<Vec<ViewRow>, String> {
     let conn = db.read_conn()?;
     db::views::list_recent(&conn, &workspace_id, limit)
 }
@@ -138,7 +159,11 @@ pub async fn view_rename(db: State<'_, Db>, id: String, name: String) -> Result<
 }
 
 #[tauri::command]
-pub async fn view_set_icon(db: State<'_, Db>, id: String, icon: Option<String>) -> Result<(), String> {
+pub async fn view_set_icon(
+    db: State<'_, Db>,
+    id: String,
+    icon: Option<String>,
+) -> Result<(), String> {
     let conn = db.write_conn()?;
     db::views::set_icon(&conn, &id, icon.as_deref())
 }
@@ -150,7 +175,11 @@ pub async fn view_update_extra(db: State<'_, Db>, id: String, extra: String) -> 
 }
 
 #[tauri::command]
-pub async fn view_set_favorite(db: State<'_, Db>, id: String, favorite: bool) -> Result<(), String> {
+pub async fn view_set_favorite(
+    db: State<'_, Db>,
+    id: String,
+    favorite: bool,
+) -> Result<(), String> {
     let conn = db.write_conn()?;
     db::views::set_favorite(&conn, &id, favorite)
 }
@@ -344,7 +373,10 @@ pub async fn pp_rename(
 // ---------- database（grid/board 表格三表：fields / rows / cells） ----------
 
 #[tauri::command]
-pub async fn field_list(db: State<'_, Db>, view_id: String) -> Result<Vec<DatabaseFieldRow>, String> {
+pub async fn field_list(
+    db: State<'_, Db>,
+    view_id: String,
+) -> Result<Vec<DatabaseFieldRow>, String> {
     let conn = db.read_conn()?;
     db::database::list_fields(&conn, &view_id)
 }
@@ -375,13 +407,21 @@ pub async fn field_delete(db: State<'_, Db>, field_id: String) -> Result<(), Str
 }
 
 #[tauri::command]
-pub async fn field_set_width(db: State<'_, Db>, field_id: String, width: i64) -> Result<(), String> {
+pub async fn field_set_width(
+    db: State<'_, Db>,
+    field_id: String,
+    width: i64,
+) -> Result<(), String> {
     let conn = db.write_conn()?;
     db::database::set_field_width(&conn, &field_id, width)
 }
 
 #[tauri::command]
-pub async fn field_set_hidden(db: State<'_, Db>, field_id: String, hidden: bool) -> Result<(), String> {
+pub async fn field_set_hidden(
+    db: State<'_, Db>,
+    field_id: String,
+    hidden: bool,
+) -> Result<(), String> {
     let conn = db.write_conn()?;
     db::database::set_field_hidden(&conn, &field_id, hidden)
 }
@@ -424,7 +464,11 @@ pub async fn row_list(db: State<'_, Db>, view_id: String) -> Result<Vec<Database
 }
 
 #[tauri::command]
-pub async fn row_create(db: State<'_, Db>, view_id: String, id: String) -> Result<DatabaseRowRow, String> {
+pub async fn row_create(
+    db: State<'_, Db>,
+    view_id: String,
+    id: String,
+) -> Result<DatabaseRowRow, String> {
     // id 由前端 newId() 生成
     let conn = db.write_conn()?;
     db::database::create_row(&conn, &view_id, &id)

@@ -40,7 +40,8 @@ fn query_views(
 }
 
 /// 树 / 回收站 / 最近访问的可见性口径：行详情文档与派生视图（多视图）都不是"页面"，一律排除。
-const VISIBLE_IN_TREE: &str = " AND json_extract(extra, '$.row_detail') IS NOT 1 AND source_id IS NULL";
+const VISIBLE_IN_TREE: &str =
+    " AND json_extract(extra, '$.row_detail') IS NOT 1 AND source_id IS NULL";
 
 pub fn list_by_workspace(conn: &Connection, workspace_id: &str) -> Result<Vec<ViewRow>, String> {
     query_views(
@@ -64,7 +65,11 @@ pub fn list_trash(conn: &Connection, workspace_id: &str) -> Result<Vec<ViewRow>,
     )
 }
 
-pub fn list_recent(conn: &Connection, workspace_id: &str, limit: i64) -> Result<Vec<ViewRow>, String> {
+pub fn list_recent(
+    conn: &Connection,
+    workspace_id: &str,
+    limit: i64,
+) -> Result<Vec<ViewRow>, String> {
     query_views(
         conn,
         &format!(
@@ -104,15 +109,22 @@ pub fn data_view_id(conn: &Connection, view_id: &str) -> Result<String, String> 
 }
 
 pub fn touch_visited(conn: &Connection, id: &str) -> Result<(), String> {
-    conn.execute("UPDATE views SET visited_at = ?1 WHERE id = ?2", params![now_ms(), id])
-        .map_err(dberr("touch visited"))?;
+    conn.execute(
+        "UPDATE views SET visited_at = ?1 WHERE id = ?2",
+        params![now_ms(), id],
+    )
+    .map_err(dberr("touch visited"))?;
     Ok(())
 }
 
 pub fn get(conn: &Connection, id: &str) -> Result<Option<ViewRow>, String> {
-    conn.query_row("SELECT * FROM views WHERE id = ?1", params![id], row_to_view)
-        .optional()
-        .map_err(dberr("get view"))
+    conn.query_row(
+        "SELECT * FROM views WHERE id = ?1",
+        params![id],
+        row_to_view,
+    )
+    .optional()
+    .map_err(dberr("get view"))
 }
 
 /// 单事务：同级 MAX(position)+1 → INSERT views → document 布局再插默认内容行（H1 标题 + 分割线，
@@ -234,7 +246,9 @@ pub fn duplicate(
     }
 
     let t = now_ms();
-    let tx = conn.unchecked_transaction().map_err(dberr("duplicate view"))?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(dberr("duplicate view"))?;
 
     // 副本排在同级末尾（与 create 同一口径）
     let position: i64 = tx
@@ -306,7 +320,11 @@ pub fn duplicate(
     let mut copied_docs: Vec<DocRowOut> = Vec::new();
     for (old_id, new_vid) in &pairs {
         let content: Option<String> = tx
-            .query_row("SELECT content FROM documents WHERE view_id = ?1", params![old_id], |r| r.get(0))
+            .query_row(
+                "SELECT content FROM documents WHERE view_id = ?1",
+                params![old_id],
+                |r| r.get(0),
+            )
             .optional()
             .map_err(dberr("duplicate view document"))?;
         if let Some(content) = content {
@@ -398,10 +416,12 @@ pub fn duplicate(
 
         for (i, r) in rows.iter().enumerate() {
             let new_rid = format!("{new_vid}_r{i}");
-            let new_doc = r
-                .document_id
-                .as_ref()
-                .and_then(|d| pairs.iter().find(|(old, _)| old == d).map(|(_, new)| new.clone()));
+            let new_doc = r.document_id.as_ref().and_then(|d| {
+                pairs
+                    .iter()
+                    .find(|(old, _)| old == d)
+                    .map(|(_, new)| new.clone())
+            });
             tx.execute(
                 "INSERT INTO database_rows(id, database_view_id, position, document_id, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
@@ -509,7 +529,13 @@ pub fn update_extra(conn: &Connection, id: &str, extra: &str) -> Result<(), Stri
     Ok(())
 }
 
-fn with_recursive_subtree(conn: &Connection, body: &str, id: &str, extra: Option<i64>, ctx: &'static str) -> Result<usize, String> {
+fn with_recursive_subtree(
+    conn: &Connection,
+    body: &str,
+    id: &str,
+    extra: Option<i64>,
+    ctx: &'static str,
+) -> Result<usize, String> {
     let sql = format!(
         "WITH RECURSIVE sub(id) AS (
            SELECT id FROM views WHERE id = ?1
@@ -617,8 +643,14 @@ pub fn purge_trash(conn: &Connection, workspace_id: &str) -> Result<(), String> 
 }
 
 /// 永久删除回收站中 deleted_at 早于 deadline_ms（毫秒时间戳）的视图，返回删除行数（30 天自动清空）
-pub fn purge_expired_trash(conn: &Connection, workspace_id: &str, deadline_ms: i64) -> Result<i64, String> {
-    let tx = conn.unchecked_transaction().map_err(dberr("purge expired trash"))?;
+pub fn purge_expired_trash(
+    conn: &Connection,
+    workspace_id: &str,
+    deadline_ms: i64,
+) -> Result<i64, String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(dberr("purge expired trash"))?;
     let n = tx
         .execute(
             "DELETE FROM views WHERE workspace_id = ?1 AND is_trash = 1
@@ -680,7 +712,8 @@ fn compute_renumber(
     let idx = (index.max(0) as usize).min(new_ids.len());
     new_ids.insert(idx, moved_id.to_string());
     // 同父级且顺序不变 → 无需更新
-    if old_parent.as_deref() == new_parent_id && new_ids == sibling_ids(views, new_parent_id, None) {
+    if old_parent.as_deref() == new_parent_id && new_ids == sibling_ids(views, new_parent_id, None)
+    {
         return Vec::new();
     }
 
@@ -733,7 +766,11 @@ pub fn move_view(
             if cursor == view_id {
                 return Ok(());
             }
-            match views.iter().find(|v| v.id == cursor).and_then(|v| v.parent_id.clone()) {
+            match views
+                .iter()
+                .find(|v| v.id == cursor)
+                .and_then(|v| v.parent_id.clone())
+            {
                 Some(p) => cursor = p,
                 None => break,
             }
@@ -747,7 +784,9 @@ pub fn move_view(
     let t = now_ms();
     {
         let mut stmt = tx
-            .prepare("UPDATE views SET parent_id = ?1, position = ?2, updated_at = ?3 WHERE id = ?4")
+            .prepare(
+                "UPDATE views SET parent_id = ?1, position = ?2, updated_at = ?3 WHERE id = ?4",
+            )
             .map_err(dberr("move view"))?;
         for u in &updates {
             stmt.execute(params![u.parent_id, u.position, t, u.id])
@@ -800,12 +839,18 @@ mod tests {
             .unwrap();
         let rows = stmt
             .query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, i64>(2)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
             })
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        rows.into_iter().map(|(id, p, pos)| (id, (p, pos))).collect()
+        rows.into_iter()
+            .map(|(id, p, pos)| (id, (p, pos)))
+            .collect()
     }
 
     #[test]
@@ -899,7 +944,11 @@ mod tests {
         assert_eq!(v.position, 0);
         assert_eq!(v.is_trash, 0);
         let content: String = conn
-            .query_row("SELECT content FROM documents WHERE view_id = 'v1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT content FROM documents WHERE view_id = 'v1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         // 默认结构：H1 标题 + 分割线（与前端 document-structure-lock 的保护区一致）
         assert_eq!(
@@ -907,7 +956,9 @@ mod tests {
             r#"{"type":"doc","content":[{"type":"heading","attrs":{"level":1},"content":[{"type":"text","text":"He said \"hi\" \\ ok"}]},{"type":"horizontalRule"}]}"#
         );
         // documents INSERT 触发器已写 FTS
-        let fts: i64 = conn.query_row("SELECT COUNT(*) FROM documents_fts", [], |r| r.get(0)).unwrap();
+        let fts: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents_fts", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(fts, 1);
     }
 
@@ -915,7 +966,9 @@ mod tests {
     fn create_grid_has_no_document_row() {
         let conn = setup();
         create(&conn, "v1", "w1", None, "grid", "grid", "{}", None).unwrap();
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 0);
     }
 
@@ -925,9 +978,15 @@ mod tests {
         create(&conn, "a", "w1", None, "a", "grid", "{}", None).unwrap();
         create(&conn, "b", "w1", None, "b", "grid", "{}", None).unwrap();
         create(&conn, "c", "w1", Some("a"), "c", "grid", "{}", None).unwrap();
-        let pa: i64 = conn.query_row("SELECT position FROM views WHERE id='a'", [], |r| r.get(0)).unwrap();
-        let pb: i64 = conn.query_row("SELECT position FROM views WHERE id='b'", [], |r| r.get(0)).unwrap();
-        let pc: i64 = conn.query_row("SELECT position FROM views WHERE id='c'", [], |r| r.get(0)).unwrap();
+        let pa: i64 = conn
+            .query_row("SELECT position FROM views WHERE id='a'", [], |r| r.get(0))
+            .unwrap();
+        let pb: i64 = conn
+            .query_row("SELECT position FROM views WHERE id='b'", [], |r| r.get(0))
+            .unwrap();
+        let pc: i64 = conn
+            .query_row("SELECT position FROM views WHERE id='c'", [], |r| r.get(0))
+            .unwrap();
         assert_eq!((pa, pb, pc), (0, 1, 0));
     }
 
@@ -944,28 +1003,48 @@ mod tests {
 
         soft_delete(&conn, "c1").unwrap();
         for (id, trashed) in [("c1", 1), ("d1", 1), ("r1", 0)] {
-            let t: i64 = conn.query_row("SELECT is_trash FROM views WHERE id = ?1", params![id], |r| r.get(0)).unwrap();
+            let t: i64 = conn
+                .query_row(
+                    "SELECT is_trash FROM views WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .unwrap();
             assert_eq!(t, trashed, "{id} trash state");
         }
-        let del: Option<i64> = conn.query_row("SELECT deleted_at FROM views WHERE id='c1'", [], |r| r.get(0)).unwrap();
+        let del: Option<i64> = conn
+            .query_row("SELECT deleted_at FROM views WHERE id='c1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert!(del.is_some());
 
         restore(&conn, "c1").unwrap();
-        let t: i64 = conn.query_row("SELECT is_trash FROM views WHERE id='d1'", [], |r| r.get(0)).unwrap();
+        let t: i64 = conn
+            .query_row("SELECT is_trash FROM views WHERE id='d1'", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(t, 0);
 
         purge(&conn, "c1").unwrap();
         // c1 被彻底删除；d1 在 restore 后已回到树里，不陪葬（改挂到 c1 的父级 r1）
-        let c1: i64 = conn.query_row("SELECT COUNT(*) FROM views WHERE id = 'c1'", [], |r| r.get(0)).unwrap();
+        let c1: i64 = conn
+            .query_row("SELECT COUNT(*) FROM views WHERE id = 'c1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert_eq!(c1, 0, "c1 purged");
         let (d1, d1_parent): (i64, Option<String>) = conn
-            .query_row("SELECT COUNT(*), MAX(parent_id) FROM views WHERE id = 'd1'", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT COUNT(*), MAX(parent_id) FROM views WHERE id = 'd1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
         assert_eq!(d1, 1, "restored descendant survives parent purge");
         assert_eq!(d1_parent.as_deref(), Some("r1"));
-        let r1: i64 = conn.query_row("SELECT COUNT(*) FROM views WHERE id='r1'", [], |r| r.get(0)).unwrap();
+        let r1: i64 = conn
+            .query_row("SELECT COUNT(*) FROM views WHERE id='r1'", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(r1, 1);
     }
 
@@ -991,13 +1070,23 @@ mod tests {
         purge(&conn, "c1").unwrap();
 
         let doc: i64 = conn
-            .query_row("SELECT COUNT(*) FROM documents WHERE view_id = 'd1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM documents WHERE view_id = 'd1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(doc, 1, "restored child document must survive");
         let parent: Option<String> = conn
-            .query_row("SELECT parent_id FROM views WHERE id = 'd1'", [], |r| r.get(0))
+            .query_row("SELECT parent_id FROM views WHERE id = 'd1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
-        assert_eq!(parent.as_deref(), Some("r1"), "child re-attached to grandparent");
+        assert_eq!(
+            parent.as_deref(),
+            Some("r1"),
+            "child re-attached to grandparent"
+        );
     }
 
     #[test]
@@ -1016,9 +1105,11 @@ mod tests {
         purge_trash(&conn, "w1").unwrap();
 
         let (survives, parent): (i64, Option<String>) = conn
-            .query_row("SELECT COUNT(*), MAX(parent_id) FROM views WHERE id = 'd1'", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT COUNT(*), MAX(parent_id) FROM views WHERE id = 'd1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
         assert_eq!(survives, 1, "restored child survives empty-trash");
         assert_eq!(parent, None, "no dangling parent_id after empty-trash");
@@ -1029,14 +1120,23 @@ mod tests {
         let conn = setup();
         seed_default_fixture(&conn);
         let old = now_ms() - 40 * 24 * 3600 * 1000;
-        conn.execute("UPDATE views SET is_trash = 1, deleted_at = ?1 WHERE id = 'r2'", params![old]).unwrap();
-        conn.execute("UPDATE views SET is_trash = 1 WHERE id = 'r3'", []).unwrap(); // deleted_at 仍为 NULL
+        conn.execute(
+            "UPDATE views SET is_trash = 1, deleted_at = ?1 WHERE id = 'r2'",
+            params![old],
+        )
+        .unwrap();
+        conn.execute("UPDATE views SET is_trash = 1 WHERE id = 'r3'", [])
+            .unwrap(); // deleted_at 仍为 NULL
 
         let n = purge_expired_trash(&conn, "w1", now_ms() - 30 * 24 * 3600 * 1000).unwrap();
         assert_eq!(n, 1);
-        let r2: i64 = conn.query_row("SELECT COUNT(*) FROM views WHERE id='r2'", [], |r| r.get(0)).unwrap();
+        let r2: i64 = conn
+            .query_row("SELECT COUNT(*) FROM views WHERE id='r2'", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(r2, 0);
-        let r3: i64 = conn.query_row("SELECT COUNT(*) FROM views WHERE id='r3'", [], |r| r.get(0)).unwrap();
+        let r3: i64 = conn
+            .query_row("SELECT COUNT(*) FROM views WHERE id='r3'", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(r3, 1);
     }
 
@@ -1056,11 +1156,15 @@ mod tests {
         let conn = setup();
         create(&conn, "g1", "w1", None, "表", "grid", "{}", None).unwrap();
         derive(&conn, "d1", "g1", "看板", "board");
-        conn.execute("UPDATE views SET visited_at = 5 WHERE id = 'd1'", []).unwrap();
+        conn.execute("UPDATE views SET visited_at = 5 WHERE id = 'd1'", [])
+            .unwrap();
 
         // 活跃态：派生视图既不在树里，也不因 visited_at 出现在最近
         assert_eq!(ids(&list_by_workspace(&conn, "w1").unwrap()), vec!["g1"]);
-        assert!(list_recent(&conn, "w1", 10).unwrap().is_empty(), "派生视图不进最近列表");
+        assert!(
+            list_recent(&conn, "w1", 10).unwrap().is_empty(),
+            "派生视图不进最近列表"
+        );
 
         // 回收站：派生视图随宿主一起软删，但不单独占一行
         soft_delete(&conn, "g1").unwrap();
@@ -1073,7 +1177,10 @@ mod tests {
         create(&conn, "g1", "w1", None, "表", "grid", "{}", None).unwrap();
         derive(&conn, "d2", "g1", "日历", "calendar");
         derive(&conn, "d1", "g1", "看板", "board");
-        assert_eq!(ids(&list_for_source(&conn, "g1").unwrap()), vec!["g1", "d2", "d1"]);
+        assert_eq!(
+            ids(&list_for_source(&conn, "g1").unwrap()),
+            vec!["g1", "d2", "d1"]
+        );
 
         // 宿主自身的派生视图不会漏，别的表也串不进来
         create(&conn, "g2", "w1", None, "另一张表", "grid", "{}", None).unwrap();
@@ -1088,7 +1195,9 @@ mod tests {
         create(&conn, "g2", "w1", None, "表2", "grid", "{}", None).unwrap();
         assert_eq!(derive(&conn, "d1", "g1", "看板", "board").position, 0);
         assert_eq!(derive(&conn, "d2", "g1", "日历", "calendar").position, 1);
-        let g1_pos: i64 = conn.query_row("SELECT position FROM views WHERE id='g1'", [], |r| r.get(0)).unwrap();
+        let g1_pos: i64 = conn
+            .query_row("SELECT position FROM views WHERE id='g1'", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(g1_pos, 0, "派生视图不抢宿主的树内排序位");
 
         // 派生视图不进树：parent_id 强制 NULL，哪怕调用方传了父节点
@@ -1115,15 +1224,27 @@ mod tests {
 
         soft_delete(&conn, "g1").unwrap();
         let (t, del): (i64, Option<i64>) = conn
-            .query_row("SELECT is_trash, deleted_at FROM views WHERE id='d1'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_row(
+                "SELECT is_trash, deleted_at FROM views WHERE id='d1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
         assert_eq!((t, del.is_some()), (1, true), "派生视图随宿主进回收站");
 
         restore(&conn, "g1").unwrap();
         let (t, del): (i64, Option<i64>) = conn
-            .query_row("SELECT is_trash, deleted_at FROM views WHERE id='d1'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_row(
+                "SELECT is_trash, deleted_at FROM views WHERE id='d1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
-        assert_eq!((t, del.is_some()), (0, false), "恢复后派生视图回来且 deleted_at 清空");
+        assert_eq!(
+            (t, del.is_some()),
+            (0, false),
+            "恢复后派生视图回来且 deleted_at 清空"
+        );
     }
 
     #[test]
@@ -1132,7 +1253,9 @@ mod tests {
         create(&conn, "g1", "w1", None, "表", "grid", "{}", None).unwrap();
         derive(&conn, "d1", "g1", "看板", "board");
         purge(&conn, "g1").unwrap(); // views.source_id 的 FK ON DELETE CASCADE
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM views", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM views", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 0);
     }
 
@@ -1154,8 +1277,11 @@ mod tests {
     fn duplicate_copies_subtree_with_content_and_properties() {
         let conn = setup();
         seed_default_fixture(&conn); // r1(0)/r2(1)/r3(2)，c1..c3 挂在 r1 下
-        conn.execute("UPDATE views SET is_favorite = 1, tags = '[\"甲\"]' WHERE id = 'r1'", [])
-            .unwrap();
+        conn.execute(
+            "UPDATE views SET is_favorite = 1, tags = '[\"甲\"]' WHERE id = 'r1'",
+            [],
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO documents(view_id, content, updated_at) VALUES ('r1', '{\"text\":\"正文\"}', 1)",
             [],
@@ -1175,7 +1301,9 @@ mod tests {
         assert_eq!(view.position, 3, "副本排在同级末尾");
         assert_eq!(view.is_favorite, 0, "收藏不继承");
         let tags: String = conn
-            .query_row("SELECT tags FROM views WHERE id = 'r1copy'", [], |r| r.get(0))
+            .query_row("SELECT tags FROM views WHERE id = 'r1copy'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(tags, "[\"甲\"]", "标签继承");
 
@@ -1185,7 +1313,9 @@ mod tests {
         assert_eq!(l["r1copy_2"], (Some("r1copy".into()), 1));
         assert_eq!(l["r1copy_3"], (Some("r1copy".into()), 2));
         let child_name: String = conn
-            .query_row("SELECT name FROM views WHERE id = 'r1copy_1'", [], |r| r.get(0))
+            .query_row("SELECT name FROM views WHERE id = 'r1copy_1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(child_name, "c1");
 
@@ -1194,19 +1324,31 @@ mod tests {
         assert_eq!(docs[0].view_id, "r1copy");
         assert_eq!(docs[0].content, "{\"text\":\"正文\"}");
         let fts_title: String = conn
-            .query_row("SELECT title FROM documents_fts WHERE view_id = 'r1copy'", [], |r| r.get(0))
+            .query_row(
+                "SELECT title FROM documents_fts WHERE view_id = 'r1copy'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(fts_title, "r1 副本");
 
         let pp: i64 = conn
-            .query_row("SELECT COUNT(*) FROM page_properties WHERE view_id = 'r1copy'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM page_properties WHERE view_id = 'r1copy'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(pp, 1);
 
         // 源节点与其子树未被改动
         assert_eq!(layout(&conn)["r1"], (None, 0));
         let src_children: i64 = conn
-            .query_row("SELECT COUNT(*) FROM views WHERE parent_id = 'r1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM views WHERE parent_id = 'r1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(src_children, 3);
     }
@@ -1234,11 +1376,27 @@ mod tests {
         )
         .unwrap();
         // 行详情文档：数据库页面的子节点（extra.row_detail 使其不进页面树，但仍在 parent_id 链上）
-        create(&conn, "rd1", "w1", Some("g1"), "行详情", "document", "{\"row_detail\":true}", None).unwrap();
-        conn.execute("UPDATE database_rows SET document_id = 'rd1' WHERE id = 'r1'", [])
-            .unwrap();
-        conn.execute("UPDATE documents SET content = '{\"text\":\"行正文\"}' WHERE view_id = 'rd1'", [])
-            .unwrap();
+        create(
+            &conn,
+            "rd1",
+            "w1",
+            Some("g1"),
+            "行详情",
+            "document",
+            "{\"row_detail\":true}",
+            None,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE database_rows SET document_id = 'rd1' WHERE id = 'r1'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE documents SET content = '{\"text\":\"行正文\"}' WHERE view_id = 'rd1'",
+            [],
+        )
+        .unwrap();
 
         duplicate(&conn, "g1", "g1copy", "表 副本").unwrap();
 
@@ -1251,7 +1409,11 @@ mod tests {
             .unwrap();
         assert_eq!(field_count, 2);
         let copied_type: String = conn
-            .query_row("SELECT field_type FROM database_fields WHERE id = 'g1copy_f0'", [], |r| r.get(0))
+            .query_row(
+                "SELECT field_type FROM database_fields WHERE id = 'g1copy_f0'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(copied_type, "text");
 
@@ -1266,11 +1428,19 @@ mod tests {
         let copied_rd = row_doc.expect("行详情文档应被映射到副本");
         assert_eq!(copied_rd, "g1copy_1");
         let rd_parent: Option<String> = conn
-            .query_row("SELECT parent_id FROM views WHERE id = ?1", params![copied_rd], |r| r.get(0))
+            .query_row(
+                "SELECT parent_id FROM views WHERE id = ?1",
+                params![copied_rd],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(rd_parent.as_deref(), Some("g1copy"));
         let rd_content: String = conn
-            .query_row("SELECT content FROM documents WHERE view_id = ?1", params![copied_rd], |r| r.get(0))
+            .query_row(
+                "SELECT content FROM documents WHERE view_id = ?1",
+                params![copied_rd],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(rd_content, "{\"text\":\"行正文\"}");
 
@@ -1290,11 +1460,18 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(ts_value.contains('T'), "created_at 单元格应为新时间: {ts_value}");
+        assert!(
+            ts_value.contains('T'),
+            "created_at 单元格应为新时间: {ts_value}"
+        );
 
         // 源表不受影响：文本单元格 + 插行触发器写入的 created_at 单元格
         let src_cells: i64 = conn
-            .query_row("SELECT COUNT(*) FROM database_cells WHERE row_id = 'r1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM database_cells WHERE row_id = 'r1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(src_cells, 2);
     }
@@ -1309,7 +1486,11 @@ mod tests {
         derive(&conn, "d1", "g1", "看板", "board");
         let err = duplicate(&conn, "d1", "dcopy", "看板 副本").unwrap_err();
         assert!(err.contains("derived view"), "{err}");
-        let n: i64 = conn.query_row("SELECT COUNT(*) FROM views WHERE id = 'dcopy'", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM views WHERE id = 'dcopy'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert_eq!(n, 0, "失败的复制不留下半成品");
     }
 }
