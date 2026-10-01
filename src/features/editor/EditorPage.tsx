@@ -54,6 +54,28 @@ import { FindReplace } from "./extensions/find-replace";
 import { FindReplaceBar } from "./FindReplaceBar";
 
 const AUTOSAVE_MS = 800;
+/** 落库观测阈值：超过其一即 warn + 一次性提示（只观测，不影响保存本身） */
+const SAVE_SLOW_MS = 1200;
+const SAVE_BIG_CHARS = 300_000;
+
+/** 本次会话内已提示过「保存偏慢」的文档：超阈值只提示一次，避免每次自动保存都弹 */
+const slowSaveWarned = new Set<string>();
+
+/** 落库耗时/体积记录：慢或大时 warn（生产环境保留），否则 debug */
+function reportSaveMetrics(viewId: string, chars: number, ms: number) {
+  // 注意：本文件从 tiptap 导入了 Math 扩展，模块作用域内的 Math 已被遮蔽，不能用 Math.round
+  const elapsed = Number(ms.toFixed(0));
+  if (elapsed >= SAVE_SLOW_MS || chars >= SAVE_BIG_CHARS) {
+    logger.warn("doc.save", { viewId, chars, ms: elapsed });
+    if (!slowSaveWarned.has(viewId)) {
+      slowSaveWarned.add(viewId);
+      toast.warning(t("editor.saveSlow", { size: Number((chars / 1000).toFixed(0)), ms: elapsed }));
+    }
+  } else {
+    logger.debug("doc.save", { viewId, chars, ms: elapsed });
+  }
+}
+
 /** 光标所在行相对编辑区高度的上限：超过就把内容上滚，保证当前行留在 70% 线以上 */
 const CARET_LINE_RATIO = 0.7;
 
@@ -113,8 +135,11 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     // 用缓存的最新 JSON 落库：卸载时 editor 可能已被销毁，不能依赖 editor 实例
     if (!dirtyRef.current || !latestJsonRef.current) return Promise.resolve();
     const json = latestJsonRef.current;
-    return documentApi.save(view.id, JSON.stringify(json)).then(
+    const payload = JSON.stringify(json);
+    const startedAt = performance.now();
+    return documentApi.save(view.id, payload).then(
       () => {
+        reportSaveMetrics(view.id, payload.length, performance.now() - startedAt);
         // 期间若有更新内容进 latestJsonRef，不能误清（下一轮 flush 会带上它）
         if (latestJsonRef.current === json) {
           latestJsonRef.current = null;

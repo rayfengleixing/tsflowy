@@ -95,6 +95,8 @@ const zh = {
   "editor.noTableView": "还没有可插入的表格视图",
   "editor.placeholderHeading": "标题",
   "editor.saved": "已保存",
+  "editor.saveSlow":
+    "本次保存耗时 {ms} ms（文档约 {size}K 字）。文档越大落库越慢，拆分成多个页面编辑会更流畅。",
   "error.saveDoc": "保存文档失败：{message}",
   "close.failedTitle": "有内容尚未保存",
   "close.failedDesc": "部分内容保存失败（可能是数据库被占用或磁盘问题）。仍要关闭窗口吗？取消可留在应用内重试。",
@@ -595,6 +597,8 @@ const en: Record<MessageKey, string> = {
   "editor.noTableView": "No table views to insert yet",
   "editor.placeholderHeading": "Heading",
   "editor.saved": "Saved",
+  "editor.saveSlow":
+    "This save took {ms} ms (document is about {size}K characters). Bigger documents save slower — splitting them into pages keeps editing smooth.",
   "error.saveDoc": "Failed to save document: {message}",
   "close.failedTitle": "Some content is not saved",
   "close.failedDesc":
