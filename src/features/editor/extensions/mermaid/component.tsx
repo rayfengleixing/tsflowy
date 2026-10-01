@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import { X } from "lucide-react";
-import mermaid from "mermaid";
 import { t } from "@/lib/i18n";
+
+// mermaid 核心约 800KB，只有文档真正出现图表时才需要；改为首次渲染时按需加载并缓存
+let mermaidPromise: Promise<typeof import("mermaid").default> | null = null;
+function loadMermaid() {
+  return (mermaidPromise ??= import("mermaid").then((m) => m.default));
+}
 
 let renderSeq = 0;
 // 离屏渲染宿主：mermaid.render 不传容器时会把临时 div 挂到 body 的正常文档流，
@@ -21,6 +26,7 @@ function getRenderHost(): HTMLDivElement {
 
 async function renderMermaid(code: string): Promise<string> {
   const dark = document.documentElement.classList.contains("dark");
+  const mermaid = await loadMermaid();
   mermaid.initialize({
     startOnLoad: false,
     // 必须 strict：loose 会让 mermaid 跳过对输出 SVG 的 DOMPurify 清洗，

@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import { X } from "lucide-react";
-import katex from "katex";
 import "katex/dist/katex.min.css";
 import { t } from "@/lib/i18n";
+
+// katex 核心约 580KB，只有文档真正出现公式块时才需要；改为首次渲染时按需加载并缓存。
+// CSS 仍静态引入（约 20KB），避免公式加载过程中出现无样式闪烁。
+let katexPromise: Promise<typeof import("katex").default> | null = null;
+function loadKatex() {
+  return (katexPromise ??= import("katex").then((m) => m.default));
+}
 
 // 公式 NodeView：非编辑态渲染 KaTeX；双击切编辑态（textarea 写 TeX，Ctrl+Enter 保存 / Esc 取消）
 export function MathNodeView(props: ReactNodeViewProps<HTMLElement>) {
@@ -29,16 +35,30 @@ export function MathNodeView(props: ReactNodeViewProps<HTMLElement>) {
     if (draft !== tex) updateAttributes({ tex: draft });
   };
 
-  const rendered = (() => {
-    try {
-      return katex.renderToString(tex || "\\text{}", {
-        throwOnError: false,
-        displayMode: true,
-      });
-    } catch (e) {
-      return `<span style="color:#d92d20">Invalid TeX</span>`;
+  // 异步渲染：katex 按需加载完成后写入 HTML 字符串
+  const [rendered, setRendered] = useState("");
+  useEffect(() => {
+    if (!tex) {
+      setRendered("");
+      return;
     }
-  })();
+    let cancelled = false;
+    loadKatex()
+      .then((katex) => {
+        if (cancelled) return;
+        try {
+          setRendered(katex.renderToString(tex, { throwOnError: false, displayMode: true }));
+        } catch {
+          setRendered(`<span style="color:#d92d20">Invalid TeX</span>`);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setRendered(`<span style="color:#d92d20">Invalid TeX</span>`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tex]);
 
   return (
     <NodeViewWrapper
