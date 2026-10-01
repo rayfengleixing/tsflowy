@@ -129,6 +129,21 @@ fn ensure_dir_symlink(link: &Path, target: &Path) -> Result<(), String> {
     }
 }
 
+/// 自动备份后台调度线程：每 ~1 小时醒一次，判断距上次自动备份是否已超过用户设定的间隔，
+/// 到点才真正打包（间隔最小 1 小时，逐小时轮询即可满足精度，且不会让应用常驻高占用）。
+/// 磁盘 I/O 在后台线程执行，不阻塞 UI；任何失败只记日志，绝不影响应用运行。
+fn spawn_auto_backup_loop(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        const TICK: std::time::Duration = std::time::Duration::from_secs(3600);
+        // 启动后先等一小段：让数据库/UI 完成初始化，避免开机瞬间抢 I/O
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        loop {
+            commands::files::maybe_run_auto_backup(&app);
+            std::thread::sleep(TICK);
+        }
+    });
+}
+
 fn chrono_like_timestamp_suffix() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let dur = SystemTime::now()
@@ -184,6 +199,7 @@ pub fn run() {
             tracing::info!(path = %path.display(), "database file location");
             // Db::open 永不 panic：失败进 init_error，各 DB 命令返回该错误
             app.manage(db::Db::open(path));
+            spawn_auto_backup_loop(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -202,6 +218,9 @@ pub fn run() {
             commands::files::get_data_dir_info,
             commands::files::change_data_dir,
             commands::files::reset_data_dir_default,
+            commands::files::get_auto_backup_config,
+            commands::files::set_auto_backup_config,
+            commands::files::run_auto_backup_now,
             commands::db::workspace_list,
             commands::db::workspace_create,
             commands::db::workspace_rename,

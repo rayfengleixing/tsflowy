@@ -30,6 +30,55 @@ pub struct AppConfig {
     /// 下一次启动时会把默认 app_data_dir 建为指向该路径的 junction/symlink，
     /// 使 app_data_dir（数据库、assets 等全部落点）透明访问自定义位置。
     pub custom_data_dir: Option<String>,
+    /// 自动备份设置（旧 config.json 无此字段时取默认值）
+    #[serde(default)]
+    pub auto_backup: AutoBackupConfig,
+}
+
+/// 自动备份设置。默认开启：每 24 小时打包一次 data.db 快照 + assets/ 到数据目录下的 backups/。
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AutoBackupConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 两次自动备份的最小间隔（小时），下限 1
+    #[serde(default = "default_interval_hours")]
+    pub interval_hours: u64,
+    /// backups/ 目录中保留的自动备份份数，多余按时间倒序删除
+    #[serde(default = "default_keep")]
+    pub keep: usize,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_interval_hours() -> u64 {
+    24
+}
+
+fn default_keep() -> usize {
+    7
+}
+
+impl Default for AutoBackupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_hours: 24,
+            keep: 7,
+        }
+    }
+}
+
+impl AutoBackupConfig {
+    /// 后台线程只读该配置判断是否到点，字段可能被前端写入任意值，这里统一夹到安全范围
+    fn normalized(&self) -> Self {
+        Self {
+            enabled: self.enabled,
+            interval_hours: self.interval_hours.clamp(1, 24 * 30),
+            keep: self.keep.clamp(1, 100),
+        }
+    }
 }
 
 /// 独立于 AppHandle 的 config 目录解析（给 lib.rs 在 Builder.plugin() 之前调用）。
@@ -847,6 +896,204 @@ fn reset_data_dir_default_inner(
         need_restart: true,
         copied,
     })
+}
+
+// ————————————————————————————————————————————————
+// 自动备份：按间隔打包 data.db 快照 + assets/ 到数据目录下的 backups/
+// ————————————————————————————————————————————————
+
+/// 自动备份落点子目录（数据目录下），与 assets/ 平级
+const BACKUP_DIR: &str = "backups";
+/// 自动备份文件名前缀（用于与用户手动导出的 zip 区分、以及清理时筛选）
+const AUTO_BACKUP_PREFIX: &str = "auto-";
+
+/// 自动备份目录：数据目录下 backups/
+fn backup_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(real_data_dir(app)?.join(BACKUP_DIR))
+}
+
+/// 文件名里的本地时间戳：auto-YYYYMMDD-HHMMSS.zip（取不到本地时区时退回 Unix 秒）
+fn backup_stamp() -> String {
+    let now =
+        time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+    const FMT: &[time::format_description::FormatItem<'_>] =
+        time::macros::format_description!("[year][month][day]-[hour][minute][second]");
+    now.format(FMT)
+        .unwrap_or_else(|_| now.unix_timestamp().to_string())
+}
+
+/// 打包一份自动备份到 backups/auto-<时间戳>.zip，并保留最新 keep 份。
+/// 复用 export_backup 的快照链路（WAL 下直接拷主库会丢未 checkpoint 的事务）。
+pub fn run_auto_backup(app: &tauri::AppHandle, keep: usize) -> Result<PathBuf, String> {
+    let data_dir = real_data_dir(app)?;
+    let db = data_dir.join(DB_FILE);
+    if !db.is_file() {
+        return Err(format!("database not found at {}", db.display()));
+    }
+    let assets = data_dir.join(ASSETS_DIR);
+    let dir = data_dir.join(BACKUP_DIR);
+    fs::create_dir_all(&dir).map_err(|e| format!("create backup dir failed: {e}"))?;
+
+    let target = dir.join(format!("{AUTO_BACKUP_PREFIX}{}.zip", backup_stamp()));
+    // 同一秒内重复触发（如刚开机 + 手动点「立即备份」）直接覆盖，避免留下半成品
+    let _ = fs::remove_file(&target);
+
+    let snap = data_dir.join(format!("{DB_FILE}.auto-{}", std::process::id()));
+    let _ = fs::remove_file(&snap);
+    let outcome = make_db_snapshot(&db, &snap)
+        .and_then(|()| write_backup_zip(&target, &snap, &data_dir, &assets));
+    let _ = fs::remove_file(&snap);
+    outcome?;
+
+    prune_auto_backups(&dir, keep);
+    Ok(target)
+}
+
+/// 只保留 backups/ 下最新的 keep 份自动备份（按修改时间倒序），多余删除。
+/// 纯增益动作：任何失败都静默跳过，不影响本次备份结果。
+fn prune_auto_backups(dir: &Path, keep: usize) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut items: Vec<(SystemTime, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(AUTO_BACKUP_PREFIX) || !name.ends_with(".zip") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let mtime = meta.modified().unwrap_or(UNIX_EPOCH);
+        items.push((mtime, entry.path()));
+    }
+    items.sort_by(|a, b| b.0.cmp(&a.0)); // 新的在前
+    for (_, path) in items.into_iter().skip(keep) {
+        let _ = fs::remove_file(&path);
+    }
+}
+
+/// 距最近一次自动备份已过去的时长（秒）；从未备份过返回 None
+fn secs_since_last_auto_backup(app: &tauri::AppHandle) -> Result<Option<u64>, String> {
+    let dir = backup_dir(app)?;
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Ok(None);
+    };
+    let mut latest: Option<SystemTime> = None;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(AUTO_BACKUP_PREFIX) || !name.ends_with(".zip") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let Ok(mtime) = meta.modified() else {
+            continue;
+        };
+        if latest.map(|l| mtime > l).unwrap_or(true) {
+            latest = Some(mtime);
+        }
+    }
+    Ok(latest.map(|t| {
+        SystemTime::now()
+            .duration_since(t)
+            .unwrap_or_default()
+            .as_secs()
+    }))
+}
+
+/// 后台调度一次判定：开启且距上次备份已超过间隔（或从未备份）时执行一次自动备份。
+pub fn maybe_run_auto_backup(app: &tauri::AppHandle) {
+    let cfg = load_app_config(app).auto_backup.normalized();
+    if !cfg.enabled {
+        return;
+    }
+    let interval_secs = cfg.interval_hours * 3600;
+    match secs_since_last_auto_backup(app) {
+        Ok(Some(elapsed)) if elapsed < interval_secs => return, // 未到点
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!(error = %e, "auto backup: resolve backup dir failed");
+            return;
+        }
+    }
+    match run_auto_backup(app, cfg.keep) {
+        Ok(p) => tracing::info!(path = %p.display(), "auto backup created"),
+        Err(e) => tracing::warn!(error = %e, "auto backup failed"),
+    }
+}
+
+#[derive(Serialize)]
+pub struct AutoBackupInfo {
+    /// 当前设置（normalized 之后的有效值）
+    pub enabled: bool,
+    pub interval_hours: u64,
+    pub keep: usize,
+    /// backups/ 目录绝对路径（展示 / 打开用）
+    pub dir: String,
+    /// 最近一次自动备份时间（本地时间字符串），从未备份为 None
+    pub last_backup: Option<String>,
+}
+
+/// 读取自动备份设置 + 目录 + 最近备份时间（设置页展示）
+#[tauri::command]
+pub fn get_auto_backup_config(app: tauri::AppHandle) -> Result<AutoBackupInfo, String> {
+    let cfg = load_app_config(&app).auto_backup.normalized();
+    let dir = backup_dir(&app)?;
+    let last_backup = fs::read_dir(&dir).ok().and_then(|entries| {
+        entries
+            .flatten()
+            .filter(|e| {
+                let n = e.file_name();
+                let n = n.to_string_lossy();
+                n.starts_with(AUTO_BACKUP_PREFIX) && n.ends_with(".zip")
+            })
+            .filter_map(|e| e.metadata().ok()?.modified().ok())
+            .max()
+            .map(|t| {
+                const FMT: &[time::format_description::FormatItem<'_>] =
+                    time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+                time::OffsetDateTime::from(t)
+                    .format(FMT)
+                    .unwrap_or_else(|_| "—".to_string())
+            })
+    });
+    Ok(AutoBackupInfo {
+        enabled: cfg.enabled,
+        interval_hours: cfg.interval_hours,
+        keep: cfg.keep,
+        dir: dir.to_string_lossy().to_string(),
+        last_backup,
+    })
+}
+
+/// 写入自动备份设置（前端只传变更后的完整三项）
+#[tauri::command]
+pub fn set_auto_backup_config(
+    app: tauri::AppHandle,
+    enabled: bool,
+    interval_hours: u64,
+    keep: usize,
+) -> Result<AutoBackupInfo, String> {
+    let mut cfg = load_app_config(&app);
+    cfg.auto_backup = AutoBackupConfig {
+        enabled,
+        interval_hours,
+        keep,
+    };
+    save_app_config(&app, &cfg)?;
+    // 关闭自动备份时，已存在的历史备份保留不动（由用户自行在目录里清理）
+    get_auto_backup_config(app)
+}
+
+/// 立即备份一次（设置页按钮）：走与自动备份完全相同的链路
+#[tauri::command]
+pub async fn run_auto_backup_now(app: tauri::AppHandle) -> Result<String, String> {
+    let keep = load_app_config(&app).auto_backup.normalized().keep;
+    run_auto_backup(&app, keep).map(|p| p.to_string_lossy().to_string())
 }
 
 /// 把 custom 数据恢复为 default 路径：先将现有 default 整体改名到 bak，再把 custom 复制回来。

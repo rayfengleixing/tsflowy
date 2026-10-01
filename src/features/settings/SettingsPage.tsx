@@ -62,6 +62,17 @@ interface ChangeDataDirResult {
   copied: boolean;
 }
 
+/** get_auto_backup_config / set_auto_backup_config 返回结构 */
+interface AutoBackupInfo {
+  enabled: boolean;
+  interval_hours: number;
+  keep: number;
+  /** backups/ 目录绝对路径 */
+  dir: string;
+  /** 最近一次自动备份时间（本地时间字符串），从未备份为 null */
+  last_backup: string | null;
+}
+
 /** 设置页（M6）：外观/语言/数据目录/备份/快捷键 */
 export function SettingsPage() {
   const {
@@ -93,6 +104,8 @@ export function SettingsPage() {
   const [busyImport, setBusyImport] = useState(false);
   const [busyImportFolder, setBusyImportFolder] = useState(false);
   const [busyExportFolder, setBusyExportFolder] = useState(false);
+  const [autoBackup, setAutoBackup] = useState<AutoBackupInfo | null>(null);
+  const [busyBackupNow, setBusyBackupNow] = useState(false);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
 
   useEffect(() => {
@@ -103,6 +116,7 @@ export function SettingsPage() {
       .then(setVersion)
       .catch((e: unknown) => logger.error("failed to get app version", e));
     refreshDataDirInfo();
+    refreshAutoBackup();
   }, []);
 
   const shortcutGroups: ShortcutGroup[] = [
@@ -215,6 +229,44 @@ export function SettingsPage() {
     invoke<DataDirInfo>("get_data_dir_info")
       .then(setDataDirInfo)
       .catch((e: unknown) => logger.error("failed to get data dir info", e));
+  };
+
+  const refreshAutoBackup = () => {
+    invoke<AutoBackupInfo>("get_auto_backup_config")
+      .then(setAutoBackup)
+      .catch((e: unknown) => logger.error("failed to get auto backup config", e));
+  };
+
+  /** 三项一起写回（Rust 侧命令接收完整配置），成功后用返回值刷新展示 */
+  const persistAutoBackup = async (next: AutoBackupInfo) => {
+    setAutoBackup(next); // 乐观更新，输入框即时响应
+    try {
+      const saved = await invoke<AutoBackupInfo>("set_auto_backup_config", {
+        enabled: next.enabled,
+        intervalHours: next.interval_hours,
+        keep: next.keep,
+      });
+      setAutoBackup(saved);
+    } catch (e) {
+      logger.error("save auto backup config failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+      refreshAutoBackup();
+    }
+  };
+
+  /** 立即备份一次（与自动备份同一链路，写入数据目录的 backups/） */
+  const backupNow = async () => {
+    setBusyBackupNow(true);
+    try {
+      await invoke<string>("run_auto_backup_now");
+      toast.success(t("settings.autoBackupDone"));
+      refreshAutoBackup();
+    } catch (e) {
+      logger.error("run auto backup failed", e);
+      toast.error(`${t("settings.autoBackupFailed")}：${String(e)}`);
+    } finally {
+      setBusyBackupNow(false);
+    }
   };
 
   /** 选新目录 → change_data_dir（下次启动生效；可勾选把现有数据复制过去） */
@@ -478,6 +530,69 @@ export function SettingsPage() {
               )}
               {t("settings.exportFolder")}
             </Button>
+          </div>
+
+          <div className="mt-4 border-t border-neutral-200 pt-4">
+            <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">
+              <input
+                type="checkbox"
+                checked={autoBackup?.enabled ?? false}
+                disabled={!autoBackup}
+                onChange={(e) =>
+                  autoBackup && persistAutoBackup({ ...autoBackup, enabled: e.target.checked })
+                }
+              />
+              {t("settings.autoBackupEnable")}
+            </label>
+            <p className="mb-3 mt-1.5 max-w-lg text-[11px] text-neutral-500">
+              {t("settings.autoBackupDesc")}
+            </p>
+            <div className="flex flex-wrap items-end gap-4">
+              <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
+                {t("settings.autoBackupInterval")}
+                <input
+                  type="number"
+                  min={1}
+                  max={720}
+                  className="w-24 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                  value={autoBackup?.interval_hours ?? 24}
+                  disabled={!autoBackup}
+                  onChange={(e) =>
+                    autoBackup &&
+                    setAutoBackup({ ...autoBackup, interval_hours: Number(e.target.value) })
+                  }
+                  onBlur={() => autoBackup && persistAutoBackup(autoBackup)}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
+                {t("settings.autoBackupKeep")}
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  className="w-24 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                  value={autoBackup?.keep ?? 7}
+                  disabled={!autoBackup}
+                  onChange={(e) => autoBackup && setAutoBackup({ ...autoBackup, keep: Number(e.target.value) })}
+                  onBlur={() => autoBackup && persistAutoBackup(autoBackup)}
+                />
+              </label>
+              <Button size="sm" variant="outline" onClick={backupNow} disabled={busyBackupNow || !autoBackup}>
+                {busyBackupNow ? (
+                  <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="mr-1 h-3.5 w-3.5" />
+                )}
+                {t("settings.autoBackupNow")}
+              </Button>
+            </div>
+            {autoBackup && (
+              <div className="mt-3 text-[11px] text-neutral-500">
+                {t("settings.autoBackupLast")}：
+                {autoBackup.last_backup ?? t("settings.autoBackupNever")}
+                <span className="ml-2 break-all font-mono">{autoBackup.dir}</span>
+              </div>
+            )}
           </div>
         </Section>
 
