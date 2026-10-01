@@ -2,7 +2,7 @@
 
 本地优先的 Windows 桌面笔记与知识管理应用：文档编辑 + 数据库（表格 / 看板 / 日历）+ 全局搜索，数据全部保存在本机，无需账号、不依赖云服务。
 
-基于 **Tauri 2（Rust）+ React 19 + TypeScript + TipTap + SQLite** 构建，安装包约 5.5 MB。想直接使用可从 [Releases](https://github.com/rayfengleixing/tsflowy/releases) 下载最新安装包；从源码构建与使用见下文。
+基于 **Tauri 2（Rust）+ React 19 + TypeScript + TipTap + SQLite** 构建，安装包约 7 MB。想直接使用可从 [Releases](https://github.com/rayfengleixing/tsflowy/releases) 下载最新安装包；从源码构建与使用见下文。
 
 ## 功能特性
 
@@ -99,7 +99,7 @@ npm run tauri:build
 src-tauri\target\release\bundle\nsis\TsFlowy_<版本号>_x64-setup.exe
 ```
 
-例如当前版本：`TsFlowy_0.6.3_x64-setup.exe`。
+例如当前版本：`TsFlowy_0.7.7_x64-setup.exe`。
 
 ### 开发者提示
 
@@ -118,16 +118,18 @@ src-tauri\target\release\bundle\nsis\TsFlowy_<版本号>_x64-setup.exe
 
 ## 数据存放位置
 
-应用数据默认保存在：
+应用数据默认保存在**系统「文档」目录**下的 `TsFlowy` 文件夹（中文系统显示为「文档」，路径通过系统 API 解析，兼容 OneDrive 重定向）：
 
 ```
-%APPDATA%\com.tsflowy.app\
+%USERPROFILE%\Documents\TsFlowy\
 ├── appflowy.db    # SQLite 数据库（页面、数据库表、设置等）
 └── assets\        # 图片 / 附件等资源文件
 ```
 
+- 实现方式：启动时把系统约定的应用数据目录建成指向该位置的目录联接（Windows junction），程序内部路径不变、数据实际落在文档目录，便于自行备份与同步盘同步。
+- 从 0.7.6 及更早版本升级：首次启动会自动把旧数据（`%APPDATA%\com.tsflowy.app`）迁移到新位置；若新位置已有同名数据则保留新位置数据，旧目录整体改名为备份留在原处。
 - 备份与迁移：设置 → 数据 → 导出备份（zip 打包数据库与资源），在新机器用「导入备份」还原。
-- 也可以把数据目录改到自定义位置（如同步盘），设置内提供目录迁移与恢复默认。
+- 也可以把数据目录改到自定义位置（如同步盘），设置内提供目录迁移与恢复默认（恢复默认即回到「文档\TsFlowy」）。
 
 ## 测试
 
