@@ -14,8 +14,14 @@ describe("pinyinInitials", () => {
     expect(pinyinInitials("Heading 2")).toBe("HEADING2");
   });
 
-  it("未覆盖的字返回空串（不影响降级匹配）", () => {
-    expect(pinyinInitials("饕餮")).toBe("");
+  it("任意常用标题都能出首字母（不再受手写映射表覆盖限制）", () => {
+    expect(pinyinInitials("笔记整理")).toBe("BJZL");
+    expect(pinyinInitials("产品需求文档")).toBe("CPXQWD");
+  });
+
+  it("生僻字出首字母，非汉字标点丢弃", () => {
+    expect(pinyinInitials("饕餮")).toBe("TT");
+    expect(pinyinInitials("笔记·整理")).toBe("BJZL");
   });
 
   it("混合文本", () => {

@@ -16,10 +16,10 @@ describe("titleTier", () => {
     expect(titleTier("数据库表", "sjk")).toBe(3); // 拼音命中、字面不命中
     expect(titleTier("数据库表", "sjkb")).toBe(3);
     expect(titleTier("标题", "bt")).toBe(3);
-    expect(titleTier("读书", "bt")).toBe(4); // 首字母串是 D，不含 BT
-    // pinyin-initials 是常用字映射表（非全量字典），未收录的字返回空串：
-    // 「笔记整理」四个字都不在表内 → 首字母串为空，拼音路径匹配不上
-    expect(titleTier("笔记整理", "bj")).toBe(4);
+    expect(titleTier("读书", "bt")).toBe(4); // 首字母串是 DS，不含 BT
+    expect(titleTier("笔记整理", "bj")).toBe(3);
+    expect(titleTier("笔记整理", "bjzl")).toBe(3);
+    expect(titleTier("读书", "ds")).toBe(3);
   });
 });
 
