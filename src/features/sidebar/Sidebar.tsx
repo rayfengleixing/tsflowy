@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { Search, Settings, Trash2, Layers, Hash } from "lucide-react";
+import { Search, Settings, Trash2, Layers, Hash, Tags } from "lucide-react";
 import { SpaceSwitcher } from "./SpaceSwitcher";
 import { NewPageMenu } from "./NewPageMenu";
 import { PageTree } from "./PageTree";
-import { DocumentOutline, getSidebarTab, setSidebarTab } from "@/features/editor/Outline";
+import { TagPanel } from "./TagPanel";
+import { DocumentOutline, getSidebarTab, setSidebarTab, type SidebarTab } from "@/features/editor/Outline";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
 
 const MIN_WIDTH = 268;
 const MAX_WIDTH = 560;
 
-/** 侧边栏（说明书 6.3 结构）：页面树 / 大纲 两 Tab 切换 */
+/** 侧边栏（说明书 6.3 结构）：页面树 / 大纲 / 标签 三 Tab 切换 */
 export function Sidebar() {
   const sidebarWidth = useWorkspaceStore((s) => s.sidebarWidth);
   const setSidebarWidth = useWorkspaceStore((s) => s.setSidebarWidth);
@@ -19,7 +20,7 @@ export function Sidebar() {
   const openPalette = useWorkspaceStore((s) => s.openPalette);
   const asideRef = useRef<HTMLElement>(null);
   const [resizing, setResizing] = useState(false);
-  const [mainTab, setMainTab] = useState<"tree" | "outline">(getSidebarTab());
+  const [mainTab, setMainTab] = useState<SidebarTab>(getSidebarTab());
 
   useEffect(() => {
     if (!resizing) return;
@@ -36,10 +37,17 @@ export function Sidebar() {
     };
   }, [resizing, setSidebarWidth]);
 
-  const switchTab = (tab: "tree" | "outline") => {
+  const switchTab = (tab: SidebarTab) => {
     setMainTab(tab);
     setSidebarTab(tab);
   };
+
+  /** Tab 文案取当前语言（t 在调用时读语言，不能提到模块作用域） */
+  const tabs: { id: SidebarTab; icon: typeof Layers; label: string }[] = [
+    { id: "tree", icon: Layers, label: t("sidebar.pageTree") },
+    { id: "outline", icon: Hash, label: t("sidebar.tab.outline") },
+    { id: "tags", icon: Tags, label: t("sidebar.tab.tags") },
+  ];
 
   return (
     <aside
@@ -70,39 +78,31 @@ export function Sidebar() {
         <NewPageMenu />
       </div>
 
-      {/* 一级 Tab：页面树 / 大纲 */}
+      {/* 一级 Tab：页面树 / 大纲 / 标签 */}
       <div className="flex items-stretch border-b border-neutral-300 text-[11px]">
-        <button
-          type="button"
-          onClick={() => switchTab("tree")}
-          className={
-            "flex flex-1 items-center justify-center gap-1 py-1.5 " +
-            (mainTab === "tree"
-              ? "bg-white text-brand-600 border-b-2 border-brand-500"
-              : "text-neutral-500 hover:bg-neutral-200/60")
-          }
-        >
-          <Layers className="h-3 w-3" />
-          {t("sidebar.pageTree")}
-        </button>
-        <button
-          type="button"
-          onClick={() => switchTab("outline")}
-          className={
-            "flex flex-1 items-center justify-center gap-1 py-1.5 " +
-            (mainTab === "outline"
-              ? "bg-white text-brand-600 border-b-2 border-brand-500"
-              : "text-neutral-500 hover:bg-neutral-200/60")
-          }
-        >
-          <Hash className="h-3 w-3" />
-          {t("sidebar.tab.outline")}
-        </button>
+        {tabs.map(({ id, icon: Icon, label }) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => switchTab(id)}
+            className={
+              "flex flex-1 items-center justify-center gap-1 py-1.5 " +
+              (mainTab === id
+                ? "bg-white text-brand-600 border-b-2 border-brand-500"
+                : "text-neutral-500 hover:bg-neutral-200/60")
+            }
+          >
+            <Icon className="h-3 w-3" />
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* 内容区：根据 mainTab 切换 */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {mainTab === "tree" ? <PageTree /> : <DocumentOutline />}
+        {mainTab === "tree" && <PageTree />}
+        {mainTab === "outline" && <DocumentOutline />}
+        {mainTab === "tags" && <TagPanel onFilter={() => switchTab("tree")} />}
       </div>
 
       {/* 底部固定区：回收站 / 设置 */}

@@ -13,6 +13,7 @@ import {
   type VisibleTreeRow,
 } from "@/lib/tree";
 import { t } from "@/lib/i18n";
+import { tagColor, tagTint } from "@/lib/tags";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 
@@ -34,6 +35,7 @@ export function PageTree() {
   const expand = useWorkspaceStore((s) => s.expand);
   const tagFilter = useWorkspaceStore((s) => s.tagFilter);
   const setTagFilter = useWorkspaceStore((s) => s.setTagFilter);
+  const tagMeta = useWorkspaceStore((s) => s.tagMeta);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropHint, setDropHint] = useState<DropHint | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -235,17 +237,22 @@ export function PageTree() {
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
           {allTags.map((tag) => {
             const on = tagFilter === tag;
+            const color = tagColor(tag, tagMeta);
             return (
               <button
                 key={tag}
                 className={
-                  "flex items-center gap-0.5 rounded-full border px-2 py-0.5 text-[11px] transition " +
-                  (on
-                    ? "border-brand-500 bg-brand-100 text-brand-700"
-                    : "border-neutral-300 text-neutral-500 hover:border-neutral-400 hover:text-neutral-700")
+                  "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition " +
+                  (on ? "" : "text-neutral-500 hover:text-neutral-700")
                 }
+                style={{
+                  borderColor: on ? color : tagTint(color, "66"),
+                  backgroundColor: on ? tagTint(color, "1f") : undefined,
+                  color: on ? color : undefined,
+                }}
                 onClick={() => setTagFilter(on ? null : tag)}
               >
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
                 {tag}
                 {on && <X className="h-3 w-3" />}
               </button>

@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import type { LayoutType, View, ViewNode, Workspace } from "@/types/models";
+import { parseViewTags } from "@/types/models";
+import { TAG_META_KEY, omitTagColor, parseTagColors, renameTagColor, type TagColorMap } from "@/lib/tags";
 import { viewApi, workspaceApi } from "@/lib/db";
 import { databaseApi } from "@/lib/database";
 import { documentApi } from "@/lib/documents";
@@ -55,6 +57,16 @@ interface WorkspaceState {
   /** 页面树标签过滤：null = 不过滤 */
   tagFilter: string | null;
   setTagFilter: (tag: string | null) => void;
+
+  /** 标签颜色表（全局，跨空间共用；未配置的标签用稳定默认色） */
+  tagMeta: TagColorMap;
+  loadTagMeta: () => Promise<void>;
+  /** 设置标签颜色 */
+  setTagColor: (tag: string, color: string) => Promise<void>;
+  /** 全局重命名标签：更新所有带该标签的页面与颜色表 */
+  renameTag: (from: string, to: string) => Promise<void>;
+  /** 全局删除标签：从所有页面移除并清掉颜色配置 */
+  deleteTag: (tag: string) => Promise<void>;
 
   openView: (id: string) => void;
   closeTab: (id: string) => void;
@@ -208,6 +220,15 @@ function patchTreeView(tree: ViewNode[], id: string, patch: Partial<View>): View
   });
 }
 
+/** 把标签颜色表写回 app_settings（全局键，失败仅告警，不影响 UI） */
+async function persistTagMeta(meta: TagColorMap): Promise<void> {
+  try {
+    await viewApi.setSetting(TAG_META_KEY, JSON.stringify(meta));
+  } catch (e) {
+    logger.warn("WorkspaceStore", "persist tag meta failed", e);
+  }
+}
+
 type EqualityFn<T> = (a: T, b: T) => boolean;
 
 /**
@@ -296,6 +317,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     expanded: new Set<string>(),
     sidebarWidth: 240,
     tagFilter: null,
+    tagMeta: {},
 
     init: async () => {
       if (initPromise) return initPromise;
@@ -322,6 +344,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
           }
           set({ workspaces, currentWorkspaceId: current, ready: true });
           await patchTreeAndRestoreTabs();
+          await get().loadTagMeta();
           // 首次启动展开根级页面
           set({
             expanded: new Set(
@@ -572,6 +595,61 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     setExpandedAll: (ids: Set<string>) => set({ expanded: ids }),
 
     setTagFilter: (tag) => set({ tagFilter: tag }),
+
+    loadTagMeta: async () => {
+      try {
+        const raw = await viewApi.getSetting(TAG_META_KEY);
+        set({ tagMeta: parseTagColors(raw) });
+      } catch (e) {
+        logger.warn("WorkspaceStore", "load tag meta failed", e);
+      }
+    },
+
+    setTagColor: async (tag, color) => {
+      const tagMeta = { ...get().tagMeta, [tag]: color };
+      set({ tagMeta });
+      await persistTagMeta(tagMeta);
+    },
+
+    renameTag: async (from, to) => {
+      const name = to.trim();
+      if (!name || name === from) return;
+      // 先算出每个受影响页面的新标签（目标名已存在时去重，避免同页出现两个同名标签）
+      const affected = flattenTree(get().tree)
+        .filter((v) => parseViewTags(v.tags).includes(from))
+        .map((v) => ({
+          id: v.id,
+          tags: [...new Set(parseViewTags(v.tags).map((x) => (x === from ? name : x)))],
+        }));
+      for (const a of affected) await viewApi.setTags(a.id, a.tags);
+      set((state) => {
+        let tree = state.tree;
+        for (const a of affected) tree = patchTreeView(tree, a.id, { tags: JSON.stringify(a.tags) });
+        return {
+          tree,
+          tagMeta: renameTagColor(state.tagMeta, from, name),
+          tagFilter: state.tagFilter === from ? name : state.tagFilter,
+        };
+      });
+      await persistTagMeta(get().tagMeta);
+    },
+
+    deleteTag: async (tag) => {
+      const affected = flattenTree(get().tree)
+        .filter((v) => parseViewTags(v.tags).includes(tag))
+        .map((v) => ({ id: v.id, tags: parseViewTags(v.tags).filter((x) => x !== tag) }));
+      for (const a of affected) await viewApi.setTags(a.id, a.tags);
+      set((state) => {
+        let tree = state.tree;
+        for (const a of affected) tree = patchTreeView(tree, a.id, { tags: JSON.stringify(a.tags) });
+        return {
+          tree,
+          tagMeta: omitTagColor(state.tagMeta, tag),
+          tagFilter: state.tagFilter === tag ? null : state.tagFilter,
+        };
+      });
+      await persistTagMeta(get().tagMeta);
+    },
 
     setSidebarWidth: (w: number) => set({ sidebarWidth: w }),
   };

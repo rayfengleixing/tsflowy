@@ -316,19 +316,21 @@ export function DocumentOutline() {
 
 // ——————————————————————————————————————
 // Sidebar Tab 切换状态持久化（小工具函数）
-// 旧版 OUTLINE_STORAGE_KEY 已废弃，新 key 是 sidebar_tab（tree/outline）。
+// 旧版 OUTLINE_STORAGE_KEY 已废弃，新 key 是 sidebar_tab（tree/outline/tags）。
 // ——————————————————————————————————————
-export function getSidebarTab(): "tree" | "outline" {
+export type SidebarTab = "tree" | "outline" | "tags";
+
+export function getSidebarTab(): SidebarTab {
   try {
     const v = localStorage.getItem(SIDEBAR_TAB_KEY);
-    if (v === "outline") return v;
+    if (v === "outline" || v === "tags") return v;
   } catch {
     /* ignore */
   }
   return "tree";
 }
 
-export function setSidebarTab(v: "tree" | "outline"): void {
+export function setSidebarTab(v: SidebarTab): void {
   try {
     localStorage.setItem(SIDEBAR_TAB_KEY, v);
   } catch {

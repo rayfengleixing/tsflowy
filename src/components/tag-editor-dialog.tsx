@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { flattenTree } from "@/lib/tree";
 import { parseViewTags, type View } from "@/types/models";
+import { tagColor, tagTint } from "@/lib/tags";
 import { t } from "@/lib/i18n";
 
 interface TagEditorDialogProps {
@@ -17,6 +18,7 @@ interface TagEditorDialogProps {
 export function TagEditorDialog({ view, open, onOpenChange }: TagEditorDialogProps) {
   const tree = useWorkspaceStore((s) => s.tree);
   const setViewTags = useWorkspaceStore((s) => s.setViewTags);
+  const tagMeta = useWorkspaceStore((s) => s.tagMeta);
   const [draft, setDraft] = useState("");
 
   const selected = useMemo(() => parseViewTags(view?.tags), [view]);
@@ -53,20 +55,24 @@ export function TagEditorDialog({ view, open, onOpenChange }: TagEditorDialogPro
         {/* 已选标签 */}
         <div className="flex min-h-[36px] flex-wrap gap-1.5 rounded-md border border-neutral-300 p-1.5">
           {selected.length === 0 && <span className="px-1 text-xs text-neutral-400">{t("tag.emptyHint")}</span>}
-          {selected.map((tag) => (
-            <span
-              key={tag}
-              className="flex items-center gap-1 rounded bg-brand-100 px-1.5 py-0.5 text-xs text-neutral-700"
-            >
-              {tag}
-              <button
-                className="text-neutral-400 hover:text-destructive"
-                onClick={() => apply(selected.filter((x) => x !== tag))}
+          {selected.map((tag) => {
+            const color = tagColor(tag, tagMeta);
+            return (
+              <span
+                key={tag}
+                className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs"
+                style={{ backgroundColor: tagTint(color, "1f"), color }}
               >
-                <X className="h-3 w-3" />
-              </button>
-            </span>
-          ))}
+                {tag}
+                <button
+                  className="hover:text-destructive"
+                  onClick={() => apply(selected.filter((x) => x !== tag))}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            );
+          })}
           <input
             autoFocus
             className="min-w-[100px] flex-1 bg-transparent px-1 text-xs outline-none"
@@ -91,17 +97,22 @@ export function TagEditorDialog({ view, open, onOpenChange }: TagEditorDialogPro
           <div className="flex flex-wrap gap-1.5">
             {allTags.map((tag) => {
               const on = selected.includes(tag);
+              const color = tagColor(tag, tagMeta);
               return (
                 <button
                   key={tag}
                   className={
-                    "rounded-full border px-2 py-0.5 text-xs transition " +
-                    (on
-                      ? "border-brand-500 bg-brand-100 text-brand-700"
-                      : "border-neutral-300 text-neutral-500 hover:border-neutral-400 hover:text-neutral-700")
+                    "flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition " +
+                    (on ? "" : "text-neutral-500 hover:text-neutral-700")
                   }
+                  style={{
+                    borderColor: on ? color : tagTint(color, "66"),
+                    backgroundColor: on ? tagTint(color, "1f") : undefined,
+                    color: on ? color : undefined,
+                  }}
                   onClick={() => (on ? apply(selected.filter((x) => x !== tag)) : add(tag))}
                 >
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
                   {tag}
                 </button>
               );
