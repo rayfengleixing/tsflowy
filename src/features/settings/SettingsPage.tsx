@@ -73,6 +73,35 @@ interface AutoBackupInfo {
   last_backup: string | null;
 }
 
+/** get_sync_info / set_sync_dir 返回结构 */
+interface SyncInfo {
+  /** 用户选择的同步文件夹；null = 未开启 */
+  dir: string | null;
+  /** 实际存放数据的目录（<dir>/TsFlowySync） */
+  sync_path: string | null;
+  /** 上次同步动作：none / upload / download / conflict */
+  last_action: string | null;
+  last_time: string | null;
+}
+
+/** run_sync 返回结构 */
+interface SyncRunResult {
+  action: string;
+  /** 本机库是否被替换：true 时必须重新加载前端数据 */
+  pulled: boolean;
+  assets_copied: number;
+  conflicts: string[];
+  info: SyncInfo;
+}
+
+/** 同步动作 → i18n 文案 */
+const SYNC_ACTION_KEY: Record<string, MessageKey> = {
+  none: "settings.syncActionNone",
+  upload: "settings.syncActionUpload",
+  download: "settings.syncActionDownload",
+  conflict: "settings.syncActionConflict",
+};
+
 /** 设置页（M6）：外观/语言/数据目录/备份/快捷键 */
 export function SettingsPage() {
   const {
@@ -106,7 +135,11 @@ export function SettingsPage() {
   const [busyExportFolder, setBusyExportFolder] = useState(false);
   const [autoBackup, setAutoBackup] = useState<AutoBackupInfo | null>(null);
   const [busyBackupNow, setBusyBackupNow] = useState(false);
+  const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null);
+  const [busySync, setBusySync] = useState(false);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  // 上次同步动作对应的文案 key；未知动作返回 undefined（不渲染）
+  const syncLastActionKey = syncInfo?.last_action ? SYNC_ACTION_KEY[syncInfo.last_action] : undefined;
 
   useEffect(() => {
     invoke<string>("data_dir_path")
@@ -117,6 +150,7 @@ export function SettingsPage() {
       .catch((e: unknown) => logger.error("failed to get app version", e));
     refreshDataDirInfo();
     refreshAutoBackup();
+    refreshSyncInfo();
   }, []);
 
   const shortcutGroups: ShortcutGroup[] = [
@@ -301,6 +335,68 @@ export function SettingsPage() {
       toast.error(t("error.db", { message: String(e) }));
     } finally {
       setBusyDir(false);
+    }
+  };
+
+  const refreshSyncInfo = () => {
+    invoke<SyncInfo>("get_sync_info")
+      .then(setSyncInfo)
+      .catch((e: unknown) => logger.error("failed to get sync info", e));
+  };
+
+  /** 选/换同步文件夹（传空串 = 关闭同步） */
+  const chooseSyncDir = async () => {
+    const picked = await open({ directory: true, multiple: false });
+    if (typeof picked !== "string") return;
+    try {
+      setSyncInfo(await invoke<SyncInfo>("set_sync_dir", { dir: picked }));
+    } catch (e) {
+      logger.error("set sync dir failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
+  };
+
+  const turnSyncOff = async () => {
+    try {
+      setSyncInfo(await invoke<SyncInfo>("set_sync_dir", { dir: "" }));
+    } catch (e) {
+      logger.error("disable sync failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
+  };
+
+  const openSyncDir = async () => {
+    try {
+      await invoke<void>("open_sync_dir");
+    } catch (e) {
+      toast.error(t("error.db", { message: String(e) }));
+    }
+  };
+
+  /**
+   * 手动双向同步。拉取（本机库被远端替换）后前端的树/表格/文档全是旧数据，
+   * 必须重新加载——直接重载窗口最彻底，避免残留缓存的旧文档回写覆盖远端数据。
+   */
+  const syncNow = async () => {
+    setBusySync(true);
+    try {
+      const r = await invoke<SyncRunResult>("run_sync");
+      setSyncInfo(r.info);
+      const key = SYNC_ACTION_KEY[r.action] ?? "settings.syncActionNone";
+      const extra = r.assets_copied > 0 ? ` · ${t("settings.syncAssets", { n: r.assets_copied })}` : "";
+      if (r.action === "conflict") {
+        toast.warning(t(key) + extra, {
+          description: r.conflicts.length > 0 ? `${t("settings.syncConflictFiles")}: ${r.conflicts.join(", ")}` : undefined,
+        });
+      } else {
+        toast.success(t(key) + extra);
+      }
+      if (r.pulled) window.setTimeout(() => window.location.reload(), 1500);
+    } catch (e) {
+      logger.error("run sync failed", e);
+      toast.error(`${t("settings.syncFailed")}：${String(e)}`);
+    } finally {
+      setBusySync(false);
     }
   };
 
@@ -597,6 +693,51 @@ export function SettingsPage() {
               </div>
             )}
           </div>
+        </Section>
+
+        <Section title={t("settings.sync")}>
+          <p className="mb-3 max-w-lg text-xs text-neutral-500">{t("settings.syncDesc")}</p>
+          {syncInfo?.dir ? (
+            <>
+              <div className="mb-1 text-[11px] text-neutral-500">{t("settings.syncDirLabel")}</div>
+              <div className="flex items-stretch gap-2">
+                <input
+                  readOnly
+                  value={syncInfo.sync_path ?? syncInfo.dir}
+                  className="flex-1 rounded-md border border-neutral-300 bg-neutral-50 px-3 py-1.5 font-mono text-[11px] text-neutral-700 outline-none"
+                />
+                <Button size="sm" variant="outline" onClick={openSyncDir}>
+                  <FolderOpen className="mr-1 h-3.5 w-3.5" />
+                  {t("settings.syncOpen")}
+                </Button>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button size="sm" onClick={syncNow} disabled={busySync}>
+                  <RefreshCw className={cn("mr-1 h-3.5 w-3.5", busySync && "animate-spin")} />
+                  {busySync ? "…" : t("settings.syncNow")}
+                </Button>
+                <Button size="sm" variant="outline" onClick={chooseSyncDir} disabled={busySync}>
+                  <FolderInput className="mr-1 h-3.5 w-3.5" />
+                  {t("settings.syncChange")}
+                </Button>
+                <Button size="sm" variant="outline" onClick={turnSyncOff} disabled={busySync}>
+                  {t("settings.syncOff")}
+                </Button>
+              </div>
+              <div className="mt-3 text-[11px] text-neutral-500">
+                {t("settings.syncLast")}：{syncInfo.last_time ?? t("settings.syncNever")}
+                {syncLastActionKey && <span className="ml-2">{t(syncLastActionKey)}</span>}
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-[11px] text-neutral-500">{t("settings.syncOffHint")}</span>
+              <Button size="sm" variant="outline" onClick={chooseSyncDir}>
+                <FolderInput className="mr-1 h-3.5 w-3.5" />
+                {t("settings.syncChoose")}
+              </Button>
+            </div>
+          )}
         </Section>
 
         <Section title={t("settings.shortcuts")}>

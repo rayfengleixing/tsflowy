@@ -33,6 +33,31 @@ pub struct AppConfig {
     /// 自动备份设置（旧 config.json 无此字段时取默认值）
     #[serde(default)]
     pub auto_backup: AutoBackupConfig,
+    /// 双向同步设置与上次同步基线（旧 config.json 无此字段时取默认值）
+    #[serde(default)]
+    pub sync: SyncConfig,
+}
+
+/// 双向同步（#13）：把数据目录里的库 + assets 与一个「同步文件夹」对齐。
+/// 同步文件夹由用户指定（OneDrive/坚果云等网盘客户端的本地文件夹、或映射到 WebDAV 的盘符），
+/// 实际数据放在其下的 TsFlowySync/ 子目录，避免与用户其它文件混在一起。
+///
+/// 这里只保存「本机视角」的状态：上次同步时两侧库的指纹。它是判断
+/// "谁改过" 的基线——没有基线的第一次同步按修改时间取新者，旧的留冲突副本。
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct SyncConfig {
+    /// 用户选择的同步文件夹（空/None = 未开启同步）
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// 上次同步完成时库的 sha256（两侧已一致，同一个值）
+    #[serde(default)]
+    pub last_hash: Option<String>,
+    /// 上次同步做了什么：none / upload / download / conflict
+    #[serde(default)]
+    pub last_action: Option<String>,
+    /// 上次同步时间（本地时间串）
+    #[serde(default)]
+    pub last_time: Option<String>,
 }
 
 /// 自动备份设置。默认开启：每 24 小时打包一次 data.db 快照 + assets/ 到数据目录下的 backups/。
@@ -151,7 +176,7 @@ fn app_config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .or_else(|_| Ok(app_config_dir_raw()))
 }
 
-fn load_app_config(app: &tauri::AppHandle) -> AppConfig {
+pub(crate) fn load_app_config(app: &tauri::AppHandle) -> AppConfig {
     let p = app_config_dir(app)
         .map(|d| d.join(CONFIG_FILE_NAME))
         .unwrap_or_else(|_| config_file_path());
@@ -162,7 +187,7 @@ fn load_app_config(app: &tauri::AppHandle) -> AppConfig {
     .unwrap_or_default()
 }
 
-fn save_app_config(app: &tauri::AppHandle, cfg: &AppConfig) -> Result<(), String> {
+pub(crate) fn save_app_config(app: &tauri::AppHandle, cfg: &AppConfig) -> Result<(), String> {
     let dir = app_config_dir(app)?;
     fs::create_dir_all(&dir).map_err(|e| format!("mkdir config dir: {e}"))?;
     let s = serde_json::to_string_pretty(cfg).map_err(|e| format!("config json: {e}"))?;
@@ -264,7 +289,7 @@ fn timestamp_suffix() -> String {
 }
 
 /// 跨平台在系统文件管理器里打开目录
-fn open_path_in_system(path: &Path) -> Result<(), String> {
+pub(crate) fn open_path_in_system(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         Command::new("explorer")
@@ -473,7 +498,7 @@ pub async fn export_backup(app: tauri::AppHandle, target_path: String) -> Result
 }
 
 /// 用独立的只读连接对库做 VACUUM INTO 快照（并发写不受影响，快照内容为执行时刻的一致状态）
-fn make_db_snapshot(db: &Path, snap: &Path) -> Result<(), String> {
+pub(crate) fn make_db_snapshot(db: &Path, snap: &Path) -> Result<(), String> {
     let conn =
         rusqlite::Connection::open(db).map_err(|e| format!("open db for snapshot failed: {e}"))?;
     conn.busy_timeout(std::time::Duration::from_secs(5))
@@ -744,7 +769,7 @@ fn move_db_sidecars_to_bak(db: &Path, suffix: &str) -> Result<(), String> {
 /// 先 best-effort `wal_checkpoint(TRUNCATE)`：让 .bak 主文件尽量自包含（用户常单独拷走 .bak 文件）。
 /// 注意：SQLite 打开/关闭库文件时可能会自行清理残留的 wal/shm，因此侧车文件是"被移走或被清掉"皆可，
 /// 不变量只有一个——stash 结束后原名 wal/shm 不复存在。
-fn stash_current_db(db: &Path, suffix: &str) -> Result<(), String> {
+pub(crate) fn stash_current_db(db: &Path, suffix: &str) -> Result<(), String> {
     let wal = db.with_file_name(format!("{DB_FILE}-wal"));
     let shm = db.with_file_name(format!("{DB_FILE}-shm"));
     if !db.is_file() {
@@ -934,7 +959,7 @@ fn backup_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 /// 文件名里的本地时间戳：auto-YYYYMMDD-HHMMSS.zip（取不到本地时区时退回 Unix 秒）
-fn backup_stamp() -> String {
+pub(crate) fn backup_stamp() -> String {
     let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
     const FMT: &[time::format_description::FormatItem<'_>] =
         time::macros::format_description!("[year][month][day]-[hour][minute][second]");
@@ -1047,7 +1072,7 @@ pub struct AutoBackupInfo {
 
 /// 把 SystemTime 格式化为**本地**时间串（设置页与诊断页共用）。
 /// 注意不能直接 format(OffsetDateTime::from(t))——那是 UTC，会比本地时间小 8 小时。
-fn format_local_time(t: SystemTime) -> String {
+pub(crate) fn format_local_time(t: SystemTime) -> String {
     const FMT: &[time::format_description::FormatItem<'_>] =
         time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
     let utc = time::OffsetDateTime::from(t);

@@ -386,9 +386,11 @@ mod tests {
     /// 这里要照抄 apply_one_owning_transaction 的处理，否则重建表会失败。
     fn apply_raw(conn: &Connection, m: &Migration) {
         if OWN_TRANSACTION_VERSIONS.contains(&m.version) {
-            conn.execute_batch("PRAGMA foreign_keys=OFF; PRAGMA legacy_alter_table=ON;").unwrap();
+            conn.execute_batch("PRAGMA foreign_keys=OFF; PRAGMA legacy_alter_table=ON;")
+                .unwrap();
             conn.execute_batch(m.sql).unwrap();
-            conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA legacy_alter_table=OFF;").unwrap();
+            conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA legacy_alter_table=OFF;")
+                .unwrap();
         } else {
             conn.execute_batch(m.sql).unwrap();
         }
