@@ -6,6 +6,7 @@ import { PlaceholderPage } from "@/features/placeholder/PlaceholderPage";
 import { EditorPage } from "@/features/editor/EditorPage";
 import { DatabasePage } from "@/features/database/DatabasePage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
+import { DbUnavailable, type DbHealth } from "@/features/errors/DbUnavailable";
 import { CommandPalette } from "@/features/search/CommandPalette";
 import { SearchResultsPage } from "@/features/search/SearchResultsPage";
 import { DatabaseViewPicker } from "@/features/editor/DatabaseViewPicker";
@@ -22,6 +23,7 @@ import { t, useLanguage } from "@/lib/i18n";
 import { flushAllForClose, registerCloseFlush } from "@/lib/close-flush";
 import { flushPendingUiPersist } from "@/stores/workspace";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 
 function App() {
   // Phase 4 修复 React 19 dev infinite-loop：
@@ -34,6 +36,9 @@ function App() {
 
   // 订阅语言：t() 读 getState 不订阅，切换语言后靠这里触发整树重渲染刷新文案
   useLanguage();
+  // 数据库健康状态：初始化后探一次，库打不开时用兜底页替代空工作区
+  const [dbHealth, setDbHealth] = useState<DbHealth | null>(null);
+  const [dbChecked, setDbChecked] = useState(false);
   // 关窗时保存失败 → 弹确认框；closeDecisionRef 持有用户的决定（true=仍要关闭）
   const [closeBlocked, setCloseBlocked] = useState(false);
   const closeDecisionRef = useRef<((proceed: boolean) => void) | null>(null);
@@ -54,6 +59,15 @@ function App() {
         // 这里不再外部 setState，避免触发额外 zustand emit → React 19 useSyncExternalStore 缓存告警。
         logger.error("App.init", "app init failed", e);
         toast.error(t("error.db", { message: String(e) }));
+      })
+      .finally(() => {
+        // 无论 init 成功与否都探一次库健康：连接失败时展示可操作的兜底页
+        // （真实原因 + 库文件/数据目录/最近备份 + 打开目录/导入备份/重试），
+        // 而不是让用户对着一个空工作区猜发生了什么。
+        invoke<DbHealth>("db_health")
+          .then(setDbHealth)
+          .catch((e) => logger.error("App.dbHealth", "db_health failed", e))
+          .finally(() => setDbChecked(true));
       });
   }, []);
 
@@ -120,8 +134,13 @@ function App() {
     };
   }, []);
 
-  if (!ready) {
+  // 等健康探测落地再渲染，避免库故障时先闪一下空工作区
+  if (!ready || !dbChecked) {
     return <div className="flex h-screen items-center justify-center text-sm text-neutral-500">{t("app.loading")}</div>;
+  }
+
+  if (dbHealth && !dbHealth.ok) {
+    return <DbUnavailable health={dbHealth} />;
   }
 
   const view = currentViewId ? findNode(tree, currentViewId) : null;

@@ -62,7 +62,13 @@ impl Db {
         db
     }
 
-    #[cfg(test)]
+    /// 数据库文件的绝对路径（诊断/兜底提示页展示用）
+    pub fn db_path(&self) -> PathBuf {
+        self.path.clone()
+    }
+
+    /// 当前连接不可用的原因；连接正常时为 None。
+    /// 供 db_health 诊断命令读取，让前端能展示真实原因而不是一句笼统的 error.db。
     pub fn init_error_msg(&self) -> Option<String> {
         self.init_error.lock().unwrap().clone()
     }
@@ -79,11 +85,24 @@ impl Db {
     }
 
     pub fn write_conn(&self) -> Result<DbConnGuard<'_>, String> {
-        DbConnGuard::new(self.write.lock().map_err(|_| "db state poisoned".to_string())?)
+        let guard = self.write.lock().map_err(|_| "db state poisoned".to_string())?;
+        DbConnGuard::new(guard).map_err(|e| self.with_init_error(e))
     }
 
     pub fn read_conn(&self) -> Result<DbConnGuard<'_>, String> {
-        DbConnGuard::new(self.read.lock().map_err(|_| "db state poisoned".to_string())?)
+        let guard = self.read.lock().map_err(|_| "db state poisoned".to_string())?;
+        DbConnGuard::new(guard).map_err(|e| self.with_init_error(e))
+    }
+
+    /// 连接已关闭时把真实失败原因（init_error）附在错误串后。
+    /// 没有它时前端只会收到笼统的 "database is closed or not initialized"，
+    /// 无从判断是文件被占用、迁移失败，还是正处于备份恢复中。
+    /// 注：调用时 guard 已被 new() 释放，不会与 close_for_maintenance 的加锁顺序构成环。
+    fn with_init_error(&self, base: String) -> String {
+        match self.init_error.lock().unwrap().clone() {
+            Some(msg) if !msg.is_empty() => format!("{base}（{msg}）"),
+            _ => base,
+        }
     }
 
     /// 备份/恢复前调用：checkpoint 后整体关闭连接，此后 db 文件/数据目录在 Windows 上可改名删除。

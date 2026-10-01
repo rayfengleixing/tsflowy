@@ -221,6 +221,7 @@ pub fn run() {
             commands::files::get_auto_backup_config,
             commands::files::set_auto_backup_config,
             commands::files::run_auto_backup_now,
+            commands::files::db_health,
             commands::db::workspace_list,
             commands::db::workspace_create,
             commands::db::workspace_rename,

@@ -949,55 +949,42 @@ pub fn run_auto_backup(app: &tauri::AppHandle, keep: usize) -> Result<PathBuf, S
     Ok(target)
 }
 
+/// 列出 backups/ 下的自动备份文件，按修改时间倒序（新的在前）。目录不存在时返回空表。
+fn auto_backup_files(dir: &Path) -> Vec<(String, PathBuf, SystemTime)> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut items: Vec<(String, PathBuf, SystemTime)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with(AUTO_BACKUP_PREFIX) || !name.ends_with(".zip") {
+                return None;
+            }
+            let mtime = entry.metadata().ok()?.modified().ok()?;
+            Some((name, entry.path(), mtime))
+        })
+        .collect();
+    items.sort_by(|a, b| b.2.cmp(&a.2));
+    items
+}
+
+/// backups/ 下最新的一份自动备份（文件名、路径、修改时间）
+fn latest_auto_backup(dir: &Path) -> Option<(String, PathBuf, SystemTime)> {
+    auto_backup_files(dir).into_iter().next()
+}
+
 /// 只保留 backups/ 下最新的 keep 份自动备份（按修改时间倒序），多余删除。
 /// 纯增益动作：任何失败都静默跳过，不影响本次备份结果。
 fn prune_auto_backups(dir: &Path, keep: usize) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    let mut items: Vec<(SystemTime, PathBuf)> = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.starts_with(AUTO_BACKUP_PREFIX) || !name.ends_with(".zip") {
-            continue;
-        }
-        let Ok(meta) = entry.metadata() else {
-            continue;
-        };
-        let mtime = meta.modified().unwrap_or(UNIX_EPOCH);
-        items.push((mtime, entry.path()));
-    }
-    items.sort_by(|a, b| b.0.cmp(&a.0)); // 新的在前
-    for (_, path) in items.into_iter().skip(keep) {
+    for (_, path, _) in auto_backup_files(dir).into_iter().skip(keep) {
         let _ = fs::remove_file(&path);
     }
 }
 
 /// 距最近一次自动备份已过去的时长（秒）；从未备份过返回 None
 fn secs_since_last_auto_backup(app: &tauri::AppHandle) -> Result<Option<u64>, String> {
-    let dir = backup_dir(app)?;
-    let Ok(entries) = fs::read_dir(&dir) else {
-        return Ok(None);
-    };
-    let mut latest: Option<SystemTime> = None;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.starts_with(AUTO_BACKUP_PREFIX) || !name.ends_with(".zip") {
-            continue;
-        }
-        let Ok(meta) = entry.metadata() else {
-            continue;
-        };
-        let Ok(mtime) = meta.modified() else {
-            continue;
-        };
-        if latest.map(|l| mtime > l).unwrap_or(true) {
-            latest = Some(mtime);
-        }
-    }
-    Ok(latest.map(|t| {
+    Ok(latest_auto_backup(&backup_dir(app)?).map(|(_, _, t)| {
         SystemTime::now()
             .duration_since(t)
             .unwrap_or_default()
@@ -1038,29 +1025,25 @@ pub struct AutoBackupInfo {
     pub last_backup: Option<String>,
 }
 
+/// 把 SystemTime 格式化为**本地**时间串（设置页与诊断页共用）。
+/// 注意不能直接 format(OffsetDateTime::from(t))——那是 UTC，会比本地时间小 8 小时。
+fn format_local_time(t: SystemTime) -> String {
+    const FMT: &[time::format_description::FormatItem<'_>] =
+        time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+    let utc = time::OffsetDateTime::from(t);
+    time::UtcOffset::current_local_offset()
+        .map(|off| utc.to_offset(off))
+        .unwrap_or(utc)
+        .format(FMT)
+        .unwrap_or_else(|_| "—".to_string())
+}
+
 /// 读取自动备份设置 + 目录 + 最近备份时间（设置页展示）
 #[tauri::command]
 pub fn get_auto_backup_config(app: tauri::AppHandle) -> Result<AutoBackupInfo, String> {
     let cfg = load_app_config(&app).auto_backup.normalized();
     let dir = backup_dir(&app)?;
-    let last_backup = fs::read_dir(&dir).ok().and_then(|entries| {
-        entries
-            .flatten()
-            .filter(|e| {
-                let n = e.file_name();
-                let n = n.to_string_lossy();
-                n.starts_with(AUTO_BACKUP_PREFIX) && n.ends_with(".zip")
-            })
-            .filter_map(|e| e.metadata().ok()?.modified().ok())
-            .max()
-            .map(|t| {
-                const FMT: &[time::format_description::FormatItem<'_>] =
-                    time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
-                time::OffsetDateTime::from(t)
-                    .format(FMT)
-                    .unwrap_or_else(|_| "—".to_string())
-            })
-    });
+    let last_backup = latest_auto_backup(&dir).map(|(_, _, t)| format_local_time(t));
     Ok(AutoBackupInfo {
         enabled: cfg.enabled,
         interval_hours: cfg.interval_hours,
@@ -1094,6 +1077,52 @@ pub fn set_auto_backup_config(
 pub async fn run_auto_backup_now(app: tauri::AppHandle) -> Result<String, String> {
     let keep = load_app_config(&app).auto_backup.normalized().keep;
     run_auto_backup(&app, keep).map(|p| p.to_string_lossy().to_string())
+}
+
+// ————————————————————————————————————————————————
+// 数据库健康诊断：数据库不可用时的兜底提示页
+// ————————————————————————————————————————————————
+
+/// 数据库不可用时的诊断信息：把**真实失败原因**与所有可操作路径交给前端，
+/// 用户据此能自己判断（文件被占用 / 磁盘满 / 迁移失败）并一键导入备份恢复，
+/// 而不是只看到一句无从下手的 error.db。
+#[derive(Serialize)]
+pub struct DbHealth {
+    /// 读写连接是否可用；false 时所有 DB 命令都会失败
+    pub ok: bool,
+    /// 真实失败原因（连接正常时为 None）
+    pub error: Option<String>,
+    /// 数据库文件绝对路径与大小
+    pub db_path: String,
+    pub db_size_bytes: u64,
+    /// 数据目录（库文件与 assets 所在，junction 的真实落点）
+    pub data_dir: String,
+    /// 自动备份目录
+    pub backup_dir: String,
+    /// 最近一份自动备份：文件名 / 绝对路径 / 本地时间（无备份时均为 None）
+    pub latest_backup: Option<String>,
+    pub latest_backup_path: Option<String>,
+    pub latest_backup_time: Option<String>,
+}
+
+#[tauri::command]
+pub async fn db_health(app: tauri::AppHandle, db: tauri::State<'_, Db>) -> Result<DbHealth, String> {
+    let data_dir = real_data_dir(&app)?;
+    let db_path = db.db_path();
+    let backup = backup_dir(&app)?;
+    let latest = latest_auto_backup(&backup);
+    let error = db.init_error_msg();
+    Ok(DbHealth {
+        ok: error.is_none(),
+        error,
+        db_size_bytes: fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0),
+        db_path: db_path.to_string_lossy().to_string(),
+        data_dir: data_dir.to_string_lossy().to_string(),
+        backup_dir: backup.to_string_lossy().to_string(),
+        latest_backup: latest.as_ref().map(|(n, _, _)| n.clone()),
+        latest_backup_path: latest.as_ref().map(|(_, p, _)| p.to_string_lossy().to_string()),
+        latest_backup_time: latest.as_ref().map(|(_, _, t)| format_local_time(*t)),
+    })
 }
 
 /// 把 custom 数据恢复为 default 路径：先将现有 default 整体改名到 bak，再把 custom 复制回来。
