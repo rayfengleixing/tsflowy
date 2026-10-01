@@ -82,149 +82,140 @@ export function PageTreeItem({ node, depth, draggingId, dropHint, onRowMouseDown
 
   return (
     <>
-      <div
-        data-tree-row={node.id}
-        className={
-          "group relative flex h-[30px] cursor-pointer items-center gap-1 pr-1 select-none " +
-          (isActive ? "bg-brand-100 " : "hover:bg-neutral-300/40 ") +
-          (hintFor === "inside" ? "bg-brand-100 ring-1 ring-brand-500" : "") +
-          (draggingId === node.id ? " opacity-40" : "")
-        }
-        style={{ paddingLeft: 16 + depth * INDENT }}
-        onMouseDown={(e) => onRowMouseDown(node.id, e)}
-        onClick={() => onRowClick(node.id)}
-      >
-        {isActive && <div className="absolute left-0 top-0 h-full w-[3px] bg-brand-500" />}
-        {hintFor === "before" && <div className="absolute -top-[1px] left-0 right-0 h-[2px] bg-brand-500" />}
-        {hintFor === "after" && <div className="absolute -bottom-[1px] left-0 right-0 h-[2px] bg-brand-500" />}
-
-        {hasChildren ? (
-          <button
-            className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-neutral-500 hover:bg-neutral-300"
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleExpand(node.id);
-            }}
-          >
-            <ChevronRight className={"h-3.5 w-3.5 transition-transform " + (isExpanded ? "rotate-90" : "")} />
-          </button>
-        ) : (
-          <span className="w-4 shrink-0" />
-        )}
-
-        <span
-          className="flex w-5 shrink-0 items-center justify-center text-neutral-500"
-          onClick={(e) => e.stopPropagation()}
+      {/* 相对定位 + 定高容器：定高供列表窗口化换算窗口；相对定位让重命名输入框正好覆盖本行
+          （子节点由 PageTree 展平成同级行渲染，本组件不再递归） */}
+      <div className="relative h-[30px]">
+        <div
+          data-tree-row={node.id}
+          className={
+            "group relative flex h-[30px] cursor-pointer items-center gap-1 pr-1 select-none " +
+            (isActive ? "bg-brand-100 " : "hover:bg-neutral-300/40 ") +
+            (hintFor === "inside" ? "bg-brand-100 ring-1 ring-brand-500" : "") +
+            (draggingId === node.id ? " opacity-40" : "")
+          }
+          style={{ paddingLeft: 16 + depth * INDENT }}
+          onMouseDown={(e) => onRowMouseDown(node.id, e)}
+          onClick={() => onRowClick(node.id)}
         >
-          {/* 点击图标直接换图标（popover 选择器）；stopPropagation 防止触发行打开 */}
-          <EmojiPicker
-            value={node.icon}
-            onChange={(icon) => void setViewIcon(node.id, icon)}
-            triggerClassName="h-5 w-5 rounded text-[13px] text-neutral-500 hover:bg-neutral-300"
-            trigger={viewIcon(node)}
-          />
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[13px] text-neutral-800">{node.name}</span>
+          {isActive && <div className="absolute left-0 top-0 h-full w-[3px] bg-brand-500" />}
+          {hintFor === "before" && <div className="absolute -top-[1px] left-0 right-0 h-[2px] bg-brand-500" />}
+          {hintFor === "after" && <div className="absolute -bottom-[1px] left-0 right-0 h-[2px] bg-brand-500" />}
 
-        {/* 行尾操作按钮：hover 显示；菜单打开期间（trigger 带 data-state=open）保持可见，
-            否则 Floating UI 重算时按钮隐藏（rect 0）会把菜单定位到左上角 */}
-        <span className="hidden shrink-0 items-center group-hover:flex group-has-[[data-state=open]]:flex">
-          <NewPageMenu parentId={node.id} align="end">
+          {hasChildren ? (
             <button
-              data-testid="row-add"
-              className="flex h-5 w-5 items-center justify-center rounded text-neutral-500 hover:bg-neutral-300"
-              title={t("tree.addSubpage")}
-              onClick={(e) => e.stopPropagation()}
+              className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-neutral-500 hover:bg-neutral-300"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleExpand(node.id);
+              }}
             >
-              <Plus className="h-3.5 w-3.5" />
+              <ChevronRight className={"h-3.5 w-3.5 transition-transform " + (isExpanded ? "rotate-90" : "")} />
             </button>
-          </NewPageMenu>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+          ) : (
+            <span className="w-4 shrink-0" />
+          )}
+
+          <span
+            className="flex w-5 shrink-0 items-center justify-center text-neutral-500"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* 点击图标直接换图标（popover 选择器）；stopPropagation 防止触发行打开 */}
+            <EmojiPicker
+              value={node.icon}
+              onChange={(icon) => void setViewIcon(node.id, icon)}
+              triggerClassName="h-5 w-5 rounded text-[13px] text-neutral-500 hover:bg-neutral-300"
+              trigger={viewIcon(node)}
+            />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[13px] text-neutral-800">{node.name}</span>
+
+          {/* 行尾操作按钮：hover 显示；菜单打开期间（trigger 带 data-state=open）保持可见，
+              否则 Floating UI 重算时按钮隐藏（rect 0）会把菜单定位到左上角 */}
+          <span className="hidden shrink-0 items-center group-hover:flex group-has-[[data-state=open]]:flex">
+            <NewPageMenu parentId={node.id} align="end">
               <button
-                data-testid="row-menu"
+                data-testid="row-add"
                 className="flex h-5 w-5 items-center justify-center rounded text-neutral-500 hover:bg-neutral-300"
+                title={t("tree.addSubpage")}
                 onClick={(e) => e.stopPropagation()}
               >
-                <MoreHorizontal className="h-3.5 w-3.5" />
+                <Plus className="h-3.5 w-3.5" />
               </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem
-                onSelect={() => {
-                  setEditName(node.name);
-                  setEditing(true);
-                }}
-              >
-                <Pencil className="mr-2 h-3.5 w-3.5" />
-                {t("tree.rename")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void setViewFavorite(node.id, !isFavorite)}>
-                <Star className={"mr-2 h-3.5 w-3.5 " + (isFavorite ? "fill-brand-500 text-brand-500" : "")} />
-                {isFavorite ? t("tree.unfavorite") : t("tree.favorite")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setTagEditorOpen(true)}>
-                <Tag className="mr-2 h-3.5 w-3.5" />
-                {t("tree.editTags")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setHistoryOpen(true)}>
-                <History className="mr-2 h-3.5 w-3.5" />
-                {t("tree.history")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void doDuplicate()}>
-                <Copy className="mr-2 h-3.5 w-3.5" />
-                {t("tree.duplicate")}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => exportPage(node.id, node.name, "markdown")}>
-                <Download className="mr-2 h-3.5 w-3.5" />
-                {t("tree.exportMd")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => exportPage(node.id, node.name, "html")}>
-                <Download className="mr-2 h-3.5 w-3.5" />
-                {t("tree.exportHtml")}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
-                onSelect={() => setConfirmDelete(true)}
-              >
-                <Trash2 className="mr-2 h-3.5 w-3.5" />
-                {t("tree.delete")}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </span>
-      </div>
+            </NewPageMenu>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  data-testid="row-menu"
+                  className="flex h-5 w-5 items-center justify-center rounded text-neutral-500 hover:bg-neutral-300"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem
+                  onSelect={() => {
+                    setEditName(node.name);
+                    setEditing(true);
+                  }}
+                >
+                  <Pencil className="mr-2 h-3.5 w-3.5" />
+                  {t("tree.rename")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void setViewFavorite(node.id, !isFavorite)}>
+                  <Star className={"mr-2 h-3.5 w-3.5 " + (isFavorite ? "fill-brand-500 text-brand-500" : "")} />
+                  {isFavorite ? t("tree.unfavorite") : t("tree.favorite")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setTagEditorOpen(true)}>
+                  <Tag className="mr-2 h-3.5 w-3.5" />
+                  {t("tree.editTags")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setHistoryOpen(true)}>
+                  <History className="mr-2 h-3.5 w-3.5" />
+                  {t("tree.history")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void doDuplicate()}>
+                  <Copy className="mr-2 h-3.5 w-3.5" />
+                  {t("tree.duplicate")}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => exportPage(node.id, node.name, "markdown")}>
+                  <Download className="mr-2 h-3.5 w-3.5" />
+                  {t("tree.exportMd")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => exportPage(node.id, node.name, "html")}>
+                  <Download className="mr-2 h-3.5 w-3.5" />
+                  {t("tree.exportHtml")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onSelect={() => setConfirmDelete(true)}
+                >
+                  <Trash2 className="mr-2 h-3.5 w-3.5" />
+                  {t("tree.delete")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </span>
+        </div>
 
-      {isExpanded &&
-        node.children.map((child) => (
-          <PageTreeItem
-            key={child.id}
-            node={child}
-            depth={depth + 1}
-            draggingId={draggingId}
-            dropHint={dropHint}
-            onRowMouseDown={onRowMouseDown}
-            onRowClick={onRowClick}
+        {editing && (
+          <input
+            autoFocus
+            data-rename-input
+            className="absolute left-0 top-0 z-10 h-[30px] w-full rounded bg-white px-2 text-[13px] outline-1 outline-brand-500"
+            style={{ paddingLeft: 16 + depth * INDENT }}
+            value={editName}
+            onChange={(e) => setEditName(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename();
+              if (e.key === "Escape") setEditing(false);
+            }}
+            onClick={(e) => e.stopPropagation()}
           />
-        ))}
-
-      {editing && (
-        <input
-          autoFocus
-          data-rename-input
-          className="absolute left-0 z-10 h-[30px] w-full rounded bg-white px-2 text-[13px] outline-1 outline-brand-500"
-          style={{ paddingLeft: 16 + depth * INDENT }}
-          value={editName}
-          onChange={(e) => setEditName(e.target.value)}
-          onBlur={commitRename}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commitRename();
-            if (e.key === "Escape") setEditing(false);
-          }}
-          onClick={(e) => e.stopPropagation()}
-        />
-      )}
+        )}
+      </div>
 
       <ConfirmDialog
         open={confirmDelete}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTree, computeRenumber, dropTarget, filterTreeByTag, flattenTree, isDescendant, siblingIds } from "./tree";
+import { buildTree, computeRenumber, dropTarget, filterTreeByTag, flattenTree, flattenVisibleTree, isDescendant, siblingIds } from "./tree";
 import type { View } from "@/types/models";
 
 const v = (id: string, parent_id: string | null, position: number): View => ({
@@ -53,6 +53,28 @@ describe("flattenTree / isDescendant", () => {
     expect(isDescendant(tree, "a", "c")).toBe(true);
     expect(isDescendant(tree, "b", "a")).toBe(false);
     expect(isDescendant(tree, "a", "d")).toBe(false);
+  });
+});
+
+describe("flattenVisibleTree", () => {
+  const tree = buildTree([v("a", null, 0), v("b", "a", 0), v("c", "b", 0), v("d", null, 1)]);
+  const shape = (expanded: string[]) =>
+    flattenVisibleTree(tree, new Set(expanded)).map((r) => `${r.node.id}@${r.depth}`);
+
+  it("未展开时只出根级", () => {
+    expect(shape([])).toEqual(["a@0", "d@0"]);
+  });
+
+  it("展开后按层级带 depth 下钻", () => {
+    expect(shape(["a", "b"])).toEqual(["a@0", "b@1", "c@2", "d@0"]);
+  });
+
+  it("展开 a 但未展开 b：b 出现、c 不出现", () => {
+    expect(shape(["a"])).toEqual(["a@0", "b@1", "d@0"]);
+  });
+
+  it("展开集合里的无关 id 不影响结果", () => {
+    expect(shape(["ghost"])).toEqual(["a@0", "d@0"]);
   });
 });
 

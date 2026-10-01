@@ -35,6 +35,28 @@ export function flattenTree(nodes: ViewNode[]): ViewNode[] {
   return out;
 }
 
+/** 展平后的可见行：扁平行列表 + 缩进层级（供列表渲染与窗口化使用） */
+export interface VisibleTreeRow {
+  node: ViewNode;
+  depth: number;
+}
+
+/**
+ * 展平"当前可见"的树：按展开集合决定是否下钻子节点。
+ * 与 flattenTree（展开全部、供收藏/标签统计用）区分：这里跟随 UI 展开状态，且带 depth。
+ */
+export function flattenVisibleTree(nodes: ViewNode[], expanded: Set<string>): VisibleTreeRow[] {
+  const out: VisibleTreeRow[] = [];
+  const walk = (ns: ViewNode[], depth: number) => {
+    for (const n of ns) {
+      out.push({ node: n, depth });
+      if (expanded.has(n.id)) walk(n.children, depth + 1);
+    }
+  };
+  walk(nodes, 0);
+  return out;
+}
+
 export function findNode(nodes: ViewNode[], id: string): ViewNode | null {
   for (const n of nodes) {
     if (n.id === id) return n;
