@@ -1,15 +1,66 @@
 import { describe, expect, it } from "vitest";
-import { prioritizeSearchRows, sanitizeSnippet, titleTier } from "./search";
+import { localTitleHits, mergeSearchRows, prioritizeSearchRows, sanitizeSnippet, titleTier } from "./search";
 
 // escapeFts / likePattern 的转义用例已随 Phase B 下沉 Rust（src-tauri/src/db/search.rs）。
 
 describe("titleTier", () => {
-  it("ranks exact > prefix > contains > body-only", () => {
+  it("ranks exact > prefix > contains > pinyin > body-only", () => {
     expect(titleTier("笔记", "笔记")).toBe(0);
     expect(titleTier("笔记整理", "笔记")).toBe(1);
     expect(titleTier("我的笔记整理", "笔记")).toBe(2);
-    expect(titleTier("完全不同", "笔记")).toBe(3);
+    expect(titleTier("完全不同", "笔记")).toBe(4);
     expect(titleTier("NOTE", "note")).toBe(0); // 大小写不敏感
+  });
+
+  it("matches by pinyin initials, ranked below literal title hits", () => {
+    expect(titleTier("数据库表", "sjk")).toBe(3); // 拼音命中、字面不命中
+    expect(titleTier("数据库表", "sjkb")).toBe(3);
+    expect(titleTier("标题", "bt")).toBe(3);
+    expect(titleTier("读书", "bt")).toBe(4); // 首字母串是 D，不含 BT
+    // pinyin-initials 是常用字映射表（非全量字典），未收录的字返回空串：
+    // 「笔记整理」四个字都不在表内 → 首字母串为空，拼音路径匹配不上
+    expect(titleTier("笔记整理", "bj")).toBe(4);
+  });
+});
+
+describe("localTitleHits", () => {
+  const views = [
+    { id: "a", name: "数据库表", icon: null, layout: "document" as const },
+    { id: "b", name: "读书", icon: "📖", layout: "grid" as const },
+  ] as Parameters<typeof localTitleHits>[0];
+
+  it("returns literal and pinyin title hits without touching the body", () => {
+    expect(localTitleHits(views, "sjk").map((r) => r.view_id)).toEqual(["a"]);
+    expect(localTitleHits(views, "读书").map((r) => r.view_id)).toEqual(["b"]);
+  });
+
+  it("returns nothing for empty query or body-only match", () => {
+    expect(localTitleHits(views, "   ")).toEqual([]);
+    expect(localTitleHits(views, "zzz")).toEqual([]);
+  });
+});
+
+describe("mergeSearchRows", () => {
+  it("keeps the FTS row (with its snippet) when the same view matches locally", () => {
+    const fts = [
+      { view_id: "a", title: "数据库表", icon: null, layout: "document" as const, snippet: "<em>数据</em>正文", rank: 2 },
+    ];
+    const local = [
+      { view_id: "a", title: "数据库表", icon: null, layout: "document" as const, snippet: "", rank: 0 },
+    ];
+    const out = mergeSearchRows(fts, local, "sjk");
+    expect(out).toHaveLength(1);
+    expect(out[0].snippet).toBe("<em>数据</em>正文");
+  });
+
+  it("orders pinyin title hits before body-only hits", () => {
+    const fts = [
+      { view_id: "b", title: "读书", icon: null, layout: "document" as const, snippet: "正文提到数据库", rank: 1 },
+    ];
+    const local = [
+      { view_id: "a", title: "数据库表", icon: null, layout: "document" as const, snippet: "", rank: 0 },
+    ];
+    expect(mergeSearchRows(fts, local, "sjk").map((r) => r.view_id)).toEqual(["a", "b"]);
   });
 });
 

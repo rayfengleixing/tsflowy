@@ -1,41 +1,34 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CornerDownLeft, FilePlus, FileSearch, Search, Settings, SunMoon, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
+import { Clock, CornerDownLeft, FilePlus, FileSearch, History, Search, Settings, SunMoon, Trash2, X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { HighlightedTitle } from "@/components/highlighted-title";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useDatabaseStore } from "@/stores/database";
 import { useSettingsStore } from "@/stores/settings";
-import { searchApi, type SearchHit } from "@/lib/search";
+import { searchApi, titleTier, TIER_BODY_ONLY, type SearchHit } from "@/lib/search";
+import { clearSearchHistory, loadSearchHistory, pushSearchHistory } from "@/lib/search-history";
+import { viewApi } from "@/lib/db";
+import { flattenTree } from "@/lib/tree";
 import { viewIcon } from "@/components/view-icon";
+import type { View } from "@/types/models";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 
-function highlightTitle(title: string, query: string) {
-  const q = query.trim().toLowerCase();
-  if (!q) return title;
-  const lower = title.toLowerCase();
-  const parts: { text: string; hit: boolean }[] = [];
-  let i = 0;
-  while (i < title.length) {
-    const idx = lower.indexOf(q, i);
-    if (idx === -1) {
-      parts.push({ text: title.slice(i), hit: false });
-      break;
-    }
-    if (idx > i) parts.push({ text: title.slice(i, idx), hit: false });
-    parts.push({ text: title.slice(idx, idx + q.length), hit: true });
-    i = idx + q.length;
-  }
-  return parts.map((p, k) =>
-    p.hit ? (
-      <mark key={k} className="rounded-sm bg-brand-100 text-brand-600">
-        {p.text}
-      </mark>
-    ) : (
-      <span key={k}>{p.text}</span>
-    ),
-  );
+interface PaletteAction {
+  id: string;
+  label: string;
+  icon: ReactNode;
+  run: () => void;
 }
+
+/** 面板里的一行：动作 / 历史查询 / 最近访问 / 搜索命中，↑↓ 走的就是这条扁平序列 */
+type Row =
+  | { kind: "action"; action: PaletteAction }
+  | { kind: "query"; text: string }
+  | { kind: "recent"; view: View }
+  | { kind: "hit"; hit: SearchHit };
 
 /** Ctrl+K 命令面板（项目说明书 5.1 搜索）：快捷动作 + 输入即搜，标题优先，Enter 跳转 */
 export function CommandPalette() {
@@ -49,11 +42,13 @@ export function CommandPalette() {
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchHit[]>([]);
+  const [history, setHistory] = useState<string[]>([]);
+  const [recent, setRecent] = useState<View[]>([]);
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<number | null>(null);
 
-  const actions = useMemo(
+  const actions = useMemo<PaletteAction[]>(
     () => [
       {
         id: "newPage",
@@ -94,32 +89,62 @@ export function CommandPalette() {
   // 输入即过滤动作；空查询时动作就是主内容（面板即启动器）
   const actionMatches = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return q ? actions.filter((a) => a.label.toLowerCase().includes(q)) : actions;
+    return q ? actions.filter((a) => titleTier(a.label, q) < TIER_BODY_ONLY) : actions;
   }, [actions, query]);
 
-  // 动作在前、搜索结果在后，↑↓/Enter 只认这一条扁平序列
-  const itemCount = actionMatches.length + results.length;
-  const runItem = (index: number) => {
-    if (index < actionMatches.length) {
-      const action = actionMatches[index];
-      closePalette();
-      action.run();
-      return;
+  const trimmed = query.trim();
+
+  // 动作在前、搜索结果在后；空查询时补上「最近搜索 / 最近访问」——启动器不再是一张白纸
+  const rows = useMemo<Row[]>(() => {
+    const actionRows: Row[] = actionMatches.map((action) => ({ kind: "action", action }));
+    if (trimmed) return [...actionRows, ...results.map((hit): Row => ({ kind: "hit", hit }))];
+    return [
+      ...actionRows,
+      ...history.map((text): Row => ({ kind: "query", text })),
+      ...recent.map((view): Row => ({ kind: "recent", view })),
+    ];
+  }, [actionMatches, results, history, recent, trimmed]);
+
+  const runRow = (row: Row) => {
+    switch (row.kind) {
+      case "action":
+        closePalette();
+        row.action.run();
+        break;
+      case "query":
+        setQuery(row.text);
+        inputRef.current?.focus();
+        break;
+      case "recent":
+        closePalette();
+        openView(row.view.id);
+        break;
+      case "hit":
+        pushSearchHistory(trimmed);
+        closePalette();
+        if (row.hit.row_id) useDatabaseStore.getState().setFocusRow(row.hit.row_id);
+        openView(row.hit.view_id);
+        break;
     }
-    // find 保证取到的是 SearchHit | undefined：越界（动作数变化后 active 未及归零）时不误跳
-    const hit = results.find((_, i) => i === index - actionMatches.length);
-    if (hit) jump(hit);
   };
 
-  // 打开时聚焦并清空上次状态
+  // 打开时聚焦、清空上次状态，并把历史与最近访问取回来
   useEffect(() => {
-    if (paletteOpen) {
-      setQuery("");
-      setResults([]);
-      setActive(0);
-      setTimeout(() => inputRef.current?.focus(), 30);
+    if (!paletteOpen) return;
+    setQuery("");
+    setResults([]);
+    setActive(0);
+    setHistory(loadSearchHistory());
+    setTimeout(() => inputRef.current?.focus(), 30);
+    if (!currentWorkspaceId) {
+      setRecent([]);
+      return;
     }
-  }, [paletteOpen]);
+    viewApi
+      .listRecent(currentWorkspaceId, 5)
+      .then(setRecent)
+      .catch(logger.catch("palette.recent", "list recent failed"));
+  }, [paletteOpen, currentWorkspaceId]);
 
   useEffect(() => {
     if (!paletteOpen || !currentWorkspaceId) return;
@@ -130,8 +155,10 @@ export function CommandPalette() {
         setResults([]);
         return;
       }
+      // 本地补一份标题/拼音首字母命中：FTS 只按字面匹配，输入 "bj" 找不到「笔记」
+      const views = flattenTree(useWorkspaceStore.getState().tree);
       searchApi
-        .search(currentWorkspaceId, q)
+        .search(currentWorkspaceId, q, views)
         .then((r) => {
           setResults(r);
           setActive(0);
@@ -147,26 +174,52 @@ export function CommandPalette() {
     };
   }, [query, paletteOpen, currentWorkspaceId]);
 
-  const jump = (hit: SearchHit) => {
-    closePalette();
-    // 单元格命中：先记下命中行，视图挂载后据此滚动定位
-    if (hit.row_id) useDatabaseStore.getState().setFocusRow(hit.row_id);
-    openView(hit.view_id);
-  };
-
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActive((a) => (a + 1) % Math.max(itemCount, 1));
+      setActive((a) => (a + 1) % Math.max(rows.length, 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setActive((a) => (a - 1 + itemCount) % Math.max(itemCount, 1));
+      setActive((a) => (a - 1 + rows.length) % Math.max(rows.length, 1));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if (itemCount > 0) runItem(Math.min(active, itemCount - 1));
-      else if (query.trim()) openSearch(query.trim());
+      if (rows.length > 0) runRow(rows[Math.min(active, rows.length - 1)]);
+      else if (trimmed) {
+        pushSearchHistory(trimmed);
+        openSearch(trimmed);
+      }
     }
   };
+
+  // 按 kind 切段渲染（同类行连在一起才归为一段），同时保留每行在扁平序列里的下标
+  const sections = useMemo(() => {
+    const titleOf: Record<Row["kind"], string> = {
+      action: t("palette.actions.title"),
+      query: t("search.history"),
+      recent: t("search.recent"),
+      hit: t("search.results"),
+    };
+    interface Section {
+      kind: Row["kind"];
+      title: string;
+      items: { row: Row; index: number }[];
+    }
+    const out: Section[] = [];
+    let last: Section | null = null;
+    rows.forEach((row, index) => {
+      if (last?.kind === row.kind) {
+        last.items.push({ row, index });
+        return;
+      }
+      last = { kind: row.kind, title: titleOf[row.kind], items: [{ row, index }] };
+      out.push(last);
+    });
+    return out;
+  }, [rows]);
+
+  const rowClass = (index: number) =>
+    "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left " +
+    (index === active ? "bg-brand-100" : "hover:bg-neutral-200/60");
 
   return (
     <Dialog open={paletteOpen} onOpenChange={(open) => (open ? undefined : closePalette())}>
@@ -191,80 +244,120 @@ export function CommandPalette() {
           </kbd>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
-          {actionMatches.length > 0 && (
-            <>
-              <p className="px-2.5 py-1 text-[11px] text-neutral-400">{t("palette.actions.title")}</p>
-              {actionMatches.map((a, i) => (
-                <button
-                  key={a.id}
-                  data-testid={"palette-action-" + a.id}
-                  data-active={i === active}
-                  className={
-                    "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left " +
-                    (i === active ? "bg-brand-100" : "hover:bg-neutral-200/60")
-                  }
-                  onMouseEnter={() => setActive(i)}
-                  onClick={() => {
-                    closePalette();
-                    a.run();
-                  }}
-                >
-                  <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">{a.icon}</span>
-                  <span className="min-w-0 flex-1 truncate text-[13px] text-neutral-800">{a.label}</span>
-                </button>
-              ))}
-            </>
-          )}
-          {query.trim() !== "" &&
-            (results.length === 0 ? (
-              <div className="flex h-16 items-center justify-center gap-2 text-[13px] text-neutral-400">
-                {actionMatches.length === 0 && <FileSearch className="h-4 w-4" />}
-                {t("search.noResults", { query })}
+          {sections.map((section) => (
+            <div key={section.title}>
+              <div className="flex items-center justify-between px-2.5 py-1">
+                <p className="text-[11px] text-neutral-400">{section.title}</p>
+                {section.kind === "query" && (
+                  <button
+                    className="flex items-center gap-1 rounded px-1 text-[11px] text-neutral-400 hover:text-neutral-600"
+                    onClick={() => {
+                      clearSearchHistory();
+                      setHistory([]);
+                    }}
+                  >
+                    <X className="h-3 w-3" />
+                    {t("search.clearHistory")}
+                  </button>
+                )}
               </div>
-            ) : (
-              results.map((hit, i) => {
-                const index = actionMatches.length + i;
+              {section.items.map(({ row, index }) => {
+                if (row.kind === "action") {
+                  return (
+                    <button
+                      key={row.action.id}
+                      data-testid={"palette-action-" + row.action.id}
+                      data-active={index === active}
+                      className={rowClass(index)}
+                      onMouseEnter={() => setActive(index)}
+                      onClick={() => runRow(row)}
+                    >
+                      <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">
+                        {row.action.icon}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[13px] text-neutral-800">{row.action.label}</span>
+                    </button>
+                  );
+                }
+                if (row.kind === "query") {
+                  return (
+                    <button
+                      key={"q-" + row.text}
+                      data-active={index === active}
+                      className={rowClass(index)}
+                      onMouseEnter={() => setActive(index)}
+                      onClick={() => runRow(row)}
+                    >
+                      <span className="flex w-5 shrink-0 items-center justify-center text-neutral-400">
+                        <History className="h-3.5 w-3.5" />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[13px] text-neutral-700">{row.text}</span>
+                    </button>
+                  );
+                }
+                if (row.kind === "recent") {
+                  return (
+                    <button
+                      key={"r-" + row.view.id}
+                      data-active={index === active}
+                      className={rowClass(index)}
+                      onMouseEnter={() => setActive(index)}
+                      onClick={() => runRow(row)}
+                    >
+                      <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">
+                        {viewIcon(row.view)}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[13px] text-neutral-800">{row.view.name}</span>
+                      <Clock className="h-3.5 w-3.5 shrink-0 text-neutral-300" />
+                    </button>
+                  );
+                }
                 return (
                   <button
-                    key={hit.view_id}
+                    key={row.hit.view_id}
                     data-active={index === active}
-                    className={
-                      "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left " +
-                      (index === active ? "bg-brand-100" : "hover:bg-neutral-200/60")
-                    }
+                    className={rowClass(index)}
                     onMouseEnter={() => setActive(index)}
-                    onClick={() => jump(hit)}
+                    onClick={() => runRow(row)}
                   >
                     <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">
-                      {viewIcon(hit)}
+                      {viewIcon(row.hit)}
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-[13px] font-medium text-neutral-800">
-                        {highlightTitle(hit.title, query)}
+                        <HighlightedTitle title={row.hit.title} query={trimmed} />
                       </span>
-                      {hit.snippet && (
+                      {row.hit.snippet && (
                         <span
                           className="block truncate text-[12px] text-neutral-500"
-                          dangerouslySetInnerHTML={{ __html: hit.snippet }}
+                          dangerouslySetInnerHTML={{ __html: row.hit.snippet }}
                         />
                       )}
                     </span>
                     <CornerDownLeft className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
                   </button>
                 );
-              })
-            ))}
+              })}
+            </div>
+          ))}
+          {trimmed !== "" && results.length === 0 && (
+            <div className="flex h-16 items-center justify-center gap-2 text-[13px] text-neutral-400">
+              {actionMatches.length === 0 && <FileSearch className="h-4 w-4" />}
+              {t("search.noResults", { query })}
+            </div>
+          )}
         </div>
-        {(results.length > 0 || query.trim() === "") && (
+        {(results.length > 0 || trimmed === "") && (
           <div className="flex items-center justify-between border-t border-neutral-200 px-4 py-2 text-[11px] text-neutral-400">
             <span>
-              {query.trim() === "" ? t("search.typeHint") : `↑↓ ${t("search.navigate")} · Enter ${t("search.open")}`}
+              {trimmed === "" ? t("search.typeHint") : `↑↓ ${t("search.navigate")} · Enter ${t("search.open")}`}
             </span>
             {results.length > 0 && (
               <button
                 className="flex items-center gap-1 text-brand-600 hover:underline"
                 onClick={() => {
-                  if (query.trim()) openSearch(query.trim());
+                  pushSearchHistory(trimmed);
+                  openSearch(trimmed);
                 }}
               >
                 <CornerDownLeft className="h-3 w-3" />

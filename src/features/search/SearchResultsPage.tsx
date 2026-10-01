@@ -3,39 +3,15 @@ import { ArrowLeft, Clock, FileSearch } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useDatabaseStore } from "@/stores/database";
 import { searchApi, type SearchHit } from "@/lib/search";
+import { pushSearchHistory } from "@/lib/search-history";
 import { viewApi } from "@/lib/db";
+import { flattenTree } from "@/lib/tree";
 import type { View } from "@/types/models";
 import { viewIcon } from "@/components/view-icon";
+import { HighlightedTitle } from "@/components/highlighted-title";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
-
-function highlightTitle(title: string, query: string) {
-  const q = query.trim().toLowerCase();
-  if (!q) return title;
-  const lower = title.toLowerCase();
-  const parts: { text: string; hit: boolean }[] = [];
-  let i = 0;
-  while (i < title.length) {
-    const idx = lower.indexOf(q, i);
-    if (idx === -1) {
-      parts.push({ text: title.slice(i), hit: false });
-      break;
-    }
-    if (idx > i) parts.push({ text: title.slice(i, idx), hit: false });
-    parts.push({ text: title.slice(idx, idx + q.length), hit: true });
-    i = idx + q.length;
-  }
-  return parts.map((p, k) =>
-    p.hit ? (
-      <mark key={k} className="rounded-sm bg-brand-100 text-brand-600">
-        {p.text}
-      </mark>
-    ) : (
-      <span key={k}>{p.text}</span>
-    ),
-  );
-}
 
 /** 搜索结果页（项目说明书 10-M3：可跳转）。查询词空时显示最近访问，Ctrl+Shift+F 落进来即可输入。 */
 export function SearchResultsPage() {
@@ -86,8 +62,10 @@ export function SearchResultsPage() {
       return;
     }
     setLoading(true);
+    // 本地补一份标题/拼音首字母命中：FTS 只按字面匹配，输入 "bj" 找不到「笔记」
+    const views = flattenTree(useWorkspaceStore.getState().tree);
     searchApi
-      .search(currentWorkspaceId, q)
+      .search(currentWorkspaceId, q, views)
       .then((r) => {
         if (alive) setResults(r);
       })
@@ -119,6 +97,7 @@ export function SearchResultsPage() {
   }, [currentWorkspaceId, searchQuery]);
 
   const openHit = (hit: { view_id: string; row_id?: string | null }) => {
+    pushSearchHistory(searchQuery);
     // 单元格命中：先记下命中行，视图挂载后据此滚动定位
     if (hit.row_id) useDatabaseStore.getState().setFocusRow(hit.row_id);
     openView(hit.view_id);
@@ -206,7 +185,7 @@ export function SearchResultsPage() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[14px] font-medium text-neutral-800">
-                      {highlightTitle(hit.title, searchQuery)}
+                      <HighlightedTitle title={hit.title} query={searchQuery} />
                     </span>
                     {hit.snippet && (
                       <span
