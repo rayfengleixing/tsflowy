@@ -52,15 +52,88 @@ export function tagTint(color: string, alpha: string): string {
   return /^#[0-9a-fA-F]{6}$/.test(color) ? `${color}${alpha}` : color;
 }
 
-/** 去掉某个标签的颜色配置（返回新表，不改原对象） */
-export function omitTagColor(meta: TagColorMap, tag: string): TagColorMap {
-  return Object.fromEntries(Object.entries(meta).filter(([k]) => k !== tag));
+/** 标签改名时同步颜色配置：整棵子树（含自身）的键按前缀替换；目标已有颜色则保留目标色 */
+export function renameTagColor(meta: TagColorMap, from: string, to: string): TagColorMap {
+  const out: TagColorMap = {};
+  for (const [k, color] of Object.entries(meta)) {
+    if (color === undefined) continue;
+    const nk = renameTagPath(k, from, to);
+    out[nk] ??= color;
+  }
+  return out;
 }
 
-/** 标签改名时同步颜色配置：目标标签已有颜色则保留目标色，不覆盖 */
-export function renameTagColor(meta: TagColorMap, from: string, to: string): TagColorMap {
-  const out = omitTagColor(meta, from);
-  const color = meta[from];
-  if (color && out[to] === undefined) out[to] = color;
+// — 层级标签：标签名本身仍是扁平字符串，用「/」分层，如 "工作/项目A" —
+
+/** 层级分隔符 */
+export const TAG_SEP = "/";
+
+/** 把标签名拆成层级段（过滤空段："/a//b/" → ["a","b"]） */
+export function splitTagPath(tag: string): string[] {
+  return tag.split(TAG_SEP).map((s) => s.trim()).filter(Boolean);
+}
+
+/** 标签是否命中筛选路径：完全相等，或位于其下（父路径前缀匹配，含所有子标签） */
+export function tagMatchesFilter(tag: string, filter: string): boolean {
+  return tag === filter || tag.startsWith(filter + TAG_SEP);
+}
+
+/** 按层级重写标签名：tag 命中 from 子树时，把 from 前缀替换为 to */
+export function renameTagPath(tag: string, from: string, to: string): string {
+  return tagMatchesFilter(tag, from) ? to + tag.slice(from.length) : tag;
+}
+
+/** 层级标签树节点（由扁平标签名聚合；中间层级 count 可能为 0） */
+export interface TagTreeNode {
+  /** 当前层级显示名 */
+  label: string;
+  /** 完整路径（父路径 + / + label），筛选与取色都用它 */
+  path: string;
+  /** 直接带此标签的页面数 */
+  count: number;
+  /** 含所有子标签的页面数（子树内直接计数之和） */
+  total: number;
+  children: TagTreeNode[];
+}
+
+/** 把「标签名 → 页面数」聚合成层级树（按名称排序，同名段自动合并） */
+export function buildTagTree(entries: Iterable<readonly [string, number]>): TagTreeNode[] {
+  const roots: TagTreeNode[] = [];
+  const index = new Map<string, TagTreeNode>();
+  for (const [tag, count] of [...entries].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const parts = splitTagPath(tag);
+    if (parts.length === 0) continue;
+    let level = roots;
+    let path = "";
+    for (const seg of parts) {
+      path = path ? `${path}${TAG_SEP}${seg}` : seg;
+      let node = index.get(path);
+      if (!node) {
+        node = { label: seg, path, count: 0, total: 0, children: [] };
+        index.set(path, node);
+        level.push(node);
+      }
+      level = node.children;
+    }
+    const leaf = index.get(path);
+    if (leaf) leaf.count += count;
+  }
+  const sum = (n: TagTreeNode): number => {
+    n.children.sort((a, b) => a.label.localeCompare(b.label));
+    n.total = n.count + n.children.reduce((acc, c) => acc + sum(c), 0);
+    return n.total;
+  };
+  roots.sort((a, b) => a.label.localeCompare(b.label));
+  for (const r of roots) sum(r);
+  return roots;
+}
+
+/** 去掉标签颜色配置：移除整棵子树（含自身）的键，返回新表 */
+export function omitTagColor(meta: TagColorMap, tag: string): TagColorMap {
+  const out: TagColorMap = {};
+  for (const [k, color] of Object.entries(meta)) {
+    if (color === undefined || tagMatchesFilter(k, tag)) continue;
+    out[k] = color;
+  }
   return out;
 }

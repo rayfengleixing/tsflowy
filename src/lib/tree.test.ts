@@ -182,4 +182,16 @@ describe("filterTreeByTag", () => {
   it("无任何命中返回空树", () => {
     expect(filterTreeByTag(tree, "不存在")).toEqual([]);
   });
+
+  it("层级标签：筛父路径时命中所有子标签", () => {
+    const nested = buildTree([
+      tagged("a", null, 0, '["工作/项目A"]'),
+      tagged("b", null, 1, '["工作/项目B/子项"]'),
+      tagged("c", null, 2, '["工作台"]'),
+    ]);
+    expect(flattenTree(filterTreeByTag(nested, "工作")).map((n) => n.id)).toEqual(["a", "b"]);
+    expect(flattenTree(filterTreeByTag(nested, "工作/项目B")).map((n) => n.id)).toEqual(["b"]);
+    // 前缀必须落在层级边界上："工作" 不应命中 "工作台"
+    expect(flattenTree(filterTreeByTag(nested, "工作/项")).map((n) => n.id)).toEqual([]);
+  });
 });

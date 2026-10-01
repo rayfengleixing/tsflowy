@@ -1,4 +1,5 @@
 import { parseViewTags, type View, type ViewNode } from "@/types/models";
+import { tagMatchesFilter } from "@/lib/tags";
 
 // 树操作纯函数：与数据库解耦，便于 Vitest 单测（项目说明书 11 节：树操作需单测）
 
@@ -109,13 +110,16 @@ export function siblingIds(views: View[], parentId: string | null, movedId?: str
     .map((v) => v.id);
 }
 
-/** 标签过滤树：保留"自身带标签"或"子孙带标签"的节点（祖先仅作路径容器） */
+/**
+ * 标签过滤树：保留"自身带标签"或"子孙带标签"的节点（祖先仅作路径容器）。
+ * 层级标签按前缀命中：筛选 "工作" 时 "工作/项目A" 也算命中。
+ */
 export function filterTreeByTag(nodes: ViewNode[], tag: string): ViewNode[] {
   const walk = (ns: ViewNode[]): ViewNode[] => {
     const out: ViewNode[] = [];
     for (const n of ns) {
       const children = walk(n.children);
-      const hit = parseViewTags(n.tags).includes(tag);
+      const hit = parseViewTags(n.tags).some((x) => tagMatchesFilter(x, tag));
       if (hit || children.length > 0) out.push({ ...n, children });
     }
     return out;

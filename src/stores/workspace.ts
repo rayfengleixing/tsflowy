@@ -1,7 +1,15 @@
 import { create } from "zustand";
 import type { LayoutType, View, ViewNode, Workspace } from "@/types/models";
 import { parseViewTags } from "@/types/models";
-import { TAG_META_KEY, omitTagColor, parseTagColors, renameTagColor, type TagColorMap } from "@/lib/tags";
+import {
+  TAG_META_KEY,
+  omitTagColor,
+  parseTagColors,
+  renameTagColor,
+  renameTagPath,
+  tagMatchesFilter,
+  type TagColorMap,
+} from "@/lib/tags";
 import { viewApi, workspaceApi } from "@/lib/db";
 import { databaseApi } from "@/lib/database";
 import { documentApi } from "@/lib/documents";
@@ -614,13 +622,11 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     renameTag: async (from, to) => {
       const name = to.trim();
       if (!name || name === from) return;
-      // 先算出每个受影响页面的新标签（目标名已存在时去重，避免同页出现两个同名标签）
+      // 先算出每个受影响页面的新标签（层级改名：命中 from 子树的标签整体换前缀；同页去重）
       const affected = flattenTree(get().tree)
-        .filter((v) => parseViewTags(v.tags).includes(from))
-        .map((v) => ({
-          id: v.id,
-          tags: [...new Set(parseViewTags(v.tags).map((x) => (x === from ? name : x)))],
-        }));
+        .map((v) => ({ id: v.id, tags: parseViewTags(v.tags) }))
+        .filter((a) => a.tags.some((x) => tagMatchesFilter(x, from)))
+        .map((a) => ({ id: a.id, tags: [...new Set(a.tags.map((x) => renameTagPath(x, from, name)))] }));
       for (const a of affected) await viewApi.setTags(a.id, a.tags);
       set((state) => {
         let tree = state.tree;
@@ -628,16 +634,18 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
         return {
           tree,
           tagMeta: renameTagColor(state.tagMeta, from, name),
-          tagFilter: state.tagFilter === from ? name : state.tagFilter,
+          tagFilter: state.tagFilter ? renameTagPath(state.tagFilter, from, name) : state.tagFilter,
         };
       });
       await persistTagMeta(get().tagMeta);
     },
 
     deleteTag: async (tag) => {
+      // 层级删除：整个子树（含自身）的标签一并移除
       const affected = flattenTree(get().tree)
-        .filter((v) => parseViewTags(v.tags).includes(tag))
-        .map((v) => ({ id: v.id, tags: parseViewTags(v.tags).filter((x) => x !== tag) }));
+        .map((v) => ({ id: v.id, tags: parseViewTags(v.tags) }))
+        .filter((a) => a.tags.some((x) => tagMatchesFilter(x, tag)))
+        .map((a) => ({ id: a.id, tags: a.tags.filter((x) => !tagMatchesFilter(x, tag)) }));
       for (const a of affected) await viewApi.setTags(a.id, a.tags);
       set((state) => {
         let tree = state.tree;
@@ -645,7 +653,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
         return {
           tree,
           tagMeta: omitTagColor(state.tagMeta, tag),
-          tagFilter: state.tagFilter === tag ? null : state.tagFilter,
+          tagFilter: state.tagFilter && tagMatchesFilter(state.tagFilter, tag) ? null : state.tagFilter,
         };
       });
       await persistTagMeta(get().tagMeta);
