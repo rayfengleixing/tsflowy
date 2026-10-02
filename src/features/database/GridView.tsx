@@ -160,10 +160,40 @@ export function GridView({
   // 目标行 id → 显示标题；目标库未加载时返回 null，由调用方降级到原始 id
   const relationDbOf = useCallback((viewId: string) => relationData[viewId], [relationData]);
 
+  // 公式/汇总字段没有存储值：把求值结果提前算进一份"有效单元格"图，排序/列汇总/分组小计都读它，
+  // 否则按这两列排序排不动（raw 恒为空值）、汇总恒为空。没有这类字段时直接复用原始 cells。
+  const evaluatedCells = useMemo(() => {
+    const hasComputed = fields.some((f) => f.field_type === "formula" || f.field_type === "rollup");
+    if (!hasComputed) return cells;
+    const out: Record<string, Record<string, CellValue>> = {};
+    for (const row of rows) {
+      const rowCells = cells[row.id] ?? {};
+      let copy: Record<string, CellValue> | null = null;
+      for (const f of fields) {
+        if (f.field_type === "formula") {
+          const v = computeFormula(f, rowCells, fields);
+          if (v !== null) (copy ??= { ...rowCells })[f.id] = v;
+        } else if (f.field_type === "rollup") {
+          const v = computeRollup(f, rowCells, fields, relationDbOf);
+          if (v !== null) {
+            // 数字样式的汇总值转成 number：排序才是数值序（"9.00" 不会排在 "42.50" 之后）
+            const n = Number(v);
+            (copy ??= { ...rowCells })[f.id] = v.trim() !== "" && Number.isFinite(n) ? n : v;
+          }
+        }
+      }
+      out[row.id] = copy ?? rowCells;
+    }
+    return out;
+  }, [rows, cells, fields, relationDbOf]);
+
   const displayRows = useMemo(() => {
     const filtered = applyFilters(rows, cells, filters, fields, filterMode);
-    return sortRows(filtered, cells, sorts);
-  }, [rows, cells, filters, fields, filterMode, sorts]);
+    return sortRows(filtered, evaluatedCells, sorts);
+  }, [rows, cells, evaluatedCells, filters, fields, filterMode, sorts]);
+
+  // 底部汇总菜单的 rowIds：每次渲染都新建数组会让菜单里的 useMemo 全部失效
+  const displayRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
 
   // 多选：只认当前可见（筛选 + 排序后）且仍存在的行
   const selectedIds = useMemo(
@@ -844,7 +874,7 @@ export function GridView({
               key={field.id}
               className="h-7 border-b border-r border-neutral-200 px-2 align-middle text-[11px] text-neutral-600 dark:border-neutral-700 dark:text-neutral-300"
             >
-              {fn ? aggregateValue(fn, field, rowIds, cells) : null}
+              {fn ? aggregateValue(fn, field, rowIds, evaluatedCells) : null}
             </td>
           );
         })}
@@ -1173,8 +1203,8 @@ export function GridView({
                     <AggregateMenu
                       field={field}
                       fn={aggregateOf(field)}
-                      rowIds={displayRows.map((r) => r.id)}
-                      cells={cells}
+                      rowIds={displayRowIds}
+                      cells={evaluatedCells}
                       onPick={(fn) => changeAggregate(field.id, fn)}
                     />
                   )}

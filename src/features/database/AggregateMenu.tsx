@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { ChevronDown } from "lucide-react";
 import {
   DropdownMenu,
@@ -27,6 +28,8 @@ export function AggregateMenu(props: {
 }) {
   const { field, fn, rowIds, cells, onPick } = props;
   const candidates = aggregatesForType(field.field_type);
+  // 结果值对外就是展示文本：记忆化到实际输入变化为止，滚动/选中引发的父级重渲染不再全表重算
+  const display = useMemo(() => (fn ? aggregateValue(fn, field, rowIds, cells) : null), [fn, field, rowIds, cells]);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -41,7 +44,7 @@ export function AggregateMenu(props: {
               fn ? "text-neutral-700 dark:text-neutral-200" : "text-neutral-400",
             )}
           >
-            {fn ? aggregateValue(fn, field, rowIds, cells) : t("grid.aggregateNone")}
+            {display ?? t("grid.aggregateNone")}
           </span>
           <ChevronDown className="h-3 w-3 shrink-0 text-neutral-300 dark:text-neutral-600" />
         </button>

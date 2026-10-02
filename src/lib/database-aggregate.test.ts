@@ -27,6 +27,17 @@ const cells = (m: Record<string, Record<string, CellValue>>) => m;
 describe("aggregatesForType", () => {
   it("offers arithmetic only where it means something", () => {
     expect(aggregatesForType("number")).toEqual(["count", "filled", "empty", "unique", "sum", "average", "min", "max"]);
+    // 公式列求值后是数字：候选与数字列一致（汇总读求值后的单元格图）
+    expect(aggregatesForType("formula")).toEqual([
+      "count",
+      "filled",
+      "empty",
+      "unique",
+      "sum",
+      "average",
+      "min",
+      "max",
+    ]);
     expect(aggregatesForType("checkbox")).toEqual(["count", "checked", "unchecked"]);
     expect(aggregatesForType("date")).toEqual(["count", "filled", "empty", "unique", "min", "max"]);
     expect(aggregatesForType("text")).toEqual(["count", "filled", "empty", "unique"]);

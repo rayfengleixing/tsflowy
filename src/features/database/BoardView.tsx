@@ -5,6 +5,8 @@ import { useDbStore } from "@/stores/database-context";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { NO_GROUP, cellValueForGroup, defaultBoardField, groupRowsForBoard } from "@/lib/board-calendar";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
+import { relationCellText, relationTarget, type RelationDb } from "@/lib/relation";
+import { useRelationStore } from "@/stores/relation";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -84,6 +86,25 @@ export function BoardView({
     const ids = cardFieldIds ?? defaultCardFieldIds;
     return ids.map((id) => cardCandidates.find((f) => f.id === id)).filter((f): f is DatabaseField => !!f);
   }, [cardCandidates, cardFieldIds, defaultCardFieldIds]);
+
+  // 关联列（主字段/卡片副信息）要解析目标行标题：把本表所有关联字段的目标视图拉进缓存
+  const relationTargetIds = useMemo(
+    () => [
+      ...new Set(
+        fields
+          .filter((f) => f.field_type === "relation")
+          .map((f) => relationTarget(f))
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ],
+    [fields],
+  );
+  const relationData = useRelationStore((s) => s.data);
+  const ensureRelationDbs = useRelationStore((s) => s.ensure);
+  useEffect(() => {
+    if (relationTargetIds.length > 0) ensureRelationDbs(relationTargetIds);
+  }, [relationTargetIds, ensureRelationDbs]);
+  const relationDbOf = useCallback((viewId: string) => relationData[viewId], [relationData]);
 
   const toggleCardField = (id: string) => {
     const current = cardFieldIds ?? defaultCardFieldIds;
@@ -315,6 +336,7 @@ export function BoardView({
                           subFields={cardSubFields}
                           subFieldsExplicit={cardFieldIds !== null}
                           cells={cells}
+                          relationDbOf={relationDbOf}
                           dragging={draggingRow === row.id}
                           focused={focusRowId === row.id}
                           onDragStart={() => setDraggingRow(row.id)}
@@ -383,11 +405,13 @@ export function BoardView({
 function BoardCard(props: {
   row: { id: string; position: number };
   primaryField: DatabaseField | null;
-  /** 卡片副信息字段：来自视图配置，未配置时由调用方给默认前三列 */
+  /** 副信息字段：来自视图配置，未配置时由调用方给默认前三列 */
   subFields: DatabaseField[];
   /** subFields 是否为用户显式勾选：决定时间戳字段是否显示 */
   subFieldsExplicit: boolean;
   cells: Record<string, Record<string, CellValue>>;
+  /** 关联列解析目标行标题（视图级缓存，见 BoardView 顶部的 ensure） */
+  relationDbOf: (viewId: string) => RelationDb | undefined;
   dragging: boolean;
   /** 搜索命中的卡片：滚动定位后短时高亮 */
   focused: boolean;
@@ -395,10 +419,12 @@ function BoardCard(props: {
   onDragEnd: () => void;
   onOpenDetail: () => void;
 }) {
-  const { row, primaryField, subFields, subFieldsExplicit, cells, dragging, focused } = props;
+  const { row, primaryField, subFields, subFieldsExplicit, cells, relationDbOf, dragging, focused } = props;
   const value = primaryField ? (cells[row.id]?.[primaryField.id] ?? null) : null;
   const title = primaryField
-    ? formatCellValue(primaryField.field_type, value, parseFieldOptions(primaryField.options))
+    ? primaryField.field_type === "relation"
+      ? relationCellText(value, relationDbOf(relationTarget(primaryField) ?? ""))
+      : formatCellValue(primaryField.field_type, value, parseFieldOptions(primaryField.options))
     : t("row.detailName", { n: row.position + 1 });
 
   // 副信息：单/多选 chips + 日期 + 复选框✓ + 文本/数字，空值不占位
@@ -440,7 +466,7 @@ function BoardCard(props: {
       {subs.length > 0 && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
           {subs.map((s) => (
-            <CardSub key={s.field.id} field={s.field} value={s.value} />
+            <CardSub key={s.field.id} field={s.field} value={s.value} relationDbOf={relationDbOf} />
           ))}
         </div>
       )}
@@ -455,7 +481,15 @@ function cardSubShown(field: DatabaseField, value: CellValue, explicit: boolean)
   return !isCellEmpty(value);
 }
 
-function CardSub({ field, value }: { field: DatabaseField; value: CellValue }) {
+function CardSub({
+  field,
+  value,
+  relationDbOf,
+}: {
+  field: DatabaseField;
+  value: CellValue;
+  relationDbOf: (viewId: string) => RelationDb | undefined;
+}) {
   if (field.field_type === "single_select" || field.field_type === "multi_select") {
     return (
       <div className="max-w-full min-h-[1rem]">
@@ -472,7 +506,11 @@ function CardSub({ field, value }: { field: DatabaseField; value: CellValue }) {
       <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] text-neutral-600">{text}</span>
     ) : null;
   }
-  const text = formatCellValue(field.field_type, value, parseFieldOptions(field.options));
+  // 关联列解析成目标行标题（其余类型走通用格式化）
+  const text =
+    field.field_type === "relation"
+      ? relationCellText(value, relationDbOf(relationTarget(field) ?? ""))
+      : formatCellValue(field.field_type, value, parseFieldOptions(field.options));
   if (!text) return null;
   return (
     <span

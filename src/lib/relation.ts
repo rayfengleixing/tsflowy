@@ -47,6 +47,13 @@ export function relationRowLabel(db: RelationDb, rowId: string): string | null {
   return formatCellValue(primary.field_type, value, parseFieldOptions(primary.options));
 }
 
+/** 关联单元格 → 纯文本（看板卡片、文档内嵌表格等静态只读展示；目标库未加载/行已删时降级显示原始 id） */
+export function relationCellText(value: CellValue, db: RelationDb | undefined): string {
+  return relationRowIds(value)
+    .map((id) => (db ? relationRowLabel(db, id) : null) ?? id)
+    .join(", ");
+}
+
 /** 关联选择器的候选行：按显示文本模糊匹配，空关键词返回全部（顺序沿用目标库行序） */
 export function searchRelationRows(db: RelationDb, query: string): DatabaseRow[] {
   const q = query.trim().toLowerCase();

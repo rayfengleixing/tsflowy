@@ -30,9 +30,11 @@ export function isAggregateFn(v: unknown): v is AggregateFn {
   return typeof v === "string" && (AGGREGATE_FNS as string[]).includes(v);
 }
 
-/** 字段类型能算哪些汇总（UI 菜单据此列出选项，避免给文本列摆"求和"） */
+/** 字段类型能算哪些汇总（UI 菜单据此列出选项，避免给文本列摆"求和"）。
+ *  formula 列展示时求值成数字（调用方传"求值后"的单元格图），因此享受与数字列相同的候选 */
 export function aggregatesForType(type: FieldType): AggregateFn[] {
-  if (type === "number") return ["count", "filled", "empty", "unique", "sum", "average", "min", "max"];
+  if (type === "number" || type === "formula")
+    return ["count", "filled", "empty", "unique", "sum", "average", "min", "max"];
   if (type === "checkbox") return ["count", "checked", "unchecked"];
   if (DATEISH.includes(type)) return ["count", "filled", "empty", "unique", "min", "max"];
   return ["count", "filled", "empty", "unique"];

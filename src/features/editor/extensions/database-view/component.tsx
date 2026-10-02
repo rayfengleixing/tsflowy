@@ -4,6 +4,8 @@ import { NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import type { DatabaseField, DatabaseRow, CellValue } from "@/types/database";
 import { databaseApi } from "@/lib/database";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
+import { relationCellText, relationTarget } from "@/lib/relation";
+import { useRelationStore } from "@/stores/relation";
 import { logger } from "@/lib/logger";
 import { t } from "@/lib/i18n";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -16,6 +18,9 @@ export function DatabaseViewNodeView(props: ReactNodeViewProps<HTMLElement>) {
   const [fields, setFields] = useState<DatabaseField[]>([]);
   const [rows, setRows] = useState<DatabaseRow[]>([]);
   const [cells, setCells] = useState<Record<string, Record<string, CellValue>>>({});
+  // 关联列要解析目标行标题：复用全局关联缓存（与表格/看板同一份）
+  const relationData = useRelationStore((s) => s.data);
+  const ensureRelationDbs = useRelationStore((s) => s.ensure);
 
   useEffect(() => {
     let alive = true;
@@ -38,6 +43,29 @@ export function DatabaseViewNodeView(props: ReactNodeViewProps<HTMLElement>) {
       alive = false;
     };
   }, [viewId]);
+
+  // 字段就绪后把关联字段的目标视图拉进缓存（同一目标库只请求一次）
+  useEffect(() => {
+    const targetIds = [
+      ...new Set(
+        fields
+          .filter((f) => f.field_type === "relation")
+          .map((f) => relationTarget(f))
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    if (targetIds.length > 0) ensureRelationDbs(targetIds);
+  }, [fields, ensureRelationDbs]);
+
+  /** 单元格展示文本：关联列解析成目标行标题，其余走通用格式化 */
+  const cellText = (f: DatabaseField, rowId: string) => {
+    const value = cells[rowId]?.[f.id] ?? null;
+    if (f.field_type === "relation") {
+      const targetId = relationTarget(f);
+      return relationCellText(value, targetId ? relationData[targetId] : undefined);
+    }
+    return formatCellValue(f.field_type, value, parseFieldOptions(f.options));
+  };
 
   if (!viewId) {
     return (
@@ -101,7 +129,7 @@ export function DatabaseViewNodeView(props: ReactNodeViewProps<HTMLElement>) {
                     key={f.id}
                     className="max-w-[180px] truncate border-b border-r border-neutral-200 px-2 py-1 text-[12px] text-neutral-700"
                   >
-                    {formatCellValue(f.field_type, cells[r.id]?.[f.id] ?? null, parseFieldOptions(f.options))}
+                    {cellText(f, r.id)}
                   </td>
                 ))}
               </tr>

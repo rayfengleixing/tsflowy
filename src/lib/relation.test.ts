@@ -3,6 +3,7 @@ import {
   buildRelationPickerFields,
   computeRollup,
   primaryFieldOf,
+  relationCellText,
   relationRowIds,
   relationRowLabel,
   relationRowText,
@@ -98,6 +99,15 @@ describe("relationRowLabel / relationRowText", () => {
 
   it("returns null for rows that no longer exist", () => {
     expect(relationRowLabel(db(fields, rows, cells), "gone")).toBeNull();
+  });
+
+  it("relationCellText joins labels and degrades to raw ids", () => {
+    expect(relationCellText(["r1", "r2"], db(fields, rows, cells))).toBe("任务甲, 任务乙");
+    // 行已删：该 id 降级显示原始值
+    expect(relationCellText(["r1", "ghost"], db(fields, rows, cells))).toBe("任务甲, ghost");
+    // 目标库未加载：全部降级
+    expect(relationCellText(["r1"], undefined)).toBe("r1");
+    expect(relationCellText(null, db(fields, rows, cells))).toBe("");
   });
 });
 

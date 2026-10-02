@@ -8,6 +8,7 @@ import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import type { Transaction } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
+import type { EditorView } from "@tiptap/pm/view";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import type { Editor } from "@tiptap/core";
 
@@ -15,6 +16,9 @@ export const findReplaceKey = new PluginKey<FindState>("findReplace");
 
 /** 命中数上限：单字符查询在长文里会出几千个 decoration，超出部分不参与高亮 */
 const MAX_MATCHES = 1000;
+
+/** 文档编辑后延迟重算的尾抖动时长：太长高亮跟不上，太短等于没节流 */
+const RECOMPUTE_DELAY = 150;
 
 export interface FindMatch {
   from: number;
@@ -28,7 +32,11 @@ export interface FindState {
   active: number;
 }
 
-type FindMeta = { type: "setQuery"; query: string } | { type: "setActive"; index: number } | { type: "clear" };
+type FindMeta =
+  | { type: "setQuery"; query: string }
+  | { type: "setActive"; index: number }
+  | { type: "clear" }
+  | { type: "recompute" };
 
 /** 文本块内 "文本偏移 → 文档位置" 的映射片（只统计文本字符，原子 inline 节点不占文本偏移） */
 interface Piece {
@@ -98,9 +106,24 @@ function replaceable(st: FindState | null): st is FindState {
   return !!st && st.query !== "" && st.matches.length > 0 && st.active >= 0;
 }
 
+/** 文档编辑后的重算：命中数变化时把活动项夹回范围内 */
+function recomputeMatches(state: FindState, doc: ProseMirrorNode): FindState {
+  const matches = collectMatches(doc, state.query);
+  const active = matches.length === 0 ? -1 : Math.min(Math.max(state.active, 0), matches.length - 1);
+  return { ...state, matches, active };
+}
+
+/** 替换前/替换后强制同步重算：位置全变或可能吃到延迟窗口内的旧命中，等不起尾抖动 */
+export function recomputeFindNow(editor: Editor) {
+  if (editor.isDestroyed) return;
+  editor.view.dispatch(editor.state.tr.setMeta(findReplaceKey, { type: "recompute" } satisfies FindMeta));
+}
+
 /** 替换当前选中的命中（替换后停在下一个命中） */
 export function replaceActiveMatch(editor: Editor, replacement: string): boolean {
   if (editor.isDestroyed) return false;
+  // 延迟窗口内可能还挂着旧命中：先同步重算，避免按旧位置误替换
+  recomputeFindNow(editor);
   const st = getFindState(editor);
   if (!replaceable(st)) return false;
   const m = st.matches[st.active];
@@ -108,6 +131,8 @@ export function replaceActiveMatch(editor: Editor, replacement: string): boolean
   if (replacement === "") chain.deleteRange({ from: m.from, to: m.to });
   else chain.insertContentAt({ from: m.from, to: m.to }, replacement);
   chain.run();
+  // 替换后所有命中位置都变了：立即重算，after 才是新位置
+  recomputeFindNow(editor);
   const after = getFindState(editor);
   if (after && after.matches.length > 0) gotoFindMatch(editor, after.active);
   return true;
@@ -116,6 +141,7 @@ export function replaceActiveMatch(editor: Editor, replacement: string): boolean
 /** 全部替换：一条事务从后往前替换，前面的位置不受影响；返回替换处数 */
 export function replaceAllMatches(editor: Editor, replacement: string): number {
   if (editor.isDestroyed) return 0;
+  recomputeFindNow(editor);
   const st = getFindState(editor);
   if (!replaceable(st)) return 0;
   const count = st.matches.length;
@@ -126,6 +152,7 @@ export function replaceAllMatches(editor: Editor, replacement: string): number {
     else chain.insertContentAt({ from: m.from, to: m.to }, replacement);
   }
   chain.run();
+  recomputeFindNow(editor);
   return count;
 }
 
@@ -140,6 +167,7 @@ function applyMeta(state: FindState, tr: Transaction, meta: FindMeta): FindState
     const matches = collectMatches(tr.doc, meta.query);
     return { query: meta.query, matches, active: matches.length > 0 ? 0 : -1 };
   }
+  if (meta.type === "recompute") return recomputeMatches(state, tr.doc);
   const n = state.matches.length;
   if (n === 0) return state;
   return { ...state, active: ((meta.index % n) + n) % n };
@@ -149,6 +177,26 @@ export const FindReplace = Extension.create({
   name: "findReplace",
 
   addProseMirrorPlugins() {
+    // 延迟重算的挂起定时器与本编辑器的视图（每个编辑器实例一份）：
+    // 文档编辑（打字的每个按键）不再同步全量重扫，改走尾抖动；替换流程用 recomputeFindNow 立即兜底
+    let recomputeTimer: number | null = null;
+    let viewRef: EditorView | null = null;
+    const cancelPending = () => {
+      if (recomputeTimer !== null) {
+        window.clearTimeout(recomputeTimer);
+        recomputeTimer = null;
+      }
+    };
+    const scheduleRecompute = () => {
+      cancelPending();
+      recomputeTimer = window.setTimeout(() => {
+        recomputeTimer = null;
+        const view = viewRef;
+        if (!view) return;
+        view.dispatch(view.state.tr.setMeta(findReplaceKey, { type: "recompute" } satisfies FindMeta));
+      }, RECOMPUTE_DELAY);
+    };
+
     return [
       new Plugin<FindState>({
         key: findReplaceKey,
@@ -156,13 +204,25 @@ export const FindReplace = Extension.create({
           init: () => ({ query: "", matches: [], active: -1 }),
           apply(tr, prev) {
             const meta = tr.getMeta(findReplaceKey) as FindMeta | undefined;
-            if (meta) return applyMeta(prev, tr, meta);
+            if (meta) {
+              // 显式重算（含替换流程的同步兜底）：撤销挂起的延迟任务，避免重复扫描
+              if (meta.type === "recompute") cancelPending();
+              return applyMeta(prev, tr, meta);
+            }
             if (!tr.docChanged || prev.query === "") return prev;
-            // 文档编辑后重算：命中数变化时把活动项夹回范围内
-            const matches = collectMatches(tr.doc, prev.query);
-            const active = matches.length === 0 ? -1 : Math.min(Math.max(prev.active, 0), matches.length - 1);
-            return { ...prev, matches, active };
+            // 延迟期间沿用旧命中（位置可能短暂漂移），150ms 后统一重扫
+            scheduleRecompute();
+            return prev;
           },
+        },
+        view: (view) => {
+          viewRef = view;
+          return {
+            destroy() {
+              viewRef = null;
+              cancelPending();
+            },
+          };
         },
         props: {
           decorations(state) {

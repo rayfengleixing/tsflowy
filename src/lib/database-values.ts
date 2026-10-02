@@ -90,8 +90,16 @@ export function formatCellValue(type: FieldType, value: CellValue, options?: Fie
       );
     case "checkbox":
       return value ? "✓" : "";
-    case "multi_select":
-      return Array.isArray(value) ? value.join(", ") : "";
+    case "multi_select": {
+      // 选项 id → 名称（导出、看板卡片、内嵌表格等静态展示没有 SelectChips 可用）；
+      // 选项已删或字段未配置时降级显示原始 id
+      if (!Array.isArray(value)) return "";
+      const ids = value.filter((v): v is string => typeof v === "string");
+      if (options?.kind === "select") {
+        return ids.map((id) => options.options.find((o) => o.id === id)?.name ?? id).join(", ");
+      }
+      return ids.join(", ");
+    }
     // 关联单元格存的是对端行 id，真正展示要解析成行标题 —— 由 RelationChips 负责渲染，
     // 这里只给一个不带解析的兜底文本（例如导出、无目标库缓存时的降级）。
     case "relation":

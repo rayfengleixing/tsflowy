@@ -76,6 +76,19 @@ describe("formatCellValue", () => {
     expect(formatCellValue("multi_select", [])).toBe("");
   });
 
+  it("maps multi_select ids to option names", () => {
+    const options: Extract<FieldOptions, { kind: "select" }> = {
+      kind: "select",
+      options: [
+        { id: "o1", name: "前端", color: "blue" },
+        { id: "o2", name: "后端", color: "green" },
+      ],
+    };
+    expect(formatCellValue("multi_select", ["o1", "o2"], options)).toBe("前端, 后端");
+    // 选项已删：降级显示原始 id，不吞掉值
+    expect(formatCellValue("multi_select", ["o1", "ghost"], options)).toBe("前端, ghost");
+  });
+
   it("formats date with and without time", () => {
     const date = "2026-08-31";
     expect(formatCellValue("date", date, { kind: "date", include_time: false })).toBe("2026/8/31");

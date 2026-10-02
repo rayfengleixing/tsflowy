@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toBlob } from "html-to-image";
 import { toast } from "sonner";
 import { useEditorStore } from "@/stores/editor";
+import { flushAllForClose } from "./close-flush";
 import { t } from "./i18n";
 import { documentApi } from "./documents";
 import { jsonToMarkdown } from "./markdown";
@@ -206,6 +207,8 @@ function renderTableHtml(node: JSONContent): string {
 }
 
 export async function exportPage(viewId: string, viewName: string, format: "markdown" | "html"): Promise<void> {
+  // 打开的文档可能还有防抖窗口（800ms）内未落库的改动：先冲刷挂起写，否则导出的是库里的旧内容
+  await flushAllForClose();
   const raw = await documentApi.get(viewId);
   if (!raw) {
     logger.warn("export-page", "document content is empty", viewId);
