@@ -10,7 +10,7 @@
 //   - 拖拽手柄排除见 block-drag（isProtectedStructureBlock）。
 import { Extension } from "@tiptap/core";
 import Heading from "@tiptap/extension-heading";
-import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
+import { Plugin, PluginKey, Selection } from "@tiptap/pm/state";
 import type { Transaction } from "@tiptap/pm/state";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { AddMarkStep, RemoveMarkStep, ReplaceStep } from "@tiptap/pm/transform";
@@ -86,7 +86,9 @@ export const DocumentStructureLock = Extension.create({
           if (!paragraphType) return false;
           tr = tr.insert(doc.content.size, paragraphType.create());
         }
-        tr = tr.setSelection(TextSelection.create(tr.doc, pos));
+        // pos 是块边界位（如段落开头之前），TextSelection 建在无行内容处会触发 PM 警告/异常；
+        // Selection.near 会就近落到块内有效文本位（向后优先），且对列表/代码块等容器同样成立
+        tr = tr.setSelection(Selection.near(tr.doc.resolve(pos), 1));
         editor.view.dispatch(tr);
         return true;
       },

@@ -10,11 +10,11 @@ const INLINE_RE =
 
 // 导出时 escapeInline 会给特殊符号加反斜杠；导入解析前先把 `\X` 换成私用区占位符，
 // 否则 `\*literal\*` 会被当成斜体匹配，解析完再还原（正文不会出现私用区字符）。
-const ESCAPE_CHARS = "`*_[]()#+-!~\\>=";
+const ESCAPE_CHARS = "`*_[]()#+-!~\\>=|<$";
 const ESCAPE_PLACEHOLDER = 0xe000;
 
 function protectEscapes(text: string): string {
-  return text.replace(/\\([`*_[\]()#+\-!~\\>=])/g, (_m, ch: string) =>
+  return text.replace(/\\([`*_[\]()#+\-!~\\>=|<$])/g, (_m, ch: string) =>
     String.fromCharCode(ESCAPE_PLACEHOLDER + ESCAPE_CHARS.indexOf(ch)),
   );
 }
@@ -441,7 +441,8 @@ function decodeHtmlEntities(s: string): string {
 //   - mention 输出自定义语法 `@[label](view:<id>)`，数据库视图块（databaseView）输出 `→[label](db:<id>)`（可导入还原）。
 // ——————————————————————————————————————
 
-const ESCAPE_MD_RE = /([`*_\[\]()#+\-!~\\>])/g;
+// 与导入侧 ESCAPE_CHARS 保持同集：= 打头会触发高亮 ==、$ 触发 $$ 数学、| 拆表格、< 触发 HTML 块
+const ESCAPE_MD_RE = /([`*_\[\]()#+\-!~\\>=|<$])/g;
 function escapeInline(text: string): string {
   // 简单对特殊符号转义；不处理表格语法、避免过度转义破坏可读性。
   return text.replace(ESCAPE_MD_RE, "\\$1");

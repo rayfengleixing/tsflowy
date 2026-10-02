@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   renameField: vi.fn(),
   updateFieldOptions: vi.fn(),
   setCell: vi.fn(),
+  deleteRow: vi.fn(),
   deleteRows: vi.fn(),
   createRows: vi.fn(),
   setCellsMany: vi.fn(),
@@ -169,7 +170,26 @@ describe("数据库 store 多选行操作", () => {
     expect(api.deleteRows).toHaveBeenCalledWith(["r1", "r2"]);
     expect(n).toBe(2);
     expect(store.getState().rows.map((r) => r.id)).toEqual(["r3"]);
+    expect(store.getState().rows.map((r) => r.position)).toEqual([0]); // 删后压紧，行号不跳号
     expect(store.getState().cells).toEqual({});
+  });
+
+  it("单行删除：剩余行 position 压紧（行号不跳号）", async () => {
+    const store = useDatabaseStore;
+    store.setState({
+      viewId: "v1",
+      rows: [row("r1", 0), row("r2", 1), row("r3", 2)],
+      cells: {},
+    });
+    api.deleteRow.mockResolvedValue(undefined);
+
+    await store.getState().removeRow("r2");
+
+    expect(api.deleteRow).toHaveBeenCalledWith("r2");
+    expect(store.getState().rows.map((r) => [r.id, r.position])).toEqual([
+      ["r1", 0],
+      ["r3", 1],
+    ]);
   });
 
   it("复制所选行：按表格行序建行并搬运单元格值（与勾选顺序无关）", async () => {

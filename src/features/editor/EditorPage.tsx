@@ -26,6 +26,7 @@ import { pickImageExt, uploadImageBytes } from "@/lib/assets";
 import { registerCloseFlush } from "@/lib/close-flush";
 import { onEscapeClose } from "@/lib/escape-close";
 import { t } from "@/lib/i18n";
+import { flattenTree } from "@/lib/tree";
 import { logger } from "@/lib/logger";
 import type { View } from "@/types/models";
 import { SlashMenu } from "./slash-menu";
@@ -436,6 +437,15 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     return registerDocEditor(view.id, editor);
   }, [editor, view.id]);
 
+  // 全库视图 id → View：mention hover 预览取标题走这张表。
+  // mention 目标是任意被引页、不一定是反链来源，查 backlinkViews 会大面积落空显示成 id。
+  const tree = useWorkspaceStore((s) => s.tree);
+  const viewsById = useMemo(() => {
+    const m = new Map<string, View>();
+    for (const v of flattenTree(tree)) m.set(v.id, v);
+    return m;
+  }, [tree]);
+
   // 外部重命名（侧边栏/数据库视图）→ 同步首行 H1 标题：
   // 标题被结构锁定后名称的权威源是 view.name，名称变更时反向写回文档并落库。
   // 挂载时文档还没加载（doc 为空）会早退，所以加载完成后（load effect 的 finally）也要补跑一次，
@@ -772,7 +782,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
           }}
         >
           <div className="mb-1 truncate text-[11px] font-medium text-brand-600">
-            {backlinkViews.get(hoverMention.id)?.name ?? hoverMention.id}
+            {viewsById.get(hoverMention.id)?.name ?? hoverMention.id}
           </div>
           <div className="max-h-[120px] overflow-y-auto whitespace-pre-wrap break-words text-neutral-600">
             {hoverMention.text}

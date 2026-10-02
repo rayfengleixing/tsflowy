@@ -191,7 +191,11 @@ pub(crate) fn save_app_config(app: &tauri::AppHandle, cfg: &AppConfig) -> Result
     let dir = app_config_dir(app)?;
     fs::create_dir_all(&dir).map_err(|e| format!("mkdir config dir: {e}"))?;
     let s = serde_json::to_string_pretty(cfg).map_err(|e| format!("config json: {e}"))?;
-    fs::write(dir.join(CONFIG_FILE_NAME), s).map_err(|e| format!("write config: {e}"))
+    // 同目录临时文件 + rename 覆盖：磁盘上的 config.json 任何时刻要么是旧完整内容、要么是新完整内容，
+    // 不会因写一半崩溃/断电留下半截 JSON（损坏会被 load_app_config 静默回落默认值，自定义目录等设置就“丢了”）
+    let tmp = dir.join(format!("{CONFIG_FILE_NAME}.tmp"));
+    fs::write(&tmp, s).map_err(|e| format!("write config: {e}"))?;
+    fs::rename(&tmp, dir.join(CONFIG_FILE_NAME)).map_err(|e| format!("replace config: {e}"))
 }
 
 fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {

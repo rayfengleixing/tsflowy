@@ -53,14 +53,18 @@ export function tagTint(color: string, alpha: string): string {
   return /^#[0-9a-fA-F]{6}$/.test(color) ? `${color}${alpha}` : color;
 }
 
-/** 标签改名时同步颜色配置：整棵子树（含自身）的键按前缀替换；目标已有颜色则保留目标色 */
+/** 标签改名时同步颜色配置：整棵子树（含自身）的键按前缀替换；目标已有颜色则保留目标色。
+ *  分两趟：先落座不受改名影响的键，再改名受影响的键用 ??= 写入——否则「目标色优先」会被对象遍历顺序决定。 */
 export function renameTagColor(meta: TagColorMap, from: string, to: string): TagColorMap {
   const out: TagColorMap = {};
+  const affected: [string, string][] = [];
   for (const [k, color] of Object.entries(meta)) {
     if (color === undefined) continue;
     const nk = renameTagPath(k, from, to);
-    out[nk] ??= color;
+    if (nk === k) out[k] = color;
+    else affected.push([nk, color]);
   }
+  for (const [nk, color] of affected) out[nk] ??= color;
   return out;
 }
 

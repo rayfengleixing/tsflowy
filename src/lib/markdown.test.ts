@@ -525,6 +525,19 @@ describe("jsonToMarkdown", () => {
     expect(markdownToJson(md)).toEqual(json);
   });
 
+  it("escapes = | < $ so they survive the round trip as literal text", () => {
+    const json = {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "a=b | c<d $$不是数学$$" }] }],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("\\=");
+    expect(md).toContain("\\|");
+    expect(md).toContain("\\<");
+    expect(md).toContain("\\$");
+    expect(markdownToJson(md)).toEqual(json);
+  });
+
   it("round-trips a table: json → md → json", () => {
     const json = {
       type: "doc",

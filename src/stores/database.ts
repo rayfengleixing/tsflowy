@@ -16,6 +16,13 @@ import type { View } from "@/types/models";
 // 左右两栏各读各的字段/行/单元格，互不覆盖。useDatabaseStore 是全局默认实例，
 // 供测试与未显式提供 Provider 的场景使用。
 
+/** 删除后与 Rust 侧一致地把剩余行 position 压紧为 0..n-1（行号列按 position 显示，不跳号） */
+function compactRowPositions(rows: DatabaseRow[]): DatabaseRow[] {
+  return [...rows]
+    .sort((a, b) => a.position - b.position)
+    .map((r, i) => (r.position === i ? r : { ...r, position: i }));
+}
+
 export interface DatabaseState {
   viewId: string | null;
   /** 当前视图行（写回 extra 配置用；viewId 保持原有语义不变） */
@@ -291,7 +298,7 @@ export function createDatabaseStore() {
 
     removeRow: async (id) => {
       await databaseApi.deleteRow(id);
-      set({ rows: get().rows.filter((r) => r.id !== id) });
+      set({ rows: compactRowPositions(get().rows.filter((r) => r.id !== id)) });
     },
 
     removeRows: async (ids) => {
@@ -300,7 +307,7 @@ export function createDatabaseStore() {
       const n = await databaseApi.deleteRows(ids);
       const cells = { ...get().cells };
       for (const id of ids) delete cells[id];
-      set({ rows: get().rows.filter((r) => !gone.has(r.id)), cells });
+      set({ rows: compactRowPositions(get().rows.filter((r) => !gone.has(r.id))), cells });
       return n;
     },
 

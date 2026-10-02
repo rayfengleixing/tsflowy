@@ -187,6 +187,7 @@ pub fn reorder_fields(
 
 /// 改字段类型：重置默认 options，并清空该字段所有单元格值（类型不兼容的数据不可保留）。
 /// 同类型重选是 no-op：UI 已对当前类型禁用，这里兜底防止误清整列数据。
+/// 两处 UPDATE 必须同事务：中途失败时不允许出现「类型已换、旧值还挂着」的半程状态。
 pub fn change_field_type(conn: &Connection, field_id: &str, new_type: &str) -> Result<(), String> {
     let current: Option<String> = conn
         .query_row(
@@ -200,16 +201,20 @@ pub fn change_field_type(conn: &Connection, field_id: &str, new_type: &str) -> R
         return Ok(());
     }
     let options = default_options_json(new_type);
-    conn.execute(
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(dberr("change field type"))?;
+    tx.execute(
         "UPDATE database_fields SET field_type = ?1, options = ?2 WHERE id = ?3",
         params![new_type, options, field_id],
     )
     .map_err(dberr("change field type"))?;
-    conn.execute(
+    tx.execute(
         "UPDATE database_cells SET value = 'null' WHERE field_id = ?1",
         params![field_id],
     )
     .map_err(dberr("change field type (clear cells)"))?;
+    tx.commit().map_err(dberr("change field type (commit)"))?;
     Ok(())
 }
 
@@ -295,20 +300,70 @@ pub fn set_row_document_id(
     Ok(())
 }
 
-pub fn delete_row(conn: &Connection, row_id: &str) -> Result<(), String> {
-    conn.execute("DELETE FROM database_rows WHERE id = ?1", params![row_id])
-        .map_err(dberr("delete row"))?; // cells 经 FK 级联
+/// 把视图内行的 position 压紧成 0..n-1（按现有 position，再按 id 定序）。
+/// 行号列直接显示 position + 1（GridView），删除后不压紧会跳号；reorder 本就写 0..n-1，与此语义一致。
+fn compact_row_positions(tx: &Connection, view_id: &str) -> Result<(), String> {
+    tx.execute(
+        "WITH numbered AS (
+             SELECT id, ROW_NUMBER() OVER (ORDER BY position ASC, id ASC) - 1 AS rn
+             FROM database_rows WHERE database_view_id = ?1
+         )
+         UPDATE database_rows
+         SET position = (SELECT rn FROM numbered WHERE numbered.id = database_rows.id)
+         WHERE database_view_id = ?1",
+        params![view_id],
+    )
+    .map_err(dberr("compact row positions"))?;
     Ok(())
 }
 
-/// 批量删行（多选删除）：一个事务，任何一行缺 id 不影响其余行。
+pub fn delete_row(conn: &Connection, row_id: &str) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(dberr("delete row"))?;
+    let view_id: Option<String> = tx
+        .query_row(
+            "SELECT database_view_id FROM database_rows WHERE id = ?1",
+            params![row_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(dberr("delete row (read view)"))?;
+    tx.execute("DELETE FROM database_rows WHERE id = ?1", params![row_id])
+        .map_err(dberr("delete row"))?; // cells 经 FK 级联
+    if let Some(view_id) = view_id {
+        compact_row_positions(&tx, &view_id)?;
+    }
+    tx.commit().map_err(dberr("delete row (commit)"))?;
+    Ok(())
+}
+
+/// 批量删行（多选删除）：一个事务，任何一行缺 id 不影响其余行；删后压紧剩余 position。
 pub fn delete_rows(conn: &Connection, ids: &[String]) -> Result<usize, String> {
     let tx = conn.unchecked_transaction().map_err(dberr("delete rows"))?;
+    // 先收集受影响视图（position 压紧按视图做；正常场景只有一张表）
+    let mut view_ids: Vec<String> = Vec::new();
+    for id in ids {
+        if let Some(v) = tx
+            .query_row(
+                "SELECT database_view_id FROM database_rows WHERE id = ?1",
+                params![id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(dberr("delete rows (read view)"))?
+        {
+            if !view_ids.contains(&v) {
+                view_ids.push(v);
+            }
+        }
+    }
     let mut n = 0;
     for id in ids {
         n += tx
             .execute("DELETE FROM database_rows WHERE id = ?1", params![id])
             .map_err(dberr("delete rows"))?;
+    }
+    for v in &view_ids {
+        compact_row_positions(&tx, v)?;
     }
     tx.commit().map_err(dberr("delete rows (commit)"))?;
     Ok(n)
@@ -853,6 +908,32 @@ mod tests {
         let left = cells_of(&conn, "f1");
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].row_id, "r3", "r2 的单元格随行级联删除");
+    }
+
+    /// 删除后剩余行 position 压紧 0..n-1：行号列按 position 显示，不跳号
+    #[test]
+    fn delete_compacts_row_positions() {
+        let conn = setup();
+        create_rows(&conn, "v1", &["r1".into(), "r2".into(), "r3".into(), "r4".into()]).unwrap();
+
+        delete_row(&conn, "r2").unwrap();
+        let rows = list_rows(&conn, "v1").unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.id.as_str(), r.position))
+                .collect::<Vec<_>>(),
+            vec![("r1", 0), ("r3", 1), ("r4", 2)]
+        );
+
+        // 批量删除（含缺 id）同样压紧
+        delete_rows(&conn, &["r1".into(), "ghost".into()]).unwrap();
+        let rows = list_rows(&conn, "v1").unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.id.as_str(), r.position))
+                .collect::<Vec<_>>(),
+            vec![("r3", 0), ("r4", 1)]
+        );
     }
 
     // ---------- CSV 导入 ----------
