@@ -280,6 +280,17 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
     });
   };
 
+  /** 删除选项前先移出本地 draft：否则 outside-click 提交时会把刚删掉的悬空 id 重新写回单元格 */
+  const removeOption = (id: string) => {
+    setDraft((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    onDeleteOption?.(id);
+  };
+
   const commit = () => onCommit([...draft]);
 
   const createFromQuery = () => {
@@ -341,7 +352,7 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
               option={o}
               active={draft.has(o.id)}
               onPick={() => toggle(o.id)}
-              onDelete={onDeleteOption ? () => onDeleteOption(o.id) : undefined}
+              onDelete={onDeleteOption ? () => removeOption(o.id) : undefined}
             />
           ))}
           {text && !exact && onAddOption && <CreateOptionRow name={text} onCreate={createFromQuery} />}

@@ -654,6 +654,9 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       set({ expanded: new Set(get().expanded).add(node.parent_id ?? "") });
       // 与 createView 同理：先同步父页面（父页正开着时能就地改编辑器），再打开副本
       syncSubpages(node.parent_id);
+      // 副本自身的「子页面」块也要重建：Rust 复制正文时块里还挂着原树的子页 id，
+      // 副本的子页已换成新 id，这里按新树重写（副本尚未打开，走库读改写路径）
+      syncSubpages(view.id);
       get().openView(view.id);
     },
 
@@ -708,15 +711,25 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     },
 
     purgeView: async (id: string) => {
+      // 永久删除前记下父页：删掉的子页要从父页「子页面」块里消失
+      const parentId = findInTree(get().tree, id)?.parent_id ?? null;
       await viewApi.purge(id);
       await get().reload();
+      syncSubpages(parentId);
     },
 
     purgeTrash: async () => {
       const ws = get().currentWorkspaceId;
       if (!ws) return;
+      // 被永久删除的页面，其"未被删除的父页"子页面块需要刷新（回收站列表 reload 后即清空）
+      const trashedIds = new Set(get().trash.map((v) => v.id));
+      const affectedParents = new Set<string>();
+      for (const v of get().trash) {
+        if (v.parent_id && !trashedIds.has(v.parent_id)) affectedParents.add(v.parent_id);
+      }
       await viewApi.purgeTrash(ws);
       await get().reload();
+      for (const pid of affectedParents) syncSubpages(pid);
     },
 
     moveView: async (viewId, newParentId, index) => {
@@ -968,7 +981,8 @@ async function seedGridFields(viewId: string): Promise<void> {
   await databaseApi.createRow(viewId);
 }
 
-function findInTree(nodes: ViewNode[], id: string): ViewNode | null {
+/** 树内查找节点（跨模块复用：first-heading-lock 按视图 id 取最新名称） */
+export function findInTree(nodes: ViewNode[], id: string): ViewNode | null {
   for (const n of nodes) {
     if (n.id === id) return n;
     const found = findInTree(n.children, id);

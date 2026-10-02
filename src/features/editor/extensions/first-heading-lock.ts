@@ -1,6 +1,6 @@
 import { Extension } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
-import { useWorkspaceStore } from "@/stores/workspace";
+import { findInTree, useWorkspaceStore } from "@/stores/workspace";
 import { logger } from "@/lib/logger";
 
 /**
@@ -74,7 +74,9 @@ function flushRename() {
   if (!pending) return;
   queueMicrotask(() => {
     const store = useWorkspaceStore.getState();
-    const current = store.currentViewId ? store.tree.find((v) => v.id === store.currentViewId) : null;
+    // 按"被改名的视图"查最新名称：原实现用根级 tree.find 且比对当前打开视图的
+    // currentViewId，嵌套页/分栏副栏场景都会拿错参照，导致改名结果与库不一致
+    const current = findInTree(store.tree, pending.id);
     const vName = current?.name ?? "";
     if (pending.text === vName) return;
     store

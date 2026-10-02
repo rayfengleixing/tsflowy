@@ -106,6 +106,13 @@ const CenteredTableHeader = TableHeader.extend({
 // Markdown 符号输入规则由内置扩展自带：**粗体** / *斜体* / ==高亮== / ~~删除线~~ / `代码`
 // （@tiptap/extension-bold·italic·strike·highlight·code 的 addInputRules 已注册，无需自定义）
 
+/** 全局快捷键的归属判断（分栏修复）：焦点在某栏内则只归该栏；焦点不在任何栏时主栏兜底 */
+function ownsPaneShortcuts(paneEl: HTMLElement | null, isMainPane: boolean): boolean {
+  const focusedPane = document.querySelector("[data-editor-pane]:focus-within");
+  if (focusedPane) return focusedPane === paneEl;
+  return isMainPane;
+}
+
 /** 文档编辑器页（项目说明书 8.1：读 content → 编辑 → 防抖 800ms 落库 → 切换/关闭前 flush） */
 export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?: boolean }) {
   const editorRef = useRef<ReturnType<typeof useEditor>>(null);
@@ -121,6 +128,8 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   const latestJsonRef = useRef<JSONContent | null>(null);
   // 编辑区滚动容器（隐藏滚动条 + 光标行 70% 规则都挂在它上面）
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // 面板根节点：全局快捷键（Ctrl+S/F）判断焦点归属用（分栏时只让"焦点所在栏"响应）
+  const paneRef = useRef<HTMLDivElement | null>(null);
   // 文档内查找替换面板（Ctrl+F）
   const [findOpen, setFindOpen] = useState(false);
   // 上一次选区变化是否来自键盘：鼠标点击不触发上滚，否则点到下半屏会把视图顶飞
@@ -427,6 +436,22 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     return registerDocEditor(view.id, editor);
   }, [editor, view.id]);
 
+  // 外部重命名（侧边栏/数据库视图）→ 同步首行 H1 标题：
+  // 标题被结构锁定后名称的权威源是 view.name，名称变更时反向写回文档并落库。
+  // 挂载时文档还没加载（doc 为空）会早退，所以加载完成后（load effect 的 finally）也要补跑一次，
+  // 否则"关闭时改名、再打开文档"的场景首行仍是旧标题，首次输入会把名称回退成旧值。
+  const syncH1ToViewName = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor || editor.isDestroyed) return;
+    const doc = editor.state.doc;
+    const first = doc.childCount > 0 ? doc.child(0) : null;
+    if (!first || first.type.name !== "heading" || (first.attrs as { level: number }).level !== 1) return;
+    if (first.textContent === view.name) return;
+    const tr = editor.state.tr.replaceWith(1, first.nodeSize - 1, editor.state.schema.text(view.name));
+    tr.setMeta(STRUCTURE_SYNC_META, true);
+    editor.view.dispatch(tr);
+  }, [view.name]);
+
   // 加载文档内容：加载完成（或失败）前编辑器保持只读；输入在解锁前无法发生，
   // 从根上消除加载与输入的竞态。失败也解锁，不让用户被锁死在空文档上。
   useEffect(() => {
@@ -458,12 +483,16 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       })
       .finally(() => {
         // setEditable 第二参 false：解锁不产生 update 事件
-        if (alive && editor && !editor.isDestroyed) editor.setEditable(true, false);
+        if (alive && editor && !editor.isDestroyed) {
+          editor.setEditable(true, false);
+          // 加载完成后补一次 H1 同步（挂载时的 effect 早退且不会因加载再触发）
+          syncH1ToViewName();
+        }
       });
     return () => {
       alive = false;
     };
-  }, [view.id]);
+  }, [view.id, syncH1ToViewName]);
 
   // 编辑区尾部留白 = 视口高度的 30%（与 CARET_LINE_RATIO 配对）：没有这段余量，
   // 文档末尾无内容可滚时，光标行只能停在视口底部，70% 规则失效
@@ -477,19 +506,9 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     return () => ro.disconnect();
   }, []);
 
-  // 外部重命名（侧边栏/数据库视图）→ 同步首行 H1 标题：
-  // 标题被结构锁定后不可在编辑器内修改，名称变更只能来自外部，反向写回文档并落库
   useEffect(() => {
-    const editor = editorRef.current;
-    if (!editor || editor.isDestroyed) return;
-    const doc = editor.state.doc;
-    const first = doc.childCount > 0 ? doc.child(0) : null;
-    if (!first || first.type.name !== "heading" || (first.attrs as { level: number }).level !== 1) return;
-    if (first.textContent === view.name) return;
-    const tr = editor.state.tr.replaceWith(1, first.nodeSize - 1, editor.state.schema.text(view.name));
-    tr.setMeta(STRUCTURE_SYNC_META, true);
-    editor.view.dispatch(tr);
-  }, [view.name, view.id]);
+    syncH1ToViewName();
+  }, [syncH1ToViewName, view.id]);
 
   // 卸载/切页/关闭前 flush；页面隐藏时也 flush
   useEffect(() => {
@@ -510,9 +529,13 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   // 由 App 的 onCloseRequested 统一 await（见 lib/close-flush.ts）
   useEffect(() => registerCloseFlush(flush), [flush]);
 
-  // 全局 Ctrl+S（编辑器未聚焦时也保存）：成功才提示已保存
+  // 全局 Ctrl+S（编辑器未聚焦时也保存）：成功才提示已保存。
+  // 分栏时两栏都会注册 window 监听：只让"焦点所在栏"响应，焦点不在任何栏时主栏兜底；
+  // e.defaultPrevented 过滤本栏编辑器局部 handleKeyDown 已处理的事件（避免双重提示）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (!ownsPaneShortcuts(paneRef.current, isMainPane)) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         flush()
@@ -522,11 +545,14 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [flush]);
+  }, [flush, isMainPane]);
 
-  // 全局 Ctrl+F（编辑器未聚焦时也能打开查找面板）；Ctrl+Shift+F 是全局搜索，不拦
+  // 全局 Ctrl+F（编辑器未聚焦时也能打开查找面板）；Ctrl+Shift+F 是全局搜索，不拦。
+  // 归属判断同上：分栏时只有焦点所在栏（或主栏兜底）打开查找条
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (!ownsPaneShortcuts(paneRef.current, isMainPane)) return;
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
         setFindOpen(true);
@@ -534,7 +560,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [isMainPane]);
 
   // 全局 Esc（App 广播）：焦点在编辑区时也能关掉查找条，并清掉命中高亮
   useEffect(() => {
@@ -663,7 +689,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   }, [backlinks]);
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden bg-white">
+    <div ref={paneRef} data-editor-pane className="relative flex h-full flex-col overflow-hidden bg-white">
       {/* 编辑区：内容最大宽由 --tiptap-max-width 控制（默认 800px，设置页可调，说明书 6.1）。
           滚动条由 index.css 按 data-editor-scroll 隐藏 */}
       <div ref={scrollRef} data-editor-scroll className="min-h-0 flex-1 overflow-y-auto">
