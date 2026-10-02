@@ -21,7 +21,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
-import { isReadonlyType } from "@/types/database";
+import { isReadonlyType, type FieldType } from "@/types/database";
 import { useDbStore, useDbStoreApi } from "@/stores/database-context";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { viewApi, newId } from "@/lib/db";
@@ -1054,7 +1054,12 @@ export function GridView({
                         }}
                         onChangeType={(type) => {
                           setMenuOpenFor(null);
-                          void store.changeFieldType(field.id, type);
+                          void store.changeFieldType(field.id, type).then(() => {
+                            // 改成关联/公式/汇总后必须配置才有意义，直接弹出字段设置
+                            if (!needsFieldSettings(type)) return;
+                            const next = storeApi.getState().fields.find((f) => f.id === field.id);
+                            if (next) setOptionsEditorFor(next);
+                          });
                         }}
                         onToggleHidden={() => {
                           setMenuOpenFor(null);
@@ -1091,7 +1096,7 @@ export function GridView({
                 );
               })}
               <th className="border-b border-neutral-200 bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-800">
-                <AddFieldButton />
+                <AddFieldButton onConfigure={setOptionsEditorFor} />
               </th>
             </tr>
           </thead>
@@ -1270,7 +1275,13 @@ function HiddenColumnsMenu({ fields, onShow }: { fields: DatabaseField[]; onShow
   );
 }
 
-function AddFieldButton() {
+/** 需要额外配置才有意义的字段类型：关联要选目标表，公式要写表达式，汇总要选关联/目标/聚合 */
+function needsFieldSettings(type: FieldType): boolean {
+  return type === "relation" || type === "formula" || type === "rollup";
+}
+
+function AddFieldButton(props: { onConfigure: (field: DatabaseField) => void }) {
+  const { onConfigure } = props;
   const store = useDbStore();
   const [open, setOpen] = useState(false);
 
@@ -1289,8 +1300,10 @@ function AddFieldButton() {
         onOpenChange={setOpen}
         onCreate={async (name, type) => {
           try {
-            await store.addField(type, name);
+            const field = await store.addField(type, name);
             setOpen(false);
+            // 关联/公式/汇总建好后必须配置才有意义，直接弹出字段设置
+            if (field && needsFieldSettings(field.field_type)) onConfigure(field);
           } catch (e) {
             logger.error("add field failed", e);
             toast.error(t("error.db", { message: String(e) }));

@@ -505,7 +505,7 @@ const zh = {
   "daily.folderIntro": "这里按天收纳每日笔记，每一天是一篇独立文档，可以直接搜索、加标签或导出。",
   "settings.dailyNotes": "每日笔记",
   "settings.dailyNotesDesc":
-    "每天一篇笔记，集中放在同一个目录页下、按日期命名；点侧边栏「今日笔记」即可打开当天，或在那里挑任意日期。",
+    "每天一篇笔记，按「年 / 月 / 日期」分级收在同一个目录页下；点侧边栏「今日笔记」即可打开当天，或在那里挑任意日期。",
   "settings.dailyFolder": "目录页名称",
   "settings.dailyOpenOnStart": "启动时自动打开今日笔记",
   "settings.dailyTemplate": "新建笔记的模板",
@@ -1096,7 +1096,7 @@ const en: Record<MessageKey, string> = {
     "Daily notes live here, one document per day — searchable, taggable and exportable like any other page.",
   "settings.dailyNotes": "Daily notes",
   "settings.dailyNotesDesc":
-    "One note per day, kept under a single folder page and named by date. Use “Today's note” in the sidebar to jump to today, or pick any other date there.",
+    "One note per day, grouped by year / month under a single folder page. Use “Today’s note” in the sidebar to jump to today, or pick any other date there.",
   "settings.dailyFolder": "Folder page name",
   "settings.dailyOpenOnStart": "Open today's note on startup",
   "settings.dailyTemplate": "Template for new notes",
