@@ -35,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import { importMarkdownFolder } from "@/lib/import-folder";
 import { loadDailyNotesConfig, saveDailyNotesConfig, type DailyNotesConfig } from "@/lib/daily-notes";
 import { exportMarkdownFolder } from "@/lib/export-folder";
+import { flushAllForClose } from "@/lib/close-flush";
 import { t, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
@@ -406,6 +407,9 @@ export function SettingsPage() {
   const syncNow = async () => {
     setBusySync(true);
     try {
+      // 同步会短暂关库（拉取时还要替换本机库）：先把编辑器自动保存、视图配置等挂起写入
+      // 全部冲刷落盘，避免它们撞进维护窗口失败，或落在随即被替换的旧库上
+      await flushAllForClose();
       const r = await invoke<SyncRunResult>("run_sync");
       setSyncInfo(r.info);
       const key = SYNC_ACTION_KEY[r.action] ?? "settings.syncActionNone";
@@ -418,7 +422,14 @@ export function SettingsPage() {
       } else {
         toast.success(t(key) + extra);
       }
-      if (r.pulled) window.setTimeout(() => window.location.reload(), 1500);
+      if (r.pulled) {
+        // 本机库刚被替换：立即重载，不能再等（原 1.5s 延迟窗口里编辑器会自动把旧内存态
+        // 写回新库、覆盖刚拉取的内容）；重载后树/文档/设置页全部读新库
+        window.location.reload();
+        return;
+      }
+      // 未被替换：同步期间撞进维护窗口而失败的保存，这里重试一次
+      await flushAllForClose();
     } catch (e) {
       logger.error("run sync failed", e);
       toast.error(`${t("settings.syncFailed")}：${String(e)}`);

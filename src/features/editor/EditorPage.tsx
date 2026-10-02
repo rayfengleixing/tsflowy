@@ -18,7 +18,7 @@ import { Slice, Fragment, Node as PMNode } from "@tiptap/pm/model";
 import { toast } from "sonner";
 import { Link2, ChevronDown, ChevronUp } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { useEditorStore } from "@/stores/editor";
+import { registerDocEditor, useEditorStore } from "@/stores/editor";
 import { documentApi } from "@/lib/documents";
 import { mentionsApi, type MentionRow } from "@/lib/mentions";
 import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown";
@@ -419,6 +419,13 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       useEditorStore.getState().setEditor(null, null);
     };
   }, [editor, view.id, isMainPane]);
+
+  // 登记到文档编辑器注册表（主栏与分栏副栏都登记）：子页面块等"就地更新打开中的文档"
+  // 的逻辑需要覆盖每一个实例，否则副栏跟进自动保存时会把就地更新覆盖回旧内容
+  useEffect(() => {
+    if (editor.isDestroyed) return;
+    return registerDocEditor(view.id, editor);
+  }, [editor, view.id]);
 
   // 加载文档内容：加载完成（或失败）前编辑器保持只读；输入在解锁前无法发生，
   // 从根上消除加载与输入的竞态。失败也解锁，不让用户被锁死在空文档上。

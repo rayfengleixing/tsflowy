@@ -28,7 +28,7 @@ import {
 } from "@/lib/daily-notes";
 import { mentionsApi } from "@/lib/mentions";
 import { upsertSubpagesNode, type SubpageItem } from "@/lib/subpages";
-import { useEditorStore } from "./editor";
+import { getDocEditors } from "./editor";
 import type { Editor } from "@tiptap/react";
 import type { Node as ProseMirrorNode, NodeType } from "@tiptap/pm/model";
 import type { JSONContent } from "@tiptap/core";
@@ -307,13 +307,18 @@ function applySubpagesInEditor(editor: Editor, items: SubpageItem[]): boolean {
 }
 
 /**
- * 把子页面列表写进父文档：父页正在编辑时就地改（避免与编辑器内存态互相覆盖），
- * 否则读库改写再落库。父页没有正文（表格 / 看板 / 日历页）时跳过。
+ * 把子页面列表写进父文档：父页开着编辑器（主栏或分栏任一面板）时就地改
+ * （避免与编辑器内存态互相覆盖），否则读库改写再落库。父页没有正文（表格 / 看板 / 日历页）时跳过。
  */
 async function applySubpagesToParent(parentId: string, items: SubpageItem[]): Promise<void> {
-  const es = useEditorStore.getState();
-  if (es.editor && !es.editor.isDestroyed && es.currentViewId === parentId) {
-    if (applySubpagesInEditor(es.editor, items)) return;
+  const liveEditors = getDocEditors(parentId).filter((ed) => !ed.isDestroyed);
+  if (liveEditors.length > 0) {
+    // 就地更新每一个打开着父页的编辑器实例（覆盖主栏 + 分栏副栏），随各自的自动保存落库
+    let applied = false;
+    for (const ed of liveEditors) {
+      if (applySubpagesInEditor(ed, items)) applied = true;
+    }
+    if (applied) return;
   }
   let raw: string | null;
   try {

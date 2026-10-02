@@ -340,8 +340,9 @@ fn run_sync_inner(
             "download"
         }
         Decision::RemoteWins => {
-            // 本机这一版作为副本留下（放在同步目录，别的设备也能取回）
-            conflicts.push(save_conflict(sync_dir, local_db, "local")?);
+            // 本机这一版作为副本留下（放在同步目录，别的设备也能取回）。
+            // 必须用一致性快照 snap：直接拷主库会丢掉还在 WAL 里的未 checkpoint 事务
+            conflicts.push(save_conflict(sync_dir, snap, "local")?);
             pull_into_local(db, local_db, remote_db)?;
             pulled = true;
             "conflict"
@@ -369,21 +370,46 @@ fn replace_file(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 用远端库替换本机库：关库 → 旧库改名备份 → 拷入远端 → 重开库。
-/// 旧库的 -wal/-shm 必须一并移走，否则新库会被旧 WAL 回放损坏（复用导入备份的同一条链路）。
+/// 用远端库替换本机库：库还开着时先把远端库拷到同目录临时文件（IO 失败不触碰本机库），
+/// 再关库 → stash 旧库 → rename 原子替换；stash 或替换失败自动回滚回同步前状态。
+/// 旧库的 -wal/-shm 由 stash 一并移走，否则新库会被旧 WAL 回放损坏。
 fn pull_into_local(db: &Db, local_db: &Path, remote_db: &Path) -> Result<(), String> {
+    let tmp = local_db.with_file_name(format!("{DB_FILE}.pull-{}", std::process::id()));
+    let _ = fs::remove_file(&tmp);
+    fs::copy(remote_db, &tmp).map_err(|e| format!("stage synced db failed: {e}"))?;
+
     db.close_for_maintenance()?;
+    let suffix = files::backup_stamp();
     let result = (|| -> Result<(), String> {
-        files::stash_current_db(local_db, &files::backup_stamp())?;
-        fs::copy(remote_db, local_db).map_err(|e| format!("install synced db failed: {e}"))?;
+        files::stash_current_db(local_db, &suffix)?;
+        fs::rename(&tmp, local_db).map_err(|e| format!("install synced db failed: {e}"))?;
         Ok(())
     })();
-    // 失败也要重开：恢复失败时应用应继续可用
+    let _ = fs::remove_file(&tmp);
     match result {
         Ok(()) => db.reopen(),
         Err(e) => {
+            // 替换没完成：把 stash 的旧库找回来，尽量回到同步前状态（.bak 只作最后手段）
+            restore_stashed_db(local_db, &suffix);
             let _ = db.reopen();
             Err(e)
+        }
+    }
+}
+
+/// pull 失败时的回滚：清掉半装的库，把 .bak-{suffix}（含侧车）改回原名。
+/// 与 files.rs 导入回滚同思路，但只动数据库文件、不碰 assets。
+fn restore_stashed_db(local_db: &Path, suffix: &str) {
+    let _ = fs::remove_file(local_db);
+    let bak = local_db.with_file_name(format!("{DB_FILE}.bak-{suffix}"));
+    if bak.is_file() {
+        let _ = fs::rename(&bak, local_db);
+    }
+    for ext in ["-wal", "-shm"] {
+        let from = local_db.with_file_name(format!("{DB_FILE}.bak-{suffix}{ext}"));
+        if from.is_file() {
+            let to = local_db.with_file_name(format!("{DB_FILE}{ext}"));
+            let _ = fs::rename(&from, &to);
         }
     }
 }
