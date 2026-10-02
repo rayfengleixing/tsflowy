@@ -119,6 +119,15 @@ export function dailyNoteTitle(dateKey: string, lang: "zh-CN" | "en-US"): string
   return `${dateKey.slice(5)} ${weekdayLabel(date, lang)}`;
 }
 
+/** 页面名是否指向某天的每日笔记（兼容中英星期后缀；旧命名 YYYY-MM-DD 前缀是年份，不会命中）。
+ *  用「月-日」前缀 + 边界判断：rest 为空或是非数字开头才算命中，避免 "10-025" 这类更长的数字误匹配。 */
+export function dailyNoteNameMatches(name: string, dateKey: string): boolean {
+  const monthDay = dateKey.slice(5);
+  if (monthDay.length !== 5 || !name.startsWith(monthDay)) return false;
+  const rest = name.slice(monthDay.length);
+  return rest === "" || !/^\d/.test(rest);
+}
+
 /* ————— 模板 → 文档 JSON ————— */
 
 const paragraph = (text: string): JSONContent =>

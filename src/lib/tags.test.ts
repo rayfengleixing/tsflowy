@@ -1,11 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { buildTagTree, omitTagColor, renameTagColor, renameTagPath, splitTagPath, tagMatchesFilter } from "./tags";
+import {
+  buildTagTree,
+  canonicalTagName,
+  defaultTagColor,
+  omitTagColor,
+  renameTagColor,
+  renameTagPath,
+  splitTagPath,
+  tagColor,
+  tagMatchesFilter,
+} from "./tags";
 
 describe("splitTagPath", () => {
   it("按 / 拆分层级并去掉空段", () => {
     expect(splitTagPath("工作/项目A")).toEqual(["工作", "项目A"]);
     expect(splitTagPath("/a//b/")).toEqual(["a", "b"]);
     expect(splitTagPath("")).toEqual([]);
+  });
+});
+
+describe("canonicalTagName", () => {
+  it("层级段去空白、去空段后重建；全空白得到空串", () => {
+    expect(canonicalTagName(" 工作 / 项目A ")).toBe("工作/项目A");
+    expect(canonicalTagName("//a//b/")).toBe("a/b");
+    expect(canonicalTagName("   ")).toBe("");
   });
 });
 
@@ -21,6 +39,11 @@ describe("tagMatchesFilter", () => {
     expect(tagMatchesFilter("工作台", "工作")).toBe(false);
     expect(tagMatchesFilter("其他", "工作")).toBe(false);
   });
+  it("两侧先规范形再比较，空筛选不命中", () => {
+    expect(tagMatchesFilter("工作 / 项目A", "工作")).toBe(true);
+    expect(tagMatchesFilter("工作/项目A", " 工作 ")).toBe(true);
+    expect(tagMatchesFilter("工作", "")).toBe(false);
+  });
 });
 
 describe("renameTagPath", () => {
@@ -30,6 +53,18 @@ describe("renameTagPath", () => {
   });
   it("子树之外的标签不变", () => {
     expect(renameTagPath("工作台", "工作", "职业")).toBe("工作台");
+  });
+  it("非规范写法先规范再替换，未命中保持原样", () => {
+    expect(renameTagPath("工作 / 项目A", "工作", "职业")).toBe("职业/项目A");
+    expect(renameTagPath("生活 / 娱乐", "工作", "职业")).toBe("生活 / 娱乐");
+  });
+});
+
+describe("tagColor", () => {
+  it("原始键优先，其次规范键；不同空白写法落到同一默认色", () => {
+    expect(tagColor("工作 / 项目A", { "工作/项目A": "#111111" })).toBe("#111111");
+    expect(tagColor(" 工作 ", { 工作: "#222222" })).toBe("#222222");
+    expect(tagColor("工作 / 项目A", {})).toBe(defaultTagColor("工作/项目A"));
   });
 });
 

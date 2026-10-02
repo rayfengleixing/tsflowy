@@ -42,9 +42,10 @@ export function defaultTagColor(tag: string): string {
   return TAG_COLORS[h % TAG_COLORS.length];
 }
 
-/** 取标签颜色：已配置优先，否则用稳定默认色 */
+/** 取标签颜色：原始键 → 规范键 → 稳定默认色（同一标签的不同空白写法共用同一颜色） */
 export function tagColor(tag: string, meta: TagColorMap): string {
-  return meta[tag] ?? defaultTagColor(tag);
+  const key = canonicalTagName(tag);
+  return meta[tag] ?? meta[key] ?? defaultTagColor(key || tag);
 }
 
 /** 颜色 → 带 alpha 的浅色底/描边（仅对 6 位 hex 生效，其它原样返回） */
@@ -76,14 +77,27 @@ export function splitTagPath(tag: string): string[] {
     .filter(Boolean);
 }
 
-/** 标签是否命中筛选路径：完全相等，或位于其下（父路径前缀匹配，含所有子标签） */
-export function tagMatchesFilter(tag: string, filter: string): boolean {
-  return tag === filter || tag.startsWith(filter + TAG_SEP);
+/** 标签名的规范形：层级段逐个去空白后重建（"工作 / 项目A" → "工作/项目A"；全空白 → ""）。
+ *  存库前与比较前统一走这里，避免同一逻辑标签因空白差异分裂出多种写法。 */
+export function canonicalTagName(tag: string): string {
+  return splitTagPath(tag).join(TAG_SEP);
 }
 
-/** 按层级重写标签名：tag 命中 from 子树时，把 from 前缀替换为 to */
+/** 标签是否命中筛选路径：完全相等，或位于其下（父路径前缀匹配，含所有子标签）。
+ *  两侧先规范形，历史数据里的「工作 / 项目A」这类写法也能正确命中「工作」。 */
+export function tagMatchesFilter(tag: string, filter: string): boolean {
+  const f = canonicalTagName(filter);
+  if (!f) return false;
+  const t = canonicalTagName(tag);
+  return t === f || t.startsWith(f + TAG_SEP);
+}
+
+/** 按层级重写标签名：tag 命中 from 子树时，把 from 前缀替换为 to（结果取规范形；未命中原样返回） */
 export function renameTagPath(tag: string, from: string, to: string): string {
-  return tagMatchesFilter(tag, from) ? to + tag.slice(from.length) : tag;
+  const f = canonicalTagName(from);
+  const t = canonicalTagName(tag);
+  if (!f || !(t === f || t.startsWith(f + TAG_SEP))) return tag;
+  return canonicalTagName(to) + t.slice(f.length);
 }
 
 /** 层级标签树节点（由扁平标签名聚合；中间层级 count 可能为 0） */

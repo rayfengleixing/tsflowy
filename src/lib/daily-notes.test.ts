@@ -7,6 +7,7 @@ import { LockedHeading } from "@/features/editor/extensions/document-structure-l
 import {
   buildDailyFolderDoc,
   buildDailyNoteDoc,
+  dailyNoteNameMatches,
   dailyNoteTitle,
   defaultDailyNotesConfig,
   interpolateTemplate,
@@ -64,6 +65,15 @@ describe("日期工具", () => {
     expect(dailyNoteTitle("2026-10-02", "zh-CN")).toBe("10-02 周五");
     expect(dailyNoteTitle("2026-10-02", "en-US")).toBe("10-02 Fri");
     expect(dailyNoteTitle("bad", "zh-CN")).toBe("bad");
+  });
+
+  it("dailyNoteNameMatches 按「月-日 + 边界」认当天笔记", () => {
+    expect(dailyNoteNameMatches("10-02 周五", "2026-10-02")).toBe(true);
+    expect(dailyNoteNameMatches("10-02 Fri", "2026-10-02")).toBe(true);
+    expect(dailyNoteNameMatches("10-02", "2026-10-02")).toBe(true);
+    expect(dailyNoteNameMatches("10-025 周三", "2026-10-02")).toBe(false);
+    expect(dailyNoteNameMatches("10-03 周六", "2026-10-02")).toBe(false);
+    expect(dailyNoteNameMatches("10-02 周五", "bad")).toBe(false);
   });
 });
 

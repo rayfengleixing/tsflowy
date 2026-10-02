@@ -837,9 +837,12 @@ pub struct ChangeDataDirResult {
 
 /// 修改数据保存位置：(1) 把现有 default data_dir 条目复制到 new_path；(2) 写入 config custom_data_dir；
 /// 下次启动会把 default app_data_dir 建成指向 new_path 的 junction/symlink，SQL 插件相对路径即透明生效。
+/// move_current 拷贝运行中的数据目录前先整体关闭连接（WAL 未 checkpoint 时直接拷会拿到旧主库/半截 WAL），
+/// 拷完或出错都立即重开，应用继续在原目录工作到重启。
 #[tauri::command]
 pub async fn change_data_dir(
     app: tauri::AppHandle,
+    db: tauri::State<'_, Db>,
     new_path: String,
     move_current: bool,
 ) -> Result<ChangeDataDirResult, String> {
@@ -866,12 +869,15 @@ pub async fn change_data_dir(
         return Err("target directory must be empty".to_string());
     }
 
-    if move_current {
-        // 复制 default 下所有条目到 target
-        if default.exists() {
-            copy_dir_all(&default, &target)?;
-            copied = true;
-        }
+    if move_current && default.exists() {
+        // 先 checkpoint 并关闭连接再逐文件拷贝：否则拷到的 data.db 可能不含 WAL 里未落库的事务
+        db.close_for_maintenance()?;
+        let copy_result = copy_dir_all(&default, &target);
+        // 无论拷贝成败都恢复连接（失败时应用继续用旧目录，与拷贝前一致）
+        let reopen_result = db.reopen();
+        copy_result?;
+        reopen_result?;
+        copied = true;
     }
 
     // 写 config

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { flattenTree } from "@/lib/tree";
 import { parseViewTags, type View } from "@/types/models";
-import { tagColor, tagTint } from "@/lib/tags";
+import { tagColor, tagTint, canonicalTagName } from "@/lib/tags";
 import { t } from "@/lib/i18n";
 
 interface TagEditorDialogProps {
@@ -21,11 +21,20 @@ export function TagEditorDialog({ view, open, onOpenChange }: TagEditorDialogPro
   const tagMeta = useWorkspaceStore((s) => s.tagMeta);
   const [draft, setDraft] = useState("");
 
-  const selected = useMemo(() => parseViewTags(view?.tags), [view]);
+  const selected = useMemo(() => {
+    const names = parseViewTags(view?.tags).map(canonicalTagName).filter(Boolean);
+    return [...new Set(names)];
+  }, [view]);
 
+  // 全库已有标签（规范形去重，避免「工作 / 项目A」与「工作/项目A」各出现一份）
   const allTags = useMemo(() => {
     const set = new Set<string>();
-    for (const v of flattenTree(tree)) for (const tag of parseViewTags(v.tags)) set.add(tag);
+    for (const v of flattenTree(tree)) {
+      for (const tag of parseViewTags(v.tags)) {
+        const c = canonicalTagName(tag);
+        if (c) set.add(c);
+      }
+    }
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [tree]);
 
@@ -36,7 +45,7 @@ export function TagEditorDialog({ view, open, onOpenChange }: TagEditorDialogPro
   const apply = (tags: string[]) => void setViewTags(view.id, tags);
 
   const add = (raw: string) => {
-    const tag = raw.trim();
+    const tag = canonicalTagName(raw);
     if (!tag || selected.includes(tag)) return;
     apply([...selected, tag]);
   };
