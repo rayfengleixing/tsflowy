@@ -19,7 +19,13 @@ import { useSettingsStore } from "./settings";
 import { logger } from "@/lib/logger";
 import { t } from "@/lib/i18n";
 import { buildWelcomeDoc, welcomeDocTitle } from "@/lib/welcome-doc";
-import { buildDailyFolderDoc, buildDailyNoteDoc, loadDailyNotesConfig, toDateKey } from "@/lib/daily-notes";
+import {
+  buildDailyFolderDoc,
+  buildDailyNoteDoc,
+  dailyNoteTitle,
+  loadDailyNotesConfig,
+  toDateKey,
+} from "@/lib/daily-notes";
 import { mentionsApi } from "@/lib/mentions";
 import type { JSONContent } from "@tiptap/core";
 
@@ -656,9 +662,16 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       const root = await ensureFolder(null, cfg.folderName, t("daily.folderIntro"));
       const year = await ensureFolder(root.id, dateKey.slice(0, 4));
       const month = await ensureFolder(year.id, dateKey.slice(5, 7));
-      let note = views.find((v) => v.parent_id === month.id && v.layout === "document" && v.name === dateKey);
+      // 页面名形如「02 周五」：用前两位的「日」匹配，可跨语言切换复用同一天笔记（旧命名 YYYY-MM-DD 前两位是年份，不会误匹配）
+      const day = dateKey.slice(8, 10);
+      let note = views.find((v) => v.parent_id === month.id && v.layout === "document" && v.name.slice(0, 2) === day);
       if (!note) {
-        note = await viewApi.create({ workspace_id: ws, parent_id: month.id, name: dateKey, layout: "document" });
+        note = await viewApi.create({
+          workspace_id: ws,
+          parent_id: month.id,
+          name: dailyNoteTitle(dateKey, lang),
+          layout: "document",
+        });
         views.push(note);
         try {
           await documentApi.save(note.id, JSON.stringify(buildDailyNoteDoc(dateKey, cfg.template, lang)));

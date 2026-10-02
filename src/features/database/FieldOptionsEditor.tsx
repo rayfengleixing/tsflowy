@@ -28,11 +28,15 @@ export function FieldOptionsEditor(props: {
   const [options, setOptions] = useState<FieldOptions>(initial);
   const [optionName, setOptionName] = useState("");
   // 公式引用候选：同表其它字段名（数字/复选/文本均可引用，取值规则见 database-formula）
-  const fieldNames = useDbStore((s) => s.fields.filter((f) => f.id !== field.id).map((f) => f.name));
+  // 注意：选择器必须返回稳定引用，派生数组一律在 useMemo 里做（每次返回新数组会触发无限重渲染导致白屏）
+  const allFields = useDbStore((s) => s.fields);
+  const fieldNames = useMemo(
+    () => allFields.filter((f) => f.id !== field.id).map((f) => f.name),
+    [allFields, field.id],
+  );
   // 关联目标候选：工作区里所有宿主数据库表（排除本表，自己关联自己没有意义）
   const currentViewId = useDbStore((s) => s.view?.id ?? null);
   // rollup 的关联字段候选必须来自本表，且只能是 relation 字段
-  const allFields = useDbStore((s) => s.fields);
   const relationFields = useMemo(() => allFields.filter((f) => f.field_type === "relation"), [allFields]);
   const tree = useWorkspaceStore((s) => s.tree);
   const relationData = useRelationStore((s) => s.data);

@@ -7,6 +7,7 @@ import { LockedHeading } from "@/features/editor/extensions/document-structure-l
 import {
   buildDailyFolderDoc,
   buildDailyNoteDoc,
+  dailyNoteTitle,
   defaultDailyNotesConfig,
   interpolateTemplate,
   parseDateKey,
@@ -58,6 +59,12 @@ describe("日期工具", () => {
     expect(shortDateKey("2026-10-02")).toBe("10-02");
     expect(shortDateKey("bad")).toBe("bad");
   });
+
+  it("dailyNoteTitle 生成「日 + 星期」", () => {
+    expect(dailyNoteTitle("2026-10-02", "zh-CN")).toBe("02 周五");
+    expect(dailyNoteTitle("2026-10-02", "en-US")).toBe("02 Fri");
+    expect(dailyNoteTitle("bad", "zh-CN")).toBe("bad");
+  });
 });
 
 describe("interpolateTemplate", () => {
@@ -100,13 +107,13 @@ describe("templateToBlocks", () => {
 });
 
 describe("buildDailyNoteDoc", () => {
-  it("首行 H1 = 日期、第二行分割线，符合结构锁定", () => {
+  it("首行 H1 = 页面名（日 + 星期）、第二行分割线，符合结构锁定", () => {
     const doc = schema.nodeFromJSON(
       buildDailyNoteDoc("2026-10-02", defaultDailyNotesConfig("zh-CN").template, "zh-CN"),
     );
     expect(doc.child(0).type.name).toBe("heading");
     expect(doc.child(0).attrs.level).toBe(1);
-    expect(doc.child(0).textContent).toBe("2026-10-02");
+    expect(doc.child(0).textContent).toBe("02 周五");
     expect(doc.child(1).type.name).toBe("horizontalRule");
   });
 

@@ -231,15 +231,18 @@ const zh = {
   "field.relationMissing": "行已删除",
   "field.relationRemove": "移除关联",
   "field.relationTarget": "关联到",
-  "field.relationHint": "单元格里保存的是目标行的引用；目标行删除后这里会自动显示为「行已删除」。",
+  "field.relationHint":
+    "选好目标表后，在单元格里点击即可搜索并选择要关联的目标行（可选多行）。目标行被删除时会自动显示「行已删除」。",
   "field.rollupRelation": "关联字段",
   "field.rollupTarget": "汇总字段",
   "field.rollupFn": "汇总方式",
-  "field.rollupHint": "对本行关联到的目标行做实时统计，不落库；先建一个「关联」字段才能配置汇总。",
+  "field.rollupHint":
+    "先在本表建一个「关联」字段并选好目标表，再回到这里：选关联字段 → 选要统计的目标字段 → 选汇总方式。结果按本行关联到的行实时统计，不落库。",
   "field.rollupMissing": "请选择…",
   "field.formulaExpr": "表达式",
   "field.formulaPlaceholder": "{单价} * {数量}",
-  "field.formulaHint": "支持 + - * / 和括号；{字段名} 引用同行字段，引用为空时结果显示为空。",
+  "field.formulaHint":
+    "支持 + - * / 和括号；用 {字段名} 引用同行字段（点下方标签可快速插入）。引用字段为空时结果显示为空。",
   "field.removeOption": "移除此选项",
   "field.selected": "已选",
   "backlinks.title": "被 {n} 个页面引用",
@@ -505,7 +508,7 @@ const zh = {
   "daily.folderIntro": "这里按天收纳每日笔记，每一天是一篇独立文档，可以直接搜索、加标签或导出。",
   "settings.dailyNotes": "每日笔记",
   "settings.dailyNotesDesc":
-    "每天一篇笔记，按「年 / 月 / 日期」分级收在同一个目录页下；点侧边栏「今日笔记」即可打开当天，或在那里挑任意日期。",
+    "每天一篇笔记，按「年 / 月 / 日期 星期」分级收在同一个目录页下（如 每日笔记/2026/10/02 周五）；点侧边栏「今日笔记」即可打开当天，或在那里挑任意日期。",
   "settings.dailyFolder": "目录页名称",
   "settings.dailyOpenOnStart": "启动时自动打开今日笔记",
   "settings.dailyTemplate": "新建笔记的模板",
@@ -815,17 +818,17 @@ const en: Record<MessageKey, string> = {
   "field.relationRemove": "Remove link",
   "field.relationTarget": "Links to",
   "field.relationHint":
-    "The cell stores references to target rows; if a target row is deleted, it shows as “Row deleted”.",
+    "Pick a target table, then click a cell to search and select the rows to link (multiple allowed). Deleted target rows show as “Row deleted”.",
   "field.rollupRelation": "Relation field",
   "field.rollupTarget": "Target field",
   "field.rollupFn": "Aggregate",
   "field.rollupHint":
-    "Aggregates the linked target rows live, without storing anything. Create a Relation field first.",
+    "First create a Relation field in this table and pick its target table, then come back: choose the relation field → the target field → the aggregate. Results are computed live, nothing is stored.",
   "field.rollupMissing": "Select…",
   "field.formulaExpr": "Expression",
   "field.formulaPlaceholder": "{price} * {qty}",
   "field.formulaHint":
-    "Supports + - * / and parentheses; {field} references the same row — empty references show blank.",
+    "Supports + - * / and parentheses; use {field} to reference a field in the same row (click a tag below to insert). Empty references show blank.",
   "field.removeOption": "Remove this option",
   "field.selected": "Selected",
   "backlinks.title": "Referenced by {n} pages",
@@ -1096,7 +1099,7 @@ const en: Record<MessageKey, string> = {
     "Daily notes live here, one document per day — searchable, taggable and exportable like any other page.",
   "settings.dailyNotes": "Daily notes",
   "settings.dailyNotesDesc":
-    "One note per day, grouped by year / month under a single folder page. Use “Today’s note” in the sidebar to jump to today, or pick any other date there.",
+    "One note per day, grouped by year / month / “day weekday” under a single folder page (e.g. Daily notes/2026/10/02 Fri). Use “Today’s note” in the sidebar to jump to today, or pick any other date there.",
   "settings.dailyFolder": "Folder page name",
   "settings.dailyOpenOnStart": "Open today's note on startup",
   "settings.dailyTemplate": "Template for new notes",
