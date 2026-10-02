@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { FolderOpen, Upload, Download, Settings2, RefreshCw, FolderInput, FolderOutput } from "lucide-react";
+import {
+  CalendarDays,
+  FolderOpen,
+  Upload,
+  Download,
+  Settings2,
+  RefreshCw,
+  FolderInput,
+  FolderOutput,
+} from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { save, open } from "@tauri-apps/plugin-dialog";
@@ -24,6 +33,7 @@ import {
 import { useWorkspaceStore } from "@/stores/workspace";
 import { Button } from "@/components/ui/button";
 import { importMarkdownFolder } from "@/lib/import-folder";
+import { loadDailyNotesConfig, saveDailyNotesConfig, type DailyNotesConfig } from "@/lib/daily-notes";
 import { exportMarkdownFolder } from "@/lib/export-folder";
 import { t, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -137,6 +147,8 @@ export function SettingsPage() {
   const [busyBackupNow, setBusyBackupNow] = useState(false);
   const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null);
   const [busySync, setBusySync] = useState(false);
+  const [daily, setDaily] = useState<DailyNotesConfig>(() => loadDailyNotesConfig());
+  const openDailyNote = useWorkspaceStore((s) => s.openDailyNote);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   // 上次同步动作对应的文案 key；未知动作返回 undefined（不渲染）
   const syncLastActionKey = syncInfo?.last_action ? SYNC_ACTION_KEY[syncInfo.last_action] : undefined;
@@ -338,6 +350,20 @@ export function SettingsPage() {
     }
   };
 
+  /** 每日笔记配置：改一项即存一项（localStorage，无后端往返） */
+  const updateDaily = (patch: Partial<DailyNotesConfig>) => {
+    const next = { ...daily, ...patch };
+    setDaily(next);
+    saveDailyNotesConfig(next);
+  };
+
+  const openTodayDailyNote = () => {
+    openDailyNote().catch((e: unknown) => {
+      logger.error("open daily note failed", e);
+      toast.error(t("settings.dailyOpenFailed", { message: String(e) }));
+    });
+  };
+
   const refreshSyncInfo = () => {
     invoke<SyncInfo>("get_sync_info")
       .then(setSyncInfo)
@@ -386,7 +412,8 @@ export function SettingsPage() {
       const extra = r.assets_copied > 0 ? ` · ${t("settings.syncAssets", { n: r.assets_copied })}` : "";
       if (r.action === "conflict") {
         toast.warning(t(key) + extra, {
-          description: r.conflicts.length > 0 ? `${t("settings.syncConflictFiles")}: ${r.conflicts.join(", ")}` : undefined,
+          description:
+            r.conflicts.length > 0 ? `${t("settings.syncConflictFiles")}: ${r.conflicts.join(", ")}` : undefined,
         });
       } else {
         toast.success(t(key) + extra);
@@ -637,15 +664,11 @@ export function SettingsPage() {
                 type="checkbox"
                 checked={autoBackup?.enabled ?? false}
                 disabled={!autoBackup}
-                onChange={(e) =>
-                  autoBackup && persistAutoBackup({ ...autoBackup, enabled: e.target.checked })
-                }
+                onChange={(e) => autoBackup && persistAutoBackup({ ...autoBackup, enabled: e.target.checked })}
               />
               {t("settings.autoBackupEnable")}
             </label>
-            <p className="mb-3 mt-1.5 max-w-lg text-[11px] text-neutral-500">
-              {t("settings.autoBackupDesc")}
-            </p>
+            <p className="mb-3 mt-1.5 max-w-lg text-[11px] text-neutral-500">{t("settings.autoBackupDesc")}</p>
             <div className="flex flex-wrap items-end gap-4">
               <label className="flex flex-col gap-1 text-[11px] text-neutral-600">
                 {t("settings.autoBackupInterval")}
@@ -657,8 +680,7 @@ export function SettingsPage() {
                   value={autoBackup?.interval_hours ?? 24}
                   disabled={!autoBackup}
                   onChange={(e) =>
-                    autoBackup &&
-                    setAutoBackup({ ...autoBackup, interval_hours: Number(e.target.value) })
+                    autoBackup && setAutoBackup({ ...autoBackup, interval_hours: Number(e.target.value) })
                   }
                   onBlur={() => autoBackup && persistAutoBackup(autoBackup)}
                 />
@@ -687,8 +709,7 @@ export function SettingsPage() {
             </div>
             {autoBackup && (
               <div className="mt-3 text-[11px] text-neutral-500">
-                {t("settings.autoBackupLast")}：
-                {autoBackup.last_backup ?? t("settings.autoBackupNever")}
+                {t("settings.autoBackupLast")}：{autoBackup.last_backup ?? t("settings.autoBackupNever")}
                 <span className="ml-2 break-all font-mono">{autoBackup.dir}</span>
               </div>
             )}
@@ -738,6 +759,42 @@ export function SettingsPage() {
               </Button>
             </div>
           )}
+        </Section>
+
+        <Section title={t("settings.dailyNotes")}>
+          <p className="max-w-lg text-xs text-neutral-500">{t("settings.dailyNotesDesc")}</p>
+          <Row label={t("settings.dailyFolder")}>
+            <input
+              value={daily.folderName}
+              onChange={(e) => updateDaily({ folderName: e.target.value })}
+              className="h-7 w-56 rounded-md border border-neutral-300 bg-white px-2 text-[12px] text-neutral-800 outline-none focus:border-brand-500"
+            />
+          </Row>
+          <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">
+            <input
+              type="checkbox"
+              checked={daily.openOnStart}
+              onChange={(e) => updateDaily({ openOnStart: e.target.checked })}
+            />
+            {t("settings.dailyOpenOnStart")}
+          </label>
+          <div>
+            <div className="mb-1.5 text-sm font-medium text-neutral-800">{t("settings.dailyTemplate")}</div>
+            <textarea
+              value={daily.template}
+              onChange={(e) => updateDaily({ template: e.target.value })}
+              rows={6}
+              spellCheck={false}
+              className="w-full max-w-lg resize-y rounded-md border border-neutral-300 bg-white px-2 py-1.5 font-mono text-[12px] text-neutral-800 outline-none focus:border-brand-500"
+            />
+            <p className="mt-1.5 max-w-lg text-[11px] text-neutral-500">{t("settings.dailyTemplateHint")}</p>
+          </div>
+          <div>
+            <Button size="sm" variant="outline" onClick={openTodayDailyNote}>
+              <CalendarDays className="mr-1 h-3.5 w-3.5" />
+              {t("settings.dailyOpenNow")}
+            </Button>
+          </div>
         </Section>
 
         <Section title={t("settings.shortcuts")}>

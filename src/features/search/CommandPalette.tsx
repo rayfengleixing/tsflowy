@@ -1,6 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Clock, CornerDownLeft, FilePlus, FileSearch, History, Search, Settings, SunMoon, Trash2, X } from "lucide-react";
+import {
+  CalendarDays,
+  Clock,
+  CornerDownLeft,
+  FilePlus,
+  FileSearch,
+  History,
+  Search,
+  Settings,
+  SunMoon,
+  Trash2,
+  X,
+} from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { HighlightedTitle } from "@/components/highlighted-title";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -38,6 +50,7 @@ export function CommandPalette() {
   const openView = useWorkspaceStore((s) => s.openView);
   const openSearch = useWorkspaceStore((s) => s.openSearch);
   const createView = useWorkspaceStore((s) => s.createView);
+  const openDailyNote = useWorkspaceStore((s) => s.openDailyNote);
   const setRoute = useWorkspaceStore((s) => s.setRoute);
 
   const [query, setQuery] = useState("");
@@ -57,6 +70,17 @@ export function CommandPalette() {
         run: () => {
           createView({ parentId: null, layout: "document" }).catch((e: unknown) => {
             logger.error("palette.newPage", e);
+            toast.error(t("error.db", { message: String(e) }));
+          });
+        },
+      },
+      {
+        id: "dailyNote",
+        label: t("palette.action.dailyNote"),
+        icon: <CalendarDays className="h-4 w-4" />,
+        run: () => {
+          openDailyNote().catch((e: unknown) => {
+            logger.error("palette.dailyNote", e);
             toast.error(t("error.db", { message: String(e) }));
           });
         },
@@ -83,7 +107,7 @@ export function CommandPalette() {
         run: () => setRoute("trash"),
       },
     ],
-    [createView, setRoute],
+    [createView, openDailyNote, setRoute],
   );
 
   // 输入即过滤动作；空查询时动作就是主内容（面板即启动器）

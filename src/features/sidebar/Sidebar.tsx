@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Search, Settings, Trash2, Layers, Hash, Tags } from "lucide-react";
 import { SpaceSwitcher } from "./SpaceSwitcher";
 import { NewPageMenu } from "./NewPageMenu";
+import { DailyNoteButton } from "./DailyNoteButton";
 import { PageTree } from "./PageTree";
 import { TagPanel } from "./TagPanel";
 import { DocumentOutline, getSidebarTab, setSidebarTab, type SidebarTab } from "@/features/editor/Outline";
@@ -73,9 +74,10 @@ export function Sidebar() {
         </button>
       </div>
 
-      {/* 新建页面：位于搜索下方，与页面树之间留一个空行 */}
-      <div className="px-2 pt-1 pb-5">
+      {/* 新建页面 / 今日笔记：位于搜索下方，与页面树之间留一个空行 */}
+      <div className="flex flex-col gap-0.5 px-2 pt-1 pb-5">
         <NewPageMenu />
+        <DailyNoteButton />
       </div>
 
       {/* 一级 Tab：页面树 / 大纲 / 标签 */}

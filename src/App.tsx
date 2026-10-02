@@ -17,6 +17,7 @@ import { viewIcon } from "@/components/view-icon";
 import { ArrowLeftRight, X } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { bootstrapVisualSettings } from "@/stores/settings";
+import { loadDailyNotesConfig } from "@/lib/daily-notes";
 import { findNode } from "@/lib/tree";
 import type { ViewNode } from "@/types/models";
 import { mentionsApi } from "@/lib/mentions";
@@ -154,6 +155,12 @@ function App() {
         // 这里不再外部 setState，避免触发额外 zustand emit → React 19 useSyncExternalStore 缓存告警。
         logger.error("App.init", "app init failed", e);
         toast.error(t("error.db", { message: String(e) }));
+      })
+      .then(() => {
+        // 启动自动打开今日笔记（设置项，默认关闭）；失败只记日志，不打扰启动流程
+        if (loadDailyNotesConfig().openOnStart) {
+          useWorkspaceStore.getState().openDailyNote().catch(logger.catch("App.dailyNote", "open daily note failed"));
+        }
       })
       .finally(() => {
         // 无论 init 成功与否都探一次库健康：连接失败时展示可操作的兜底页

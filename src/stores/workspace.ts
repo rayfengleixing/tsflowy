@@ -19,6 +19,7 @@ import { useSettingsStore } from "./settings";
 import { logger } from "@/lib/logger";
 import { t } from "@/lib/i18n";
 import { buildWelcomeDoc, welcomeDocTitle } from "@/lib/welcome-doc";
+import { buildDailyFolderDoc, buildDailyNoteDoc, loadDailyNotesConfig, toDateKey } from "@/lib/daily-notes";
 import { mentionsApi } from "@/lib/mentions";
 import type { JSONContent } from "@tiptap/core";
 
@@ -89,6 +90,8 @@ interface WorkspaceState {
   swapSplit: () => void;
   setSplitRatio: (r: number) => void;
   newTab: () => Promise<void>;
+  /** 打开某天的每日笔记（不存在则按模板创建）；date 省略 = 今天 */
+  openDailyNote: (date?: Date) => Promise<void>;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   setRoute: (route: Route) => void;
   /** 打开搜索结果页 */
@@ -622,6 +625,44 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
 
     newTab: async () => {
       await get().createView({ parentId: null, layout: "document" });
+    },
+
+    openDailyNote: async (date) => {
+      const ws = get().currentWorkspaceId;
+      if (!ws) return;
+      const lang = useSettingsStore.getState().lang;
+      const cfg = loadDailyNotesConfig();
+      const dateKey = toDateKey(date ?? new Date());
+      // 一天一篇按「目录页 + 日期同名子页」定位，无需额外标记：搜索/标签/导出/备份/同步全部按普通页面生效
+      // （listByWorkspace 已排除行详情文档与派生视图，返回的都是树里的页面）
+      const views = await viewApi.listByWorkspace(ws);
+      let folder = views.find((v) => v.parent_id === null && v.layout === "document" && v.name === cfg.folderName);
+      if (!folder) {
+        folder = await viewApi.create({ workspace_id: ws, parent_id: null, name: cfg.folderName, layout: "document" });
+        try {
+          await documentApi.save(
+            folder.id,
+            JSON.stringify(buildDailyFolderDoc(cfg.folderName, t("daily.folderIntro"))),
+          );
+        } catch (e) {
+          // 正文种子失败不阻断：页面已建好，用户可直接写
+          logger.warn("WorkspaceStore.openDailyNote", "seed folder doc failed", folder.id, e);
+        }
+      }
+      const folderId = folder.id;
+      let note = views.find((v) => v.parent_id === folderId && v.name === dateKey);
+      if (!note) {
+        note = await viewApi.create({ workspace_id: ws, parent_id: folderId, name: dateKey, layout: "document" });
+        try {
+          await documentApi.save(note.id, JSON.stringify(buildDailyNoteDoc(dateKey, cfg.template, lang)));
+        } catch (e) {
+          logger.warn("WorkspaceStore.openDailyNote", "seed note doc failed", note.id, e);
+        }
+      }
+      const noteId = note.id;
+      await get().reload();
+      set({ expanded: new Set(get().expanded).add(folderId) });
+      get().openView(noteId);
     },
 
     reorderTabs: (fromIndex: number, toIndex: number) => {
