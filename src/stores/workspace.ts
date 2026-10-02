@@ -27,6 +27,10 @@ import {
   toDateKey,
 } from "@/lib/daily-notes";
 import { mentionsApi } from "@/lib/mentions";
+import { upsertSubpagesNode, type SubpageItem } from "@/lib/subpages";
+import { useEditorStore } from "./editor";
+import type { Editor } from "@tiptap/react";
+import type { Node as ProseMirrorNode, NodeType } from "@tiptap/pm/model";
 import type { JSONContent } from "@tiptap/core";
 
 export type Route = "workspace" | "trash" | "search" | "settings";
@@ -256,6 +260,106 @@ async function persistTagMeta(meta: TagColorMap): Promise<void> {
   }
 }
 
+/* ————— 子页面双链块：把「父页面 → 子页面」的链接列表维护在父文档正文最上方 ————— */
+
+/** 头部保护区（首行 H1 + 可选分割线）之后的 ProseMirror 绝对位置；无首行 H1 返回 -1 */
+function subpagesPosInPmDoc(doc: ProseMirrorNode): number {
+  if (doc.childCount === 0) return -1;
+  const first = doc.child(0);
+  if (first.type.name !== "heading" || (first.attrs as { level: number }).level !== 1) return -1;
+  let pos = first.nodeSize;
+  if (doc.childCount > 1 && doc.child(1).type.name === "horizontalRule") pos += doc.child(1).nodeSize;
+  return pos;
+}
+
+/** 在已打开的父文档编辑器里就地更新子页面块（走正常自动保存）；成功返回 true */
+function applySubpagesInEditor(editor: Editor, items: SubpageItem[]): boolean {
+  const { state } = editor;
+  const type = state.schema.nodes.subpages as NodeType | undefined;
+  if (!type) return false;
+
+  let existingPos: number | null = null;
+  let existingSize = 0;
+  let offset = 0;
+  for (let i = 0; i < state.doc.childCount; i++) {
+    const child = state.doc.child(i);
+    if (child.type.name === "subpages") {
+      existingPos = offset;
+      existingSize = child.nodeSize;
+      break;
+    }
+    offset += child.nodeSize;
+  }
+
+  if (items.length === 0) {
+    if (existingPos === null) return true;
+    editor.view.dispatch(state.tr.delete(existingPos, existingPos + existingSize));
+    return true;
+  }
+  if (existingPos !== null) {
+    editor.view.dispatch(state.tr.setNodeMarkup(existingPos, undefined, { items }));
+    return true;
+  }
+  const pos = subpagesPosInPmDoc(state.doc);
+  if (pos < 0) return false;
+  editor.view.dispatch(state.tr.insert(pos, type.create({ items })));
+  return true;
+}
+
+/**
+ * 把子页面列表写进父文档：父页正在编辑时就地改（避免与编辑器内存态互相覆盖），
+ * 否则读库改写再落库。父页没有正文（表格 / 看板 / 日历页）时跳过。
+ */
+async function applySubpagesToParent(parentId: string, items: SubpageItem[]): Promise<void> {
+  const es = useEditorStore.getState();
+  if (es.editor && !es.editor.isDestroyed && es.currentViewId === parentId) {
+    if (applySubpagesInEditor(es.editor, items)) return;
+  }
+  let raw: string | null;
+  try {
+    raw = await documentApi.get(parentId);
+  } catch (e) {
+    logger.warn("WorkspaceStore", "read parent doc for subpages failed", parentId, e);
+    return;
+  }
+  if (!raw) return;
+  let doc: JSONContent;
+  try {
+    doc = JSON.parse(raw) as JSONContent;
+  } catch (e) {
+    logger.warn("WorkspaceStore", "parse parent doc for subpages failed", parentId, e);
+    return;
+  }
+  const next = upsertSubpagesNode(doc, items);
+  if (next === doc) return; // 无变化不落库
+  try {
+    await documentApi.save(parentId, JSON.stringify(next));
+  } catch (e) {
+    logger.warn("WorkspaceStore", "write subpages block failed", parentId, e);
+  }
+}
+
+/* ————— 欢迎文档：内容随版本更新，启动时按版本号刷新一次 ————— */
+
+/** 欢迎文档生成版本：正文有更新时递增，老版本安装会在启动时替换成新版示范文档 */
+const WELCOME_DOC_KEY = "tsflowy:welcome-doc-version";
+const WELCOME_DOC_VERSION = "2";
+
+/** 按版本号刷新欢迎文档；找不到同名根级文档（用户删了/改名了）时只记版本，不新建 */
+async function refreshWelcomeDoc(wsId: string): Promise<void> {
+  try {
+    if ((await viewApi.getSetting(WELCOME_DOC_KEY)) === WELCOME_DOC_VERSION) return;
+    const lang = useSettingsStore.getState().lang;
+    const title = welcomeDocTitle(lang);
+    const views = await viewApi.listByWorkspace(wsId);
+    const target = views.find((v) => v.parent_id === null && v.layout === "document" && v.name === title);
+    if (target) await documentApi.save(target.id, JSON.stringify(buildWelcomeDoc(lang)));
+    await viewApi.setSetting(WELCOME_DOC_KEY, WELCOME_DOC_VERSION);
+  } catch (e) {
+    logger.warn("WorkspaceStore", "refresh welcome doc failed", e);
+  }
+}
+
 type EqualityFn<T> = (a: T, b: T) => boolean;
 
 /**
@@ -333,6 +437,15 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     persistNow();
   };
 
+  /** 把 parentId 下的子页面同步进父文档最上方的双链块（无子页面则移除该块） */
+  const syncSubpages = (parentId: string | null): void => {
+    if (!parentId) return;
+    const parent = findInTree(get().tree, parentId);
+    if (!parent) return;
+    const items: SubpageItem[] = parent.children.map((c) => ({ id: c.id, name: c.name }));
+    void applySubpagesToParent(parentId, items);
+  };
+
   return {
     ready: false,
     workspaces: [],
@@ -368,6 +481,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
               layout: "document",
             });
             await documentApi.save(welcome.id, JSON.stringify(buildWelcomeDoc(lang)));
+            await viewApi.setSetting(WELCOME_DOC_KEY, WELCOME_DOC_VERSION);
             workspaces = await workspaceApi.list();
           }
           let current = await viewApi.getSetting("last_workspace_id");
@@ -377,6 +491,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
           set({ workspaces, currentWorkspaceId: current, ready: true });
           await patchTreeAndRestoreTabs();
           await get().loadTagMeta();
+          await refreshWelcomeDoc(current);
           // 首次启动展开根级页面
           set({
             expanded: new Set(
@@ -479,6 +594,8 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       }
       await get().reload();
       set({ expanded: new Set(get().expanded).add(parentId ?? "") });
+      // 先同步父页面的子页面块：父页若正开着，这一步还赶得上就地改编辑器（打开子页会卸载它）
+      syncSubpages(parentId);
       get().openView(view.id);
       return view;
     },
@@ -497,6 +614,8 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       }
       await get().reload();
       set({ expanded: new Set(get().expanded).add(node.parent_id ?? "") });
+      // 与 createView 同理：先同步父页面（父页正开着时能就地改编辑器），再打开副本
+      syncSubpages(node.parent_id);
       get().openView(view.id);
     },
 
@@ -506,6 +625,8 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
         tabs: state.tabs.map((v) => (v.id === id ? { ...v, name } : v)),
         tree: patchTreeName(state.tree, id, name),
       }));
+      // 名称是对应「父页面」子页面块里的链接文案，需要同步刷新
+      syncSubpages(findInTree(get().tree, id)?.parent_id ?? null);
     },
 
     setViewIcon: async (id: string, icon: string | null) => {
@@ -527,6 +648,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     },
 
     deleteView: async (id: string) => {
+      const parentId = findInTree(get().tree, id)?.parent_id ?? null;
       await viewApi.softDelete(id);
       // 关闭该视图及全部后代的标签页
       const node = findInTree(get().tree, id);
@@ -538,11 +660,13 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       const splitViewId = split && affected.has(split) ? null : split;
       set({ tabs, currentViewId, splitViewId });
       await get().reload();
+      syncSubpages(parentId);
     },
 
     restoreView: async (id: string) => {
       await viewApi.restore(id);
       await get().reload();
+      syncSubpages(findInTree(get().tree, id)?.parent_id ?? null);
     },
 
     purgeView: async (id: string) => {
@@ -558,8 +682,11 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     },
 
     moveView: async (viewId, newParentId, index) => {
+      const oldParentId = findInTree(get().tree, viewId)?.parent_id ?? null;
       await viewApi.move(viewId, newParentId, index);
       await get().reload();
+      syncSubpages(oldParentId);
+      if (newParentId !== oldParentId) syncSubpages(newParentId);
     },
 
     openView: (id: string) => {

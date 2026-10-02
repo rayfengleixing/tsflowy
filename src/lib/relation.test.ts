@@ -81,10 +81,13 @@ describe("primaryFieldOf", () => {
 });
 
 describe("relationRowLabel / relationRowText", () => {
-  const fields = [field("title", "text"), field("status", "single_select", {
-    kind: "select",
-    options: [{ id: "o1", name: "进行中", color: "blue" }],
-  })];
+  const fields = [
+    field("title", "text"),
+    field("status", "single_select", {
+      kind: "select",
+      options: [{ id: "o1", name: "进行中", color: "blue" }],
+    }),
+  ];
   const rows = [row("r1"), row("r2", 1)];
   const cells = { r1: { title: "任务甲", status: "o1" }, r2: { title: "任务乙" } };
 
@@ -126,11 +129,7 @@ describe("rollupConfig", () => {
 describe("computeRollup", () => {
   const relField = field("rel", "relation", { kind: "relation", target_view_id: "v2" });
   const amount = field("amount", "number", { kind: "number", format: "decimal", precision: 2, currency: "CNY" });
-  const target = db(
-    [amount],
-    [row("t1"), row("t2", 1)],
-    { t1: { amount: 10 }, t2: { amount: 32.5 } },
-  );
+  const target = db([amount], [row("t1"), row("t2", 1)], { t1: { amount: 10 }, t2: { amount: 32.5 } });
   const getDb = (id: string) => (id === "v2" ? target : undefined);
 
   it("aggregates the linked rows through the relation field", () => {

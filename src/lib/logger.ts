@@ -56,9 +56,11 @@ export const logger = {
    * 便捷写法：logger.catch("load tabs", id)(e) → 错误上下文 + warn 级别（常见模式）。
    * 例：something.catch(logger.catch("xxx failed", extra))。
    */
-  catch: (ctx: string, ...extra: unknown[]) => (e: unknown) => {
-    if (isOn("warn")) console.warn(`[${ctx}]`, ...extra, e);
-  },
+  catch:
+    (ctx: string, ...extra: unknown[]) =>
+    (e: unknown) => {
+      if (isOn("warn")) console.warn(`[${ctx}]`, ...extra, e);
+    },
 };
 
 // 开发环境下把 logger 挂到全局，便于 F12 手动 setLevel('trace')

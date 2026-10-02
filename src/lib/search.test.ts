@@ -43,11 +43,16 @@ describe("localTitleHits", () => {
 describe("mergeSearchRows", () => {
   it("keeps the FTS row (with its snippet) when the same view matches locally", () => {
     const fts = [
-      { view_id: "a", title: "数据库表", icon: null, layout: "document" as const, snippet: "<em>数据</em>正文", rank: 2 },
+      {
+        view_id: "a",
+        title: "数据库表",
+        icon: null,
+        layout: "document" as const,
+        snippet: "<em>数据</em>正文",
+        rank: 2,
+      },
     ];
-    const local = [
-      { view_id: "a", title: "数据库表", icon: null, layout: "document" as const, snippet: "", rank: 0 },
-    ];
+    const local = [{ view_id: "a", title: "数据库表", icon: null, layout: "document" as const, snippet: "", rank: 0 }];
     const out = mergeSearchRows(fts, local, "sjk");
     expect(out).toHaveLength(1);
     expect(out[0].snippet).toBe("<em>数据</em>正文");
@@ -57,9 +62,7 @@ describe("mergeSearchRows", () => {
     const fts = [
       { view_id: "b", title: "读书", icon: null, layout: "document" as const, snippet: "正文提到数据库", rank: 1 },
     ];
-    const local = [
-      { view_id: "a", title: "数据库表", icon: null, layout: "document" as const, snippet: "", rank: 0 },
-    ];
+    const local = [{ view_id: "a", title: "数据库表", icon: null, layout: "document" as const, snippet: "", rank: 0 }];
     expect(mergeSearchRows(fts, local, "sjk").map((r) => r.view_id)).toEqual(["a", "b"]);
   });
 });

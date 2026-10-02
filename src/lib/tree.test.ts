@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { buildTree, computeRenumber, dropTarget, filterTreeByTag, flattenTree, flattenVisibleTree, isDescendant, siblingIds } from "./tree";
+import {
+  buildTree,
+  computeRenumber,
+  dropTarget,
+  filterTreeByTag,
+  flattenTree,
+  flattenVisibleTree,
+  isDescendant,
+  siblingIds,
+} from "./tree";
 import type { View } from "@/types/models";
 
 const v = (id: string, parent_id: string | null, position: number): View => ({

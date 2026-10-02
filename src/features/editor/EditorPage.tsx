@@ -42,6 +42,7 @@ import { Mermaid } from "./extensions/mermaid/node";
 import { Callout } from "./extensions/callout/node";
 import { Toggle } from "./extensions/toggle/node";
 import { Outline } from "./extensions/outline/node";
+import { Subpages } from "./extensions/subpages/node";
 import { Columns, Column } from "./extensions/columns/node";
 import { ImageGallery } from "./extensions/image-gallery/node";
 import Mention from "@tiptap/extension-mention";
@@ -241,6 +242,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       // — M3 高级块结束 —
       ...(hideSlash ? [] : [SlashMenu]),
       FirstHeadingLock.configure({ viewId: view.id }),
+      Subpages.configure({ viewId: view.id }),
       BlockDrag,
       FindReplace,
     ],

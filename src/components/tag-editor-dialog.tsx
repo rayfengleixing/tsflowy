@@ -64,10 +64,7 @@ export function TagEditorDialog({ view, open, onOpenChange }: TagEditorDialogPro
                 style={{ backgroundColor: tagTint(color, "1f"), color }}
               >
                 {tag}
-                <button
-                  className="hover:text-destructive"
-                  onClick={() => apply(selected.filter((x) => x !== tag))}
-                >
+                <button className="hover:text-destructive" onClick={() => apply(selected.filter((x) => x !== tag))}>
                   <X className="h-3 w-3" />
                 </button>
               </span>

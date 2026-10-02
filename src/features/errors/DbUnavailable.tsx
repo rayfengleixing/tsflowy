@@ -72,9 +72,7 @@ export function DbUnavailable({ health }: { health: DbHealth }) {
       if (typeof picked !== "string") return;
       src = picked;
     }
-    const confirmed = window.confirm(
-      `${t("settings.confirmImportTitle")}\n\n${t("settings.confirmImportDesc")}`,
-    );
+    const confirmed = window.confirm(`${t("settings.confirmImportTitle")}\n\n${t("settings.confirmImportDesc")}`);
     if (!confirmed) return;
     setBusy(true);
     try {
@@ -111,10 +109,7 @@ export function DbUnavailable({ health }: { health: DbHealth }) {
         )}
 
         <dl className="mb-4 space-y-2 text-[11px]">
-          <PathRow
-            label={t("db.errorDbFile")}
-            value={`${health.db_path}（${formatSize(health.db_size_bytes)}）`}
-          />
+          <PathRow label={t("db.errorDbFile")} value={`${health.db_path}（${formatSize(health.db_size_bytes)}）`} />
           <PathRow label={t("db.errorDataDir")} value={health.data_dir} />
           <PathRow label={t("db.errorBackupDir")} value={health.backup_dir} />
           <PathRow
@@ -135,11 +130,7 @@ export function DbUnavailable({ health }: { health: DbHealth }) {
             onClick={() => void importBackup(health.latest_backup_path)}
             disabled={busy || !health.latest_backup_path}
           >
-            {busy ? (
-              <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Upload className="mr-1 h-3.5 w-3.5" />
-            )}
+            {busy ? <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Upload className="mr-1 h-3.5 w-3.5" />}
             {t("db.errorImportLatest")}
           </Button>
           <Button size="sm" variant="outline" onClick={() => void importBackup(null)} disabled={busy}>

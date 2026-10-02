@@ -61,6 +61,17 @@ function collectMentions(node: JSONContent, parentBlockText: string | null): Col
     out.push({ targetId, context: trimmed || label });
   }
 
+  // 子页面双链块：块内每一条都是对子页面的一次提及（父 → 子的双链来源，见 lib/subpages.ts）
+  if (node.type === "subpages") {
+    const items = Array.isArray(node.attrs?.items) ? (node.attrs.items as { id?: unknown; name?: unknown }[]) : [];
+    for (const it of items) {
+      if (typeof it.id === "string") {
+        out.push({ targetId: it.id, context: typeof it.name === "string" ? it.name : "" });
+      }
+    }
+    return out;
+  }
+
   // 递归子节点
   if (node.content) {
     for (const child of node.content) {

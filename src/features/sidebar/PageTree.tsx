@@ -71,10 +71,7 @@ export function PageTree() {
     const listTop = list.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
     const total = rows.length;
     const start = Math.max(0, Math.floor((el.scrollTop - listTop) / ROW_H) - VIRTUAL_OVERSCAN);
-    const end = Math.min(
-      total,
-      Math.ceil((el.scrollTop - listTop + el.clientHeight) / ROW_H) + VIRTUAL_OVERSCAN,
-    );
+    const end = Math.min(total, Math.ceil((el.scrollTop - listTop + el.clientHeight) / ROW_H) + VIRTUAL_OVERSCAN);
     const next = { start, end: Math.max(end, Math.min(total, start + 1)) };
     setWin((prev) => (prev?.start === next.start && prev.end === next.end ? prev : next));
   }, [rows.length]);

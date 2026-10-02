@@ -83,32 +83,50 @@ export function FilterBar(props: {
     if (!field) return;
     const op = opsForType(field.field_type)[0];
     onChange(
-      [...filters, { id: "flt_" + crypto.randomUUID().slice(0, 8), field_id: field.id, op, value: defaultOperand(field) }],
+      [
+        ...filters,
+        { id: "flt_" + crypto.randomUUID().slice(0, 8), field_id: field.id, op, value: defaultOperand(field) },
+      ],
       mode,
     );
   };
 
   const update = (id: string, patch: Partial<FilterSpec>) => {
-    onChange(filters.map((f) => (f.id === id ? { ...f, ...patch } : f)), mode);
+    onChange(
+      filters.map((f) => (f.id === id ? { ...f, ...patch } : f)),
+      mode,
+    );
   };
 
   const remove = (id: string) => {
-    onChange(filters.filter((f) => f.id !== id), mode);
+    onChange(
+      filters.filter((f) => f.id !== id),
+      mode,
+    );
   };
 
   const fieldById = (id: string) => visibleFields.find((f) => f.id === id);
 
   return (
-    <div data-testid="filter-bar" className="flex flex-wrap items-center gap-2 border-b border-neutral-200 bg-neutral-100/60 px-4 py-2">
+    <div
+      data-testid="filter-bar"
+      className="flex flex-wrap items-center gap-2 border-b border-neutral-200 bg-neutral-100/60 px-4 py-2"
+    >
       <div className="flex items-center gap-1 text-[12px]">
         <button
-          className={cn("rounded px-1.5 py-0.5 font-medium", mode === "and" ? "bg-brand-500 text-white" : "text-neutral-500 hover:bg-neutral-200")}
+          className={cn(
+            "rounded px-1.5 py-0.5 font-medium",
+            mode === "and" ? "bg-brand-500 text-white" : "text-neutral-500 hover:bg-neutral-200",
+          )}
           onClick={() => onChange(filters, "and")}
         >
           AND
         </button>
         <button
-          className={cn("rounded px-1.5 py-0.5 font-medium", mode === "or" ? "bg-brand-500 text-white" : "text-neutral-500 hover:bg-neutral-200")}
+          className={cn(
+            "rounded px-1.5 py-0.5 font-medium",
+            mode === "or" ? "bg-brand-500 text-white" : "text-neutral-500 hover:bg-neutral-200",
+          )}
           onClick={() => onChange(filters, "or")}
         >
           OR
@@ -164,13 +182,14 @@ export function FilterBar(props: {
         <Plus className="h-3.5 w-3.5" />
         {t("filter.add")}
       </Button>
-      <button className="ml-auto flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200" onClick={onClose}>
+      <button
+        className="ml-auto flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200"
+        onClick={onClose}
+      >
         <X className="h-4 w-4" />
       </button>
       {filters.length > 0 && (
-        <span className="text-[11px] text-neutral-400">
-          {t("filter.active", { count: String(filters.length) })}
-        </span>
+        <span className="text-[11px] text-neutral-400">{t("filter.active", { count: String(filters.length) })}</span>
       )}
     </div>
   );

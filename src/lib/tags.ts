@@ -70,7 +70,10 @@ export const TAG_SEP = "/";
 
 /** 把标签名拆成层级段（过滤空段："/a//b/" → ["a","b"]） */
 export function splitTagPath(tag: string): string[] {
-  return tag.split(TAG_SEP).map((s) => s.trim()).filter(Boolean);
+  return tag
+    .split(TAG_SEP)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 /** 标签是否命中筛选路径：完全相等，或位于其下（父路径前缀匹配，含所有子标签） */

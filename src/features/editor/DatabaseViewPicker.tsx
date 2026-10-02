@@ -37,13 +37,21 @@ export function DatabaseViewPicker() {
   };
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) setEditor(null); setOpen(o); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) setEditor(null);
+        setOpen(o);
+      }}
+    >
       <DialogContent className="w-[420px]">
         <DialogHeader>
           <DialogTitle>{t("editor.insertDatabaseView")}</DialogTitle>
         </DialogHeader>
         <div className="flex max-h-72 flex-col gap-1 overflow-y-auto">
-          {gridViews.length === 0 && <p className="py-6 text-center text-[13px] text-neutral-400">{t("editor.noTableView")}</p>}
+          {gridViews.length === 0 && (
+            <p className="py-6 text-center text-[13px] text-neutral-400">{t("editor.noTableView")}</p>
+          )}
           {gridViews.map((v) => (
             <button
               key={v.id}

@@ -147,8 +147,7 @@ export function applyFilters(
 /** 字段类型支持的比较符（筛选器 UI 用） */
 export function opsForType(type: FieldType): FilterOp[] {
   if (type === "checkbox") return ["checked", "unchecked"];
-  if (type === "multi_select" || type === "relation")
-    return ["is_empty", "is_not_empty", "contains", "not_contains"];
+  if (type === "multi_select" || type === "relation") return ["is_empty", "is_not_empty", "contains", "not_contains"];
   if (type === "number") return ["is_empty", "is_not_empty", "equals", "not_equals", "gt", "gte", "lt", "lte"];
   if (type === "date" || type === "created_at" || type === "last_edited_at")
     return ["is_empty", "is_not_empty", "equals", "not_equals", "gt", "gte", "lt", "lte"];

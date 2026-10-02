@@ -654,6 +654,19 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
       return `<!-- image gallery (${srcs.length} images) -->\n${srcs.map((u) => `![](${u})`).join("\n")}`;
     }
 
+    case "subpages": {
+      // 子页面双链块：导出为 mention 链接列表，可被 markdownToJson 还原成 @提及
+      const raw = Array.isArray(node.attrs?.items) ? (node.attrs.items as unknown[]) : [];
+      const lines: string[] = [];
+      for (const it of raw) {
+        if (!it || typeof it !== "object") continue;
+        const rec = it as { id?: unknown; name?: unknown };
+        if (typeof rec.id !== "string") continue;
+        lines.push(`- @[${escapeInline(typeof rec.name === "string" ? rec.name : "")}](view:${rec.id})`);
+      }
+      return lines.join("\n");
+    }
+
     case "outline":
       return "<!-- outline block -->";
 

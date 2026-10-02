@@ -31,7 +31,13 @@ export function EmojiPickerDialog() {
   };
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) setEditor(null); setOpen(o); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) setEditor(null);
+        setOpen(o);
+      }}
+    >
       <DialogContent className="w-[360px]">
         <DialogHeader>
           <DialogTitle>{t("emoji.pick")}</DialogTitle>

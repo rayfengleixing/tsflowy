@@ -49,27 +49,44 @@ export function ColumnsNodeView(props: ReactNodeViewProps<HTMLElement>) {
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => switchTo(2)}
           title={t("columns.to2")}
-          className={cn("flex h-6 w-6 items-center justify-center rounded hover:bg-neutral-200", count === 2 && "text-brand-500")}
-        ><Columns2 className="h-3.5 w-3.5" /></button>
+          className={cn(
+            "flex h-6 w-6 items-center justify-center rounded hover:bg-neutral-200",
+            count === 2 && "text-brand-500",
+          )}
+        >
+          <Columns2 className="h-3.5 w-3.5" />
+        </button>
         <button
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => switchTo(3)}
           title={t("columns.to3")}
-          className={cn("flex h-6 w-6 items-center justify-center rounded hover:bg-neutral-200", count === 3 && "text-brand-500")}
-        ><Columns3 className="h-3.5 w-3.5" /></button>
+          className={cn(
+            "flex h-6 w-6 items-center justify-center rounded hover:bg-neutral-200",
+            count === 3 && "text-brand-500",
+          )}
+        >
+          <Columns3 className="h-3.5 w-3.5" />
+        </button>
         <button
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => switchTo(4)}
           title={t("columns.to4")}
-          className={cn("flex h-6 w-6 items-center justify-center rounded hover:bg-neutral-200", count === 4 && "text-brand-500")}
-        ><Columns4 className="h-3.5 w-3.5" /></button>
+          className={cn(
+            "flex h-6 w-6 items-center justify-center rounded hover:bg-neutral-200",
+            count === 4 && "text-brand-500",
+          )}
+        >
+          <Columns4 className="h-3.5 w-3.5" />
+        </button>
         <div className="mx-0.5 h-4 w-px bg-neutral-200" />
         <button
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => deleteNode()}
           title={t("common.delete")}
           className="flex h-6 w-6 items-center justify-center rounded hover:bg-red-100 text-neutral-500 hover:text-red-600"
-        ><X className="h-3.5 w-3.5" /></button>
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       {/* 子列：TipTap 会自动按 child 顺序调用 ColumnNodeView 填满此处 */}

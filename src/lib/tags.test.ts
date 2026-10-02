@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildTagTree,
-  omitTagColor,
-  renameTagColor,
-  renameTagPath,
-  splitTagPath,
-  tagMatchesFilter,
-} from "./tags";
+import { buildTagTree, omitTagColor, renameTagColor, renameTagPath, splitTagPath, tagMatchesFilter } from "./tags";
 
 describe("splitTagPath", () => {
   it("按 / 拆分层级并去掉空段", () => {

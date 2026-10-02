@@ -159,6 +159,7 @@ function zhBody(): JSONContent[] {
     ),
     bullets([
       "字段支持文本、数字、日期、单选、多选、复选框、URL、电话、邮箱，以及自动维护的创建时间 / 最后编辑时间。",
+      "还有三种进阶字段：关联（引用其他表的一行或多行）、公式（用 {字段名} 组合计算，如 {单价} * {数量}）、汇总（把本行关联到的行里的数值求和 / 平均 / 计数）。",
       "表格视图可以按字段分组并显示小计，底部合计行可选汇总函数（求和 / 平均 / 计数等）。",
       "看板视图按单选字段分列，卡片上显示哪些字段由你决定。",
       "日历视图按日期字段铺排事项。",
@@ -170,13 +171,34 @@ function zhBody(): JSONContent[] {
       ),
     ),
 
-    h2("搜索、提及与整理"),
+    h2("页面组织：标签、收藏、子页面、并排、历史"),
+    bullets([
+      "标签：编辑页面标签时用「/」分层（如 工作/项目A）；侧边栏「标签」页可以改颜色、重命名、删除，点标签即可筛选页面树。",
+      "收藏：把常用页面收藏后，会汇总在侧边栏顶部的收藏区。",
+      "子页面：在页面行右侧用「+」新建子页面，父页面正文最上方会自动列出子页面的双链列表，改名 / 移动 / 删除都会自动同步。",
+      "并排对照：右键页面「在右侧打开（并排对照）」，两个页面左右并排；可拖动中间分隔条调整宽度，也可以左右互换。",
+      "历史版本：右键「历史版本」可以查看编辑过程中自动保存的快照并一键恢复（恢复前会先备份当前内容）。",
+      "删除的页面进入回收站保留 30 天，期间可随时恢复，或彻底删除。",
+    ]),
+
+    h2("每日笔记"),
+    p(
+      text(
+        "侧边栏的「今日笔记」按钮会打开当天的笔记。每日笔记按「年 / 月 / 月-日 星期」分级收在同一个目录页下（如 每日笔记/2026/10/10-02 周五），每天一篇独立文档——搜索、标签、导出、备份都和普通页面一样。",
+      ),
+    ),
+    p(
+      text(
+        "在「设置 → 每日笔记」里可以改目录页名称、新建笔记的模板（支持 # 小标题、- [ ] 待办、{{date}} 等占位符），以及是否在启动时自动打开今天的笔记。",
+      ),
+    ),
+
+    h2("搜索与提及"),
     bullets([
       "全局搜索（Ctrl+Shift+F）覆盖页面标题、正文与数据库单元格，命中行可以直接定位。",
-      "命令面板（Ctrl+K）快速跳转到任意页面。",
-      "输入 @ 可以提及任意页面：悬停预览、点击跳转，页面底部会列出反向链接。",
+      "命令面板（Ctrl+K）快速跳转到任意页面，也能新建页面或打开今日笔记。",
+      "输入 @ 可以提及任意页面：悬停预览、点击跳转，页面底部会列出引用它的反向链接。",
       "长文档可以在右侧打开大纲（H1–H3）快速跳转；/ 菜单的「目录」块则把目录直接嵌进正文。",
-      "删除的页面进入回收站保留 30 天，期间可随时恢复，或彻底删除。",
     ]),
 
     h2("导出、备份与设置"),
@@ -283,6 +305,7 @@ function enBody(): JSONContent[] {
     ),
     bullets([
       "Fields: text, number, date, single select, multi select, checkbox, URL, phone, email, plus auto-maintained created / last-edited time.",
+      "Three advanced field types: Relation (link rows in another table), Formula (combine fields like {Unit price} * {Quantity}) and Rollup (sum / average / count a number across the related rows).",
       "Table view groups by any field with subtotals, and the footer row offers per-column aggregates.",
       "Board view splits by a single-select field, and you choose which fields appear on cards.",
       "Calendar view lays items out by a date field.",
@@ -294,13 +317,34 @@ function enBody(): JSONContent[] {
       ),
     ),
 
-    h2("Search, mentions and organizing"),
+    h2("Organizing pages: tags, favorites, sub-pages, split view, history"),
+    bullets([
+      "Tags: use 「/」 to nest them (like Work/Project A). The Tags panel in the sidebar lets you recolor, rename and delete tags, and clicking a tag filters the page tree.",
+      "Favorites: star the pages you use often — they collect in the Favorites section at the top of the sidebar.",
+      "Sub-pages: create one with the + on a page row. The parent page then shows a live double-link list of its sub-pages at the very top, kept in sync as they are renamed, moved or deleted.",
+      "Split view: right-click a page and choose Open on the right to view two pages side by side. Drag the divider to resize, or swap the panes.",
+      "History: right-click a page to browse auto-saved snapshots and restore one — your current content is backed up first.",
+      "Deleted pages stay in the trash for 30 days — restore them any time, or delete them for good.",
+    ]),
+
+    h2("Daily notes"),
+    p(
+      text(
+        "The Today's note button in the sidebar opens the note for today. Daily notes live under one folder, grouped by year / month / day (for example Daily notes/2026/10/10-02 Fri) with one document per day — search, tags, export and backup all work just like any other page.",
+      ),
+    ),
+    p(
+      text(
+        "Settings → Daily notes lets you change the folder page name, the template for new notes (supports # headings, - [ ] to-dos and {{date}} placeholders) and whether today's note opens automatically on startup.",
+      ),
+    ),
+
+    h2("Search and mentions"),
     bullets([
       "Global search (Ctrl+Shift+F) covers page titles, body text and database cells, and jumps straight to the matching row.",
-      "The command palette (Ctrl+K) jumps to any page.",
+      "The command palette (Ctrl+K) jumps to any page, and can also create a page or open today's note.",
       "Type @ to mention a page: hover to preview, click to open; backlinks are listed at the bottom of the page.",
       "For long documents, use the outline panel (H1–H3) on the right, or insert an 'Outline' block from the / menu for an in-page table of contents.",
-      "Deleted pages stay in the trash for 30 days — restore them any time, or delete them for good.",
     ]),
 
     h2("Export, backup and settings"),

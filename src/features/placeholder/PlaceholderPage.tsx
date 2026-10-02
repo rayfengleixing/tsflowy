@@ -9,9 +9,7 @@ export function PlaceholderPage() {
   const view = useWorkspaceStore((s) => (currentViewId ? findNode(s.tree, currentViewId) : null));
 
   if (!view) {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-neutral-500">{t("content.empty")}</div>
-    );
+    return <div className="flex h-full items-center justify-center text-sm text-neutral-500">{t("content.empty")}</div>;
   }
 
   const milestone = view.layout === "document" ? "M3" : view.layout === "grid" ? "M4" : "M5";

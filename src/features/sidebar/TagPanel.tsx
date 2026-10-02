@@ -142,7 +142,9 @@ export function TagPanel({ onFilter }: TagPanelProps) {
                     >
                       <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
                       <span
-                        className={"min-w-0 flex-1 truncate text-[13px] " + (on ? "text-brand-700" : "text-neutral-700")}
+                        className={
+                          "min-w-0 flex-1 truncate text-[13px] " + (on ? "text-brand-700" : "text-neutral-700")
+                        }
                       >
                         {label}
                       </span>

@@ -95,8 +95,6 @@ export function rollupFnsFor(db: RelationDb | undefined, targetFieldId: string):
 const DATABASE_LAYOUTS: string[] = ["grid", "board", "calendar"];
 
 /** 可选作关联目标的视图：宿主数据库表（派生视图与文档页排除，它们没有独立的字段/行） */
-export function buildRelationPickerFields<T extends { layout: string; source_id?: string | null }>(
-  views: T[],
-): T[] {
+export function buildRelationPickerFields<T extends { layout: string; source_id?: string | null }>(views: T[]): T[] {
   return views.filter((v) => DATABASE_LAYOUTS.includes(v.layout) && !v.source_id);
 }
