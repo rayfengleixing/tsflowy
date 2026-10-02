@@ -60,9 +60,9 @@ describe("日期工具", () => {
     expect(shortDateKey("bad")).toBe("bad");
   });
 
-  it("dailyNoteTitle 生成「日 + 星期」", () => {
-    expect(dailyNoteTitle("2026-10-02", "zh-CN")).toBe("02 周五");
-    expect(dailyNoteTitle("2026-10-02", "en-US")).toBe("02 Fri");
+  it("dailyNoteTitle 生成「月-日 + 星期」", () => {
+    expect(dailyNoteTitle("2026-10-02", "zh-CN")).toBe("10-02 周五");
+    expect(dailyNoteTitle("2026-10-02", "en-US")).toBe("10-02 Fri");
     expect(dailyNoteTitle("bad", "zh-CN")).toBe("bad");
   });
 });
@@ -107,13 +107,13 @@ describe("templateToBlocks", () => {
 });
 
 describe("buildDailyNoteDoc", () => {
-  it("首行 H1 = 页面名（日 + 星期）、第二行分割线，符合结构锁定", () => {
+  it("首行 H1 = 页面名（月-日 + 星期）、第二行分割线，符合结构锁定", () => {
     const doc = schema.nodeFromJSON(
       buildDailyNoteDoc("2026-10-02", defaultDailyNotesConfig("zh-CN").template, "zh-CN"),
     );
     expect(doc.child(0).type.name).toBe("heading");
     expect(doc.child(0).attrs.level).toBe(1);
-    expect(doc.child(0).textContent).toBe("02 周五");
+    expect(doc.child(0).textContent).toBe("10-02 周五");
     expect(doc.child(1).type.name).toBe("horizontalRule");
   });
 

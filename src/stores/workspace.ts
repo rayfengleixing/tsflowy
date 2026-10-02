@@ -662,9 +662,11 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       const root = await ensureFolder(null, cfg.folderName, t("daily.folderIntro"));
       const year = await ensureFolder(root.id, dateKey.slice(0, 4));
       const month = await ensureFolder(year.id, dateKey.slice(5, 7));
-      // 页面名形如「02 周五」：用前两位的「日」匹配，可跨语言切换复用同一天笔记（旧命名 YYYY-MM-DD 前两位是年份，不会误匹配）
-      const day = dateKey.slice(8, 10);
-      let note = views.find((v) => v.parent_id === month.id && v.layout === "document" && v.name.slice(0, 2) === day);
+      // 页面名形如「10-02 周五」：用「月-日」前缀匹配，可跨语言切换复用同一天笔记（旧命名 YYYY-MM-DD 前缀是年份，不会误匹配）
+      const monthDay = dateKey.slice(5);
+      let note = views.find(
+        (v) => v.parent_id === month.id && v.layout === "document" && v.name.slice(0, 5) === monthDay,
+      );
       if (!note) {
         note = await viewApi.create({
           workspace_id: ws,

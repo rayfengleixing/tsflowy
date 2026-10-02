@@ -2,7 +2,7 @@
 //
 // 设计：每日笔记不是新的数据类型，就是普通的文档页面 ——
 //   · 根级目录页（名称取配置，默认「每日笔记」）
-//   · 目录下按「年 / 月」分层，最内层是当天文档页（页面名如「02 周五」），一天一篇
+//   · 目录下按「年 / 月」分层，最内层是当天文档页（页面名如「10-02 周五」），一天一篇
 // 这样搜索、标签、导出、备份、同步等既有能力全部直接可用。
 import type { JSONContent } from "@tiptap/core";
 import { useSettingsStore } from "@/stores/settings";
@@ -112,11 +112,11 @@ export function shortDateKey(key: string): string {
   return key.length >= 10 ? key.slice(5) : key;
 }
 
-/** 每日笔记的页面名：日 + 星期，如 "02 周五" / "02 Fri"（非法日期回落到完整日期键） */
+/** 每日笔记的页面名：月-日 + 星期，如 "10-02 周五" / "10-02 Fri"（非法日期回落到完整日期键） */
 export function dailyNoteTitle(dateKey: string, lang: "zh-CN" | "en-US"): string {
   const date = parseDateKey(dateKey);
   if (!date) return dateKey;
-  return `${dateKey.slice(8, 10)} ${weekdayLabel(date, lang)}`;
+  return `${dateKey.slice(5)} ${weekdayLabel(date, lang)}`;
 }
 
 /* ————— 模板 → 文档 JSON ————— */
