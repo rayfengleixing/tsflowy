@@ -4,6 +4,7 @@ import StarterKit from "@tiptap/starter-kit";
 import type { JSONContent } from "@tiptap/core";
 import { LockedHeading } from "@/features/editor/extensions/document-structure-lock";
 import { Subpages } from "@/features/editor/extensions/subpages/node";
+import { buildDailyFolderDoc } from "./daily-notes";
 import { readSubpagesItems, subpagesAnchorIndex, upsertSubpagesNode, type SubpageItem } from "./subpages";
 
 // 与 EditorPage 注册一致：用真实 schema 校验生成的文档 JSON，
@@ -82,5 +83,19 @@ describe("upsertSubpagesNode", () => {
   it("readSubpagesItems 对损坏数据返回空数组", () => {
     expect(readSubpagesItems({ type: "doc", content: [] })).toEqual([]);
     expect(readSubpagesItems({ type: "doc", content: [{ type: "subpages", attrs: { items: "bad" } }] })).toEqual([]);
+  });
+
+  // 每日笔记的「每日笔记 / 年份 / 月份」目录页就是普通文档页（H1 + 分割线 + 一句说明），
+  // 这里确认它们同样能插进子页面列表，且说明文字被保留在列表之后
+  it("每日笔记目录页也能插入子页面块，说明文字保留", () => {
+    const next = upsertSubpagesNode(buildDailyFolderDoc("每日笔记", "说明文字"), [{ id: "v-2026", name: "2026" }]);
+    expect(next.content!.map((n) => n.type)).toEqual(["heading", "horizontalRule", "subpages", "paragraph"]);
+    expect(readSubpagesItems(next)).toEqual([{ id: "v-2026", name: "2026" }]);
+    expect(() => schema.nodeFromJSON(next)).not.toThrow();
+  });
+
+  it("目录页没有说明文字时，子页面块紧跟在分割线之后", () => {
+    const next = upsertSubpagesNode(buildDailyFolderDoc("2026", ""), [{ id: "v-10", name: "10" }]);
+    expect(next.content!.map((n) => n.type)).toEqual(["heading", "horizontalRule", "subpages"]);
   });
 });

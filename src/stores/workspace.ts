@@ -360,6 +360,37 @@ async function refreshWelcomeDoc(wsId: string): Promise<void> {
   }
 }
 
+/* ————— 子页面块补齐：老数据里已有父子关系但正文没有列表，每个空间补一次 ————— */
+
+/** 补齐版本：逻辑有变化（例如新增要覆盖的页型）时递增 */
+const SUBPAGES_BACKFILL_VERSION = "1";
+const subpagesBackfillKey = (wsId: string) => `tsflowy:subpages-backfill:${wsId}`;
+/** 本进程内已补齐过的空间，避免每次 reload 都读一次 app_settings */
+const backfilledWs = new Set<string>();
+
+/**
+ * 给「有子页面但正文里还没有列表」的文档页补上子页面块。
+ * 每日笔记的「每日笔记 / 年份 / 月份」三级目录页也走这条路径（它们就是普通文档页）。
+ * 表格 / 看板 / 日历页没有正文，applySubpagesToParent 会自行跳过。
+ */
+async function backfillSubpages(wsId: string): Promise<void> {
+  if (backfilledWs.has(wsId)) return;
+  backfilledWs.add(wsId);
+  try {
+    if ((await viewApi.getSetting(subpagesBackfillKey(wsId))) === SUBPAGES_BACKFILL_VERSION) return;
+    for (const node of flattenTree(useWorkspaceStore.getState().tree)) {
+      if (node.children.length === 0) continue;
+      await applySubpagesToParent(
+        node.id,
+        node.children.map((c) => ({ id: c.id, name: c.name })),
+      );
+    }
+    await viewApi.setSetting(subpagesBackfillKey(wsId), SUBPAGES_BACKFILL_VERSION);
+  } catch (e) {
+    logger.warn("WorkspaceStore", "backfill subpages failed", wsId, e);
+  }
+}
+
 type EqualityFn<T> = (a: T, b: T) => boolean;
 
 /**
@@ -419,6 +450,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     if (splitViewId && !byId.has(splitViewId)) splitViewId = null;
     set({ tree, trash, tabs, currentViewId, splitViewId });
     persistNow();
+    void backfillSubpages(currentWorkspaceId);
   };
 
   // patchTree 的变体：调用 loadTabsForWs 从 app_settings 恢复（首次进入 workspace）
@@ -435,6 +467,7 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
     if (seq !== treeSeq || get().currentWorkspaceId !== currentWorkspaceId) return;
     set({ tree, trash, tabs, currentViewId, splitViewId: null });
     persistNow();
+    void backfillSubpages(currentWorkspaceId);
   };
 
   /** 把 parentId 下的子页面同步进父文档最上方的双链块（无子页面则移除该块） */
@@ -810,6 +843,12 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       }
       const noteId = note.id;
       await get().reload();
+      // 目录页与普通文档一样带「子页面」双链列表：每日笔记页列年份、年份页列月份、月份页列当月笔记。
+      // 每次都按最新页面树整体重写，所以历史遗留的目录页也会被补齐。
+      syncSubpages(root.id);
+      syncSubpages(year.id);
+      syncSubpages(month.id);
+      // 展开要在同步之后：目录页若正开着，先就地改编辑器再打开笔记，避免卸载时把新列表覆盖掉
       // 逐级展开，保证当天笔记在树里可见
       const expanded = new Set(get().expanded);
       expanded.add(root.id);
