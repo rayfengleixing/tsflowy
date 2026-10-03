@@ -40,7 +40,7 @@ fn bootstrap_data_dir() {
         return;
     }
     // 目标与默认目录同一位置，或默认目录已是指向目标的联接 → 无需处理
-    if same_path(&default, &target) || is_link_to(&default, &target) {
+    if commands::files::same_path(&default, &target) || is_link_to(&default, &target) {
         return;
     }
     if let Err(e) = fs::create_dir_all(&target) {
@@ -134,27 +134,9 @@ fn is_link_to(link: &Path, target: &Path) -> bool {
         return false;
     }
     match fs::read_link(link) {
-        Ok(dst) => same_path(&dst, target),
+        Ok(dst) => commands::files::same_path(&dst, target),
         Err(_) => false,
     }
-}
-
-fn same_path(a: &Path, b: &Path) -> bool {
-    fn norm(p: &Path) -> PathBuf {
-        let mut pb = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-        if !pb.is_absolute() {
-            if let Ok(cd) = std::env::current_dir() {
-                pb = cd.join(&pb);
-            }
-        }
-        let s = pb
-            .to_string_lossy()
-            .trim_end_matches(['/', '\\'])
-            .to_string()
-            .to_lowercase();
-        PathBuf::from(s)
-    }
-    norm(a) == norm(b)
 }
 
 fn ensure_dir_symlink(link: &Path, target: &Path) -> Result<(), String> {

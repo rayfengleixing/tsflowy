@@ -1263,36 +1263,23 @@ fn restore_custom_to_default(default: &Path, custom: &Path, bak: &Path) -> Resul
     Ok(())
 }
 
-/// 判断两个路径是否指向同一位置（规范化后比较）
-fn same_path(a: &Path, b: &Path) -> bool {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    fn norm(p: &Path) -> Option<PathBuf> {
+/// 判断两个路径是否指向同一位置：canonicalize（会自动展开 junction/symlink）+ 转绝对 + 去尾部斜杠 + 统一小写后比较
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    fn norm(p: &Path) -> PathBuf {
         let mut pb = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
         if !pb.is_absolute() {
-            pb = std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(&pb);
+            if let Ok(cd) = std::env::current_dir() {
+                pb = cd.join(&pb);
+            }
         }
-        // 去除末尾分隔符
         let s = pb
             .to_string_lossy()
             .trim_end_matches(['/', '\\'])
-            .to_string();
-        Some(PathBuf::from(s))
+            .to_string()
+            .to_lowercase();
+        PathBuf::from(s)
     }
-    let (x, y) = (norm(a), norm(b));
-    match (x, y) {
-        (Some(x), Some(y)) => {
-            let h = |p: &Path| -> u64 {
-                let mut s = DefaultHasher::new();
-                p.to_string_lossy().to_lowercase().hash(&mut s);
-                s.finish()
-            };
-            h(&x) == h(&y)
-        }
-        _ => false,
-    }
+    norm(a) == norm(b)
 }
 
 /// 判断目录是否"安全为空"：不存在 / 空 / 只有 .DS_Store、Thumbs.db 这类忽略项。
