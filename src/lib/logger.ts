@@ -65,7 +65,6 @@ export const logger = {
 
 // 开发环境下把 logger 挂到全局，便于 F12 手动 setLevel('trace')
 declare global {
-  // eslint-disable-next-line @typescript-eslint/consistent-type-definitions
   interface Window {
     __tsflowy_logger?: typeof logger & { setLevel: typeof setLevel; getLevel: typeof getLevel };
   }

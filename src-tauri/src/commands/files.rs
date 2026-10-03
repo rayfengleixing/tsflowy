@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, BufReader, BufWriter, Cursor};
+use std::io::{self, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -1312,13 +1312,6 @@ fn is_dir_safely_empty(dir: &Path) -> Result<bool, String> {
         return Ok(false);
     }
     Ok(true)
-}
-
-#[allow(dead_code)]
-fn _unused() -> Option<Cursor<Vec<u8>>> {
-    // 避免 Cursor / time 导入在某些 target 下出现 dead_code 警告
-    let _ = time::macros::format_description!("[year]-[month]-[day]");
-    None
 }
 
 #[cfg(test)]

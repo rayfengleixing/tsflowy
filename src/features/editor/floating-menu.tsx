@@ -274,7 +274,7 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
         const y = from.top - 8; // 顶部上方 8px
         setCoord({ x, y });
         setVisible(true);
-      } catch (e) {
+      } catch {
         setVisible(false);
       }
     };

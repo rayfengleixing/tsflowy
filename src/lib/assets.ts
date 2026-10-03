@@ -48,8 +48,3 @@ export function pickImageExt(file: File): string {
   if (m) return m[1];
   return "png";
 }
-
-/** 判断 File 是否为图片（用于粘贴/拖拽分流） */
-export function isImageFile(file: File): boolean {
-  return file.type.startsWith("image/");
-}

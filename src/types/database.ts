@@ -100,7 +100,4 @@ export type FieldOptions =
     }
   | { kind: "none" };
 
-/** 行详情视图的 extra 标记（说明书 12 节风险 7：搜索/侧边栏过滤时排除） */
-export const ROW_DETAIL_MARKER = { row_detail: true };
-
 export type { LayoutType };

@@ -167,18 +167,6 @@ export function defaultOperand(field: DatabaseField): CellValue {
   return null;
 }
 
-/** 展示辅助：把字段/选项信息带给排序比较（select 按选项位置排序） */
-export function fieldSortKey(field: DatabaseField, value: CellValue): string {
-  if (field.field_type === "single_select" && typeof value === "string") {
-    const opts = parseFieldOptions(field.options);
-    if (opts.kind === "select") {
-      const idx = opts.options.findIndex((o) => o.id === value);
-      return String(idx === -1 ? 9999 : idx).padStart(5, "0") + value;
-    }
-  }
-  return formatCellValue(field.field_type, value, parseFieldOptions(field.options));
-}
-
 export { isReadonlyType };
 
 // ---------- 表格分组（小计与列汇总见 database-aggregate.ts） ----------

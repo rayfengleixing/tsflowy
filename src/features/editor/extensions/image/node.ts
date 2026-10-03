@@ -2,14 +2,6 @@ import { mergeAttributes, Node } from "@tiptap/core";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import { ImageNodeView } from "./component";
 
-export interface ImageAttributes {
-  src: string;
-  alt: string;
-  caption: string;
-  /** 显示宽度（百分比 20-100，默认 100 = 撑满行宽） */
-  width: number;
-}
-
 // 图片节点（项目说明书 8.2：自定义 image Node，attrs: src 相对路径 / alt / caption）
 export const Image = Node.create({
   name: "image",

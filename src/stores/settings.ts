@@ -118,10 +118,6 @@ export function applyAccentToDocument(accent: AccentColor) {
   root.style.accentColor = palette[500];
 }
 
-export function getAccentClass(accent: AccentColor): string {
-  return ACCENT_CLASS_BY_COLOR[accent].brand;
-}
-
 /** 应用主题：light/dark class 写到 <html>；system 则用 matchMedia 跟随 + 监听 */
 export function applyThemeToDocument(mode: ThemeMode): () => void {
   const root = document.documentElement;
