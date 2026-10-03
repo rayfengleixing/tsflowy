@@ -331,6 +331,11 @@ pub fn run() {
             commands::db::cell_set,
             commands::db::cell_set_many,
             commands::db::csv_import,
+            commands::ai::ai_get_config,
+            commands::ai::ai_save_config,
+            commands::ai::ai_test_connection,
+            commands::ai::ai_chat,
+            commands::ai::ai_cancel,
         ])
         .run(tauri::generate_context!());
 

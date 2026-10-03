@@ -6,6 +6,7 @@ import { PlaceholderPage } from "@/features/placeholder/PlaceholderPage";
 import { EditorPage } from "@/features/editor/EditorPage";
 import { DatabasePage } from "@/features/database/DatabasePage";
 import { SettingsPage } from "@/features/settings/SettingsPage";
+import { AiPanel } from "@/features/ai/AiPanel";
 import { DbUnavailable, type DbHealth } from "@/features/errors/DbUnavailable";
 import { CommandPalette } from "@/features/search/CommandPalette";
 import { SearchResultsPage } from "@/features/search/SearchResultsPage";
@@ -283,6 +284,7 @@ function App() {
           </>
         )}
       </div>
+      <AiPanel />
       <CommandPalette />
       <DatabaseViewPicker />
       <EmojiPickerDialog />

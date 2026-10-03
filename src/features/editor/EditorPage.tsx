@@ -24,6 +24,7 @@ import { mentionsApi, type MentionRow } from "@/lib/mentions";
 import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown";
 import { pickImageExt, uploadImageBytes } from "@/lib/assets";
 import { registerCloseFlush } from "@/lib/close-flush";
+import { registerAiEditor } from "@/lib/ai-editor";
 import { onEscapeClose } from "@/lib/escape-close";
 import { t } from "@/lib/i18n";
 import { flattenTree } from "@/lib/tree";
@@ -436,6 +437,30 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     if (editor.isDestroyed) return;
     return registerDocEditor(view.id, editor);
   }, [editor, view.id]);
+
+  // AI 助手桥接：供 AI 面板取当前页/选区文本、回填内容。分栏时只注册主栏
+  // （与 useEditorStore 推送 editor 的约定一致），避免副栏抢占回填目标。
+  useEffect(() => {
+    if (!editor || editor.isDestroyed || !isMainPane) return;
+    return registerAiEditor({
+      getPageText: () =>
+        editor.isDestroyed ? "" : editor.state.doc.textBetween(0, editor.state.doc.content.size, "\n"),
+      getSelectionText: () => {
+        if (editor.isDestroyed) return "";
+        const { from, to } = editor.state.selection;
+        return from === to ? "" : editor.state.doc.textBetween(from, to, "\n");
+      },
+      replaceSelection: (text) => {
+        if (editor.isDestroyed) return;
+        const { from, to } = editor.state.selection;
+        editor.chain().focus().insertContentAt({ from, to }, text).run();
+      },
+      insertAtCursor: (text) => {
+        if (editor.isDestroyed) return;
+        editor.chain().focus().insertContent(text).run();
+      },
+    });
+  }, [editor, isMainPane]);
 
   // 全库视图 id → View：mention hover 预览取标题走这张表。
   // mention 目标是任意被引页、不一定是反链来源，查 backlinkViews 会大面积落空显示成 id。

@@ -9,6 +9,7 @@ import {
   FolderInput,
   FolderOutput,
   DownloadCloud,
+  Sparkles,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
@@ -34,11 +35,13 @@ import {
   type EditorWidth,
 } from "@/stores/settings";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useAiStore } from "@/stores/ai";
 import { Button } from "@/components/ui/button";
 import { importMarkdownFolder } from "@/lib/import-folder";
 import { loadDailyNotesConfig, saveDailyNotesConfig, type DailyNotesConfig } from "@/lib/daily-notes";
 import { exportMarkdownFolder } from "@/lib/export-folder";
 import { flushAllForClose } from "@/lib/close-flush";
+import { aiGetConfig, aiSaveConfig, aiTestConnection, AI_PROVIDER_PRESETS, type AiConfig } from "@/lib/ai";
 import { t, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
@@ -116,6 +119,24 @@ const SYNC_ACTION_KEY: Record<string, MessageKey> = {
   conflict: "settings.syncActionConflict",
 };
 
+/** AI 助手表单（与 AiConfig 的 snake_case 字段解耦，便于本地编辑） */
+interface AiFormState {
+  enabled: boolean;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  maxChars: number;
+}
+
+/** AI 服务商预设 → i18n 文案 */
+const AI_PROVIDER_LABEL_KEY: Record<string, MessageKey> = {
+  custom: "settings.aiProviderCustom",
+  deepseek: "settings.aiProviderDeepseek",
+  qwen: "settings.aiProviderQwen",
+  kimi: "settings.aiProviderKimi",
+  ollama: "settings.aiProviderOllama",
+};
+
 /** 设置页（M6）：外观/语言/数据目录/备份/快捷键 */
 export function SettingsPage() {
   const {
@@ -158,6 +179,16 @@ export function SettingsPage() {
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
   const updateRef = useRef<Awaited<ReturnType<typeof check>> | null>(null);
   const [daily, setDaily] = useState<DailyNotesConfig>(() => loadDailyNotesConfig());
+  const [aiConfig, setAiConfig] = useState<AiConfig | null>(null);
+  const [aiForm, setAiForm] = useState<AiFormState>({
+    enabled: false,
+    provider: "custom",
+    baseUrl: "",
+    model: "",
+    maxChars: 8000,
+  });
+  const [aiApiKey, setAiApiKey] = useState("");
+  const [busyAiTest, setBusyAiTest] = useState(false);
   const openDailyNote = useWorkspaceStore((s) => s.openDailyNote);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   // 上次同步动作对应的文案 key；未知动作返回 undefined（不渲染）
@@ -173,6 +204,13 @@ export function SettingsPage() {
     refreshDataDirInfo();
     refreshAutoBackup();
     refreshSyncInfo();
+    // AI 配置（内联拉取：避免把 refreshAiConfig 引入 effect 依赖）
+    aiGetConfig()
+      .then((c) => {
+        applyAiConfig(c);
+        useAiStore.getState().setConfig(c);
+      })
+      .catch((e: unknown) => logger.error("failed to get ai config", e));
   }, []);
 
   const checkForUpdates = async () => {
@@ -413,6 +451,62 @@ export function SettingsPage() {
     invoke<SyncInfo>("get_sync_info")
       .then(setSyncInfo)
       .catch((e: unknown) => logger.error("failed to get sync info", e));
+  };
+
+  // ————— AI 助手：读取/保存配置 —————
+  const applyAiConfig = (c: AiConfig) => {
+    setAiConfig(c);
+    setAiForm({
+      enabled: c.enabled,
+      provider: AI_PROVIDER_PRESETS.some((p) => p.id === c.provider) ? c.provider : "custom",
+      baseUrl: c.base_url,
+      model: c.model,
+      maxChars: c.max_chars,
+    });
+  };
+
+  /** 保存（可选局部更新）；apiKey 留空表示不修改（传 null），保存后清空输入框 */
+  const persistAi = async (partial?: Partial<AiFormState>, apiKey = aiApiKey): Promise<void> => {
+    const next = { ...aiForm, ...partial };
+    setAiForm(next);
+    await aiSaveConfig({
+      enabled: next.enabled,
+      provider: next.provider,
+      baseUrl: next.baseUrl,
+      model: next.model,
+      maxChars: next.maxChars,
+      apiKey: apiKey.trim() === "" ? null : apiKey,
+    });
+    const c = await aiGetConfig();
+    applyAiConfig(c);
+    useAiStore.getState().setConfig(c);
+    setAiApiKey("");
+  };
+
+  const saveAi = (partial?: Partial<AiFormState>) => {
+    persistAi(partial).then(
+      () => toast.success(t("settings.aiSaved")),
+      (e: unknown) => toast.error(t("settings.aiSaveFailed", { message: String(e) })),
+    );
+  };
+
+  const saveAiQuietly = (partial?: Partial<AiFormState>) => {
+    persistAi(partial).catch((e: unknown) => toast.error(t("settings.aiSaveFailed", { message: String(e) })));
+  };
+
+  /** 测试连接：先保存当前配置（Rust 侧读持久化配置）再测试 */
+  const testAi = async () => {
+    setBusyAiTest(true);
+    try {
+      await persistAi();
+      const msg = await aiTestConnection();
+      toast.success(t("settings.aiTestOk", { message: msg }));
+    } catch (e) {
+      logger.error("ai test connection failed", e);
+      toast.error(t("settings.aiTestFailed", { message: String(e) }));
+    } finally {
+      setBusyAiTest(false);
+    }
   };
 
   /** 选/换同步文件夹（传空串 = 关闭同步） */
@@ -878,6 +972,88 @@ export function SettingsPage() {
               {t("settings.dailyOpenNow")}
             </Button>
           </div>
+        </Section>
+
+        <Section title={t("settings.ai")}>
+          <p className="max-w-lg text-xs text-neutral-500">{t("settings.aiDesc")}</p>
+          <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">
+            <input type="checkbox" checked={aiForm.enabled} onChange={(e) => saveAi({ enabled: e.target.checked })} />
+            {t("settings.aiEnable")}
+          </label>
+          <Row label={t("settings.aiProvider")}>
+            <select
+              value={aiForm.provider}
+              onChange={(e) => {
+                const preset = AI_PROVIDER_PRESETS.find((p) => p.id === e.target.value);
+                if (preset) saveAi({ provider: preset.id, baseUrl: preset.baseUrl, model: preset.model });
+              }}
+              className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs outline-none focus:border-brand-500"
+            >
+              {AI_PROVIDER_PRESETS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {t(AI_PROVIDER_LABEL_KEY[p.id])}
+                </option>
+              ))}
+            </select>
+          </Row>
+          <Row label={t("settings.aiBaseUrl")}>
+            <input
+              value={aiForm.baseUrl}
+              onChange={(e) => setAiForm((f) => ({ ...f, baseUrl: e.target.value }))}
+              onBlur={() => saveAiQuietly()}
+              placeholder={t("settings.aiBaseUrlPlaceholder")}
+              className="h-7 w-80 rounded-md border border-neutral-300 bg-white px-2 font-mono text-[12px] text-neutral-800 outline-none focus:border-brand-500"
+            />
+          </Row>
+          <Row label={t("settings.aiModel")}>
+            <input
+              value={aiForm.model}
+              onChange={(e) => setAiForm((f) => ({ ...f, model: e.target.value }))}
+              onBlur={() => saveAiQuietly()}
+              placeholder={t("settings.aiModelPlaceholder")}
+              className="h-7 w-80 rounded-md border border-neutral-300 bg-white px-2 font-mono text-[12px] text-neutral-800 outline-none focus:border-brand-500"
+            />
+          </Row>
+          <Row label={t("settings.aiApiKey")}>
+            <input
+              type="password"
+              value={aiApiKey}
+              onChange={(e) => setAiApiKey(e.target.value)}
+              onBlur={() => saveAiQuietly()}
+              autoComplete="off"
+              placeholder={
+                aiConfig?.has_api_key ? t("settings.aiApiKeyPlaceholderSaved") : t("settings.aiApiKeyPlaceholderEmpty")
+              }
+              className="h-7 w-80 rounded-md border border-neutral-300 bg-white px-2 font-mono text-[12px] text-neutral-800 outline-none focus:border-brand-500"
+            />
+          </Row>
+          {aiConfig?.has_api_key && aiConfig.api_key_masked && (
+            <p className="-mt-2 text-right text-[11px] text-neutral-400">
+              {`${t("settings.aiApiKeySaved")}：${aiConfig.api_key_masked}`}
+            </p>
+          )}
+          <Row label={t("settings.aiMaxChars")}>
+            <input
+              type="number"
+              min={500}
+              max={200000}
+              value={aiForm.maxChars}
+              onChange={(e) => setAiForm((f) => ({ ...f, maxChars: Number(e.target.value) }))}
+              onBlur={() => saveAiQuietly()}
+              className="h-7 w-28 rounded-md border border-neutral-300 bg-white px-2 text-[12px] text-neutral-800 outline-none focus:border-brand-500"
+            />
+          </Row>
+          <Row label="">
+            <Button size="sm" variant="outline" onClick={testAi} disabled={busyAiTest}>
+              {busyAiTest ? (
+                <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="mr-1 h-3.5 w-3.5" />
+              )}
+              {busyAiTest ? t("settings.aiTesting") : t("settings.aiTest")}
+            </Button>
+          </Row>
+          <p className="text-[11px] text-amber-600">{t("settings.aiPrivacy")}</p>
         </Section>
 
         <Section title={t("settings.shortcuts")}>

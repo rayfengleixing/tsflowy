@@ -37,6 +37,41 @@ pub struct AppConfig {
     /// 双向同步设置与上次同步基线（旧 config.json 无此字段时取默认值）
     #[serde(default)]
     pub sync: SyncConfig,
+    /// AI 助手设置（旧 config.json 无此字段时视为未配置）
+    #[serde(default)]
+    pub ai: Option<AiConfig>,
+}
+
+/// AI 助手设置。provider / base_url / model 全部由用户填写：base_url 是否已含 /v1、
+/// 模型名等各家不同，这里不内建默认值，避免猜错；设置页给出常见服务商的推荐值即可。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiConfig {
+    /// 是否启用 AI 助手
+    pub enabled: bool,
+    /// 服务商标识：openai / deepseek / qwen / kimi / ollama ...
+    pub provider: String,
+    /// OpenAI 兼容接口的 base_url，例如 https://api.deepseek.com（可能已含 /v1）
+    pub base_url: String,
+    /// 模型名，例如 deepseek-chat
+    pub model: String,
+    /// API Key（本地明文存储；对前端只回传掩码）
+    pub api_key: String,
+    /// 请求上下文允许的最大字符数，默认 8000
+    pub max_chars: u32,
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: String::new(),
+            base_url: String::new(),
+            model: String::new(),
+            api_key: String::new(),
+            max_chars: 8000,
+        }
+    }
 }
 
 /// 双向同步（#13）：把数据目录里的库 + assets 与一个「同步文件夹」对齐。

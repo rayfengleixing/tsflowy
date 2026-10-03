@@ -6,9 +6,11 @@ import {
   CornerDownLeft,
   FilePlus,
   FileSearch,
+  FileText,
   History,
   Search,
   Settings,
+  Sparkles,
   SunMoon,
   Trash2,
   X,
@@ -16,6 +18,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { HighlightedTitle } from "@/components/highlighted-title";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useAiStore } from "@/stores/ai";
 import { useRowFocusStore } from "@/stores/row-focus";
 import { useSettingsStore } from "@/stores/settings";
 import { searchApi, titleTier, TIER_BODY_ONLY, type SearchHit } from "@/lib/search";
@@ -105,6 +108,20 @@ export function CommandPalette() {
         label: t("palette.action.openTrash"),
         icon: <Trash2 className="h-4 w-4" />,
         run: () => setRoute("trash"),
+      },
+      {
+        id: "openAi",
+        label: t("palette.action.openAi"),
+        icon: <Sparkles className="h-4 w-4" />,
+        run: () => useAiStore.getState().openPanel(),
+      },
+      {
+        id: "summarizePage",
+        label: t("palette.action.summarizePage"),
+        icon: <FileText className="h-4 w-4" />,
+        run: () => {
+          void useAiStore.getState().quickAction("summarize");
+        },
       },
     ],
     [createView, openDailyNote, setRoute],

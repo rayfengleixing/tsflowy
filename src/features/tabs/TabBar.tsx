@@ -1,5 +1,16 @@
 import { useRef } from "react";
-import { CircleX, Columns2, Download, FileText, Image as ImageIcon, Plus, Printer, SquareX, X } from "lucide-react";
+import {
+  CircleX,
+  Columns2,
+  Download,
+  FileText,
+  Image as ImageIcon,
+  Plus,
+  Printer,
+  Sparkles,
+  SquareX,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { viewIcon } from "@/components/view-icon";
 import {
@@ -16,6 +27,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useAiStore } from "@/stores/ai";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { exportPage, exportPageImage, printPage } from "@/lib/export-page";
@@ -37,6 +49,8 @@ export function TabBar() {
   const closeSplit = useWorkspaceStore((s) => s.closeSplit);
   const dragIndex = useRef<number | null>(null);
   const currentView = tabs.find((v: View) => v.id === currentViewId) ?? null;
+  const aiOpen = useAiStore((s) => s.open);
+  const toggleAi = useAiStore((s) => s.toggle);
 
   // 并排开关：已并排则取消；未并排时把「当前标签的下一个」放到右栏，一键形成对照
   const toggleSplit = () => {
@@ -159,6 +173,18 @@ export function TabBar() {
             {splitViewId ? t("split.close") : t("split.open")}
           </button>
         )}
+        <button
+          data-testid="ai-toggle"
+          className={
+            "flex h-7 items-center gap-1 rounded-md px-2 text-[12px] " +
+            (aiOpen ? "bg-brand-100 text-brand-700" : "text-neutral-500 hover:bg-neutral-200/70")
+          }
+          title={t("ai.title")}
+          onClick={toggleAi}
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          {t("ai.title")}
+        </button>
         {currentView?.layout === "document" && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
