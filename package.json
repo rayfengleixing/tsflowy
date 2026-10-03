@@ -16,6 +16,7 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json,md}\"",
     "tauri": "tauri",
     "tauri:build": "tauri build",
+    "release:manifest": "node scripts/gen-latest-json.mjs",
     "prepare": "husky"
   },
   "lint-staged": {
