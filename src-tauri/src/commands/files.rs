@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{self, BufReader, BufWriter, Cursor};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -229,6 +230,34 @@ fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
     match s.strip_prefix(r"\\?\") {
         Some(rest) => PathBuf::from(rest),
         None => p,
+    }
+}
+
+/// 启动时发现「数据目录联接悬空」（联接条目还在、目标被外部删除）时记下的丢失路径。
+/// 兜底页据此明确告知用户数据目录曾丢失，避免应用静默建出空库、让人误以为数据凭空消失。
+static DANGLING_DATA_DIR: Mutex<Option<String>> = Mutex::new(None);
+
+/// 由 lib.rs 在启动自检发现悬空联接时调用（见 lib.rs bootstrap_data_dir）
+pub fn set_dangling_data_dir_warning(lost: &Path) {
+    let p = strip_verbatim_prefix(lost.to_path_buf());
+    *DANGLING_DATA_DIR.lock().unwrap() = Some(p.to_string_lossy().to_string());
+}
+
+/// 本次启动是否存在悬空联接告警
+pub fn dangling_data_dir_warning() -> Option<String> {
+    DANGLING_DATA_DIR.lock().unwrap().clone()
+}
+
+/// 目录已重建（用户确认重建或导入备份成功）后清除告警
+pub fn clear_dangling_data_dir_warning() {
+    *DANGLING_DATA_DIR.lock().unwrap() = None;
+}
+
+/// 本次启动实际使用的数据落点，与 lib.rs bootstrap_data_dir 口径一致：自定义目录优先，否则「文档\TsFlowy」
+pub fn target_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    match load_config_raw().custom_data_dir {
+        Some(c) => Ok(PathBuf::from(c)),
+        None => documents_data_dir(app),
     }
 }
 
@@ -568,7 +597,11 @@ pub async fn import_backup(
     db.close_for_maintenance()?;
     let result = import_backup_inner(app, &source_path);
     match result {
-        Ok(()) => db.reopen(),
+        Ok(()) => {
+            // 导入成功即数据目录已重建（悬空联接被 create_dir_all 治好），告警随之失效
+            clear_dangling_data_dir_warning();
+            db.reopen()
+        }
         // 失败路径也重开：恢复失败时应用应继续可用（原数据仍在 .bak 或原位）
         Err(e) => {
             let _ = db.reopen();
@@ -1158,6 +1191,9 @@ pub struct DbHealth {
     pub latest_backup: Option<String>,
     pub latest_backup_path: Option<String>,
     pub latest_backup_time: Option<String>,
+    /// 悬空目录联接告警：启动时检测到数据目录目标已被外部删除（正常为 None）。
+    /// 有值时说明当前库不是原来的库，前端应提示用户从备份恢复。
+    pub dangling_data_dir: Option<String>,
 }
 
 #[tauri::command]
@@ -1182,7 +1218,22 @@ pub async fn db_health(
             .as_ref()
             .map(|(_, p, _)| p.to_string_lossy().to_string()),
         latest_backup_time: latest.as_ref().map(|(_, _, t)| format_local_time(*t)),
+        dangling_data_dir: dangling_data_dir_warning(),
     })
+}
+
+/// 兜底页「重建数据目录」：仅在启动检测到悬空联接、且用户确认放弃等待恢复时调用。
+/// 补建目标目录（悬空联接随之恢复可用）并重开数据库，因此得到的是一个新空库。
+#[tauri::command]
+pub async fn rebuild_data_dir(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, Db>,
+) -> Result<DbHealth, String> {
+    let target = target_data_dir(&app)?;
+    fs::create_dir_all(&target).map_err(|e| format!("mkdir data dir: {e}"))?;
+    db.reopen()?;
+    clear_dangling_data_dir_warning();
+    db_health(app, db).await
 }
 
 /// 把 custom 数据恢复为 default 路径：先将现有 default 整体改名到 bak，再把 custom 复制回来。

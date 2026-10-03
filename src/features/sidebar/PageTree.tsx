@@ -209,7 +209,10 @@ export function PageTree() {
   );
 
   return (
-    <div ref={containerRef} className="flex-1 overflow-y-auto px-2 pb-2">
+    <div
+      ref={containerRef}
+      className="flex-1 overflow-y-auto px-2 pb-2 [&::-webkit-scrollbar]:hidden [scrollbar-width:none]"
+    >
       {/* 收藏区：有收藏页面时显示，点击直达（保留在树中原位置） */}
       {favorites.length > 0 && (
         <div className="mb-2 border-b border-neutral-200 pb-2">

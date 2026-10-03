@@ -26,6 +26,20 @@ fn bootstrap_data_dir(app: &tauri::AppHandle) {
         },
     };
     let default = commands::files::default_data_dir_raw();
+    // 悬空联接：联接条目还在，但它指向的目标目录已被外部删除/移走。
+    // 若继续往下走，create_dir_all 会把目标"悄悄"建成空目录，应用随即新建一个空库，
+    // 用户会以为历史数据凭空消失。这里显式记下告警并停止自愈（也不建目录），
+    // 由用户在兜底页选择「导入备份」或明确「重建为空库」后再继续。
+    if is_symlink(&default) && !default.exists() {
+        let lost = fs::read_link(&default).unwrap_or_else(|_| target.clone());
+        tracing::error!(
+            link = %default.display(),
+            lost = %lost.display(),
+            "bootstrap: data dir link is dangling (target missing), skip auto-heal"
+        );
+        commands::files::set_dangling_data_dir_warning(&lost);
+        return;
+    }
     // 目标与默认目录同一位置，或默认目录已是指向目标的联接 → 无需处理
     if same_path(&default, &target) || is_link_to(&default, &target) {
         return;
@@ -197,8 +211,11 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| PathBuf::from("."));
-            if let Err(e) = fs::create_dir_all(&dir) {
-                tracing::warn!(dir = %dir.display(), error = %e, "setup: create data dir failed");
+            // 悬空联接时不得补建目录：否则会把目标建成空目录、掩盖数据已丢失（见 bootstrap_data_dir）
+            if commands::files::dangling_data_dir_warning().is_none() {
+                if let Err(e) = fs::create_dir_all(&dir) {
+                    tracing::warn!(dir = %dir.display(), error = %e, "setup: create data dir failed");
+                }
             }
             let path = dir.join(db::DB_FILE);
             tracing::info!(path = %path.display(), "database file location");
@@ -227,6 +244,7 @@ pub fn run() {
             commands::files::set_auto_backup_config,
             commands::files::run_auto_backup_now,
             commands::files::db_health,
+            commands::files::rebuild_data_dir,
             commands::sync::get_sync_info,
             commands::sync::set_sync_dir,
             commands::sync::open_sync_dir,

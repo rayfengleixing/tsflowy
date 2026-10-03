@@ -19,6 +19,8 @@ export interface DbHealth {
   latest_backup: string | null;
   latest_backup_path: string | null;
   latest_backup_time: string | null;
+  /** 悬空目录联接告警：数据目录目标被外部删除时非空（当前库不是原来的库） */
+  dangling_data_dir: string | null;
 }
 
 function formatSize(bytes: number): string {
@@ -88,6 +90,27 @@ export function DbUnavailable({ health }: { health: DbHealth }) {
     }
   };
 
+  /**
+   * 数据目录联接悬空（目标被外部删除）时的唯一可用出口：补建目录并新建空库。
+   * 属于「放弃找回」的破坏性选择，必须二次确认；想找回数据应走「导入备份」。
+   */
+  const rebuildDataDir = async () => {
+    if (!window.confirm(t("db.errorDanglingRebuildConfirm"))) return;
+    setBusy(true);
+    try {
+      const next = await invoke<DbHealth>("rebuild_data_dir");
+      if (next.ok) {
+        toast.success(t("db.errorRetryOk"));
+        window.location.reload();
+      }
+    } catch (e) {
+      logger.error("DbUnavailable.rebuildDataDir", "rebuild data dir failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="flex h-screen items-center justify-center bg-neutral-50 px-6">
       <div className="w-full max-w-xl rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
@@ -105,6 +128,16 @@ export function DbUnavailable({ health }: { health: DbHealth }) {
           <div className="mb-4 rounded-md bg-red-50 p-3">
             <div className="text-[11px] font-medium text-red-700">{t("db.errorReason")}</div>
             <div className="mt-1 font-mono text-[11px] break-all text-red-800">{health.error}</div>
+          </div>
+        )}
+
+        {/* 悬空联接：真正的原因是数据目录被外部删除，必须单独讲清楚，否则用户会以为是数据库坏了 */}
+        {health.dangling_data_dir && (
+          <div className="mb-4 rounded-md bg-amber-50 p-3">
+            <div className="text-[11px] font-medium text-amber-800">{t("db.errorDanglingTitle")}</div>
+            <div className="mt-1 text-[11px] break-all text-amber-800">
+              {t("db.errorDanglingDesc", { path: health.dangling_data_dir })}
+            </div>
           </div>
         )}
 
@@ -145,6 +178,12 @@ export function DbUnavailable({ health }: { health: DbHealth }) {
             <RefreshCw className="mr-1 h-3.5 w-3.5" />
             {t("db.errorRetry")}
           </Button>
+          {/* 仅在数据目录真的丢了时才出现：这是"放弃找回、重建为空库"的出口 */}
+          {health.dangling_data_dir && (
+            <Button size="sm" variant="destructive" onClick={() => void rebuildDataDir()} disabled={busy}>
+              {t("db.errorDanglingRebuild")}
+            </Button>
+          )}
         </div>
       </div>
     </div>

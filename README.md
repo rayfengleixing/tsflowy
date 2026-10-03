@@ -99,7 +99,7 @@ npm run tauri:build
 D:\Code\rust-target\release\bundle\nsis\TsFlowy_<版本号>_x64-setup.exe
 ```
 
-例如当前版本：`TsFlowy_0.8.8_x64-setup.exe`。
+例如当前版本：`TsFlowy_0.8.9_x64-setup.exe`。
 
 > 打包前必须设置自动更新的签名私钥，否则构建会失败（`createUpdaterArtifacts` 已开启）：
 >
@@ -111,10 +111,10 @@ D:\Code\rust-target\release\bundle\nsis\TsFlowy_<版本号>_x64-setup.exe
 > 构建完成后 bundle 目录会产出安装包及其 `.sig` 签名文件。再用下面的命令生成更新清单 `latest.json`：
 >
 > ```powershell
-> npm run release:manifest -- --version 0.8.8 --notes "本次更新说明"
+> npm run release:manifest -- --version 0.8.9 --notes "本次更新说明"
 > ```
 >
-> 将安装包、`.sig`、`latest.json` 三者一并上传到 GitHub Release（tag 形如 `v0.8.8`），应用内「设置 → 软件更新」即可检测到新版本。私钥务必妥善保管、不要提交到仓库。
+> 将安装包、`.sig`、`latest.json` 三者一并上传到 GitHub Release（tag 形如 `v0.8.9`），应用内「设置 → 软件更新」即可检测到新版本。私钥务必妥善保管、不要提交到仓库。
 
 ### 开发者提示
 

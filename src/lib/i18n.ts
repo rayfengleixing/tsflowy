@@ -540,6 +540,12 @@ const zh = {
   "db.errorImportOther": "选择备份文件导入…",
   "db.errorRetry": "重新检查",
   "db.errorRetryOk": "数据库已恢复",
+  "db.errorDanglingTitle": "数据目录已丢失",
+  "db.errorDanglingDesc":
+    "数据目录原本位于「{path}」，但该目录已被删除或移走（目录联接仍在，指向一个不存在的目标）。为避免在空目录上新建一个空数据库、让你误以为数据被清空，TsFlowy 已暂停自动重建。请优先用下方「导入备份」找回数据；只有确认不需要找回时，才点「重建为空库」。",
+  "db.errorDanglingRebuild": "重建为空库",
+  "db.errorDanglingRebuildConfirm":
+    "确定要重建数据目录吗？\n\n这会新建一个空数据库，原有数据不会回来（若能找回，请改用「导入备份」）。",
   "db.errorHint":
     "提示：若数据库文件正被其他程序占用，请关闭该程序后点「重新检查」；若文件已损坏，用最近一次备份恢复。",
   "settings.shortcuts": "快捷键",
@@ -1144,6 +1150,12 @@ const en: Record<MessageKey, string> = {
   "db.errorImportOther": "Choose a backup file…",
   "db.errorRetry": "Check again",
   "db.errorRetryOk": "Database recovered",
+  "db.errorDanglingTitle": "Data directory is gone",
+  "db.errorDanglingDesc":
+    "The data directory used to be at “{path}”, but that folder was deleted or moved (the link still exists and points to a missing target). To avoid silently creating a fresh empty database in an empty folder — which would look like your data vanished — TsFlowy has paused automatic re-creation. Use “Restore backup” below to get your data back; only pick “Rebuild as empty” if you are sure the data is not needed.",
+  "db.errorDanglingRebuild": "Rebuild as empty",
+  "db.errorDanglingRebuildConfirm":
+    "Rebuild the data directory?\n\nThis creates a new empty database. Your old data will not come back (use “Restore backup” instead if it can still be recovered).",
   "db.errorHint":
     "Tip: if the database file is locked by another program, close it and try again; if the file is corrupted, restore from the latest backup.",
   "settings.shortcuts": "Keyboard shortcuts",
