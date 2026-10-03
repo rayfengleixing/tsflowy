@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { Columns2, Download, FileText, Image as ImageIcon, Plus, Printer, X } from "lucide-react";
+import { CircleX, Columns2, Download, FileText, Image as ImageIcon, Plus, Printer, SquareX, X } from "lucide-react";
 import { toast } from "sonner";
 import { viewIcon } from "@/components/view-icon";
 import {
@@ -8,6 +8,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
@@ -21,6 +28,8 @@ export function TabBar() {
   const currentViewId = useWorkspaceStore((s) => s.currentViewId);
   const openView = useWorkspaceStore((s) => s.openView);
   const closeTab = useWorkspaceStore((s) => s.closeTab);
+  const closeAllTabs = useWorkspaceStore((s) => s.closeAllTabs);
+  const closeOtherTabs = useWorkspaceStore((s) => s.closeOtherTabs);
   const newTab = useWorkspaceStore((s) => s.newTab);
   const reorderTabs = useWorkspaceStore((s) => s.reorderTabs);
   const splitViewId = useWorkspaceStore((s) => s.splitViewId);
@@ -81,32 +90,50 @@ export function TabBar() {
       {tabs.map((v: View, index: number) => {
         const active = v.id === currentViewId;
         return (
-          <div
-            key={v.id}
-            data-tab-id={v.id}
-            draggable
-            onDragStart={(e) => handleDragStart(e, index)}
-            onDragOver={(e) => handleDragOver(e, index)}
-            onClick={() => openView(v.id)}
-            className={
-              "group relative flex w-[200px] shrink-0 cursor-pointer items-center gap-1.5 border-r border-neutral-300 px-2 text-[13px] " +
-              (active ? "bg-white text-neutral-800" : "text-neutral-500 hover:bg-neutral-200/60")
-            }
-          >
-            {active && <div className="absolute inset-x-0 top-0 h-[2px] bg-brand-500" />}
-            <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">{viewIcon(v)}</span>
-            <span className="min-w-0 flex-1 truncate">{v.name}</span>
-            <button
-              data-testid="tab-close"
-              className="hidden h-4 w-4 shrink-0 items-center justify-center rounded text-neutral-500 hover:bg-neutral-300 group-hover:flex"
-              onClick={(e) => {
-                e.stopPropagation();
-                closeTab(v.id);
-              }}
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </div>
+          <ContextMenu key={v.id}>
+            <ContextMenuTrigger asChild>
+              <div
+                data-tab-id={v.id}
+                draggable
+                onDragStart={(e) => handleDragStart(e, index)}
+                onDragOver={(e) => handleDragOver(e, index)}
+                onClick={() => openView(v.id)}
+                className={
+                  "group relative flex min-w-0 max-w-[200px] flex-1 cursor-pointer items-center gap-1.5 overflow-hidden border-r border-neutral-300 px-2 text-[13px] " +
+                  (active ? "bg-white text-neutral-800" : "text-neutral-500 hover:bg-neutral-200/60")
+                }
+              >
+                {active && <div className="absolute inset-x-0 top-0 h-[2px] bg-brand-500" />}
+                <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">{viewIcon(v)}</span>
+                <span className="min-w-0 flex-1 truncate">{v.name}</span>
+                <button
+                  data-testid="tab-close"
+                  className="hidden h-4 w-4 shrink-0 items-center justify-center rounded text-neutral-500 hover:bg-neutral-300 group-hover:flex"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeTab(v.id);
+                  }}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            </ContextMenuTrigger>
+            <ContextMenuContent className="w-44">
+              <ContextMenuItem onSelect={() => closeTab(v.id)}>
+                <X className="mr-2 h-3.5 w-3.5" />
+                {t("tabs.close")}
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => closeOtherTabs(v.id)}>
+                <CircleX className="mr-2 h-3.5 w-3.5" />
+                {t("tabs.closeOthers")}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem onSelect={() => closeAllTabs()}>
+                <SquareX className="mr-2 h-3.5 w-3.5" />
+                {t("tabs.closeAll")}
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
         );
       })}
       <button

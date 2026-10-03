@@ -95,6 +95,10 @@ interface WorkspaceState {
 
   openView: (id: string) => void;
   closeTab: (id: string) => void;
+  /** 关闭所有标签页 */
+  closeAllTabs: () => void;
+  /** 关闭除指定标签外的其它标签页（保留的标签置为当前页） */
+  closeOtherTabs: (id: string) => void;
   /** 在右侧分栏打开（并排对照）；已在并排时替换右侧 */
   openInSplit: (id: string) => void;
   closeSplit: () => void;
@@ -778,6 +782,19 @@ const _useWorkspaceStore = create<WorkspaceState>()((set, get) => {
       // 关掉的是副视图则取消并排
       const splitViewId = get().splitViewId === id ? null : get().splitViewId;
       set({ tabs, currentViewId, splitViewId });
+      persistNow();
+    },
+
+    closeAllTabs: () => {
+      set({ tabs: [], currentViewId: null, splitViewId: null });
+      persistNow();
+    },
+
+    closeOtherTabs: (id) => {
+      const keep = get().tabs.find((v) => v.id === id);
+      if (!keep) return;
+      // 保留的标签可能是右栏（副视图）：收敛为唯一标签并置为当前页
+      set({ tabs: [keep], currentViewId: id, splitViewId: null });
       persistNow();
     },
 
