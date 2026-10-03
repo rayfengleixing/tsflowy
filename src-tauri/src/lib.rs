@@ -10,22 +10,21 @@ use tauri_plugin_window_state::StateFlags;
 use tracing_subscriber::{fmt, EnvFilter};
 
 /// 启动前：确定数据落点并建好联接。
-/// 目标目录 = 用户自定义目录（config.custom_data_dir）优先，否则默认为系统「文档」目录下的 TsFlowy。
-/// 若默认 app_data_dir 还是真实目录（老版本遗留），先把其中数据迁移到目标（不覆盖目标已有同名数据），
-/// 再把它建成指向目标的 junction/symlink，此后 app_data_dir（数据库、assets 等全部落点）透明落到目标。
-fn bootstrap_data_dir(app: &tauri::AppHandle) {
+/// 默认落点就是 app_data_dir 本身（真实目录，Windows 上即 %APPDATA%\com.tsflowy.app）；
+/// 用户设置自定义目录（config.custom_data_dir）后，把 app_data_dir 建成指向该位置的 junction/symlink，
+/// 此后 app_data_dir（数据库、assets 等全部落点）透明落到自定义位置。
+/// 老版本曾把默认落点设为「文档\TsFlowy」并联接过去；这里会把这类遗留联接还原为真实目录并把数据搬回。
+fn bootstrap_data_dir() {
     let cfg = commands::files::load_config_raw();
+    let default = commands::files::default_data_dir_raw();
     let target = match cfg.custom_data_dir.clone() {
         Some(c) => PathBuf::from(c),
-        None => match commands::files::documents_data_dir(app) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::error!(error = %e, "bootstrap: resolve documents data dir failed");
-                return;
-            }
-        },
+        None => {
+            // 未设置自定义目录：数据直接落在 app_data_dir，无需联接
+            restore_real_default_dir(&default);
+            return;
+        }
     };
-    let default = commands::files::default_data_dir_raw();
     // 悬空联接：联接条目还在，但它指向的目标目录已被外部删除/移走。
     // 若继续往下走，create_dir_all 会把目标"悄悄"建成空目录，应用随即新建一个空库，
     // 用户会以为历史数据凭空消失。这里显式记下告警并停止自愈（也不建目录），
@@ -80,6 +79,47 @@ fn bootstrap_data_dir(app: &tauri::AppHandle) {
     if let Err(e) = ensure_dir_symlink(&default, &target) {
         tracing::error!(default = %default.display(), target = %target.display(), error = %e, "bootstrap: ensure_dir_symlink failed");
     }
+}
+
+/// 默认落点回归 app_data_dir 真实目录：若默认目录当前是指向别处（老版本「文档\TsFlowy」）的联接，
+/// 把目标里的数据搬回真实目录，再删掉联接条目本身（只删联接，绝不动目标里的其它文件）。
+/// 悬空联接（目标已丢失）不自动重建：保留告警交由兜底页处理，避免静默建空库掩盖数据丢失。
+fn restore_real_default_dir(default: &Path) {
+    if !is_symlink(default) {
+        return; // 已是真实目录，无需处理
+    }
+    if !default.exists() {
+        let lost = fs::read_link(default).unwrap_or_else(|_| default.to_path_buf());
+        tracing::error!(
+            link = %default.display(),
+            lost = %lost.display(),
+            "bootstrap: default data dir link is dangling (target missing), skip auto-heal"
+        );
+        commands::files::set_dangling_data_dir_warning(&lost);
+        return;
+    }
+    let src = match fs::read_link(default) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(link = %default.display(), error = %e, "bootstrap: read data dir link failed");
+            return;
+        }
+    };
+    // 摘掉联接条目（删联接不删目标数据）→ 建真实目录 → 把数据搬回来
+    if let Err(e) = fs::remove_dir(default).or_else(|_| fs::remove_file(default)) {
+        tracing::error!(link = %default.display(), error = %e, "bootstrap: remove data dir link failed");
+        return;
+    }
+    if let Err(e) = fs::create_dir_all(default) {
+        tracing::error!(path = %default.display(), error = %e, "bootstrap: recreate real data dir failed");
+        return;
+    }
+    if let Err(e) = commands::files::migrate_dir_entries(&src, default) {
+        tracing::error!(from = %src.display(), to = %default.display(), error = %e, "bootstrap: migrate data back to default failed");
+        return;
+    }
+    // 原目标目录搬空后删掉；仍有残留内容（用户自己放的文件）则保留
+    let _ = fs::remove_dir(&src);
 }
 
 fn is_symlink(p: &Path) -> bool {
@@ -204,9 +244,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            // 先把数据落点确定好（默认「文档\TsFlowy」），再打开数据库；
-            // junction 机制让 app_data_dir 透明落到目标目录。
-            bootstrap_data_dir(app.handle());
+            // 先把数据落点确定好（默认即 app_data_dir，设置自定义目录时建联接），再打开数据库；
+            // junction 机制让 app_data_dir 透明落到自定义目录。
+            bootstrap_data_dir();
             let dir = app
                 .path()
                 .app_data_dir()

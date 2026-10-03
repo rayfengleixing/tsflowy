@@ -205,16 +205,7 @@ fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("failed to resolve app data dir: {e}"))
 }
 
-/// 未设置自定义目录时的默认数据落点：系统「文档」目录下的 TsFlowy 子目录。
-/// 用 Tauri 的 document_dir() 解析，兼容中文本地化目录名与 OneDrive 重定向。
-pub fn documents_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .document_dir()
-        .map(|d| d.join("TsFlowy"))
-        .map_err(|e| format!("failed to resolve documents dir: {e}"))
-}
-
-/// 数据目录的真实落点：默认目录若是指向别处的 junction/symlink（自定义目录/文档目录），
+/// 数据目录的真实落点：默认目录若是指向别处的 junction/symlink（自定义目录），
 /// 返回其目标路径，供设置页展示与路径比较；否则返回目录本身。
 pub fn real_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app_data_dir(app)?;
@@ -253,11 +244,11 @@ pub fn clear_dangling_data_dir_warning() {
     *DANGLING_DATA_DIR.lock().unwrap() = None;
 }
 
-/// 本次启动实际使用的数据落点，与 lib.rs bootstrap_data_dir 口径一致：自定义目录优先，否则「文档\TsFlowy」
+/// 本次启动实际使用的数据落点，与 lib.rs bootstrap_data_dir 口径一致：自定义目录优先，否则 app_data_dir 真实目录
 pub fn target_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     match load_config_raw().custom_data_dir {
         Some(c) => Ok(PathBuf::from(c)),
-        None => documents_data_dir(app),
+        None => app_data_dir(app),
     }
 }
 
@@ -484,7 +475,7 @@ fn read_asset_bytes_inner(data_dir: &Path, relative: &str) -> Result<Vec<u8>, St
 
 // ---------- M6 设置页三个新命令 ----------
 
-/// 返回数据目录绝对路径（显示在设置页里）：默认目录经 junction 落到「文档\TsFlowy」或自定义目录，展示真实落点
+/// 返回数据目录绝对路径（显示在设置页里）：默认目录经 junction 落到自定义目录时展示真实落点
 #[tauri::command]
 pub fn data_dir_path(app: tauri::AppHandle) -> Result<String, String> {
     Ok(real_data_dir(&app)?.to_string_lossy().to_string())
@@ -833,7 +824,7 @@ pub(crate) fn stash_current_db(db: &Path, suffix: &str) -> Result<(), String> {
 
 #[derive(Serialize)]
 pub struct DataDirInfo {
-    /// 当前实际生效的数据目录（默认目录经联接落到「文档\TsFlowy」或自定义目录后的真实位置）
+    /// 当前实际生效的数据目录（默认目录经联接落到自定义目录后的真实位置）
     pub default: String,
     /// 用户自定义路径（设置后下次启动生效）
     pub custom: Option<String>,
@@ -965,18 +956,27 @@ fn reset_data_dir_default_inner(
             copied: false,
         });
     };
-    let documents = documents_data_dir(&app)?;
+    let default = app_data_dir(&app)?;
     let custom_pb = PathBuf::from(&custom);
     let mut copied = false;
 
-    // 自定义位置与默认「文档」位置相同时无需搬动（历史配置），只清除配置即可
-    if move_back && custom_pb.exists() && !same_path(&custom_pb, &documents) {
+    // 自定义目录模式下 default 是指向 custom 的联接：先摘掉联接条目（只删联接、不动 custom 数据），
+    // 再把 custom 数据复制回真实 default 目录。
+    if move_back && custom_pb.exists() {
         let suf = timestamp_suffix();
-        let bak = documents
+        let bak = default
             .parent()
-            .map(|p| p.join(format!("tsflowy-docs-bak-{suf}")))
-            .unwrap_or_else(|| PathBuf::from(format!("./tsflowy-docs-bak-{suf}")));
-        restore_custom_to_default(&documents, &custom_pb, &bak)?;
+            .map(|p| p.join(format!("tsflowy-appdata-bak-{suf}")))
+            .unwrap_or_else(|| PathBuf::from(format!("./tsflowy-appdata-bak-{suf}")));
+        if fs::symlink_metadata(&default)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            fs::remove_dir(&default)
+                .or_else(|_| fs::remove_file(&default))
+                .map_err(|e| format!("remove data dir link failed: {e}"))?;
+        }
+        restore_custom_to_default(&default, &custom_pb, &bak)?;
         copied = true;
     }
 
@@ -1229,6 +1229,18 @@ pub async fn rebuild_data_dir(
     app: tauri::AppHandle,
     db: tauri::State<'_, Db>,
 ) -> Result<DbHealth, String> {
+    // 默认落点已回归 app_data_dir 真实目录：老版本留下的悬空联接要摘掉，
+    // 否则 create_dir_all 会走进不存在的目标、数据库仍打不开。
+    // 自定义目录模式下联接仍指向用户选的目录，保留不动。
+    let default = app_data_dir(&app)?;
+    if load_app_config(&app).custom_data_dir.is_none()
+        && fs::symlink_metadata(&default)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        && !default.exists()
+    {
+        let _ = fs::remove_dir(&default).or_else(|_| fs::remove_file(&default));
+    }
     let target = target_data_dir(&app)?;
     fs::create_dir_all(&target).map_err(|e| format!("mkdir data dir: {e}"))?;
     db.reopen()?;
