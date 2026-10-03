@@ -99,7 +99,16 @@ npm run tauri:build
 src-tauri\target\release\bundle\nsis\TsFlowy_<版本号>_x64-setup.exe
 ```
 
-例如当前版本：`TsFlowy_0.7.7_x64-setup.exe`。
+例如当前版本：`TsFlowy_0.8.7_x64-setup.exe`。
+
+> 打包前必须设置自动更新的签名私钥，否则构建会失败（`createUpdaterArtifacts` 已开启）：
+>
+> ```powershell
+> $env:TAURI_SIGNING_PRIVATE_KEY = "<私钥文件路径或私钥内容>"
+> npm run tauri:build
+> ```
+>
+> 构建完成后 bundle 目录会额外产出 `latest.json` 与安装包的 `.sig` 签名文件，将它们一并上传到 GitHub Release，应用内「设置 → 软件更新」即可检测到新版本。私钥务必妥善保管、不要提交到仓库。
 
 ### 开发者提示
 

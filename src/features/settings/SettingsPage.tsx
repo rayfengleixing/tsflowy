@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   CalendarDays,
   FolderOpen,
@@ -8,10 +8,13 @@ import {
   RefreshCw,
   FolderInput,
   FolderOutput,
+  DownloadCloud,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { save, open } from "@tauri-apps/plugin-dialog";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { toast } from "sonner";
 
 import {
@@ -148,6 +151,12 @@ export function SettingsPage() {
   const [busyBackupNow, setBusyBackupNow] = useState(false);
   const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null);
   const [busySync, setBusySync] = useState(false);
+  // 自动更新：idle → checking → available → downloading → installing
+  const [updateState, setUpdateState] = useState<"idle" | "checking" | "available" | "downloading" | "installing">(
+    "idle",
+  );
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+  const updateRef = useRef<Awaited<ReturnType<typeof check>> | null>(null);
   const [daily, setDaily] = useState<DailyNotesConfig>(() => loadDailyNotesConfig());
   const openDailyNote = useWorkspaceStore((s) => s.openDailyNote);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
@@ -165,6 +174,41 @@ export function SettingsPage() {
     refreshAutoBackup();
     refreshSyncInfo();
   }, []);
+
+  const checkForUpdates = async () => {
+    setUpdateState("checking");
+    try {
+      const update = await check();
+      if (!update) {
+        setUpdateState("idle");
+        toast.success(t("settings.upToDate"));
+        return;
+      }
+      updateRef.current = update;
+      setUpdateVersion(update.version);
+      setUpdateState("available");
+    } catch (e) {
+      setUpdateState("idle");
+      logger.error("check update failed", e);
+      toast.error(t("settings.updateFailed", { message: String(e) }));
+    }
+  };
+
+  const installUpdate = async () => {
+    const update = updateRef.current;
+    if (!update) return;
+    try {
+      setUpdateState("downloading");
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Finished") setUpdateState("installing");
+      });
+      await relaunch();
+    } catch (e) {
+      setUpdateState("available");
+      logger.error("install update failed", e);
+      toast.error(t("settings.updateFailed", { message: String(e) }));
+    }
+  };
 
   const shortcutGroups: ShortcutGroup[] = [
     {
@@ -450,6 +494,34 @@ export function SettingsPage() {
             <p className="text-xs text-neutral-500">{version ? `TsFlowy · v${version}` : "TsFlowy"}</p>
           </div>
         </header>
+
+        <Section title={t("settings.updates")}>
+          <p className="mb-3 max-w-lg text-xs text-neutral-500">{t("settings.updateDesc")}</p>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={checkForUpdates}
+              disabled={updateState === "checking" || updateState === "downloading" || updateState === "installing"}
+            >
+              <RefreshCw className={cn("mr-1 h-3.5 w-3.5", updateState === "checking" && "animate-spin")} />
+              {updateState === "checking" ? t("settings.updateChecking") : t("settings.checkUpdate")}
+            </Button>
+            {updateState === "available" && (
+              <Button size="sm" onClick={installUpdate}>
+                <DownloadCloud className="mr-1 h-3.5 w-3.5" />
+                {t("settings.updateInstall")}
+              </Button>
+            )}
+            <span className="text-xs text-neutral-500">
+              {updateState === "available" && updateVersion
+                ? t("settings.updateAvailable", { version: updateVersion })
+                : null}
+              {updateState === "downloading" ? t("settings.updateDownloading") : null}
+              {updateState === "installing" ? t("settings.updateInstalling") : null}
+            </span>
+          </div>
+        </Section>
 
         <Section title={t("settings.appearance")}>
           <Row label={t("settings.theme")}>

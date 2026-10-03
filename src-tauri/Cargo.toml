@@ -1,7 +1,7 @@
 [package]
 name = "tsflowy"
-version = "0.6.0"
-description = "A Tauri App"
+version = "0.8.8"
+description = "TsFlowy - 本地优先的笔记与知识管理应用"
 authors = ["you"]
 edition = "2021"
 
@@ -39,3 +39,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 sha2 = "0.10"
 tauri-plugin-single-instance = "2.4.5"
 tauri-plugin-window-state = "2.4.1"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
+# Release 构建优化：减小二进制体积并提升运行性能
+# · lto + codegen-units=1：跨 crate 内联与死代码消除
+# · opt-level="s"：以体积优先（对桌面应用性能影响可忽略）
+# · strip：剔除调试符号，显著缩小 exe
+# · panic="abort"：不再保留展开表，进一步瘦身
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+panic = "abort"

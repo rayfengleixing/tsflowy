@@ -914,7 +914,12 @@ mod tests {
     #[test]
     fn delete_compacts_row_positions() {
         let conn = setup();
-        create_rows(&conn, "v1", &["r1".into(), "r2".into(), "r3".into(), "r4".into()]).unwrap();
+        create_rows(
+            &conn,
+            "v1",
+            &["r1".into(), "r2".into(), "r3".into(), "r4".into()],
+        )
+        .unwrap();
 
         delete_row(&conn, "r2").unwrap();
         let rows = list_rows(&conn, "v1").unwrap();

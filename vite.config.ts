@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
@@ -6,9 +6,24 @@ import path from "node:path";
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
+// KaTeX 字体裁剪：katex.min.css 为每个字体声明 woff2/woff/ttf 三重回退源，
+// 三者合计约 1MB，而 WebView2 必定支持 woff2。构建期只保留 woff2，
+// 去掉 woff/ttf 源后 Vite 不再产出这些字体文件（约省 800KB）。
+function katexWoff2Only(): Plugin {
+  return {
+    name: "katex-woff2-only",
+    enforce: "pre",
+    transform(code, id) {
+      if (!id.includes("katex") || !id.endsWith(".css")) return null;
+      const next = code.replace(/,\s*url\([^)]*?\.(?:woff|ttf)\)\s*format\("(?:woff|truetype)"\)/g, "");
+      return next === code ? null : { code: next, map: null };
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), katexWoff2Only()],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "./src"),
