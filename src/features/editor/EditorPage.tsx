@@ -458,6 +458,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     return registerAiEditor({
       getPageText: () =>
         editor.isDestroyed ? "" : editor.state.doc.textBetween(0, editor.state.doc.content.size, "\n"),
+      getPageTitle: () => (editor.isDestroyed ? "" : (view?.name ?? "")),
       getSelectionText: () => {
         if (editor.isDestroyed) return "";
         const { from, to } = editor.state.selection;
@@ -479,8 +480,30 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         editor.view.dispatch(tr.scrollIntoView());
         editor.view.focus();
       },
+      // AI 自主修改：按 op 决定改写范围，直接落到文档上
+      applyEdit: (op, markdown) => {
+        if (editor.isDestroyed) return false;
+        const slice = toSlice(markdown);
+        if (!slice) return false;
+        const { doc, selection } = editor.state;
+        const range =
+          op === "append_to_document"
+            ? { from: doc.content.size, to: doc.content.size }
+            : op === "insert_at_cursor"
+              ? { from: selection.from, to: selection.from }
+              : // replace_selection：无选区时退化为在光标处插入，与「替换选中」按钮一致
+                { from: selection.from, to: selection.to };
+        const before = editor.state.doc;
+        editor.view.dispatch(editor.state.tr.replaceRange(range.from, range.to, slice).scrollIntoView());
+        editor.view.focus();
+        // 结构锁定（首行标题/第二行分割线）会拦掉落在保护区里的事务：据实回报是否真的改了
+        return !editor.state.doc.eq(before);
+      },
+      undo: () => {
+        if (!editor.isDestroyed) editor.commands.undo();
+      },
     });
-  }, [editor, isMainPane]);
+  }, [editor, isMainPane, view?.name]);
 
   // 全库视图 id → View：mention hover 预览取标题走这张表。
   // mention 目标是任意被引页、不一定是反链来源，查 backlinkViews 会大面积落空显示成 id。

@@ -11,15 +11,24 @@ import {
   type AiConfig,
 } from "@/lib/ai";
 import { getAiEditor } from "@/lib/ai-editor";
+import {
+  buildEditSystemPrompt,
+  CHAT_ONLY_SYSTEM_PROMPT,
+  extractEdit,
+  hideEditBlock,
+  type AiEditOp,
+} from "@/lib/ai-edit";
 import { t, type MessageKey } from "@/lib/i18n";
 
 // AI 助手面板状态：开关/宽度（localStorage 偏好）、消息列表、流式状态、
-// 配置缓存与 send / stop / clear / retry / quickAction 动作。
+// 配置缓存与 send / stop / clear / retry / quickAction / undoEdit 动作。
 
 export interface AiMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /** 本条回复下发的文档编辑指令及其落地结果（用于展示与撤销） */
+  edit?: { op: AiEditOp; summary: string; applied: boolean; undone?: boolean };
 }
 
 export type AiQuickAction = "summarize" | "translate" | "rewrite" | "explain";
@@ -70,34 +79,88 @@ interface AiState {
   clear: () => void;
   retry: () => Promise<void>;
   quickAction: (kind: AiQuickAction) => Promise<void>;
+  /** 撤销某条回复造成的文档改动 */
+  undoEdit: (messageId: string) => void;
 }
 
 export const useAiStore = create<AiState>()((set, get) => {
-  /** 组装发给服务端的消息：排除空的助手占位与空内容 */
-  const requestMessages = (assistantId: string): AiChatMessage[] =>
-    get()
+  /** 当前配置的最大上下文字符数 */
+  const maxChars = () => {
+    const configured = get().config?.max_chars;
+    return configured && configured > 0 ? configured : DEFAULT_MAX_CHARS;
+  };
+
+  /**
+   * system prompt：有可编辑文档时下发编辑协议 + 当前文档上下文（AI 自主修改的基础），
+   * 没有文档时退化为纯问答，避免模型凭空产出编辑指令。
+   */
+  const systemMessage = (): AiChatMessage => {
+    const bridge = getAiEditor();
+    if (!bridge) return { role: "system", content: CHAT_ONLY_SYSTEM_PROMPT };
+    const limit = maxChars();
+    return {
+      role: "system",
+      content: buildEditSystemPrompt({
+        title: bridge.getPageTitle(),
+        selection: bridge.getSelectionText().slice(0, limit),
+        pageText: bridge.getPageText().slice(0, limit),
+      }),
+    };
+  };
+
+  /** 组装发给服务端的消息：system + 历史对话（排除空的助手占位） */
+  const requestMessages = (assistantId: string): AiChatMessage[] => [
+    systemMessage(),
+    ...get()
       .messages.filter((m) => m.id !== assistantId && m.content.trim().length > 0)
-      .map((m) => ({ role: m.role, content: m.content }));
+      .map((m) => ({ role: m.role, content: m.content })),
+  ];
 
   /** 失败时丢弃空的助手占位（保留有内容的半截回答），错误单独存供重试 */
   const dropEmptyAssistant = (assistantId: string) =>
     set((s) => ({ messages: s.messages.filter((m) => m.id !== assistantId || m.content.trim().length > 0) }));
 
-  /** 流式跑一轮：把助手消息 id 作为写入目标 */
+  /** 一轮结束：提取编辑指令并直接应用到文档（AI 自主修改），同时留下结果卡片供撤销 */
+  const finishAssistant = (assistantId: string, full: string) => {
+    const { edit, display } = extractEdit(full);
+    if (!edit) {
+      const text = display.trim() || full;
+      set((s) => ({ messages: s.messages.map((m) => (m.id === assistantId ? { ...m, content: text } : m)) }));
+      return;
+    }
+    const bridge = getAiEditor();
+    // 没有打开中的文档时无法落地；据实标记，界面会给「未应用」提示
+    const applied = bridge ? bridge.applyEdit(edit.op, edit.content) : false;
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.id === assistantId
+          ? {
+              ...m,
+              // 正文为空时用 summary 兜底，保证这条消息留在后续对话上下文里
+              content: display.trim() || edit.summary,
+              edit: { op: edit.op, summary: edit.summary, applied },
+            }
+          : m,
+      ),
+    }));
+  };
+
+  /** 流式跑一轮：raw 累积模型原始输出，state 里只放「去掉编辑指令块」的展示文本 */
   const runStream = async (assistantId: string) => {
+    let raw = "";
     try {
       await aiChat(requestMessages(assistantId), (ev: AiChatEvent) => {
         if (ev.type === "chunk") {
+          raw += ev.delta;
+          const display = hideEditBlock(raw);
           set((s) => ({
-            messages: s.messages.map((m) => (m.id === assistantId ? { ...m, content: m.content + ev.delta } : m)),
+            messages: s.messages.map((m) => (m.id === assistantId ? { ...m, content: display } : m)),
           }));
         } else if (ev.type === "reasoning") {
           // 推理型模型的思考增量：单独累积，只用于展示，不写进助手消息
           set((s) => ({ reasoning: s.reasoning + ev.delta }));
         } else if (ev.type === "done") {
-          set((s) => ({
-            messages: s.messages.map((m) => (m.id === assistantId ? { ...m, content: ev.full || m.content } : m)),
-          }));
+          finishAssistant(assistantId, ev.full || raw);
         } else {
           // 用户主动「停止」时 Rust 会回 cancelled：不算错误，保留已生成的部分内容
           if (ev.message === "cancelled") return;
@@ -183,8 +246,7 @@ export const useAiStore = create<AiState>()((set, get) => {
     // 快捷动作：总结当前页取整页纯文本（按 max_chars 截断）；其余三个用选中文本
     quickAction: async (kind) => {
       const bridge = getAiEditor();
-      const configuredMax = get().config?.max_chars;
-      const maxChars = configuredMax && configuredMax > 0 ? configuredMax : DEFAULT_MAX_CHARS;
+      const limit = maxChars();
       let content: string;
       if (kind === "summarize") {
         const page = bridge?.getPageText().trim() ?? "";
@@ -192,7 +254,7 @@ export const useAiStore = create<AiState>()((set, get) => {
           toast.error(t("ai.noPage"));
           return;
         }
-        content = page.slice(0, maxChars);
+        content = page.slice(0, limit);
       } else {
         const selection = bridge?.getSelectionText().trim() ?? "";
         if (!selection) {
@@ -202,6 +264,18 @@ export const useAiStore = create<AiState>()((set, get) => {
         content = selection;
       }
       await get().send(t(QUICK_PROMPT_KEY[kind], { content }));
+    },
+
+    // 撤销 AI 的自动改写：走编辑器自身的 undo 栈（与 Ctrl+Z 同一条链路）
+    undoEdit: (messageId) => {
+      const bridge = getAiEditor();
+      if (!bridge) return;
+      bridge.undo();
+      set((s) => ({
+        messages: s.messages.map((m) =>
+          m.id === messageId && m.edit ? { ...m, edit: { ...m.edit, undone: true } } : m,
+        ),
+      }));
     },
   };
 });

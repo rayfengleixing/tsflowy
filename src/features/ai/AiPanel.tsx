@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  Check,
   Copy,
   CornerDownLeft,
   Eraser,
@@ -12,6 +13,7 @@ import {
   Settings,
   Sparkles,
   Square,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -41,6 +43,7 @@ export function AiPanel() {
   const clear = useAiStore((s) => s.clear);
   const retry = useAiStore((s) => s.retry);
   const quickAction = useAiStore((s) => s.quickAction);
+  const undoEdit = useAiStore((s) => s.undoEdit);
   const setRoute = useWorkspaceStore((s) => s.setRoute);
 
   const [input, setInput] = useState("");
@@ -180,6 +183,7 @@ export function AiPanel() {
                 message={m}
                 onReplace={m.role === "assistant" ? () => writeBack(m.content, "replace") : undefined}
                 onInsert={m.role === "assistant" ? () => writeBack(m.content, "insert") : undefined}
+                onUndo={m.edit ? () => undoEdit(m.id) : undefined}
               />
             ))}
             {/* 推理型模型（deepseek-flash / deepseek-reasoner 等）的思考过程：仅展示，不参与回填 */}
@@ -262,25 +266,54 @@ function MessageBubble({
   message,
   onReplace,
   onInsert,
+  onUndo,
 }: {
   message: AiMessage;
   onReplace?: () => void;
   onInsert?: () => void;
+  onUndo?: () => void;
 }) {
   const isUser = message.role === "user";
+  const edit = message.edit;
+  // 正文为空、内容被 summary 兜底时不再渲染气泡，避免与下方结果卡片重复
+  const bubbleText = edit && message.content === edit.summary ? "" : message.content;
   return (
     <div className={cn("flex flex-col", isUser ? "items-end" : "items-start")}>
-      <div
-        className={cn(
-          "max-w-[85%] whitespace-pre-wrap break-words rounded-lg px-2.5 py-1.5 text-[12px] leading-relaxed",
-          isUser
-            ? "bg-brand-500 text-white"
-            : "bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200",
-        )}
-      >
-        {message.content || "…"}
-      </div>
-      {!isUser && message.content.trim() && (onReplace || onInsert) && (
+      {(bubbleText.trim() || !edit) && (
+        <div
+          className={cn(
+            "max-w-[85%] whitespace-pre-wrap break-words rounded-lg px-2.5 py-1.5 text-[12px] leading-relaxed",
+            isUser
+              ? "bg-brand-500 text-white"
+              : "bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200",
+          )}
+        >
+          {bubbleText || "…"}
+        </div>
+      )}
+      {/* AI 自主修改的落地结果：已写入 / 未写入 + 撤销 */}
+      {edit && (
+        <div
+          className={cn(
+            "mt-1.5 flex max-w-[85%] items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]",
+            edit.applied
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+              : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
+          )}
+        >
+          {edit.applied ? <Check className="h-3 w-3 shrink-0" /> : <TriangleAlert className="h-3 w-3 shrink-0" />}
+          <span className="min-w-0 flex-1 truncate">
+            {edit.applied ? (edit.undone ? t("ai.editUndone") : t("ai.editApplied")) : t("ai.editNotApplied")}
+            {edit.summary && !edit.undone ? `：${edit.summary}` : ""}
+          </span>
+          {edit.applied && !edit.undone && onUndo && (
+            <button className="shrink-0 underline hover:no-underline" onClick={onUndo}>
+              {t("ai.undoEdit")}
+            </button>
+          )}
+        </div>
+      )}
+      {!isUser && bubbleText.trim() && (onReplace || onInsert) && (
         <div className="mt-1.5 flex gap-1.5">
           {onReplace && (
             <button
