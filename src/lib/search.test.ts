@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { localTitleHits, mergeSearchRows, prioritizeSearchRows, sanitizeSnippet, titleTier } from "./search";
+import {
+  filterHits,
+  localQualifierHits,
+  localTitleHits,
+  mergeSearchRows,
+  parseSearchQuery,
+  prioritizeSearchRows,
+  sanitizeSnippet,
+  titleTier,
+} from "./search";
 
 // escapeFts / likePattern 的转义用例已随 Phase B 下沉 Rust（src-tauri/src/db/search.rs）。
 
@@ -102,5 +111,50 @@ describe("prioritizeSearchRows", () => {
 describe("sanitizeSnippet", () => {
   it("keeps em markers only and strips other tags", () => {
     expect(sanitizeSnippet("a <em>b</em> c <script>x</script>")).toBe("a <em>b</em> c x");
+  });
+});
+
+describe("parseSearchQuery", () => {
+  it("splits qualifiers out of the keyword text", () => {
+    expect(parseSearchQuery("笔记 type:page")).toEqual({ text: "笔记", layouts: ["document"], tags: [] });
+    expect(parseSearchQuery("type:database")).toEqual({ text: "", layouts: ["grid", "board", "calendar"], tags: [] });
+    expect(parseSearchQuery("tag:工作 tag:重要 项目")).toEqual({ text: "项目", layouts: [], tags: ["工作", "重要"] });
+  });
+
+  it("lowercases values and supports quoted phrases", () => {
+    expect(parseSearchQuery('type:Board "项目 计划"')).toEqual({ text: "项目 计划", layouts: ["board"], tags: [] });
+    expect(parseSearchQuery("tag:Work")).toEqual({ text: "", layouts: [], tags: ["work"] });
+  });
+
+  it("drops unknown type values and bare 'type:' prefixes", () => {
+    expect(parseSearchQuery("type:xyz 笔记")).toEqual({ text: "笔记", layouts: [], tags: [] });
+    expect(parseSearchQuery("type:")).toEqual({ text: "", layouts: [], tags: [] });
+  });
+});
+
+describe("qualifier filtering", () => {
+  const views = [
+    { id: "a", name: "项目计划", icon: null, layout: "document", tags: '["工作"]' },
+    { id: "b", name: "任务表", icon: null, layout: "grid", tags: '["工作","重要"]' },
+    { id: "c", name: "读书", icon: "📖", layout: "document", tags: "[]" },
+  ] as unknown as Parameters<typeof localQualifierHits>[0];
+
+  it("localQualifierHits lists views by layout and tags", () => {
+    expect(localQualifierHits(views, parseSearchQuery("type:database")).map((r) => r.view_id)).toEqual(["b"]);
+    expect(localQualifierHits(views, parseSearchQuery("tag:工作")).map((r) => r.view_id)).toEqual(["a", "b"]);
+    expect(localQualifierHits(views, parseSearchQuery("tag:工作 type:page")).map((r) => r.view_id)).toEqual(["a"]);
+    expect(localQualifierHits(views, parseSearchQuery("tag:不存在"))).toEqual([]);
+  });
+
+  it("filterHits keeps only hits satisfying the qualifiers", () => {
+    const hits = [
+      { view_id: "a", title: "项目计划", icon: null, layout: "document" as const, snippet: "" },
+      { view_id: "b", title: "任务表", icon: null, layout: "grid" as const, snippet: "" },
+      { view_id: "c", title: "读书", icon: null, layout: "document" as const, snippet: "" },
+    ];
+    const tagsOf = (id: string) => (id === "a" ? ["工作"] : id === "b" ? ["工作", "重要"] : []);
+    expect(filterHits(hits, parseSearchQuery("type:page"), tagsOf).map((h) => h.view_id)).toEqual(["a", "c"]);
+    expect(filterHits(hits, parseSearchQuery("tag:工作"), tagsOf).map((h) => h.view_id)).toEqual(["a", "b"]);
+    expect(filterHits(hits, parseSearchQuery("笔记"), tagsOf)).toHaveLength(3); // 无限定符原样返回
   });
 });

@@ -187,6 +187,7 @@ export const zh = {
   "search.results": "搜索结果",
   "search.loading": "搜索中…",
   "search.found": "找到 {count} 条结果",
+  "search.qualifierHint": "可用限定符：type:页面 / type:数据库 / tag:标签",
   "common.add": "添加",
   "field.rename": "重命名",
   "field.changeType": "更改类型",

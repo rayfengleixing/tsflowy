@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Clock, FileSearch } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useRowFocusStore } from "@/stores/row-focus";
-import { searchApi, type SearchHit } from "@/lib/search";
+import { searchApi, parseSearchQuery, type SearchHit } from "@/lib/search";
 import { pushSearchHistory } from "@/lib/search-history";
 import { viewApi } from "@/lib/db";
 import { flattenTree } from "@/lib/tree";
@@ -104,6 +104,9 @@ export function SearchResultsPage() {
     setRoute("workspace");
   };
 
+  // 高亮只用关键词部分，避免把 `type:page` 这类限定符喂给标题高亮
+  const highlightQuery = parseSearchQuery(searchQuery).text;
+
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-4">
@@ -138,6 +141,7 @@ export function SearchResultsPage() {
         <div className="mx-auto max-w-[720px] px-6 py-4">
           {!searchQuery.trim() ? (
             <div className="flex flex-col gap-1">
+              <p className="mb-1 text-[12px] text-neutral-400">{t("search.qualifierHint")}</p>
               <p className="mb-1 flex items-center gap-1.5 text-[12px] text-neutral-500">
                 <Clock className="h-3.5 w-3.5" />
                 {t("search.recent")}
@@ -185,7 +189,7 @@ export function SearchResultsPage() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[14px] font-medium text-neutral-800">
-                      <HighlightedTitle title={hit.title} query={searchQuery} />
+                      <HighlightedTitle title={hit.title} query={highlightQuery} />
                     </span>
                     {hit.snippet && (
                       <span

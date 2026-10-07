@@ -192,6 +192,7 @@ export const en: Record<MessageKey, string> = {
   "search.results": "Results",
   "search.loading": "Searching…",
   "search.found": "{count} results found",
+  "search.qualifierHint": "Qualifiers: type:page / type:database / tag:label",
   "common.add": "Add",
   "field.rename": "Rename",
   "field.changeType": "Change type",
