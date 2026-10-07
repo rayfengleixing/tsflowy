@@ -6,7 +6,7 @@ import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { NO_GROUP, cellValueForGroup, defaultBoardField, groupRowsForBoard } from "@/lib/board-calendar";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { relationCellText, relationTarget, type RelationDb } from "@/lib/relation";
-import { useRelationStore } from "@/stores/relation";
+import { useRelationDbs } from "./use-database-data";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -88,23 +88,7 @@ export function BoardView({
   }, [cardCandidates, cardFieldIds, defaultCardFieldIds]);
 
   // 关联列（主字段/卡片副信息）要解析目标行标题：把本表所有关联字段的目标视图拉进缓存
-  const relationTargetIds = useMemo(
-    () => [
-      ...new Set(
-        fields
-          .filter((f) => f.field_type === "relation")
-          .map((f) => relationTarget(f))
-          .filter((id): id is string => Boolean(id)),
-      ),
-    ],
-    [fields],
-  );
-  const relationData = useRelationStore((s) => s.data);
-  const ensureRelationDbs = useRelationStore((s) => s.ensure);
-  useEffect(() => {
-    if (relationTargetIds.length > 0) ensureRelationDbs(relationTargetIds);
-  }, [relationTargetIds, ensureRelationDbs]);
-  const relationDbOf = useCallback((viewId: string) => relationData[viewId], [relationData]);
+  const relationDbOf = useRelationDbs(fields);
 
   const toggleCardField = (id: string) => {
     const current = cardFieldIds ?? defaultCardFieldIds;

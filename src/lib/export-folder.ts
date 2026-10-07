@@ -53,7 +53,9 @@ export async function exportMarkdownFolder(): Promise<ExportFolderResult | null>
   const tree = useWorkspaceStore.getState().tree;
   if (tree.length === 0) return { total: 0, exported: 0, failed: 0 };
 
-  const root = await open({ directory: true, multiple: false });
+  // recursive: true 让 dialog 把整棵子树授权给 fs scope：导出会往下建子目录（<页面>/<子页>.md），
+  // 非递归时 scope 只放行一层，写入自定义命令会被路径白名单拒绝
+  const root = await open({ directory: true, multiple: false, recursive: true });
   if (typeof root !== "string" || !root) return null; // 用户取消
 
   let total = 0;

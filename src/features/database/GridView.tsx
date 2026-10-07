@@ -2,15 +2,12 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type Mouse
 import {
   ArrowUpDown,
   CheckSquare,
-  ChevronDown,
-  ChevronRight,
   Copy,
   Download,
   ExternalLink,
   FileUp,
   Filter,
   GripVertical,
-  Plus,
   Square,
   Trash2,
   X,
@@ -25,11 +22,11 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { viewApi, newId } from "@/lib/db";
 import { parseFieldOptions } from "@/lib/database-values";
 import { UNGROUPED, applyFilters, canGroupBy, groupRowsForGrid, sortRows, type SortSpec } from "@/lib/database-query";
-import { aggregateValue, normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
+import { normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
 import { buildCsvExport, csvValueToCell, parseCsv, planImport, parseTsv, resolveSelectRefs } from "@/lib/csv";
 import { computeFormula } from "@/lib/database-formula";
 import { computeRollup, relationRowIds, relationRowLabel, relationTarget } from "@/lib/relation";
-import { useRelationStore } from "@/stores/relation";
+import { useRelationDbs } from "./use-database-data";
 import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
 import { FilterBar } from "./FilterBar";
@@ -39,15 +36,20 @@ import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
 import { CellEditorSlot } from "./editors";
 import { RowDetailPanel } from "./RowDetail";
 import { AddFieldButton, CellDisplay, HiddenColumnsMenu, RenameInput, needsFieldSettings } from "./grid-parts";
+import { GridAddRow, GridGroupHeaderRow, GridSpacerRow, GridSubtotalRow } from "./grid-rows";
+import {
+  ROW_H_FALLBACK,
+  VIRTUAL_MIN_ROWS,
+  VIRTUAL_OVERSCAN,
+  cellSelector,
+  clampColumnWidth,
+  computeEvaluatedCells,
+  computeVirtualWindow,
+  rowCenterScrollTop,
+} from "./grid-view-helpers";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 
-/** 窗口化阈值：行数超过它才启用（小表保持全量渲染，零行为差异） */
-const VIRTUAL_MIN_ROWS = 150;
-/** 行高兜底值（td h-8 = 32px）：首次测量前用，测量后以真实行高为准 */
-const ROW_H_FALLBACK = 32;
-/** 视口上下各多渲染的行数：抵消快速滚动时的白屏 */
-const VIRTUAL_OVERSCAN = 12;
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
@@ -109,14 +111,13 @@ export function GridView({
     const col = tableRef.current?.querySelector<HTMLTableColElement>(`col[data-field-id="${fieldId}"]`);
     if (!col) return;
     const startX = e.clientX;
-    const clamp = (w: number) => Math.max(60, Math.min(600, w));
     const onMove = (ev: MouseEvent) => {
-      col.style.width = clamp(startWidth + ev.clientX - startX) + "px";
+      col.style.width = clampColumnWidth(startWidth + ev.clientX - startX) + "px";
     };
     const onUp = (ev: MouseEvent) => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
-      const width = clamp(startWidth + ev.clientX - startX);
+      const width = clampColumnWidth(startWidth + ev.clientX - startX);
       void store.setFieldWidth(fieldId, width).catch((err: unknown) => {
         col.style.width = ""; // 落库失败：去掉本地预览宽度，回退 store 旧值
         logger.error("set field width failed", err);
@@ -132,51 +133,14 @@ export function GridView({
   const primaryField = visibleFields[0] ?? null;
 
   // 关联/汇总要读目标库：把本表所有关联字段的目标视图拉进缓存（同一目标库只请求一次）
-  const relationTargetIds = useMemo(
-    () => [
-      ...new Set(
-        fields
-          .filter((f) => f.field_type === "relation")
-          .map((f) => relationTarget(f))
-          .filter((id): id is string => Boolean(id)),
-      ),
-    ],
-    [fields],
-  );
-  const relationData = useRelationStore((s) => s.data);
-  const ensureRelationDbs = useRelationStore((s) => s.ensure);
-  useEffect(() => {
-    if (relationTargetIds.length > 0) ensureRelationDbs(relationTargetIds);
-  }, [relationTargetIds, ensureRelationDbs]);
-  // 目标行 id → 显示标题；目标库未加载时返回 null，由调用方降级到原始 id
-  const relationDbOf = useCallback((viewId: string) => relationData[viewId], [relationData]);
+  const relationDbOf = useRelationDbs(fields);
 
   // 公式/汇总字段没有存储值：把求值结果提前算进一份"有效单元格"图，排序/列汇总/分组小计都读它，
   // 否则按这两列排序排不动（raw 恒为空值）、汇总恒为空。没有这类字段时直接复用原始 cells。
-  const evaluatedCells = useMemo(() => {
-    const hasComputed = fields.some((f) => f.field_type === "formula" || f.field_type === "rollup");
-    if (!hasComputed) return cells;
-    const out: Record<string, Record<string, CellValue>> = {};
-    for (const row of rows) {
-      const rowCells = cells[row.id] ?? {};
-      let copy: Record<string, CellValue> | null = null;
-      for (const f of fields) {
-        if (f.field_type === "formula") {
-          const v = computeFormula(f, rowCells, fields);
-          if (v !== null) (copy ??= { ...rowCells })[f.id] = v;
-        } else if (f.field_type === "rollup") {
-          const v = computeRollup(f, rowCells, fields, relationDbOf);
-          if (v !== null) {
-            // 数字样式的汇总值转成 number：排序才是数值序（"9.00" 不会排在 "42.50" 之后）
-            const n = Number(v);
-            (copy ??= { ...rowCells })[f.id] = v.trim() !== "" && Number.isFinite(n) ? n : v;
-          }
-        }
-      }
-      out[row.id] = copy ?? rowCells;
-    }
-    return out;
-  }, [rows, cells, fields, relationDbOf]);
+  const evaluatedCells = useMemo(
+    () => computeEvaluatedCells(rows, cells, fields, relationDbOf),
+    [rows, cells, fields, relationDbOf],
+  );
 
   const displayRows = useMemo(() => {
     const filtered = applyFilters(rows, cells, filters, fields, filterMode);
@@ -264,10 +228,13 @@ export function GridView({
     if (first?.offsetHeight) rowHeightRef.current = first.offsetHeight;
     const h = rowHeightRef.current;
     const dataTop = body.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
-    const total = displayRows.length;
-    const start = Math.max(0, Math.floor((el.scrollTop - dataTop) / h) - VIRTUAL_OVERSCAN);
-    const end = Math.min(total, Math.ceil((el.scrollTop - dataTop + el.clientHeight) / h) + VIRTUAL_OVERSCAN);
-    const next = { start, end: Math.max(end, Math.min(total, start + 1)) };
+    const next = computeVirtualWindow({
+      scrollTop: el.scrollTop,
+      dataTop,
+      clientHeight: el.clientHeight,
+      total: displayRows.length,
+      rowHeight: h,
+    });
     setWin((prev) => (prev?.start === next.start && prev.end === next.end ? prev : next));
   }, [scrollerRef, displayRows.length]);
 
@@ -298,7 +265,12 @@ export function GridView({
     if (idx < 0 || !el || !body) return;
     if (win && idx >= win.start && idx < win.end) return;
     const dataTop = body.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
-    el.scrollTop = Math.max(0, dataTop + idx * rowHeightRef.current - el.clientHeight / 2);
+    el.scrollTop = rowCenterScrollTop({
+      dataTop,
+      index: idx,
+      rowHeight: rowHeightRef.current,
+      clientHeight: el.clientHeight,
+    });
   }, [focusRowId, virtual, displayRows, win, scrollerRef]);
 
   useEffect(() => {
@@ -317,9 +289,6 @@ export function GridView({
   const hasAggregates = visibleFields.some((f) => aggregateOf(f));
 
   // ---------- 键盘导航 ----------
-  const cellSelector = (c: { rowId: string; fieldId: string }) =>
-    `[data-cell-row="${c.rowId}"][data-cell-field="${c.fieldId}"]`;
-
   /** 光标移动：越界即夹紧；虚拟窗口外的行先滚过去，渲染完成后再聚焦 */
   const moveCursorTo = (rowIndex: number, colIndex: number) => {
     const ri = Math.max(0, Math.min(displayRows.length - 1, rowIndex));
@@ -332,7 +301,12 @@ export function GridView({
       const body = tbodyRef.current;
       if (el && body) {
         const dataTop = body.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
-        el.scrollTop = Math.max(0, dataTop + ri * rowHeightRef.current - el.clientHeight / 2);
+        el.scrollTop = rowCenterScrollTop({
+          dataTop,
+          index: ri,
+          rowHeight: rowHeightRef.current,
+          clientHeight: el.clientHeight,
+        });
       }
     }
     setCursor({ rowId: row.id, fieldId: field.id });
@@ -843,37 +817,6 @@ export function GridView({
     setCollapsedGroups(next);
   };
 
-  /** 分组小计行：只铺已配置汇总的列，其余列留空 */
-  // 窗口外的行用一条占位行撑住高度：列宽由 colgroup 决定，占位不参与渲染
-  const renderSpacer = (height: number) => (
-    <tr aria-hidden style={{ height }}>
-      <td colSpan={visibleFields.length + 2} className="border-0 p-0" />
-    </tr>
-  );
-
-  const renderSubtotal = (groupRows: DatabaseRow[]) => {
-    const rowIds = groupRows.map((r) => r.id);
-    return (
-      <tr className="bg-neutral-50/80 dark:bg-neutral-900/40">
-        <td className="border-b border-r border-neutral-200 px-1 text-right text-[11px] text-neutral-400 dark:border-neutral-700">
-          {t("grid.subtotal")}
-        </td>
-        {visibleFields.map((field) => {
-          const fn = aggregateOf(field);
-          return (
-            <td
-              key={field.id}
-              className="h-7 border-b border-r border-neutral-200 px-2 align-middle text-[11px] text-neutral-600 dark:border-neutral-700 dark:text-neutral-300"
-            >
-              {fn ? aggregateValue(fn, field, rowIds, evaluatedCells) : null}
-            </td>
-          );
-        })}
-        <td className="border-b border-neutral-200 dark:border-neutral-700" />
-      </tr>
-    );
-  };
-
   if (loading && fields.length === 0) {
     return <div className="flex h-full items-center justify-center text-sm text-neutral-500">{t("app.loading")}</div>;
   }
@@ -1127,29 +1070,22 @@ export function GridView({
                   const collapsed = collapsedGroups.has(group.key);
                   return (
                     <Fragment key={group.key}>
-                      <tr>
-                        <td
-                          colSpan={visibleFields.length + 2}
-                          className="border-b border-neutral-200 bg-neutral-50 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900/40"
-                        >
-                          <button
-                            className="flex items-center gap-1.5 text-[12px] font-medium text-neutral-700 dark:text-neutral-200"
-                            onClick={() => toggleGroup(group.key)}
-                          >
-                            {collapsed ? (
-                              <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-                            ) : (
-                              <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-                            )}
-                            <span className="truncate">
-                              {group.key === UNGROUPED || !group.label ? t("grid.ungrouped") : group.label}
-                            </span>
-                            <span className="text-[11px] font-normal text-neutral-400">{group.rows.length}</span>
-                          </button>
-                        </td>
-                      </tr>
+                      <GridGroupHeaderRow
+                        label={group.key === UNGROUPED || !group.label ? t("grid.ungrouped") : group.label}
+                        count={group.rows.length}
+                        collapsed={collapsed}
+                        onToggle={() => toggleGroup(group.key)}
+                        colSpan={visibleFields.length + 2}
+                      />
                       {!collapsed && group.rows.map(renderRow)}
-                      {!collapsed && hasAggregates && renderSubtotal(group.rows)}
+                      {!collapsed && hasAggregates && (
+                        <GridSubtotalRow
+                          rowIds={group.rows.map((r) => r.id)}
+                          visibleFields={visibleFields}
+                          aggregateOf={aggregateOf}
+                          cells={evaluatedCells}
+                        />
+                      )}
                     </Fragment>
                   );
                 })
@@ -1160,29 +1096,22 @@ export function GridView({
                     const end = win?.end ?? Math.min(displayRows.length, VIRTUAL_OVERSCAN * 4);
                     return (
                       <>
-                        {start > 0 && renderSpacer(start * rowHeightRef.current)}
+                        {start > 0 && (
+                          <GridSpacerRow height={start * rowHeightRef.current} colSpan={visibleFields.length + 2} />
+                        )}
                         {displayRows.slice(start, end).map(renderRow)}
-                        {end < displayRows.length && renderSpacer((displayRows.length - end) * rowHeightRef.current)}
+                        {end < displayRows.length && (
+                          <GridSpacerRow
+                            height={(displayRows.length - end) * rowHeightRef.current}
+                            colSpan={visibleFields.length + 2}
+                          />
+                        )}
                       </>
                     );
                   })()
                 : displayRows.map(renderRow)}
-            <tr>
-              {/* 新建行：跨整行底部，避免无字段时挤在窄列里 */}
-              <td
-                colSpan={1 + visibleFields.length + 1}
-                className="h-8 border-t border-neutral-200 px-2 dark:border-neutral-700"
-              >
-                <button
-                  data-testid="add-row"
-                  className="flex h-6 items-center gap-1 rounded px-1.5 text-[12px] text-neutral-500 hover:bg-neutral-200/60 dark:text-neutral-400 dark:hover:bg-neutral-800"
-                  onClick={addRow}
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  {t("row.new")}
-                </button>
-              </td>
-            </tr>
+            {/* 新建行：跨整行底部，避免无字段时挤在窄列里 */}
+            <GridAddRow colSpan={1 + visibleFields.length + 1} onAdd={addRow} />
           </tbody>
           {/* 底部汇总行：每列一个可点的汇总函数，就地显示结果（无边框，与数据区视觉分离） */}
           <tfoot>

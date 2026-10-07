@@ -139,24 +139,23 @@ const AI_PROVIDER_LABEL_KEY: Record<string, MessageKey> = {
 
 /** 设置页（M6）：外观/语言/数据目录/备份/快捷键 */
 export function SettingsPage() {
-  const {
-    theme,
-    themePreset,
-    accent,
-    font,
-    lang,
-    fontSize,
-    lineHeight,
-    editorWidth,
-    setTheme,
-    setThemePreset,
-    setAccent,
-    setFont,
-    setLang,
-    setFontSize,
-    setLineHeight,
-    setEditorWidth,
-  } = useSettingsStore();
+  // 原子 selector 订阅：避免 useSettingsStore() 全量订阅导致任意设置变更都重渲染整个设置页
+  const theme = useSettingsStore((s) => s.theme);
+  const themePreset = useSettingsStore((s) => s.themePreset);
+  const accent = useSettingsStore((s) => s.accent);
+  const font = useSettingsStore((s) => s.font);
+  const lang = useSettingsStore((s) => s.lang);
+  const fontSize = useSettingsStore((s) => s.fontSize);
+  const lineHeight = useSettingsStore((s) => s.lineHeight);
+  const editorWidth = useSettingsStore((s) => s.editorWidth);
+  const setTheme = useSettingsStore((s) => s.setTheme);
+  const setThemePreset = useSettingsStore((s) => s.setThemePreset);
+  const setAccent = useSettingsStore((s) => s.setAccent);
+  const setFont = useSettingsStore((s) => s.setFont);
+  const setLang = useSettingsStore((s) => s.setLang);
+  const setFontSize = useSettingsStore((s) => s.setFontSize);
+  const setLineHeight = useSettingsStore((s) => s.setLineHeight);
+  const setEditorWidth = useSettingsStore((s) => s.setEditorWidth);
 
   const [dataDir, setDataDir] = useState<string>("");
   const [version, setVersion] = useState<string>("");

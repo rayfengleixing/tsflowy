@@ -99,7 +99,7 @@ npm run tauri:build
 D:\Code\rust-target\release\bundle\nsis\TsFlowy_<版本号>_x64-setup.exe
 ```
 
-例如当前版本：`TsFlowy_0.8.14_x64-setup.exe`。
+例如当前版本：`TsFlowy_0.8.15_x64-setup.exe`。
 
 > 打包前必须设置自动更新的签名私钥，否则构建会失败（`createUpdaterArtifacts` 已开启）：
 >
