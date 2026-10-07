@@ -40,6 +40,7 @@ import { useAiStore } from "@/stores/ai";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { scanOrphanAssets, purgeOrphanAssets, type OrphanScan } from "@/lib/assets";
+import { detectDataDirRisk, type DataDirRisk } from "@/lib/data-dir-risk";
 import { importMarkdownFolder } from "@/lib/import-folder";
 import { loadDailyNotesConfig, saveDailyNotesConfig, type DailyNotesConfig } from "@/lib/daily-notes";
 import { exportMarkdownFolder } from "@/lib/export-folder";
@@ -221,6 +222,8 @@ export function SettingsPage() {
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   // 上次同步动作对应的文案 key；未知动作返回 undefined（不渲染）
   const syncLastActionKey = syncInfo?.last_action ? SYNC_ACTION_KEY[syncInfo.last_action] : undefined;
+  // 数据目录风险：位于云同步盘内，或与同步文件夹互相嵌套
+  const dataDirRisk = detectDataDirRisk(dataDir, syncInfo?.dir);
 
   useEffect(() => {
     invoke<string>("data_dir_path")
@@ -824,6 +827,7 @@ export function SettingsPage() {
                 : t("settings.dataDirPlain")}
             </div>
           )}
+          <RiskNotice risk={dataDirRisk} />
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <label className="flex items-center gap-1.5 text-[11px] text-neutral-600">
               <input type="checkbox" checked={moveCurrent} onChange={(e) => setMoveCurrent(e.target.checked)} />
@@ -1007,6 +1011,7 @@ export function SettingsPage() {
                   {t("settings.syncOpen")}
                 </Button>
               </div>
+              {dataDirRisk === "sync-overlap" && <RiskNotice risk={dataDirRisk} />}
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button size="sm" onClick={syncNow} disabled={busySync}>
                   <RefreshCw className={cn("mr-1 h-3.5 w-3.5", busySync && "animate-spin")} />
@@ -1174,6 +1179,16 @@ export function SettingsPage() {
           </div>
         </Section>
       </div>
+    </div>
+  );
+}
+
+/** 数据目录风险提示（云同步盘 / 与同步目录嵌套）；无风险时不渲染 */
+function RiskNotice({ risk }: { risk: DataDirRisk | null }) {
+  if (!risk) return null;
+  return (
+    <div className="mt-2 max-w-lg rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+      {t(risk === "cloud" ? "settings.dataDirRiskCloud" : "settings.dataDirRiskOverlap")}
     </div>
   );
 }

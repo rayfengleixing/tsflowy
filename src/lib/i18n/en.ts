@@ -458,8 +458,12 @@ export const en: Record<MessageKey, string> = {
     "All workspaces, docs, database and attachments are stored here; the default location is the system app data directory (on Windows, %APPDATA%\\com.tsflowy.app). After changing, restart the app — TsFlowy will transparently redirect the default data directory to your new location via a junction/symlink.",
   "settings.dataDirEffective": "Current path",
   "settings.dataDirLinked":
-    "Data actually lives at the path above: the system default folder {path} is a junction pointing to it, so you can back it up or sync that folder directly.",
+    "Data actually lives at the path above: the system default folder {path} is a junction pointing to it, so you can back that folder up directly.",
   "settings.dataDirPlain": "Data is stored directly at the path above (no junction in use).",
+  "settings.dataDirRiskCloud":
+    "The data folder sits inside a cloud-sync folder (OneDrive / Dropbox / etc.). The sync client may move files while the database is being written, which can corrupt your data. Move the data folder to a local disk and use the Sync folder feature below for cross-device sync.",
+  "settings.dataDirRiskOverlap":
+    "The data folder and the sync folder are nested inside each other. Syncing would copy the database while it is being written, which can corrupt it. Choose a sync folder outside the data folder.",
   "settings.dataDirCustom": "Next-start path (custom)",
   "settings.chooseDir": "Browse…",
   "settings.resetDir": "Reset to default",

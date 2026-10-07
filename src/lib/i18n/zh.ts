@@ -451,9 +451,12 @@ export const zh = {
   "settings.dataDirHint":
     "所有空间、文档、数据库和附件都保存在这里，默认位置是系统的应用数据目录（Windows 为 %APPDATA%\\com.tsflowy.app）。修改后需重启应用，应用会自动把默认目录建立为指向新位置的联接（junction），可随时点击「恢复默认」回退。",
   "settings.dataDirEffective": "当前路径",
-  "settings.dataDirLinked":
-    "数据实际存放在上方路径：系统默认目录 {path} 是指向它的目录联接，可直接对该文件夹做备份或放进同步盘。",
+  "settings.dataDirLinked": "数据实际存放在上方路径：系统默认目录 {path} 是指向它的目录联接，可直接对该文件夹做备份。",
   "settings.dataDirPlain": "数据直接存放在上方路径（未启用目录联接）。",
+  "settings.dataDirRiskCloud":
+    "数据目录位于云同步盘内（OneDrive / 坚果云 / Dropbox 等）：同步客户端可能在数据库写入过程中搬走文件，导致数据损坏。建议把数据目录移到本地磁盘，改用下方「同步文件夹」实现跨设备同步。",
+  "settings.dataDirRiskOverlap":
+    "数据目录与同步文件夹互相嵌套：同步时会拷贝本机正在写入的数据库，可能导致损坏。请把同步文件夹选在数据目录之外。",
   "settings.dataDirCustom": "下次启动路径（自定义）",
   "settings.chooseDir": "浏览…",
   "settings.resetDir": "恢复默认",
