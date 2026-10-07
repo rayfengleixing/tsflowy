@@ -603,7 +603,7 @@ const zh = {
   // — AI 助手 —
   "ai.title": "AI 助手",
   "ai.empty": "开始对话吧，或使用下方快捷动作。",
-  "ai.inputPlaceholder": "输入消息，Enter 发送，Shift+Enter 换行",
+  "ai.inputPlaceholder": "输入消息，Enter 发送，Shift+Enter 换行，@ 引用文件",
   "ai.send": "发送",
   "ai.stop": "停止",
   "ai.clear": "清空对话",
@@ -1280,7 +1280,7 @@ const en: Record<MessageKey, string> = {
   // — AI assistant —
   "ai.title": "AI Assistant",
   "ai.empty": "Start chatting, or use a quick action below.",
-  "ai.inputPlaceholder": "Type a message. Enter to send, Shift+Enter for a new line",
+  "ai.inputPlaceholder": "Type a message. Enter to send, Shift+Enter for a new line, @ to reference a file",
   "ai.send": "Send",
   "ai.stop": "Stop",
   "ai.clear": "Clear chat",

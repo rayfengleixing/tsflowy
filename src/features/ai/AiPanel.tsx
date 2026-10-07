@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   Copy,
@@ -18,10 +18,13 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { viewIcon } from "@/components/view-icon";
 import { useAiStore, type AiMessage } from "@/stores/ai";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { aiErrorText } from "@/lib/ai";
 import { getAiEditor } from "@/lib/ai-editor";
+import { detectMentionQuery } from "@/lib/ai-mention";
+import { flattenTree } from "@/lib/tree";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -47,7 +50,27 @@ export function AiPanel() {
   const setRoute = useWorkspaceStore((s) => s.setRoute);
 
   const [input, setInput] = useState("");
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
+  const [mentionActive, setMentionActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const tree = useWorkspaceStore((s) => s.tree);
+
+  // @ 引用的候选文档：当前工作区树（排除行详情），按查询词过滤
+  const mentionItems = useMemo(() => {
+    if (!mention) return [];
+    const q = mention.query.trim().toLowerCase();
+    return flattenTree(tree)
+      .filter((v) => {
+        try {
+          return !JSON.parse(v.extra ?? "{}").row_detail;
+        } catch {
+          return true;
+        }
+      })
+      .filter((v) => !q || v.name.toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [mention, tree]);
 
   useEffect(() => {
     if (open && !configLoaded) void loadConfig();
@@ -68,10 +91,58 @@ export function AiPanel() {
     const text = input.trim();
     if (!text || streaming) return;
     setInput("");
+    setMention(null);
     void send(text);
   };
 
+  // 选中 @ 引用：把 @查询词 替换为 @文件名 （带一个尾随空格），并把光标移到其后
+  const pickMention = (name: string) => {
+    if (!mention) return;
+    const caret = textareaRef.current?.selectionStart ?? input.length;
+    const next = input.slice(0, mention.start) + "@" + name + " " + input.slice(caret);
+    setInput(next);
+    setMention(null);
+    const pos = mention.start + name.length + 2;
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(pos, pos);
+      }
+    });
+  };
+
+  const onInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setInput(value);
+    setMention(detectMentionQuery(value, e.target.selectionStart ?? value.length));
+    setMentionActive(0);
+  };
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // 文件下拉打开时，方向键/回车/退出优先归下拉
+    if (mention && mentionItems.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionActive((i) => (i + 1) % mentionItems.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionActive((i) => (i - 1 + mentionItems.length) % mentionItems.length);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        pickMention(mentionItems[mentionActive]?.name ?? mentionItems[0].name);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMention(null);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       submit();
@@ -232,11 +303,40 @@ export function AiPanel() {
             />
           </div>
 
-          {/* 输入区：Enter 发送、Shift+Enter 换行 */}
-          <div className="shrink-0 border-t border-neutral-200 p-2 dark:border-neutral-700">
+          {/* 输入区：Enter 发送、Shift+Enter 换行；输入 @ 引用工作区文件 */}
+          <div className="relative shrink-0 border-t border-neutral-200 p-2 dark:border-neutral-700">
+            {mention && (
+              <div className="absolute inset-x-2 bottom-full mb-1 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800">
+                {mentionItems.length === 0 ? (
+                  <div className="px-3 py-2 text-[12px] text-neutral-400">{t("mention.empty")}</div>
+                ) : (
+                  <div className="max-h-56 overflow-y-auto py-1">
+                    {mentionItems.map((v, i) => (
+                      <button
+                        key={v.id}
+                        type="button"
+                        data-active={i === mentionActive}
+                        className={cn(
+                          "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px]",
+                          i === mentionActive
+                            ? "bg-brand-100 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100"
+                            : "text-neutral-600 dark:text-neutral-300",
+                        )}
+                        onMouseEnter={() => setMentionActive(i)}
+                        onClick={() => pickMention(v.name)}
+                      >
+                        <span className="text-base leading-none">{viewIcon(v)}</span>
+                        <span className="min-w-0 flex-1 truncate">{v.name || t("common.untitled")}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <textarea
+              ref={textareaRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={onInputChange}
               onKeyDown={onKeyDown}
               rows={3}
               placeholder={t("ai.inputPlaceholder")}

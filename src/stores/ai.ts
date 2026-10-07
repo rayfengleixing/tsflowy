@@ -18,6 +18,13 @@ import {
   hideEditBlock,
   type AiEditOp,
 } from "@/lib/ai-edit";
+import { parseMentions } from "@/lib/ai-mention";
+import { documentApi } from "@/lib/documents";
+import { jsonToMarkdown } from "@/lib/markdown";
+import { flattenTree } from "@/lib/tree";
+import { logger } from "@/lib/logger";
+import { useWorkspaceStore } from "@/stores/workspace";
+import type { JSONContent } from "@tiptap/core";
 import { t, type MessageKey } from "@/lib/i18n";
 
 // AI 助手面板状态：开关/宽度（localStorage 偏好）、消息列表、流式状态、
@@ -108,13 +115,47 @@ export const useAiStore = create<AiState>()((set, get) => {
     };
   };
 
-  /** 组装发给服务端的消息：system + 历史对话（排除空的助手占位） */
-  const requestMessages = (assistantId: string): AiChatMessage[] => [
+  /** 组装发给服务端的消息：system + 参考文档 + 历史对话（排除空的助手占位） */
+  const requestMessages = (assistantId: string, referenceContext = ""): AiChatMessage[] => [
     systemMessage(),
+    ...(referenceContext ? [{ role: "system" as const, content: referenceContext }] : []),
     ...get()
       .messages.filter((m) => m.id !== assistantId && m.content.trim().length > 0)
       .map((m) => ({ role: m.role, content: m.content })),
   ];
+
+  /**
+   * 用户消息里 `@文件名` 引用的文档 → 参考上下文：读磁盘快照、转 Markdown、按 max_chars 截断。
+   * 引用名解析不到（改名/删除/未同步）时静默跳过，不影响本轮提问。
+   */
+  const buildReferenceContext = async (): Promise<string> => {
+    const lastUser = [...get().messages].reverse().find((m) => m.role === "user");
+    if (!lastUser) return "";
+    const list = flattenTree(useWorkspaceStore.getState().tree);
+    if (list.length === 0) return "";
+    const refs = parseMentions(
+      lastUser.content,
+      list.map((v) => ({ id: v.id, name: v.name })),
+    );
+    if (refs.length === 0) return "";
+    const limit = maxChars();
+    const parts: string[] = [];
+    for (const ref of refs) {
+      try {
+        const raw = await documentApi.get(ref.id);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw) as JSONContent | JSONContent[];
+        const doc: JSONContent = Array.isArray(parsed) ? { type: "doc", content: parsed } : parsed;
+        const md = jsonToMarkdown(doc).trim();
+        if (!md) continue;
+        parts.push(`### ${ref.name}\n${md.slice(0, limit)}`);
+      } catch (e) {
+        logger.error("ai reference load failed", ref.id, e);
+      }
+    }
+    if (parts.length === 0) return "";
+    return `【用户 @ 引用的文档】\n${parts.join("\n\n")}`;
+  };
 
   /** 失败时丢弃空的助手占位（保留有内容的半截回答），错误单独存供重试 */
   const dropEmptyAssistant = (assistantId: string) =>
@@ -149,7 +190,9 @@ export const useAiStore = create<AiState>()((set, get) => {
   const runStream = async (assistantId: string) => {
     let raw = "";
     try {
-      await aiChat(requestMessages(assistantId), (ev: AiChatEvent) => {
+      // @ 引用的文档要先读盘转文本，再随 system 一起下发
+      const referenceContext = await buildReferenceContext();
+      await aiChat(requestMessages(assistantId, referenceContext), (ev: AiChatEvent) => {
         if (ev.type === "chunk") {
           raw += ev.delta;
           const display = hideEditBlock(raw);
