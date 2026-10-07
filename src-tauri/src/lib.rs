@@ -267,6 +267,8 @@ pub fn run() {
             commands::files::run_auto_backup_now,
             commands::files::db_health,
             commands::files::rebuild_data_dir,
+            commands::files::scan_orphan_assets,
+            commands::files::purge_orphan_assets,
             commands::sync::get_sync_info,
             commands::sync::set_sync_dir,
             commands::sync::open_sync_dir,

@@ -479,6 +479,17 @@ export const zh = {
   "settings.autoBackupNever": "尚未备份",
   "settings.autoBackupDone": "已生成自动备份",
   "settings.autoBackupFailed": "自动备份失败",
+  "settings.assets": "资源清理",
+  "settings.assetsDesc":
+    "删除页面或图片后，assets 目录里的文件不会自动回收，长期使用会越积越多。这里可以扫描并清理不再被任何页面引用的资源。",
+  "settings.assetsScan": "扫描未引用资源",
+  "settings.assetsScanning": "扫描中…",
+  "settings.assetsNone": "没有发现未引用的资源",
+  "settings.assetsFound": "发现 {n} 个未引用资源，共 {size}",
+  "settings.assetsPurge": "移入备份并清理",
+  "settings.assetsPurgeConfirm": "将把 {n} 个文件移动到备份目录（不是删除，可找回），确认继续？",
+  "settings.assetsPurged": "已清理 {n} 个文件，释放 {size}",
+  "settings.assetsFailed": "资源清理失败：{message}",
   "settings.sync": "双向同步",
   "settings.syncDesc":
     "把本机数据与一个「同步文件夹」对齐，多台电脑共用一份数据。选 OneDrive / 坚果云 / Dropbox 的本地文件夹即可；WebDAV 网盘挂成盘符后选该盘符同样可以。同步由网盘客户端负责上传下载，本应用只做双向文件对齐。",

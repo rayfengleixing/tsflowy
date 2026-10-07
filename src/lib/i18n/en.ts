@@ -487,6 +487,17 @@ export const en: Record<MessageKey, string> = {
   "settings.autoBackupNever": "Never",
   "settings.autoBackupDone": "Automatic backup created",
   "settings.autoBackupFailed": "Automatic backup failed",
+  "settings.assets": "Asset cleanup",
+  "settings.assetsDesc":
+    "Deleting pages or images does not reclaim files in the assets folder, so it grows over time. Scan for assets that are no longer referenced by any page and clean them up.",
+  "settings.assetsScan": "Scan for unused assets",
+  "settings.assetsScanning": "Scanning…",
+  "settings.assetsNone": "No unused assets found",
+  "settings.assetsFound": "{n} unused assets found, {size} in total",
+  "settings.assetsPurge": "Move to backup",
+  "settings.assetsPurgeConfirm": "Move {n} files to the backup folder (not deleted, recoverable). Continue?",
+  "settings.assetsPurged": "Moved {n} files, freed {size}",
+  "settings.assetsFailed": "Asset cleanup failed: {message}",
   "settings.sync": "Two-way sync",
   "settings.syncDesc":
     "Keeps this device aligned with a shared “sync folder”, so several computers use the same data. Point it at a OneDrive / Dropbox / Jianguoyun local folder — or a mapped WebDAV drive. The cloud client handles uploading and downloading; this app only aligns files both ways.",

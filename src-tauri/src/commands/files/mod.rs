@@ -52,6 +52,12 @@ pub use auto_backup::{
 // —— 数据库健康诊断（兜底提示页）——
 pub use health::{db_health, rebuild_data_dir, DbHealth};
 
+// —— 未引用资源扫描 / 回收 ——
+pub mod orphan;
+pub use orphan::{
+    purge_orphan_assets, scan_orphan_assets, OrphanAsset, OrphanPurge, OrphanScan,
+};
+
 // —— 文件对话框路径白名单 ——
 /// 只放行用户在本机文件对话框中明确选择过的路径（目录含其子树）。
 ///
@@ -105,4 +111,9 @@ pub use data_dir::{
 pub use health::{
     __cmd__db_health, __cmd__rebuild_data_dir, __tauri_command_name_db_health,
     __tauri_command_name_rebuild_data_dir,
+};
+#[doc(hidden)]
+pub use orphan::{
+    __cmd__purge_orphan_assets, __cmd__scan_orphan_assets,
+    __tauri_command_name_purge_orphan_assets, __tauri_command_name_scan_orphan_assets,
 };

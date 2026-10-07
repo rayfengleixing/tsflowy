@@ -1,3 +1,4 @@
+pub mod asset_refs;
 pub mod database;
 pub mod docs;
 pub mod mentions;

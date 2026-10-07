@@ -44,7 +44,41 @@ export function pickImageExt(file: File): string {
     if (/^[a-z0-9]{1,5}$/.test(e)) return e;
   }
   const mime = file.type.toLowerCase();
-  const m = mime.match(/^image\/([a-z0-9.+-]+)/);
+  const m = /^image\/([a-z0-9.+-]+)/.exec(mime);
   if (m) return m[1];
   return "png";
+}
+
+/* ————— 未引用资源扫描 / 回收 ————— */
+
+export interface OrphanAsset {
+  name: string;
+  bytes: number;
+}
+
+export interface OrphanScan {
+  files: OrphanAsset[];
+  total_files: number;
+  total_bytes: number;
+}
+
+export interface OrphanPurge {
+  /** 实际挪走的文件数（可能少于请求数：期间又被引用的不动） */
+  moved: number;
+  freed_bytes: number;
+  /** 挪到的备份目录，反悔时从这里找回 */
+  dest: string;
+}
+
+/** 扫描 assets/ 下不再被任何文档或页面封面引用的文件（只读，不动磁盘） */
+export async function scanOrphanAssets(): Promise<OrphanScan> {
+  return await invoke<OrphanScan>("scan_orphan_assets");
+}
+
+/**
+ * 把未引用资源挪进备份目录（不是删除）。
+ * @param names 要清理的文件名；传空数组 = 清理当前扫描出的全部孤儿资源
+ */
+export async function purgeOrphanAssets(names: string[]): Promise<OrphanPurge> {
+  return await invoke<OrphanPurge>("purge_orphan_assets", { names });
 }
