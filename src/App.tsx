@@ -30,6 +30,7 @@ import { flushPendingUiPersist } from "@/stores/workspace";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { requestEscapeClose } from "@/lib/escape-close";
+import { useShortcutsStore, comboEquals, eventToCombo } from "@/lib/shortcuts";
 
 /** Ctrl+Tab / Ctrl+Shift+Tab 循环标签页；当前视图不在 tabs 里（如停在设置页）时落到第一个 */
 function cycleTab(step: number) {
@@ -181,38 +182,41 @@ function App() {
     mentionsApi.backfillIfEmpty().catch(logger.catch("App.backfillMentions", "mentions backfill failed"));
   }, [ready]);
 
-  // 全局快捷键（与 Settings 快捷键表一致）：
-  // Ctrl+K / Ctrl+P 命令面板 · Ctrl+Shift+F 全局搜索 · Ctrl+Tab 切换标签页 · Esc 关闭浮层
+  // 全局快捷键（可在 设置 → 快捷键 里自定义）：
+  // 命令面板 / 快速打开 · 全局搜索 · 切换标签页；Esc 固定不可改（关闭浮层）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const metaOrCtrl = e.ctrlKey || e.metaKey;
-      const key = e.key.toLowerCase();
-      if (metaOrCtrl && !e.shiftKey && (key === "k" || key === "p")) {
+      // Esc 固定：命令面板自己也会处理，这里先一步收掉，避免同一次按键再触发下面的广播
+      if (e.key === "Escape") {
+        const s = useWorkspaceStore.getState();
+        if (s.paletteOpen) {
+          s.closePalette();
+          return;
+        }
+        requestEscapeClose();
+        return;
+      }
+      const combo = eventToCombo(e);
+      if (!combo) return;
+      const { combos } = useShortcutsStore.getState();
+      // 切换标签页：方向由 Shift 决定，故比较时忽略 Shift
+      const tab = combos.switchTab;
+      if (combo.key === tab.key && combo.ctrl === tab.ctrl && combo.alt === tab.alt) {
+        e.preventDefault();
+        cycleTab(e.shiftKey ? -1 : 1);
+        return;
+      }
+      if (comboEquals(combo, combos.commandPalette) || comboEquals(combo, combos.quickOpen)) {
         e.preventDefault();
         const s = useWorkspaceStore.getState();
         if (s.paletteOpen) s.closePalette();
         else s.openPalette();
         return;
       }
-      if (metaOrCtrl && e.shiftKey && key === "f") {
+      if (comboEquals(combo, combos.search)) {
         e.preventDefault();
         useWorkspaceStore.getState().openSearch("");
         return;
-      }
-      // Ctrl+Tab / Ctrl+Shift+Tab：循环打开的标签页（macOS 的 ⌘+Tab 是系统切换，故只认 Ctrl）
-      if (e.ctrlKey && e.key === "Tab") {
-        e.preventDefault();
-        cycleTab(e.shiftKey ? -1 : 1);
-        return;
-      }
-      if (e.key === "Escape") {
-        const s = useWorkspaceStore.getState();
-        // 命令面板自己也会处理 Esc，这里先一步收掉，避免同一次按键再触发下面的广播
-        if (s.paletteOpen) {
-          s.closePalette();
-          return;
-        }
-        requestEscapeClose();
       }
     };
     window.addEventListener("keydown", onKey);

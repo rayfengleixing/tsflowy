@@ -46,6 +46,15 @@ import { loadDailyNotesConfig, saveDailyNotesConfig, type DailyNotesConfig } fro
 import { exportMarkdownFolder } from "@/lib/export-folder";
 import { flushAllForClose } from "@/lib/close-flush";
 import { aiGetConfig, aiSaveConfig, aiTestConnection, AI_PROVIDER_PRESETS, type AiConfig } from "@/lib/ai";
+import {
+  useShortcutsStore,
+  CUSTOMIZABLE_SHORTCUTS,
+  eventToCombo,
+  formatCombo,
+  findConflict,
+  isBindableCombo,
+  type ShortcutId,
+} from "@/lib/shortcuts";
 import { t, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
@@ -61,9 +70,19 @@ const ACCENT_HEX: Record<AccentColor, string> = {
   rose: "#e11d48",
 };
 
+interface ShortcutItem {
+  label: string;
+  /** 可自定义的全局快捷键 id；缺省表示只读展示 */
+  id?: ShortcutId;
+  /** 只读展示时的组合文案 */
+  key?: string;
+}
+
 interface ShortcutGroup {
   titleKey: string;
-  items: { label: string; key: string }[];
+  /** 是否允许自定义（仅全局组） */
+  customizable?: boolean;
+  items: ShortcutItem[];
 }
 
 /** get_data_dir_info 返回结构（Rust 侧字段名即 JSON 键名） */
@@ -282,11 +301,12 @@ export function SettingsPage() {
   const shortcutGroups: ShortcutGroup[] = [
     {
       titleKey: t("settings.shortcuts.global"),
+      customizable: true,
       items: [
-        { label: t("settings.shortcuts.commandPalette"), key: "Ctrl / ⌘ + K" },
-        { label: t("settings.shortcuts.quickOpen"), key: "Ctrl / ⌘ + P" },
-        { label: t("settings.shortcuts.search"), key: "Ctrl / ⌘ + Shift + F" },
-        { label: t("settings.shortcuts.switchTab"), key: "Ctrl + Tab" },
+        { label: t("settings.shortcuts.commandPalette"), id: "commandPalette" },
+        { label: t("settings.shortcuts.quickOpen"), id: "quickOpen" },
+        { label: t("settings.shortcuts.search"), id: "search" },
+        { label: t("settings.shortcuts.switchTab"), id: "switchTab" },
         { label: t("settings.shortcuts.escape"), key: "Esc" },
         { label: t("settings.shortcuts.save"), key: "Ctrl / ⌘ + S" },
       ],
@@ -1161,21 +1181,30 @@ export function SettingsPage() {
 
         <Section title={t("settings.shortcuts")}>
           <div className="space-y-5">
+            <p className="max-w-lg text-[11px] leading-relaxed text-neutral-500">{t("settings.shortcutHint")}</p>
             {shortcutGroups.map((g) => (
               <div key={g.titleKey}>
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">{g.titleKey}</h3>
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{g.titleKey}</h3>
+                  {g.customizable ? <ResetAllShortcuts /> : null}
+                </div>
                 <ul className="divide-y divide-neutral-200 overflow-hidden rounded-lg border border-neutral-200 text-xs">
                   {g.items.map((item) => (
-                    <li key={item.label} className="flex items-center justify-between px-3 py-2">
+                    <li key={item.label} className="flex items-center justify-between gap-3 px-3 py-2">
                       <span className="text-neutral-700">{item.label}</span>
-                      <kbd className="rounded border border-neutral-300 bg-neutral-100 px-1.5 py-0.5 font-mono text-[10px] text-neutral-600 shadow-sm">
-                        {item.key}
-                      </kbd>
+                      {item.id ? (
+                        <ShortcutRecorder id={item.id} />
+                      ) : (
+                        <kbd className="rounded border border-neutral-300 bg-neutral-100 px-1.5 py-0.5 font-mono text-[10px] text-neutral-600 shadow-sm">
+                          {item.key}
+                        </kbd>
+                      )}
                     </li>
                   ))}
                 </ul>
               </div>
             ))}
+            <p className="text-[11px] text-neutral-400">{t("settings.shortcutEditorFixed")}</p>
           </div>
         </Section>
       </div>
@@ -1190,6 +1219,86 @@ function RiskNotice({ risk }: { risk: DataDirRisk | null }) {
     <div className="mt-2 max-w-lg rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
       {t(risk === "cloud" ? "settings.dataDirRiskCloud" : "settings.dataDirRiskOverlap")}
     </div>
+  );
+}
+
+/** 可自定义快捷键的录制按钮：点按后捕获下一个组合键 */
+function ShortcutRecorder({ id }: { id: ShortcutId }) {
+  const combo = useShortcutsStore((s) => s.combos[id]);
+  const customized = useShortcutsStore((s) => s.overrides[id] !== undefined);
+  const setShortcut = useShortcutsStore((s) => s.setShortcut);
+  const resetShortcut = useShortcutsStore((s) => s.resetShortcut);
+  const [recording, setRecording] = useState(false);
+
+  useEffect(() => {
+    if (!recording) return;
+    const onKey = (e: KeyboardEvent) => {
+      // 捕获阶段拦截，避免这次按键触发 App 的全局快捷键
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setRecording(false);
+        return;
+      }
+      const next = eventToCombo(e);
+      if (!next) return; // 纯修饰键，继续等待
+      if (!isBindableCombo(next)) {
+        toast.error(t("settings.shortcutNeedModifier"));
+        return;
+      }
+      const conflict = findConflict(id, next);
+      if (conflict) {
+        const def = CUSTOMIZABLE_SHORTCUTS.find((s) => s.id === conflict);
+        toast.error(t("settings.shortcutConflict", { name: def ? t(def.labelKey as MessageKey) : conflict }));
+        return;
+      }
+      setShortcut(id, next);
+      setRecording(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [recording, id, setShortcut]);
+
+  return (
+    <span className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => setRecording((v) => !v)}
+        className={cn(
+          "rounded border px-1.5 py-0.5 font-mono text-[10px] shadow-sm transition-colors",
+          recording
+            ? "border-brand-500 bg-brand-50 text-brand-600"
+            : "border-neutral-300 bg-neutral-100 text-neutral-600 hover:bg-neutral-200",
+        )}
+      >
+        {recording ? t("settings.shortcutRecording") : formatCombo(combo)}
+      </button>
+      {customized ? (
+        <button
+          type="button"
+          onClick={() => resetShortcut(id)}
+          className="text-[10px] text-neutral-400 underline-offset-2 hover:text-neutral-600 hover:underline"
+        >
+          {t("settings.shortcutReset")}
+        </button>
+      ) : null}
+    </span>
+  );
+}
+
+/** 全局组标题右侧的「全部恢复默认」，仅在有自定义项时出现 */
+function ResetAllShortcuts() {
+  const hasOverride = useShortcutsStore((s) => Object.keys(s.overrides).length > 0);
+  const resetAll = useShortcutsStore((s) => s.resetAll);
+  if (!hasOverride) return null;
+  return (
+    <button
+      type="button"
+      onClick={resetAll}
+      className="text-[11px] text-neutral-400 underline-offset-2 hover:text-neutral-600 hover:underline"
+    >
+      {t("settings.shortcutResetAll")}
+    </button>
   );
 }
 

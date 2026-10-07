@@ -580,6 +580,14 @@ export const zh = {
   "settings.shortcuts.undo": "撤销",
   "settings.shortcuts.redo": "重做",
   "settings.shortcuts.slash": "唤起块菜单",
+  "settings.shortcutHint":
+    "带「Ctrl / ⌘」的组合可点击修改：按下新组合即生效，Esc 取消。Esc、保存与编辑器内快捷键暂不可改。",
+  "settings.shortcutRecording": "按下新组合…",
+  "settings.shortcutReset": "恢复默认",
+  "settings.shortcutResetAll": "全部恢复默认",
+  "settings.shortcutConflict": "已与「{name}」冲突，请换一个组合",
+  "settings.shortcutNeedModifier": "组合键需包含 Ctrl 或 Alt",
+  "settings.shortcutEditorFixed": "编辑器内快捷键由编辑器与系统提供，暂不支持自定义",
   // — B-2/B-3 新文案 —
   "sidebar.pageTree": "页面树",
   // — P2-17 i18n 硬编码清理 —
