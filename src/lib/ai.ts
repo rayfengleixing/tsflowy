@@ -20,9 +20,12 @@ export interface AiChatMessage {
   content: string;
 }
 
-/** `ai_chat` 流式事件：chunk 增量 / done 收尾全量 / error 报错 */
+/** `ai_chat` 流式事件：chunk 增量 / reasoning 思考增量 / done 收尾全量 / error 报错 */
 export type AiChatEvent =
-  { type: "chunk"; delta: string } | { type: "done"; full: string } | { type: "error"; message: string };
+  | { type: "chunk"; delta: string }
+  | { type: "reasoning"; delta: string }
+  | { type: "done"; full: string }
+  | { type: "error"; message: string };
 
 /** 服务商预设：选中后自动填充 Base URL 与模型（用户仍可手改） */
 export interface AiProviderPreset {

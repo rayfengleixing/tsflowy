@@ -26,6 +26,7 @@ export function AiPanel() {
   const open = useAiStore((s) => s.open);
   const width = useAiStore((s) => s.width);
   const messages = useAiStore((s) => s.messages);
+  const reasoning = useAiStore((s) => s.reasoning);
   const streaming = useAiStore((s) => s.streaming);
   const error = useAiStore((s) => s.error);
   const config = useAiStore((s) => s.config);
@@ -51,7 +52,7 @@ export function AiPanel() {
   useEffect(() => {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, streaming]);
+  }, [messages, reasoning, streaming]);
 
   if (!open) return null;
 
@@ -175,7 +176,14 @@ export function AiPanel() {
                 onInsert={m.role === "assistant" ? () => writeBack(m.content, "insert") : undefined}
               />
             ))}
-            {streaming && <p className="text-[11px] text-neutral-400">{t("ai.thinking")}</p>}
+            {/* 推理型模型（deepseek-flash / deepseek-reasoner 等）的思考过程：仅展示，不参与回填 */}
+            {streaming && reasoning && (
+              <div className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-[11px] text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800/50 dark:text-neutral-400">
+                <p className="mb-1 font-medium">{t("ai.reasoning")}</p>
+                <div className="max-h-32 overflow-y-auto break-words whitespace-pre-wrap">{reasoning}</div>
+              </div>
+            )}
+            {streaming && !reasoning && <p className="text-[11px] text-neutral-400">{t("ai.thinking")}</p>}
             {error && (
               <div className="rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-[11px] text-red-600">
                 {t("ai.errorPrefix", { message: error })}

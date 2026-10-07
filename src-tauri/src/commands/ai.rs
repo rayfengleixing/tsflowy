@@ -32,9 +32,20 @@ pub struct AiChatRequest {
 #[derive(Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AiEvent {
-    Chunk { delta: String },
-    Done { full: String },
-    Error { message: String },
+    Chunk {
+        delta: String,
+    },
+    /// 推理型模型（deepseek-flash / deepseek-reasoner 等）的思考增量。
+    /// 与正式回答分开推，避免把思考内容混进可回填到文档的正文。
+    Reasoning {
+        delta: String,
+    },
+    Done {
+        full: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// 回传前端的配置（绝不包含明文 api_key）
@@ -202,6 +213,18 @@ pub async fn ai_chat(
                         return Ok(());
                     }
                 }
+                SseParse::Reasoning(delta) => {
+                    if cancelled(generation) {
+                        let _ = on_event.send(AiEvent::Error {
+                            message: "cancelled".to_string(),
+                        });
+                        return Ok(());
+                    }
+                    // 思考内容不计入 full：Done 回传的仍只是正式回答
+                    if on_event.send(AiEvent::Reasoning { delta }).is_err() {
+                        return Ok(());
+                    }
+                }
                 SseParse::Error(message) => {
                     let _ = on_event.send(AiEvent::Error { message });
                     return Ok(());
@@ -273,6 +296,8 @@ fn extract_error_message(v: &serde_json::Value) -> Option<String> {
 enum SseParse {
     /// 一条 data 行中提取出的非空增量文本
     Delta(String),
+    /// 推理型模型的思考增量（`delta.reasoning_content`）
+    Reasoning(String),
     /// `data: [DONE]`
     Done,
     /// 服务端返回的错误信息
@@ -281,7 +306,8 @@ enum SseParse {
     Ignore,
 }
 
-/// 解析单行 SSE：按 `data:` 前缀取值，`[DONE]` 结束，取 `choices[0].delta.content`。
+/// 解析单行 SSE：按 `data:` 前缀取值，`[DONE]` 结束，取 `choices[0].delta.content`；
+/// content 为空时回退到 `choices[0].delta.reasoning_content`（推理型模型）。
 fn parse_sse_line(line: &str) -> SseParse {
     let line = line.strip_suffix('\r').unwrap_or(line);
     let Some(rest) = line.strip_prefix("data:") else {
@@ -304,15 +330,22 @@ fn parse_sse_line(line: &str) -> SseParse {
     let delta = v
         .get("choices")
         .and_then(|c| c.get(0))
-        .and_then(|c| c.get("delta"))
+        .and_then(|c| c.get("delta"));
+    let content = delta
         .and_then(|d| d.get("content"))
         .and_then(|c| c.as_str())
         .unwrap_or("");
-    if delta.is_empty() {
-        SseParse::Ignore
-    } else {
-        SseParse::Delta(delta.to_string())
+    if !content.is_empty() {
+        return SseParse::Delta(content.to_string());
     }
+    let reasoning = delta
+        .and_then(|d| d.get("reasoning_content"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
+    if !reasoning.is_empty() {
+        return SseParse::Reasoning(reasoning.to_string());
+    }
+    SseParse::Ignore
 }
 
 /// HTTP 非 2xx：尽量把服务端的 error.message 提取出来，否则回退到响应片段
@@ -330,22 +363,35 @@ fn readable_http_error(status: u16, body: &str) -> String {
     }
 }
 
-/// 解析非流式补全响应，取 `choices[0].message.content`
+/// 解析非流式补全响应：取 `choices[0].message.content`。
+/// content 为空（推理型模型把 tokens 全用在思考上）时仍算连通——HTTP 200 且有 choices，
+/// 说明地址、鉴权、模型三者都已被服务端接受。
 fn parse_completion_text(body: &str) -> Result<String, String> {
     let v: serde_json::Value =
         serde_json::from_str(body).map_err(|e| format!("响应解析失败：{e}"))?;
     if let Some(m) = extract_error_message(&v) {
         return Err(m);
     }
-    let text = v
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
+    let Some(choice) = v.get("choices").and_then(|c| c.get(0)) else {
+        return Err("服务返回了空响应".to_string());
+    };
+    let text = choice
+        .get("message")
         .and_then(|m| m.get("content"))
         .and_then(|c| c.as_str())
         .unwrap_or("");
     if text.is_empty() {
-        Err("服务返回了空响应".to_string())
+        // 推理型模型（deepseek-flash / deepseek-reasoner）：内容可能在 reasoning_content
+        let reasoning = choice
+            .get("message")
+            .and_then(|m| m.get("reasoning_content"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        if reasoning.is_empty() {
+            Ok("模型已响应".to_string())
+        } else {
+            Ok("推理型模型已响应".to_string())
+        }
     } else {
         Ok(text.to_string())
     }
@@ -376,6 +422,19 @@ mod tests {
     fn parse_sse_single_delta_line() {
         let line = r#"data: {"choices":[{"delta":{"content":"你好"}}]}"#;
         assert_eq!(parse_sse_line(line), SseParse::Delta("你好".to_string()));
+    }
+
+    #[test]
+    fn parse_sse_reasoning_line() {
+        // 推理型模型：content 为空、reasoning_content 有内容 → 归为 Reasoning
+        let line = r#"data: {"choices":[{"delta":{"content":"","reasoning_content":"思考中"}}]}"#;
+        assert_eq!(
+            parse_sse_line(line),
+            SseParse::Reasoning("思考中".to_string())
+        );
+        // 两者都有时 content 优先
+        let line = r#"data: {"choices":[{"delta":{"content":"答案","reasoning_content":"思考"}}]}"#;
+        assert_eq!(parse_sse_line(line), SseParse::Delta("答案".to_string()));
     }
 
     #[test]
@@ -476,5 +535,15 @@ data: [DONE]
         let body = r#"{"choices":[{"message":{"role":"assistant","content":"pong"}}]}"#;
         assert_eq!(parse_completion_text(body).unwrap(), "pong");
         assert!(parse_completion_text(r#"{"error":{"message":"nope"}}"#).is_err());
+        // 推理型模型：max_tokens 全用在思考上，content 为空但仍算连通
+        let body =
+            r#"{"choices":[{"message":{"content":"","reasoning_content":"We need answer"}}]}"#;
+        assert_eq!(parse_completion_text(body).unwrap(), "推理型模型已响应");
+        assert_eq!(
+            parse_completion_text(r#"{"choices":[{"message":{"content":""}}]}"#).unwrap(),
+            "模型已响应"
+        );
+        // 没有 choices → 视为异常响应
+        assert!(parse_completion_text(r#"{"foo":1}"#).is_err());
     }
 }

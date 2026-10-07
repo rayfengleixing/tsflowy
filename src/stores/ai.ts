@@ -52,6 +52,8 @@ interface AiState {
   open: boolean;
   width: number;
   messages: AiMessage[];
+  /** 推理型模型的思考过程（仅展示，不参与回填/复制） */
+  reasoning: string;
   streaming: boolean;
   error: string | null;
   config: AiConfig | null;
@@ -89,6 +91,9 @@ export const useAiStore = create<AiState>()((set, get) => {
           set((s) => ({
             messages: s.messages.map((m) => (m.id === assistantId ? { ...m, content: m.content + ev.delta } : m)),
           }));
+        } else if (ev.type === "reasoning") {
+          // 推理型模型的思考增量：单独累积，只用于展示，不写进助手消息
+          set((s) => ({ reasoning: s.reasoning + ev.delta }));
         } else if (ev.type === "done") {
           set((s) => ({
             messages: s.messages.map((m) => (m.id === assistantId ? { ...m, content: ev.full || m.content } : m)),
@@ -112,6 +117,7 @@ export const useAiStore = create<AiState>()((set, get) => {
     open: false,
     width: loadWidth(),
     messages: [],
+    reasoning: "",
     streaming: false,
     error: null,
     config: null,
@@ -147,6 +153,7 @@ export const useAiStore = create<AiState>()((set, get) => {
       set((s) => ({
         open: true,
         error: null,
+        reasoning: "",
         streaming: true,
         messages: [...s.messages, { id: newId(), role: "user", content }, assistant],
       }));
@@ -158,7 +165,7 @@ export const useAiStore = create<AiState>()((set, get) => {
       set({ streaming: false });
     },
 
-    clear: () => set({ messages: [], error: null }),
+    clear: () => set({ messages: [], reasoning: "", error: null }),
 
     retry: async () => {
       if (get().streaming) return;
@@ -169,7 +176,7 @@ export const useAiStore = create<AiState>()((set, get) => {
       }
       if (msgs.length === 0 || msgs[msgs.length - 1].role !== "user") return;
       const assistant: AiMessage = { id: newId(), role: "assistant", content: "" };
-      set({ messages: [...msgs, assistant], streaming: true, error: null });
+      set({ messages: [...msgs, assistant], reasoning: "", streaming: true, error: null });
       await runStream(assistant.id);
     },
 
