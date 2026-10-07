@@ -1,7 +1,10 @@
 import { buildTree, flattenTree } from "@/lib/tree";
 import { viewApi } from "@/lib/db";
+import { documentApi } from "@/lib/documents";
 import { databaseApi } from "@/lib/database";
 import { newSelectOption } from "@/lib/database-values";
+import { buildPageTemplate } from "@/lib/page-templates";
+import { useSettingsStore } from "@/stores/settings";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { canonicalTagName } from "@/lib/tags";
@@ -125,7 +128,7 @@ export const createTreeSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (
     await patchTree(set, get);
   },
 
-  createView: async ({ parentId, layout }) => {
+  createView: async ({ parentId, layout, template }) => {
     const ws = get().currentWorkspaceId;
     if (!ws) return null;
     const name = t("common.untitled");
@@ -141,6 +144,15 @@ export const createTreeSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (
         await seedGridFields(view.id);
       } catch (e) {
         logger.error("WorkspaceStore.createView", "seed grid fields failed", view.id, e);
+      }
+    }
+    // 页面模板：文档布局按所选模板预填正文（首行 H1 = 页面名 + 分割线 + 模板块）
+    if (layout === "document" && template) {
+      try {
+        const doc = buildPageTemplate(template, name, useSettingsStore.getState().lang);
+        if (doc) await documentApi.save(view.id, JSON.stringify(doc));
+      } catch (e) {
+        logger.error("WorkspaceStore.createView", "seed page template failed", view.id, e);
       }
     }
     await get().reload();

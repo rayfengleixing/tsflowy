@@ -2,13 +2,18 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus } from "lucide-react";
+import { Plus, LayoutTemplate } from "lucide-react";
 import type { LayoutType } from "@/types/models";
 import { LAYOUTS } from "@/types/models";
 import { layoutMeta } from "@/components/view-icon";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { PAGE_TEMPLATES, type PageTemplateId } from "@/lib/page-templates";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
@@ -20,12 +25,12 @@ interface NewPageMenuProps {
   children?: React.ReactNode;
 }
 
-/** 新建页面菜单：四种布局（侧边栏新建按钮 / 页面行 "+" 子页面共用） */
+/** 新建页面菜单：四种布局 + 文档模板（侧边栏新建按钮 / 页面行 "+" 子页面共用） */
 export function NewPageMenu({ parentId = null, align = "start", triggerClassName, children }: NewPageMenuProps) {
   const createView = useWorkspaceStore((s) => s.createView);
 
-  const handleCreate = (layout: LayoutType) => {
-    createView({ parentId, layout }).catch((e: unknown) => {
+  const handleCreate = (layout: LayoutType, template?: PageTemplateId) => {
+    createView({ parentId, layout, template }).catch((e: unknown) => {
       logger.error("create view failed", e);
       toast.error(t("error.db", { message: String(e) }));
     });
@@ -53,6 +58,20 @@ export function NewPageMenu({ parentId = null, align = "start", triggerClassName
             {layoutMeta(layout).label}
           </DropdownMenuItem>
         ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <LayoutTemplate className="mr-2 text-neutral-500" />
+            {t("template.fromTemplate")}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            {PAGE_TEMPLATES.map((tpl) => (
+              <DropdownMenuItem key={tpl.id} onSelect={() => handleCreate("document", tpl.id)}>
+                {t(tpl.nameKey)}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
       </DropdownMenuContent>
     </DropdownMenu>
   );
