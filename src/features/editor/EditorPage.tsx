@@ -442,6 +442,19 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   // （与 useEditorStore 推送 editor 的约定一致），避免副栏抢占回填目标。
   useEffect(() => {
     if (!editor || editor.isDestroyed || !isMainPane) return;
+    // 回填文本 → ProseMirror 节点：含 markdown 结构（# 标题 / - 列表 / ``` 围栏…）时走
+    // markdownToJson，否则按行拆段落保留换行。复用粘贴的转换逻辑，避免把 **粗体**、- 列表
+    // 这类标记原样落成字面文本，也避免多段被合并成一段。
+    const toSlice = (text: string): Slice | null => {
+      try {
+        const json = looksLikeMarkdown(text) ? markdownToJson(text) : textToBlocks(text);
+        const nodes = (json.content ?? []).map((b) => PMNode.fromJSON(editor.state.schema, b));
+        return nodes.length === 0 ? null : new Slice(Fragment.fromArray(nodes), 0, 0);
+      } catch (e) {
+        logger.error("ai write-back convert failed", e);
+        return null;
+      }
+    };
     return registerAiEditor({
       getPageText: () =>
         editor.isDestroyed ? "" : editor.state.doc.textBetween(0, editor.state.doc.content.size, "\n"),
@@ -452,12 +465,19 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       },
       replaceSelection: (text) => {
         if (editor.isDestroyed) return;
-        const { from, to } = editor.state.selection;
-        editor.chain().focus().insertContentAt({ from, to }, text).run();
+        const slice = toSlice(text);
+        // 转换失败时退化为纯文本插入，宁可丢格式也不要什么都不发生
+        const tr = slice ? editor.state.tr.replaceSelection(slice) : editor.state.tr.insertText(text);
+        editor.view.dispatch(tr.scrollIntoView());
+        editor.view.focus();
       },
       insertAtCursor: (text) => {
         if (editor.isDestroyed) return;
-        editor.chain().focus().insertContent(text).run();
+        const slice = toSlice(text);
+        const pos = editor.state.selection.from;
+        const tr = slice ? editor.state.tr.replaceRange(pos, pos, slice) : editor.state.tr.insertText(text, pos);
+        editor.view.dispatch(tr.scrollIntoView());
+        editor.view.focus();
       },
     });
   }, [editor, isMainPane]);

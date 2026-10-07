@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Copy,
+  CornerDownLeft,
   Eraser,
   FileText,
   Languages,
   Lightbulb,
   PenLine,
+  Replace,
   Send,
   Settings,
   Sparkles,
@@ -88,9 +90,13 @@ export function AiPanel() {
       toast.error(t("ai.noEditor"));
       return;
     }
-    if (mode === "replace") bridge.replaceSelection(text);
-    else bridge.insertAtCursor(text);
-    toast.success(t("ai.inserted"));
+    if (mode === "replace") {
+      bridge.replaceSelection(text);
+      toast.success(t("ai.replaced"));
+    } else {
+      bridge.insertAtCursor(text);
+      toast.success(t("ai.inserted"));
+    }
   };
 
   // 拖拽左边缘调宽：向左拖变宽
@@ -275,14 +281,24 @@ function MessageBubble({
         {message.content || "…"}
       </div>
       {!isUser && message.content.trim() && (onReplace || onInsert) && (
-        <div className="mt-1 flex gap-2">
+        <div className="mt-1.5 flex gap-1.5">
           {onReplace && (
-            <button className="text-[10px] text-neutral-400 hover:text-brand-600" onClick={onReplace}>
+            <button
+              className="flex items-center gap-1 rounded-md border border-neutral-200 px-1.5 py-0.5 text-[11px] text-neutral-600 hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              title={t("ai.replaceSelection")}
+              onClick={onReplace}
+            >
+              <Replace className="h-3 w-3" />
               {t("ai.replaceSelection")}
             </button>
           )}
           {onInsert && (
-            <button className="text-[10px] text-neutral-400 hover:text-brand-600" onClick={onInsert}>
+            <button
+              className="flex items-center gap-1 rounded-md border border-neutral-200 px-1.5 py-0.5 text-[11px] text-neutral-600 hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              title={t("ai.insertToCursor")}
+              onClick={onInsert}
+            >
+              <CornerDownLeft className="h-3 w-3" />
               {t("ai.insertToCursor")}
             </button>
           )}
