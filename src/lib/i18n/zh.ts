@@ -527,6 +527,7 @@ export const zh = {
   "settings.updateDownloading": "正在下载更新…",
   "settings.updateInstalling": "正在安装，应用即将重启…",
   "settings.updateFailed": "检查更新失败：{message}",
+  "settings.updateNetworkError": "网络不可用或无法访问 GitHub，请检查网络或代理后重试",
   "db.errorTitle": "数据库不可用",
   "db.errorDesc": "TsFlowy 无法打开本地数据库，暂时不能读写数据。下面是排查与恢复入口。",
   "db.errorReason": "失败原因",

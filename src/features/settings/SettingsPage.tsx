@@ -137,6 +137,20 @@ const AI_PROVIDER_LABEL_KEY: Record<string, MessageKey> = {
   ollama: "settings.aiProviderOllama",
 };
 
+/**
+ * 更新器报错转成人话：DNS 解析失败、连接超时/被重置、TLS 握手失败都会抛 reqwest 的
+ * "error sending request for url (...)"，对用户毫无意义，统一收敛成一句网络提示；
+ * 其余错误（签名校验失败、latest.json 异常等）保留原文，便于定位。
+ */
+function updateErrorMessage(e: unknown): string {
+  const raw = String(e);
+  const isTransportError =
+    /error sending request|error trying to connect|timed out|dns error|connection (refused|reset)|unexpected eof|tls|invalid peer certificate/i.test(
+      raw,
+    );
+  return isTransportError ? t("settings.updateNetworkError") : t("settings.updateFailed", { message: raw });
+}
+
 /** 设置页（M6）：外观/语言/数据目录/备份/快捷键 */
 export function SettingsPage() {
   // 原子 selector 订阅：避免 useSettingsStore() 全量订阅导致任意设置变更都重渲染整个设置页
@@ -227,7 +241,7 @@ export function SettingsPage() {
     } catch (e) {
       setUpdateState("idle");
       logger.error("check update failed", e);
-      toast.error(t("settings.updateFailed", { message: String(e) }));
+      toast.error(updateErrorMessage(e));
     }
   };
 
@@ -243,7 +257,7 @@ export function SettingsPage() {
     } catch (e) {
       setUpdateState("available");
       logger.error("install update failed", e);
-      toast.error(t("settings.updateFailed", { message: String(e) }));
+      toast.error(updateErrorMessage(e));
     }
   };
 

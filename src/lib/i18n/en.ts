@@ -538,6 +538,7 @@ export const en: Record<MessageKey, string> = {
   "settings.updateDownloading": "Downloading update…",
   "settings.updateInstalling": "Installing, the app will restart shortly…",
   "settings.updateFailed": "Update check failed: {message}",
+  "settings.updateNetworkError": "Cannot reach GitHub. Check your network or proxy and try again.",
   "db.errorTitle": "Database unavailable",
   "db.errorDesc":
     "TsFlowy could not open the local database, so data cannot be read or written right now. Below are the diagnostics and recovery options.",
