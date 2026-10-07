@@ -54,9 +54,7 @@ pub use health::{db_health, rebuild_data_dir, DbHealth};
 
 // —— 未引用资源扫描 / 回收 ——
 pub mod orphan;
-pub use orphan::{
-    purge_orphan_assets, scan_orphan_assets, OrphanAsset, OrphanPurge, OrphanScan,
-};
+pub use orphan::{purge_orphan_assets, scan_orphan_assets, OrphanAsset, OrphanPurge, OrphanScan};
 
 // —— 文件对话框路径白名单 ——
 /// 只放行用户在本机文件对话框中明确选择过的路径（目录含其子树）。
