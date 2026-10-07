@@ -412,6 +412,26 @@ function ensurePrintStyle() {
   body.${PRINTING_CLASS} > *:not(.${PRINT_ROOT_CLASS}) { display: none !important; }
   body.${PRINTING_CLASS} > .${PRINT_ROOT_CLASS} { display: block !important; }
   body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} .tiptap { max-width: none !important; outline: none !important; }
+  /* 分页控制：整块内容不被拦腰截断；标题不与其后的正文分离；长表格跨页时重复表头 */
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} img,
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} figure,
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} table,
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} tr,
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} pre,
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} blockquote,
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} li {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} h1,
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} h2,
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} h3,
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} h4 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} p { orphans: 2; widows: 2; }
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} thead { display: table-header-group; }
 }
 `;
   document.head.appendChild(style);
