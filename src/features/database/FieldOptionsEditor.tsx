@@ -4,7 +4,7 @@ import type { DatabaseField, FieldOptions, SelectOption } from "@/types/database
 import type { AggregateFn } from "@/lib/database-aggregate";
 import { aggregateLabel } from "@/lib/database-aggregate";
 import { newSelectOption, parseFieldOptions } from "@/lib/database-values";
-import { buildRelationPickerFields, relationTarget, rollupFnsFor } from "@/lib/relation";
+import { buildRelationPickerFields, relationTarget, reverseRelationSourceFields, rollupFnsFor } from "@/lib/relation";
 import { flattenTree } from "@/lib/tree";
 import { useDbStore } from "@/stores/database-context";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -58,6 +58,14 @@ export function FieldOptionsEditor(props: {
   }, [rollupTargetViewId, ensureRelationDbs]);
   const rollupDb = rollupTargetViewId ? relationData[rollupTargetViewId] : undefined;
   const rollupFns: AggregateFn[] = rollupFnsFor(rollupDb, options.kind === "rollup" ? options.target_field_id : "");
+
+  // 反向关系依赖：所选来源表的字段（用于列出「指向本表」的关联字段候选）
+  const reverseSourceViewId = options.kind === "reverse_relation" ? options.source_view_id : "";
+  useEffect(() => {
+    if (reverseSourceViewId) ensureRelationDbs([reverseSourceViewId]);
+  }, [reverseSourceViewId, ensureRelationDbs]);
+  const reverseSourceDb = reverseSourceViewId ? relationData[reverseSourceViewId] : undefined;
+  const reverseSourceFields = reverseRelationSourceFields(reverseSourceDb, currentViewId);
 
   // 每次打开时重置
   const handleOpenChange = (next: boolean) => {
@@ -332,6 +340,54 @@ export function FieldOptionsEditor(props: {
               </label>
             )}
             <p className="text-[11px] leading-5 text-neutral-400">{t("field.rollupHint")}</p>
+          </div>
+        ) : field.field_type === "reverse_relation" ? (
+          <div className="flex flex-col gap-3">
+            <label className="flex flex-col gap-1 text-[12px] text-neutral-500">
+              {t("field.reverseSourceTable")}
+              <select
+                className="h-8 rounded-md border border-neutral-300 bg-white px-2 text-[13px] outline-none focus:border-brand-500"
+                value={options.kind === "reverse_relation" ? options.source_view_id : ""}
+                onChange={(e) =>
+                  // 换来源表 = 换了关联字段池：来源字段一并清零，避免留下悬空配置
+                  setOptions({ kind: "reverse_relation", source_view_id: e.target.value, source_field_id: "" })
+                }
+              >
+                <option value="">{t("field.rollupMissing")}</option>
+                {relationTargets.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name || t("common.untitled")}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {reverseSourceDb && (
+              <label className="flex flex-col gap-1 text-[12px] text-neutral-500">
+                {t("field.reverseSourceField")}
+                <select
+                  className="h-8 rounded-md border border-neutral-300 bg-white px-2 text-[13px] outline-none focus:border-brand-500"
+                  value={options.kind === "reverse_relation" ? options.source_field_id : ""}
+                  onChange={(e) =>
+                    setOptions({
+                      kind: "reverse_relation",
+                      source_view_id: options.kind === "reverse_relation" ? options.source_view_id : "",
+                      source_field_id: e.target.value,
+                    })
+                  }
+                >
+                  <option value="">{t("field.rollupMissing")}</option>
+                  {reverseSourceFields.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {reverseSourceDb && reverseSourceFields.length === 0 && (
+              <p className="text-[11px] leading-5 text-amber-600">{t("field.reverseUnset")}</p>
+            )}
+            <p className="text-[11px] leading-5 text-neutral-400">{t("field.reverseHint")}</p>
           </div>
         ) : (
           <p className="text-[13px] text-neutral-400">{t("field.noOptionsForType")}</p>

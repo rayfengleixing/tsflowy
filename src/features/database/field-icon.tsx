@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import {
+  ArrowRightLeft,
   Calendar,
   CheckSquare,
   CircleDot,
@@ -49,5 +50,7 @@ export function fieldIcon(type: FieldType): ReactNode {
       return <Link2 className={cls} />;
     case "rollup":
       return <Combine className={cls} />;
+    case "reverse_relation":
+      return <ArrowRightLeft className={cls} />;
   }
 }

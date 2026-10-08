@@ -1,6 +1,6 @@
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { computeFormula } from "@/lib/database-formula";
-import { computeRollup, type RelationDb } from "@/lib/relation";
+import { computeReverseRelation, computeRollup, type RelationDb } from "@/lib/relation";
 
 // GridView 的纯计算/工具函数与常量：从 GridView.tsx 原样搬出（无逻辑改动），
 // 便于单测这些与 React 无关的取值/窗口计算。
@@ -49,8 +49,8 @@ export function rowCenterScrollTop(p: {
 }
 
 /**
- * 公式/汇总字段没有存储值：把求值结果提前算进一份"有效单元格"图，排序/列汇总/分组小计都读它，
- * 否则按这两列排序排不动（raw 恒为空值）、汇总恒为空。没有这类字段时直接复用原始 cells。
+ * 公式/汇总/反向关系字段没有存储值：把求值结果提前算进一份"有效单元格"图，排序/列汇总/分组小计都读它，
+ * 否则按这些列排序排不动（raw 恒为空值）、汇总恒为空。没有这类字段时直接复用原始 cells。
  */
 export function computeEvaluatedCells(
   rows: DatabaseRow[],
@@ -58,7 +58,9 @@ export function computeEvaluatedCells(
   fields: DatabaseField[],
   relationDbOf: (viewId: string) => RelationDb | undefined,
 ): Record<string, Record<string, CellValue>> {
-  const hasComputed = fields.some((f) => f.field_type === "formula" || f.field_type === "rollup");
+  const hasComputed = fields.some(
+    (f) => f.field_type === "formula" || f.field_type === "rollup" || f.field_type === "reverse_relation",
+  );
   if (!hasComputed) return cells;
   const out: Record<string, Record<string, CellValue>> = {};
   for (const row of rows) {
@@ -75,6 +77,10 @@ export function computeEvaluatedCells(
           const n = Number(v);
           (copy ??= { ...rowCells })[f.id] = v.trim() !== "" && Number.isFinite(n) ? n : v;
         }
+      } else if (f.field_type === "reverse_relation") {
+        // 反向关系：实时反查来源行，值为来源行 id 数组（可参与排序/汇总）
+        const v = computeReverseRelation(row.id, f, relationDbOf);
+        if (v !== null) (copy ??= { ...rowCells })[f.id] = v;
       }
     }
     out[row.id] = copy ?? rowCells;

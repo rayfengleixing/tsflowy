@@ -5,12 +5,12 @@ import { FIELD_TYPES, isReadonlyType, type FieldType } from "@/types/database";
 import { useDbStore } from "@/stores/database-context";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { computeFormula } from "@/lib/database-formula";
-import { computeRollup } from "@/lib/relation";
+import { computeReverseRelation, computeRollup } from "@/lib/relation";
 import { useRelationStore } from "@/stores/relation";
 import { cn } from "@/lib/utils";
 import type { View } from "@/types/models";
 import { EditorPage } from "@/features/editor/EditorPage";
-import { CellEditorSlot, RelationChips, SelectChips } from "./editors";
+import { CellEditorSlot, RelationChips, ReverseRelationChips, SelectChips } from "./editors";
 import { fieldIcon } from "./field-icon";
 import { FieldTypeMenu } from "./FieldTypeMenu";
 import { t } from "@/lib/i18n";
@@ -47,7 +47,9 @@ function RowPropertyField({
       ? computeFormula(field, s.cells[row.id] ?? {}, s.fields)
       : field.field_type === "rollup"
         ? computeRollup(field, s.cells[row.id] ?? {}, s.fields, (id) => relationData[id])
-        : (s.cells[row.id]?.[field.id] ?? null),
+        : field.field_type === "reverse_relation"
+          ? computeReverseRelation(row.id, field, (id) => relationData[id])
+          : (s.cells[row.id]?.[field.id] ?? null),
   );
   const setCell = useDbStore((s) => s.setCell);
   const addSelectOption = useDbStore((s) => s.addSelectOption);
@@ -76,6 +78,13 @@ function RowPropertyField({
     }
     if (field.field_type === "relation") {
       return <RelationChips field={field} value={value} />;
+    }
+    if (field.field_type === "reverse_relation") {
+      return Array.isArray(value) && value.length > 0 ? (
+        <ReverseRelationChips field={field} value={value} />
+      ) : (
+        <span className="text-neutral-300">{t("rowDetail.empty")}</span>
+      );
     }
     const text = formatCellValue(field.field_type, value, parseFieldOptions(field.options));
     return (

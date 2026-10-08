@@ -3,7 +3,13 @@ import { Check, ChevronDown, Link2, Plus, Search, Trash2, X } from "lucide-react
 import type { CellValue, DatabaseField, SelectOption } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { parseFieldOptions } from "@/lib/database-values";
-import { relationRowIds, relationRowLabel, relationTarget, searchRelationRows } from "@/lib/relation";
+import {
+  relationRowIds,
+  relationRowLabel,
+  relationTarget,
+  reverseRelationConfig,
+  searchRelationRows,
+} from "@/lib/relation";
 import { useRelationStore } from "@/stores/relation";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
@@ -677,6 +683,37 @@ export function RelationChip({
           <X className="h-2.5 w-2.5" />
         </button>
       )}
+    </span>
+  );
+}
+
+/**
+ * 反向关系单元格的只读展示：单元格无存储值，value 是调用方实时反查出的来源行 id 数组；
+ * 这里用来源库缓存把 id 解析成来源行标题（来源库未加载时降级显示 id）。
+ */
+export function ReverseRelationChips({
+  field,
+  value,
+  compact = false,
+}: {
+  field: DatabaseField;
+  value: CellValue;
+  compact?: boolean;
+}) {
+  const cfg = reverseRelationConfig(field);
+  const sourceViewId = cfg?.source_view_id ?? null;
+  const db = useRelationStore((s) => (sourceViewId ? s.data[sourceViewId] : undefined));
+  const ids = relationRowIds(value);
+  if (ids.length === 0) return null;
+  return (
+    <span className={cn("flex flex-wrap", compact ? "gap-0.5" : "gap-1")}>
+      {ids.map((id) => (
+        <RelationChip
+          key={id}
+          compact={compact}
+          label={(db ? relationRowLabel(db, id) : null) ?? (db ? t("field.relationMissing") : id)}
+        />
+      ))}
     </span>
   );
 }

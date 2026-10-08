@@ -25,7 +25,13 @@ import { UNGROUPED, applyFilters, canGroupBy, groupRowsForGrid, sortRows, type S
 import { normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
 import { buildCsvExport, csvValueToCell, parseCsv, planImport, parseTsv, resolveSelectRefs } from "@/lib/csv";
 import { computeFormula } from "@/lib/database-formula";
-import { computeRollup, relationRowIds, relationRowLabel, relationTarget } from "@/lib/relation";
+import {
+  computeReverseRelation,
+  computeRollup,
+  relationRowIds,
+  relationRowLabel,
+  relationTarget,
+} from "@/lib/relation";
 import { useRelationDbs } from "./use-database-data";
 import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
@@ -506,6 +512,13 @@ export function GridView({
               .map((id) => (db ? relationRowLabel(db, id) : null) ?? id)
               .join("; ");
             cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: text };
+          } else if (f.field_type === "reverse_relation") {
+            // 反向关系无存储值：实时反查来源行并导出标题（同样对人可读）
+            const ids = computeReverseRelation(row.id, f, relationDbOf) ?? [];
+            const cfg = parseFieldOptions(f.options);
+            const db = cfg.kind === "reverse_relation" ? relationDbOf(cfg.source_view_id) : undefined;
+            const text = ids.map((id) => (db ? relationRowLabel(db, id) : null) ?? id).join("; ");
+            if (text !== "") cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: text };
           }
         }
       }
@@ -725,13 +738,15 @@ export function GridView({
       {visibleFields.map((field) => {
         const isPrimary = field.id === primaryField?.id;
         const isEditing = editing?.rowId === row.id && editing.fieldId === field.id;
-        // 公式/汇总字段无存储值：渲染时按表达式/关联行实时计算
+        // 公式/汇总/反向关系字段无存储值：渲染时按表达式/关联行/来源行实时计算
         const value =
           field.field_type === "formula"
             ? computeFormula(field, cells[row.id] ?? {}, fields)
             : field.field_type === "rollup"
               ? computeRollup(field, cells[row.id] ?? {}, fields, relationDbOf)
-              : (cells[row.id]?.[field.id] ?? null);
+              : field.field_type === "reverse_relation"
+                ? computeReverseRelation(row.id, field, relationDbOf)
+                : (cells[row.id]?.[field.id] ?? null);
         return (
           <td
             key={field.id}

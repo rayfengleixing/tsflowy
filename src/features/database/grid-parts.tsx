@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { NewFieldDialog } from "./NewFieldDialog";
-import { RelationChips, SelectChips } from "./editors";
+import { RelationChips, ReverseRelationChips, SelectChips } from "./editors";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -63,9 +63,10 @@ export function HiddenColumnsMenu({ fields, onShow }: { fields: DatabaseField[];
   );
 }
 
-/** 需要额外配置才有意义的字段类型：关联要选目标表，公式要写表达式，汇总要选关联/目标/聚合 */
+/** 需要额外配置才有意义的字段类型：关联要选目标表，公式要写表达式，汇总要选关联/目标/聚合，
+ *  反向关系要选来源表与其指向本表的关联字段 */
 export function needsFieldSettings(type: FieldType): boolean {
-  return type === "relation" || type === "formula" || type === "rollup";
+  return type === "relation" || type === "formula" || type === "rollup" || type === "reverse_relation";
 }
 
 export function AddFieldButton(props: { onConfigure: (field: DatabaseField) => void }) {
@@ -142,6 +143,18 @@ export function CellDisplay({
           <span className="text-neutral-300" />
         ) : (
           <RelationChips field={field} value={value} />
+        )}
+      </div>
+    );
+  }
+  // 反向关系只读虚拟列：value 由调用方实时反查（来源行 id 数组），这里解析成来源行标题
+  if (field.field_type === "reverse_relation") {
+    return (
+      <div className="flex h-full w-full items-center truncate px-2">
+        {Array.isArray(value) && value.length > 0 ? (
+          <ReverseRelationChips field={field} value={value} />
+        ) : (
+          <span className="text-neutral-300" />
         )}
       </div>
     );

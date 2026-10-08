@@ -49,6 +49,9 @@ export function validateCellValue(type: FieldType, value: CellValue): boolean {
     case "rollup":
       // 汇总字段同样无存储值；聚合结果按字符串展示，防御性放行
       return typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
+    case "reverse_relation":
+      // 反向关系无存储值，渲染时实时反查；防御性放行（值为对端行 id 数组）
+      return Array.isArray(value) && value.every((v) => typeof v === "string");
     case "checkbox":
       return typeof value === "boolean";
     case "multi_select":
@@ -102,7 +105,9 @@ export function formatCellValue(type: FieldType, value: CellValue, options?: Fie
     }
     // 关联单元格存的是对端行 id，真正展示要解析成行标题 —— 由 RelationChips 负责渲染，
     // 这里只给一个不带解析的兜底文本（例如导出、无目标库缓存时的降级）。
+    // 反向关系同理：单元格无存储值，真正展示由 ReverseRelationChips 解析来源行标题。
     case "relation":
+    case "reverse_relation":
       return Array.isArray(value) ? value.join(", ") : "";
     // 汇总值由 computeRollup 算好传入，已经是展示文本
     case "rollup":

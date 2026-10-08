@@ -2,8 +2,9 @@ import type { CellValue, DatabaseField, DatabaseRow, FieldOptions } from "@/type
 import { aggregatesForType, aggregateValue, type AggregateFn } from "./database-aggregate";
 import { formatCellValue, parseFieldOptions } from "./database-values";
 
-// 关联（relation）与汇总（rollup）纯逻辑（项目说明书 11 节：求值需单测）。
-// 两者都不落库：relation 存对端行 id，rollup 每次渲染实时按目标库聚合。
+// 关联（relation）与汇总（rollup）、反向关系（reverse_relation）纯逻辑
+// （项目说明书 11 节：求值需单测）。三者都不落库：relation 存对端行 id，
+// rollup 每次渲染实时按目标库聚合，reverse_relation 每次渲染实时反查来源行。
 
 /** 关联/汇总求值需要的目标库快照（由 stores/relation.ts 按目标视图缓存） */
 export interface RelationDb {
@@ -104,4 +105,45 @@ const DATABASE_LAYOUTS: string[] = ["grid", "board", "calendar"];
 /** 可选作关联目标的视图：宿主数据库表（派生视图与文档页排除，它们没有独立的字段/行） */
 export function buildRelationPickerFields<T extends { layout: string; source_id?: string | null }>(views: T[]): T[] {
   return views.filter((v) => DATABASE_LAYOUTS.includes(v.layout) && !v.source_id);
+}
+
+// ---------- 反向关系（reverse_relation） ----------
+
+/** 反向关系配置解析：来源表 / 来源关联字段任一为空都算未配置（此时列显示为空） */
+export function reverseRelationConfig(
+  field: DatabaseField,
+): Extract<FieldOptions, { kind: "reverse_relation" }> | null {
+  const opts = parseFieldOptions(field.options);
+  if (opts.kind !== "reverse_relation") return null;
+  if (!opts.source_view_id || !opts.source_field_id) return null;
+  return opts;
+}
+
+/**
+ * 来源表里「指向本表」的关联字段候选：配置反向关系时只能选这种字段，
+ * 否则反查方向不对，永远查不到来源行。
+ */
+export function reverseRelationSourceFields(db: RelationDb | undefined, currentViewId: string | null): DatabaseField[] {
+  if (!db || !currentViewId) return [];
+  return db.fields.filter((f) => f.field_type === "relation" && relationTarget(f) === currentViewId);
+}
+
+/**
+ * 实时反查来源行：来源表里所有「关联字段指向本行」的行 id（按来源表行序）。
+ * 未配置、来源库未加载、来源字段已删时返回 null（与 rollup 一致：不把配置坏了渲染成空数组误导）。
+ */
+export function computeReverseRelation(
+  rowId: string,
+  field: DatabaseField,
+  getDb: (viewId: string) => RelationDb | undefined,
+): string[] | null {
+  const cfg = reverseRelationConfig(field);
+  if (!cfg) return null;
+  const db = getDb(cfg.source_view_id);
+  if (!db) return null;
+  const sourceField = db.fields.find((f) => f.id === cfg.source_field_id);
+  if (!sourceField) return null;
+  return db.rows
+    .filter((r) => relationRowIds(db.cells[r.id]?.[sourceField.id] ?? null).includes(rowId))
+    .map((r) => r.id);
 }

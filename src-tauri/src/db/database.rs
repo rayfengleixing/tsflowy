@@ -35,6 +35,13 @@ pub fn default_options_json(field_type: &str) -> String {
             "kind": "rollup", "relation_field_id": "", "target_field_id": "", "fn": "count"
         })
         .to_string(),
+        // 反向关系：读目标库中某个 relation 字段指向本表时，展示回指本行的来源行（前端配置）
+        "reverse_relation" => serde_json::json!({
+            "kind": "reverse_relation", "source_view_id": "", "source_field_id": ""
+        })
+        .to_string(),
+        // 附件：单元格存 [{name, path}] 数组，文件落 assets/；无需额外配置
+        "attachment" => serde_json::json!({ "kind": "none" }).to_string(),
         _ => serde_json::json!({ "kind": "none" }).to_string(),
     }
 }
@@ -592,6 +599,11 @@ mod tests {
             default_options_json("rollup"),
             r#"{"fn":"count","kind":"rollup","relation_field_id":"","target_field_id":""}"#
         );
+        assert_eq!(
+            default_options_json("reverse_relation"),
+            r#"{"kind":"reverse_relation","source_field_id":"","source_view_id":""}"#
+        );
+        assert_eq!(default_options_json("attachment"), r#"{"kind":"none"}"#);
     }
 
     #[test]

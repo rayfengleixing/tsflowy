@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildRelationPickerFields,
+  computeReverseRelation,
   computeRollup,
   primaryFieldOf,
   relationCellText,
@@ -8,6 +9,8 @@ import {
   relationRowLabel,
   relationRowText,
   relationTarget,
+  reverseRelationConfig,
+  reverseRelationSourceFields,
   rollupConfig,
   rollupFnsFor,
   searchRelationRows,
@@ -213,5 +216,64 @@ describe("buildRelationPickerFields", () => {
       { id: "v4", name: "客户库(派生)", layout: "grid" as const, source_id: "v2" },
     ];
     expect(buildRelationPickerFields(views).map((v) => v.id)).toEqual(["v1", "v2"]);
+  });
+});
+
+describe("reverseRelationConfig", () => {
+  it("requires both the source view and the source relation field", () => {
+    const ok = { kind: "reverse_relation", source_view_id: "v1", source_field_id: "rel" };
+    expect(reverseRelationConfig(field("rr", "reverse_relation", ok))).toEqual(ok);
+    expect(reverseRelationConfig(field("rr", "reverse_relation", { ...ok, source_field_id: "" }))).toBeNull();
+    expect(reverseRelationConfig(field("rr", "text"))).toBeNull();
+  });
+});
+
+describe("reverseRelationSourceFields", () => {
+  const relToMe = field("relA", "relation", { kind: "relation", target_view_id: "v2" });
+  const relElsewhere = field("relB", "relation", { kind: "relation", target_view_id: "v9" });
+  const text = field("t", "text");
+  const source = db([relToMe, relElsewhere, text], [], {});
+
+  it("keeps only relation fields pointing at the current view", () => {
+    expect(reverseRelationSourceFields(source, "v2").map((f) => f.id)).toEqual(["relA"]);
+  });
+
+  it("returns empty when the db or current view is unknown", () => {
+    expect(reverseRelationSourceFields(undefined, "v2")).toEqual([]);
+    expect(reverseRelationSourceFields(source, null)).toEqual([]);
+  });
+});
+
+describe("computeReverseRelation", () => {
+  // 来源表 v1：relA 指向本表 v2；本表 v2 关心「哪些来源行引用了当前行」
+  const relA = field("relA", "relation", { kind: "relation", target_view_id: "v2" });
+  const title = field("title", "text");
+  const source = db([title, relA], [row("s1"), row("s2", 1), row("s3", 2)], {
+    s1: { title: "甲", relA: ["me1", "me2"] },
+    s2: { title: "乙", relA: ["me2"] },
+    s3: { title: "丙", relA: [] },
+  });
+  const rrField = field("rr", "reverse_relation", {
+    kind: "reverse_relation",
+    source_view_id: "v1",
+    source_field_id: "relA",
+  });
+  const getDb = (id: string) => (id === "v1" ? source : undefined);
+
+  it("lists the source rows that link to the given row", () => {
+    expect(computeReverseRelation("me2", rrField, getDb)).toEqual(["s1", "s2"]);
+    expect(computeReverseRelation("me1", rrField, getDb)).toEqual(["s1"]);
+    expect(computeReverseRelation("nobody", rrField, getDb)).toEqual([]);
+  });
+
+  it("returns null when unconfigured, source db missing or source field deleted", () => {
+    expect(computeReverseRelation("me1", field("x", "text"), getDb)).toBeNull();
+    expect(computeReverseRelation("me1", rrField, () => undefined)).toBeNull();
+    const ghost = field("rr2", "reverse_relation", {
+      kind: "reverse_relation",
+      source_view_id: "v1",
+      source_field_id: "ghost",
+    });
+    expect(computeReverseRelation("me1", ghost, getDb)).toBeNull();
   });
 });

@@ -230,6 +230,7 @@ export const zh = {
   "field.type.formula": "公式",
   "field.type.relation": "关联",
   "field.type.rollup": "汇总",
+  "field.type.reverse_relation": "反向关系",
   "field.relationUnset": "未配置关联表",
   "field.relationSearch": "搜索要关联的行…",
   "field.relationEmpty": "没有匹配的行",
@@ -244,6 +245,12 @@ export const zh = {
   "field.rollupHint":
     "先在本表建一个「关联」字段并选好目标表，再回到这里：选关联字段 → 选要统计的目标字段 → 选汇总方式。结果按本行关联到的行实时统计，不落库。",
   "field.rollupMissing": "请选择…",
+  "field.reverseSourceTable": "来源表",
+  "field.reverseSourceField": "来源关联字段",
+  "field.reverseUnset": "未配置反向关系",
+  "field.reverseEmpty": "没有指向本行的来源行",
+  "field.reverseHint":
+    "先在「来源表」里建一个指向本表的「关联」字段，再回到这里选来源表与那个关联字段。本列会实时列出来源表中关联到当前行的所有行（只读，不落库）。",
   "field.formulaExpr": "表达式",
   "field.formulaPlaceholder": "{单价} * {数量}",
   "field.formulaHint":

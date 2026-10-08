@@ -235,6 +235,7 @@ export const en: Record<MessageKey, string> = {
   "field.type.formula": "Formula",
   "field.type.relation": "Relation",
   "field.type.rollup": "Rollup",
+  "field.type.reverse_relation": "Reverse relation",
   "field.relationUnset": "No target table configured",
   "field.relationSearch": "Search rows to link…",
   "field.relationEmpty": "No matching rows",
@@ -249,6 +250,12 @@ export const en: Record<MessageKey, string> = {
   "field.rollupHint":
     "First create a Relation field in this table and pick its target table, then come back: choose the relation field → the target field → the aggregate. Results are computed live, nothing is stored.",
   "field.rollupMissing": "Select…",
+  "field.reverseSourceTable": "Source table",
+  "field.reverseSourceField": "Source relation field",
+  "field.reverseUnset": "Reverse relation not configured",
+  "field.reverseEmpty": "No source rows link to this row",
+  "field.reverseHint":
+    "First create a Relation field in the source table that points to this table, then come back and pick the source table and that relation field. This column lists, live, the source-table rows that link to the current row (read-only, nothing stored).",
   "field.formulaExpr": "Expression",
   "field.formulaPlaceholder": "{price} * {qty}",
   "field.formulaHint":
