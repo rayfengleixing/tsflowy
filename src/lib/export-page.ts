@@ -1,7 +1,6 @@
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
-import { toBlob } from "html-to-image";
 import { toast } from "sonner";
 import { useEditorStore } from "@/stores/editor";
 import { flushAllForClose } from "./close-flush";
@@ -25,7 +24,7 @@ function textOf(node: JSONContent): string {
     .map((child) => {
       if (child.type === "text") return child.text ?? "";
       if (child.type === "hardBreak") return "\n";
-      if (child.type === "mention") return `[[${child.attrs?.label ?? child.attrs?.id ?? ""}]]`;
+      if (child.type === "mention") return `[[${attrStr(child, "label") || attrStr(child, "id")}]]`;
       return textOf(child);
     })
     .join("");
@@ -36,7 +35,7 @@ function escapeHtml(s: string): string {
 }
 
 /** 取字符串属性（attrs 是 unknown 值域，先做类型收窄再进模板串） */
-function attrStr(node: JSONContent, key: string): string {
+function attrStr(node: { attrs?: Record<string, unknown> }, key: string): string {
   const v = node.attrs?.[key];
   return typeof v === "string" ? v : "";
 }
@@ -93,9 +92,10 @@ function nodeToHtml(node: JSONContent): string {
       return `<pre><code class="language-${escapeAttr(lang)}">${escapeHtml(textOf(node))}</code></pre>`;
     }
     case "image": {
-      const src = escapeAttr(String(node.attrs?.src ?? ""));
-      const alt = escapeHtml(String(node.attrs?.alt ?? ""));
-      const caption = node.attrs?.caption ? `<figcaption>${escapeHtml(String(node.attrs.caption))}</figcaption>` : "";
+      const src = escapeAttr(attrStr(node, "src"));
+      const alt = escapeHtml(attrStr(node, "alt"));
+      const captionText = attrStr(node, "caption");
+      const caption = captionText ? `<figcaption>${escapeHtml(captionText)}</figcaption>` : "";
       return `<figure><img src="${src}" alt="${alt}"/>${caption}</figure>`;
     }
     case "taskList":
@@ -175,7 +175,7 @@ function inlineHtml(node: JSONContent): string {
             else if (m.type === "italic") html = `<em>${html}</em>`;
             else if (m.type === "code") html = `<code>${html}</code>`;
             else if (m.type === "strike") html = `<del>${html}</del>`;
-            else if (m.type === "link") html = `<a href="${escapeAttr(String(m.attrs?.href ?? ""))}">${html}</a>`;
+            else if (m.type === "link") html = `<a href="${escapeAttr(attrStr(m, "href"))}">${html}</a>`;
             else if (m.type === "underline") html = `<u>${html}</u>`;
           }
         }
@@ -183,7 +183,7 @@ function inlineHtml(node: JSONContent): string {
       }
       if (child.type === "hardBreak") return "<br/>";
       if (child.type === "mention")
-        return `<a class="mention" href="#">[[${escapeHtml(String(child.attrs?.label ?? child.attrs?.id ?? ""))}]]</a>`;
+        return `<a class="mention" href="#">[[${escapeHtml(attrStr(child, "label") || attrStr(child, "id"))}]]</a>`;
       return nodeToHtml(child);
     })
     .join("");
@@ -315,6 +315,8 @@ export async function exportPageImage(viewName: string): Promise<void> {
   if (!editor || editor.isDestroyed) throw new Error("editor not ready");
 
   const el = editor.view.dom;
+  // html-to-image 体积可观且仅在长图导出时用到：按需加载，避免进主包/拖慢启动
+  const { toBlob } = await import("html-to-image");
   const restore = await inlineAssetImages(el);
   let blob: Blob | null = null;
   try {

@@ -11,7 +11,7 @@ export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
   const [editingLang, setEditingLang] = useState(false);
   const [langDraft, setLangDraft] = useState("");
   const preRef = useRef<HTMLPreElement>(null);
-  const lang = (node.attrs.language as string | undefined) || "text";
+  const lang = (node.attrs.language as string | undefined) ?? "text";
 
   const commitLang = () => {
     setEditingLang(false);
@@ -22,7 +22,7 @@ export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
   const copy = async () => {
     try {
       // 用 DOM innerText（pre 设了 white-space: pre，保留多行换行）；textBetween 不可靠只返回首行
-      const text = preRef.current?.innerText ?? node.textContent ?? "";
+      const text = preRef.current?.innerText ?? node.textContent;
       await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);

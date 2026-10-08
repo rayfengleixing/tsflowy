@@ -20,7 +20,7 @@ export const Image = Node.create({
         default: 100,
         // 粘贴/导入 HTML img 时读取 style width 百分比
         parseHTML: (el: HTMLElement) => {
-          const w = parseFloat(el.style?.width ?? "");
+          const w = parseFloat(el.style.width);
           return Number.isFinite(w) ? Math.max(20, Math.min(100, w)) : 100;
         },
         renderHTML: (attrs: Record<string, unknown>) => {

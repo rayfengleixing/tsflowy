@@ -56,7 +56,7 @@ export function BoardView({
   const [newGroupOpen, setNewGroupOpen] = useState(false);
 
   useEffect(() => {
-    store.load(view).catch((e) => logger.error("board.load", e));
+    store.load(view).catch((e: unknown) => logger.error("board.load", e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.id]);
 
@@ -404,6 +404,7 @@ function BoardCard(props: {
   onOpenDetail: () => void;
 }) {
   const { row, primaryField, subFields, subFieldsExplicit, cells, relationDbOf, dragging, focused } = props;
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
   const value = primaryField ? (cells[row.id]?.[primaryField.id] ?? null) : null;
   const title = primaryField
     ? primaryField.field_type === "relation"
@@ -413,6 +414,7 @@ function BoardCard(props: {
 
   // 副信息：单/多选 chips + 日期 + 复选框✓ + 文本/数字，空值不占位
   const subs: { field: DatabaseField; value: CellValue }[] = subFields
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
     .map((f) => ({ field: f, value: cells[row.id]?.[f.id] ?? null }))
     .filter((s) => cardSubShown(s.field, s.value, subFieldsExplicit));
 

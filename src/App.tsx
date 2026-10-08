@@ -1,15 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { TabBar } from "@/features/tabs/TabBar";
-import { TrashPage } from "@/features/trash/TrashPage";
 import { PlaceholderPage } from "@/features/placeholder/PlaceholderPage";
-import { EditorPage } from "@/features/editor/EditorPage";
-import { DatabasePage } from "@/features/database/DatabasePage";
-import { SettingsPage } from "@/features/settings/SettingsPage";
 import { AiPanel } from "@/features/ai/AiPanel";
 import { DbUnavailable, type DbHealth } from "@/features/errors/DbUnavailable";
 import { CommandPalette } from "@/features/search/CommandPalette";
-import { SearchResultsPage } from "@/features/search/SearchResultsPage";
 import { DatabaseViewPicker } from "@/features/editor/DatabaseViewPicker";
 import { EmojiPickerDialog } from "@/features/editor/EmojiPickerDialog";
 import { Toaster } from "@/components/ui/sonner";
@@ -31,6 +26,16 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { requestEscapeClose } from "@/lib/escape-close";
 import { useShortcutsStore, comboEquals, eventToCombo } from "@/lib/shortcuts";
+
+// 路由级懒加载：编辑页（含 TipTap 及全部扩展）/ 数据库页 / 设置页 / 回收站 / 搜索结果页
+// 体积较大且互斥，拆成独立 chunk 按需加载，缩短启动时主包的解析时间（fallback 复用 app.loading）。
+const EditorPage = lazy(() => import("@/features/editor/EditorPage").then((m) => ({ default: m.EditorPage })));
+const DatabasePage = lazy(() => import("@/features/database/DatabasePage").then((m) => ({ default: m.DatabasePage })));
+const SettingsPage = lazy(() => import("@/features/settings/SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const TrashPage = lazy(() => import("@/features/trash/TrashPage").then((m) => ({ default: m.TrashPage })));
+const SearchResultsPage = lazy(() =>
+  import("@/features/search/SearchResultsPage").then((m) => ({ default: m.SearchResultsPage })),
+);
 
 /** Ctrl+Tab / Ctrl+Shift+Tab 循环标签页；当前视图不在 tabs 里（如停在设置页）时落到第一个 */
 function cycleTab(step: number) {
@@ -152,7 +157,7 @@ function App() {
     useWorkspaceStore
       .getState()
       .init()
-      .catch((e) => {
+      .catch((e: unknown) => {
         // ready=true 已在 WorkspaceStore.init() 内部 catch 分支最终保证；
         // 这里不再外部 setState，避免触发额外 zustand emit → React 19 useSyncExternalStore 缓存告警。
         logger.error("App.init", "app init failed", e);
@@ -170,7 +175,7 @@ function App() {
         // 而不是让用户对着一个空工作区猜发生了什么。
         invoke<DbHealth>("db_health")
           .then(setDbHealth)
-          .catch((e) => logger.error("App.dbHealth", "db_health failed", e))
+          .catch((e: unknown) => logger.error("App.dbHealth", "db_health failed", e))
           .finally(() => setDbChecked(true));
       });
   }, []);
@@ -293,18 +298,24 @@ function App() {
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
-        {route === "trash" ? (
-          <TrashPage />
-        ) : route === "search" ? (
-          <SearchResultsPage />
-        ) : route === "settings" ? (
-          <SettingsPage />
-        ) : (
-          <>
-            <TabBar />
-            {splitView ? <SplitView left={view} right={splitView} /> : renderView(view)}
-          </>
-        )}
+        <Suspense
+          fallback={
+            <div className="flex h-full items-center justify-center text-sm text-neutral-500">{t("app.loading")}</div>
+          }
+        >
+          {route === "trash" ? (
+            <TrashPage />
+          ) : route === "search" ? (
+            <SearchResultsPage />
+          ) : route === "settings" ? (
+            <SettingsPage />
+          ) : (
+            <>
+              <TabBar />
+              {splitView ? <SplitView left={view} right={splitView} /> : renderView(view)}
+            </>
+          )}
+        </Suspense>
       </div>
       <AiPanel />
       <CommandPalette />

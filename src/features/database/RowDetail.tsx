@@ -49,7 +49,8 @@ function RowPropertyField({
         ? computeRollup(field, s.cells[row.id] ?? {}, s.fields, (id) => relationData[id])
         : field.field_type === "reverse_relation"
           ? computeReverseRelation(row.id, field, (id) => relationData[id])
-          : (s.cells[row.id]?.[field.id] ?? null),
+          : // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
+            (s.cells[row.id]?.[field.id] ?? null),
   );
   const setCell = useDbStore((s) => s.setCell);
   const addSelectOption = useDbStore((s) => s.addSelectOption);

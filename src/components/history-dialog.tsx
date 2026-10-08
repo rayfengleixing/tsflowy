@@ -36,7 +36,7 @@ export function HistoryDialog({ view, open, onOpenChange }: HistoryDialogProps) 
     documentApi
       .listSnapshots(view.id)
       .then(setSnapshots)
-      .catch((e) => {
+      .catch((e: unknown) => {
         logger.error("list snapshots failed", e);
         toast.error(t("error.db", { message: String(e) }));
       })

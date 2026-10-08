@@ -10,8 +10,8 @@ const PAD = 8;
 
 /** 查找最近的可滚动编辑区容器（无则返回 null；调用方以 viewport 兜底） */
 export function getEditorViewportRect(editor: Editor | null | undefined): DOMRect | null {
-  const dom = (editor?.view?.dom as HTMLElement | null) ?? null;
-  const scroller = dom?.closest?.("[data-editor-scroll]");
+  const dom = (editor?.view.dom as HTMLElement | null) ?? null;
+  const scroller = dom?.closest("[data-editor-scroll]");
   if (scroller) return scroller.getBoundingClientRect();
   return null;
 }

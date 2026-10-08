@@ -71,7 +71,7 @@ declare global {
 }
 if (typeof window !== "undefined" && import.meta.env.DEV) {
   window.__tsflowy_logger = Object.assign(
-    (..._: unknown[]) => {}, // stub
+    (..._: unknown[]) => undefined, // stub
     logger,
     { setLevel, getLevel },
   );

@@ -220,7 +220,8 @@ export function createDatabaseStore() {
       // 清理本地单元格缓存与排序/筛选引用
       const cells = { ...get().cells };
       for (const rowId of Object.keys(cells)) {
-        delete cells[rowId][id];
+        const { [id]: _removed, ...rest } = cells[rowId];
+        cells[rowId] = rest;
       }
       set({
         cells,
@@ -245,7 +246,13 @@ export function createDatabaseStore() {
       const viewId = get().viewId;
       if (!viewId) return;
       await databaseApi.reorderFields(viewId, orderedIds);
-      set({ fields: [...orderedIds].map((id, i) => ({ ...get().fields.find((f) => f.id === id)!, position: i })) });
+      const byId = new Map(get().fields.map((f) => [f.id, f]));
+      set({
+        fields: orderedIds.flatMap((id, i) => {
+          const field = byId.get(id);
+          return field ? [{ ...field, position: i }] : [];
+        }),
+      });
     },
 
     updateFieldOptions: async (id, options) => {
@@ -306,8 +313,7 @@ export function createDatabaseStore() {
       if (ids.length === 0) return 0;
       const gone = new Set(ids);
       const n = await databaseApi.deleteRows(ids);
-      const cells = { ...get().cells };
-      for (const id of ids) delete cells[id];
+      const cells = Object.fromEntries(Object.entries(get().cells).filter(([rowId]) => !gone.has(rowId)));
       set({ rows: compactRowPositions(get().rows.filter((r) => !gone.has(r.id))), cells });
       return n;
     },
@@ -345,7 +351,13 @@ export function createDatabaseStore() {
       const viewId = get().viewId;
       if (!viewId) return;
       await databaseApi.reorderRows(viewId, orderedIds);
-      set({ rows: [...orderedIds].map((id, i) => ({ ...get().rows.find((r) => r.id === id)!, position: i })) });
+      const byId = new Map(get().rows.map((r) => [r.id, r]));
+      set({
+        rows: orderedIds.flatMap((id, i) => {
+          const row = byId.get(id);
+          return row ? [{ ...row, position: i }] : [];
+        }),
+      });
     },
 
     setCell: async (rowId, fieldId, value) => {

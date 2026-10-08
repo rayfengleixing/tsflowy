@@ -70,7 +70,7 @@ export function DocumentOutline() {
       const list: HeadingItem[] = [];
       editor.state.doc.descendants((node, pos) => {
         if (node.type.name === "heading") {
-          const level = (node.attrs.level as number) ?? 1;
+          const level = (node.attrs.level as number | undefined) ?? 1;
           const text = node.textContent.trim().replace(/\s+/g, " ") || "(Untitled)";
           list.push({ pos, level, text });
         }
@@ -111,7 +111,7 @@ export function DocumentOutline() {
 
   // 找到 editor 内容的 overflow-y 父容器（EditorPage 编辑区外层 overflow-auto）
   useEffect(() => {
-    if (!editor?.view?.dom || !isDocument) {
+    if (!editor?.view.dom || !isDocument) {
       scrollElRef.current = null;
       return;
     }
@@ -129,7 +129,7 @@ export function DocumentOutline() {
 
   // IntersectionObserver：监听每个 heading dom 进入视口
   useEffect(() => {
-    if (!editor?.view?.dom || !isDocument) return;
+    if (!editor?.view.dom || !isDocument) return;
 
     if (typeof IntersectionObserver === "undefined") {
       const sc = scrollElRef.current;
@@ -177,9 +177,10 @@ export function DocumentOutline() {
       io.observe(dom);
     }
     scrollFindActive();
+    const activeItems = activeItemsRef.current;
     return () => {
       io.disconnect();
-      activeItemsRef.current.clear();
+      activeItems.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, isDocument, headings]);
@@ -212,7 +213,7 @@ export function DocumentOutline() {
     list: HeadingItem[],
   ): HTMLElement | null {
     const cached = list.find((x) => x.pos === pos)?.cachedDom;
-    if (cached !== undefined) return cached || null;
+    if (cached !== undefined) return cached ?? null;
     try {
       const result = ed.view.domAtPos(pos + 1);
       let node: Node | null = result.node;

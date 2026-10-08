@@ -64,8 +64,8 @@ export function evalFormula(expr: string, ref: (name: string) => number | null):
   if (!tokens || tokens.length === 0) return null;
   let pos = 0;
 
-  const peek = () => tokens[pos];
-  const eat = () => tokens[pos++];
+  const peek = (): Token | undefined => tokens[pos];
+  const eat = (): Token | undefined => tokens[pos++];
 
   const parseFactor = (): number | null => {
     const tok = peek();
@@ -78,15 +78,15 @@ export function evalFormula(expr: string, ref: (name: string) => number | null):
       eat();
       return ref(tok.name);
     }
-    if (tok.kind === "op" && tok.op === "(") {
+    if (tok.op === "(") {
       eat();
       const v = parseExpr();
       const close = eat();
-      if (!close || close.kind !== "op" || close.op !== ")") return null;
+      if (close?.kind !== "op" || close.op !== ")") return null;
       return v;
     }
     // 一元负号
-    if (tok.kind === "op" && tok.op === "-") {
+    if (tok.op === "-") {
       eat();
       const v = parseFactor();
       return v === null ? null : -v;

@@ -7,7 +7,7 @@ import type { JSONContent } from "@tiptap/core";
 /** 给 columns 容器节点的 NodeView：顶部带切换 2/3/4 列工具栏；子 node 自动用 ColumnNodeView 渲染 */
 export function ColumnsNodeView(props: ReactNodeViewProps<HTMLElement>) {
   const { node, editor, deleteNode, getPos } = props;
-  const count = node.childCount ?? 1;
+  const count = node.childCount;
 
   const switchTo = (cols: 2 | 3 | 4) => {
     const posVal = typeof getPos === "function" ? getPos() : undefined;
@@ -16,7 +16,7 @@ export function ColumnsNodeView(props: ReactNodeViewProps<HTMLElement>) {
     if (!current) return;
     const currentCols: JSONContent[] = [];
     current.forEach((col) => {
-      currentCols.push(col.toJSON());
+      currentCols.push(col.toJSON() as JSONContent);
       return false; // continue forEach (return false ≠ break in PM)
     });
     const result: JSONContent[] = [];

@@ -51,6 +51,7 @@ export function aggregateLabel(fn: AggregateFn): string {
 }
 
 function cellValues(rowIds: string[], fieldId: string, cells: Record<string, Record<string, CellValue>>): CellValue[] {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
   return rowIds.map((id) => cells[id]?.[fieldId] ?? null);
 }
 

@@ -363,6 +363,15 @@ function SlashMenuList(props: {
   );
 }
 
+interface SlashMenuOptions {
+  char: string;
+  startOfLine: boolean;
+  allowSpaces: boolean;
+  pluginKey: PluginKey;
+  items: (props: { query: string; editor: Editor }) => SlashItem[];
+  command: (args: { editor: Editor; range: Range; props: SlashItem }) => void;
+}
+
 /**
  * Slash 菜单扩展（项目说明书 8.3）：输入 "/" 唤起（行首），实时过滤，Enter/↑/↓ 选择。
  * 基于 @tiptap/suggestion 的托管定位（props.mount）。
@@ -386,7 +395,7 @@ export const SlashMenu = Extension.create({
   },
 
   addProseMirrorPlugins() {
-    const options = this.options;
+    const options = this.options as SlashMenuOptions;
     return [
       Suggestion({
         editor: this.editor,

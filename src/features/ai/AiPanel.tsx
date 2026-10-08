@@ -63,7 +63,7 @@ export function AiPanel() {
     return flattenTree(tree)
       .filter((v) => {
         try {
-          return !JSON.parse(v.extra ?? "{}").row_detail;
+          return !(JSON.parse(v.extra) as { row_detail?: unknown }).row_detail;
         } catch {
           return true;
         }
@@ -115,7 +115,7 @@ export function AiPanel() {
   const onInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
     setInput(value);
-    setMention(detectMentionQuery(value, e.target.selectionStart ?? value.length));
+    setMention(detectMentionQuery(value, e.target.selectionStart));
     setMentionActive(0);
   };
 
@@ -376,7 +376,7 @@ function MessageBubble({
   const isUser = message.role === "user";
   const edit = message.edit;
   // 正文为空、内容被 summary 兜底时不再渲染气泡，避免与下方结果卡片重复
-  const bubbleText = edit && message.content === edit.summary ? "" : message.content;
+  const bubbleText = message.content === edit?.summary ? "" : message.content;
   return (
     <div className={cn("flex flex-col", isUser ? "items-end" : "items-start")}>
       {(bubbleText.trim() || !edit) && (
@@ -413,7 +413,7 @@ function MessageBubble({
           )}
         </div>
       )}
-      {!isUser && bubbleText.trim() && (onReplace || onInsert) && (
+      {!isUser && bubbleText.trim() && (onReplace ?? onInsert) && (
         <div className="mt-1.5 flex gap-1.5">
           {onReplace && (
             <button

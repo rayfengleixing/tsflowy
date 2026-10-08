@@ -38,7 +38,7 @@ export function DatabaseViewNodeView(props: ReactNodeViewProps<HTMLElement>) {
           setCells(c);
         }
       })
-      .catch((e) => logger.error("load embedded db failed", viewId, e));
+      .catch((e: unknown) => logger.error("load embedded db failed", viewId, e));
     return () => {
       alive = false;
     };
@@ -59,6 +59,7 @@ export function DatabaseViewNodeView(props: ReactNodeViewProps<HTMLElement>) {
 
   /** 单元格展示文本：关联列解析成目标行标题，其余走通用格式化 */
   const cellText = (f: DatabaseField, rowId: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
     const value = cells[rowId]?.[f.id] ?? null;
     if (f.field_type === "relation") {
       const targetId = relationTarget(f);
@@ -88,7 +89,7 @@ export function DatabaseViewNodeView(props: ReactNodeViewProps<HTMLElement>) {
       <div className="flex items-center gap-2 border-b border-neutral-200 bg-neutral-100/70 px-3 py-2">
         <Table2 className="h-4 w-4 text-neutral-500" />
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-neutral-800">
-          {(node.attrs.name as string | undefined) || t("databaseView.defaultName")}
+          {(node.attrs.name as string | undefined) ?? t("databaseView.defaultName")}
         </span>
         <button
           className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[12px] text-brand-600 hover:bg-brand-100"

@@ -40,7 +40,7 @@ export interface ViewNode extends View {
 export function parseViewTags(tags: string | null | undefined): string[] {
   if (!tags) return [];
   try {
-    const v = JSON.parse(tags);
+    const v: unknown = JSON.parse(tags);
     return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
   } catch {
     return [];

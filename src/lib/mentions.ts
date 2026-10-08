@@ -36,6 +36,7 @@ const CONTEXT_RADIUS = 30;
  */
 function collectMentions(node: JSONContent, parentBlockText: string | null): CollectedMention[] {
   const out: CollectedMention[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- 递归遍历 JSON 文档数据，节点可能为 null（脏数据防御）
   if (!node) return out;
 
   // 当前块级文本：paragraph/heading 等含 text 子节点，提取后传给子节点做 context
@@ -53,7 +54,7 @@ function collectMentions(node: JSONContent, parentBlockText: string | null): Col
   // 命中 mention 节点
   if (node.type === "mention" && typeof node.attrs?.id === "string") {
     const targetId = node.attrs.id;
-    const label = typeof node.attrs?.label === "string" ? node.attrs.label : "";
+    const label = typeof node.attrs.label === "string" ? node.attrs.label : "";
     const ctx = currentBlockText ?? label;
     // 截前后 30 字（mention 节点本身可能不在 textContent 中，截整个块文本即可）
     const trimmed =
@@ -83,6 +84,7 @@ function collectMentions(node: JSONContent, parentBlockText: string | null): Col
 
 /** 取一个块级节点的纯文本（拼接所有 text 子节点） */
 function collectText(node: JSONContent): string {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- 递归遍历 JSON 文档数据，节点可能为 null（脏数据防御）
   if (!node) return "";
   if (typeof node.text === "string") return node.text;
   if (!node.content) return "";

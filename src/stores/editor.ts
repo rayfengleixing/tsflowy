@@ -19,7 +19,7 @@ interface EditorStoreState {
 export const useEditorStore = create<EditorStoreState>()((set) => ({
   editor: null,
   currentViewId: null,
-  setEditor: (editor, viewId) => set({ editor, currentViewId: viewId || null }),
+  setEditor: (editor, viewId) => set({ editor, currentViewId: viewId ?? null }),
 }));
 
 // ————— 文档编辑器登记表：按 viewId 索引所有存活的编辑器实例 —————

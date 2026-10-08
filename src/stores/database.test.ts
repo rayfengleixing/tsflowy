@@ -136,7 +136,7 @@ describe("database store 字段改名", () => {
     expect(targetId).toBe("f-total");
     expect(opts.formula).toBe("{单价} * {数量} + 0");
     const total = store.getState().fields.find((f) => f.id === "f-total");
-    expect(total && JSON.parse(total.options).formula).toBe("{单价} * {数量} + 0");
+    expect(total && (JSON.parse(total.options) as { formula: string }).formula).toBe("{单价} * {数量} + 0");
   });
 
   it("没有任何公式引用时不产生额外写入", async () => {

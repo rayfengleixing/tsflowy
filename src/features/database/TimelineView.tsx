@@ -93,7 +93,7 @@ export function TimelineView({
   const [scaleMode, setScaleMode] = useState<ScaleMode>("auto");
 
   useEffect(() => {
-    store.load(view).catch((e) => logger.error("timeline.load", e));
+    store.load(view).catch((e: unknown) => logger.error("timeline.load", e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.id]);
 
@@ -102,7 +102,7 @@ export function TimelineView({
     [fields],
   );
   const visibleFields = useMemo(() => fields.filter((f) => f.is_hidden === 0), [fields]);
-  const primaryField = visibleFields[0] ?? null;
+  const primaryField = visibleFields.length > 0 ? visibleFields[0] : null;
 
   // 初始化开始日期字段：第一个 date/created_at/last_edited_at
   useEffect(() => {
@@ -186,6 +186,7 @@ export function TimelineView({
 
   const titleOf = (row: DatabaseRow): string => {
     if (!primaryField) return t("row.detailName", { n: row.position + 1 });
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
     const value = cells[row.id]?.[primaryField.id] ?? null;
     return formatCellValue(primaryField.field_type, value, parseFieldOptions(primaryField.options));
   };

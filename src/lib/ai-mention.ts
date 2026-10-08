@@ -21,9 +21,9 @@ export interface ResolvedMention {
  * · `@` 必须出现在行首或空白之后（邮箱 a@b.com 这类不误判）。
  */
 export function parseMentions(text: string, candidates: MentionCandidate[]): ResolvedMention[] {
-  const used: Array<[number, number]> = [];
+  const used: [number, number][] = [];
   const seen = new Set<string>();
-  const hits: Array<{ id: string; name: string; at: number }> = [];
+  const hits: { id: string; name: string; at: number }[] = [];
   const ordered = candidates.filter((c) => c.name.trim().length > 0).sort((a, b) => b.name.length - a.name.length);
   for (const c of ordered) {
     const token = "@" + c.name;

@@ -98,8 +98,7 @@ export type EqualityFn<T> = (a: T, b: T) => boolean;
  */
 export interface UseWorkspaceStoreHook {
   (): WorkspaceState;
-  <U>(selector: (s: WorkspaceState) => U): U;
-  <U>(selector: (s: WorkspaceState) => U, equalityFn: EqualityFn<U>): U;
+  <U>(selector: (s: WorkspaceState) => U, equalityFn?: EqualityFn<U>): U;
   getState: () => WorkspaceState;
   getInitialState: () => WorkspaceState;
   setState: (

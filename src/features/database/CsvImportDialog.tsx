@@ -64,7 +64,9 @@ export interface CsvImportDialogProps {
 export function CsvImportDialog({ headers, initialTypes, dataRows, onCancel, onConfirm }: CsvImportDialogProps) {
   const [types, setTypes] = useState<FieldType[]>(initialTypes);
   // 每个附件列各选一个文件夹：列下标 → { 文件夹名, 小写文件名 → 绝对路径 }
-  const [folders, setFolders] = useState<Record<number, { name: string; files: Record<string, string> }>>({});
+  const [folders, setFolders] = useState<Record<number, { name: string; files: Record<string, string> } | undefined>>(
+    {},
+  );
 
   const setType = (col: number, type: FieldType) => setTypes((prev) => prev.map((x, i) => (i === col ? type : x)));
 
@@ -85,7 +87,7 @@ export function CsvImportDialog({ headers, initialTypes, dataRows, onCancel, onC
 
   // 每个附件列的匹配统计（跨整列去重，实时反映当前列值与所选文件夹的匹配结果）
   const stats = useMemo(() => {
-    const out: Record<number, { matched: number; missing: number }> = {};
+    const out: Record<number, { matched: number; missing: number } | undefined> = {};
     types.forEach((type, col) => {
       if (type !== "attachment") return;
       const files = folders[col]?.files ?? {};
@@ -103,7 +105,7 @@ export function CsvImportDialog({ headers, initialTypes, dataRows, onCancel, onC
 
   const confirm = () => {
     const foldersByColumn: Record<number, Record<string, string>> = {};
-    for (const [col, v] of Object.entries(folders)) foldersByColumn[Number(col)] = v.files;
+    for (const [col, v] of Object.entries(folders)) if (v) foldersByColumn[Number(col)] = v.files;
     onConfirm(types, foldersByColumn);
   };
 

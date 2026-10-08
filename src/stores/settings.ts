@@ -133,7 +133,7 @@ export function applyThemeToDocument(mode: ThemeMode): () => void {
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   }
-  return () => {};
+  return () => undefined;
 }
 
 /* ————— 主题预设（整套配色，浅色/深色各一套变量；appflowy = 基础样式表默认） ————— */

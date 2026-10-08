@@ -81,7 +81,7 @@ function flushRename() {
     if (pending.text === vName) return;
     store
       .renameView(pending.id, pending.text)
-      .catch((e) => logger.error("FirstHeadingLock", "rename failed", pending.id, pending.text, e));
+      .catch((e: unknown) => logger.error("FirstHeadingLock", "rename failed", pending.id, pending.text, e));
   });
 }
 

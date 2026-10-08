@@ -223,7 +223,7 @@ export function buildMentionSuggestion(): MentionOptions["suggestion"] {
         const list: View[] = flattenTree(state.tree);
         const filtered = list.filter((v) => {
           try {
-            const extra = JSON.parse(v.extra ?? "{}");
+            const extra = JSON.parse(v.extra) as { row_detail?: unknown };
             if (extra.row_detail) return false;
           } catch {
             // ignore

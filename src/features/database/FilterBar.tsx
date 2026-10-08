@@ -79,7 +79,7 @@ export function FilterBar(props: {
   const visibleFields = fields.filter((f) => f.is_hidden === 0);
 
   const addFilter = () => {
-    const field = visibleFields[0];
+    const field = visibleFields.length > 0 ? visibleFields[0] : undefined;
     if (!field) return;
     const op = opsForType(field.field_type)[0];
     onChange(

@@ -155,7 +155,7 @@ export const createWorkspacesSlice: WorkspaceSliceCreator<Partial<WorkspaceState
     const workspaces = get().workspaces.filter((w) => w.id !== id);
     set({ workspaces });
     if (get().currentWorkspaceId === id) {
-      const next = workspaces[0] ?? null;
+      const next = workspaces.length > 0 ? workspaces[0] : null;
       set({ currentWorkspaceId: next ? next.id : null, tabs: [], currentViewId: null, splitViewId: null });
       if (next) {
         await viewApi.setSetting("last_workspace_id", next.id);

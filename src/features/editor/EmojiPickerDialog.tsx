@@ -14,7 +14,7 @@ export function EmojiPickerDialog() {
 
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ editor: Editor }>).detail;
+      const detail = (e as CustomEvent<{ editor?: Editor } | undefined>).detail;
       if (detail?.editor) {
         setEditor(detail.editor);
         setOpen(true);

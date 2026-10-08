@@ -27,9 +27,11 @@ export function groupRowsForBoard(
   const noGroup: BoardGroup = { key: NO_GROUP, option: null, rows: [] };
   const byKey = new Map(groups.map((g) => [g.key, g]));
   for (const row of rows) {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
     const v = cells[row.id]?.[field.id];
-    if (typeof v === "string" && byKey.has(v)) {
-      byKey.get(v)!.rows.push(row);
+    const group = typeof v === "string" ? byKey.get(v) : undefined;
+    if (group) {
+      group.rows.push(row);
     } else {
       noGroup.rows.push(row);
     }
@@ -85,6 +87,7 @@ export function rowDateKey(
   cells: Record<string, Record<string, CellValue>>,
   fieldId: string,
 ): string | null {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
   const v = cells[row.id]?.[fieldId];
   if (typeof v !== "string" || v === "") return null;
   return toDateKey(v);
@@ -111,7 +114,9 @@ export function buildCalendarMonth(
       days.push({ day: dayNum, date: `${year}-${pad(month)}-${pad(dayNum)}`, rows: [] });
     }
   }
-  const byDate = new Map(days.filter((d) => d.date).map((d) => [d.date!, d]));
+  const byDate = new Map(
+    days.filter((d): d is CalendarDay & { date: string } => d.date !== null).map((d) => [d.date, d]),
+  );
   for (const row of rows) {
     const key = rowDateKey(row, cells, fieldId);
     if (key) byDate.get(key)?.rows.push(row);

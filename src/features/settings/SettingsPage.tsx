@@ -247,7 +247,7 @@ export function SettingsPage() {
   useEffect(() => {
     invoke<string>("data_dir_path")
       .then(setDataDir)
-      .catch((e) => logger.error("failed to get data dir", e));
+      .catch((e: unknown) => logger.error("failed to get data dir", e));
     getVersion()
       .then(setVersion)
       .catch((e: unknown) => logger.error("failed to get app version", e));

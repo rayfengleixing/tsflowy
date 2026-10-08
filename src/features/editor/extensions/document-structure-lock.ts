@@ -51,8 +51,8 @@ export function filterStructureTransaction(tr: Transaction): boolean {
     // H1 内部纯文本替换（含插入/删除/整段替换）：完全落在 H1 文本区间内且新内容是
     // inline 级（文本/标记）→ 放行；slice 含块节点（如回车分割 H1、粘贴整块）→ 拒绝
     if (step instanceof ReplaceStep && from >= 1 && step.to <= h1InnerEnd) {
-      const slice = step.slice?.content;
-      const textOnly = !slice || slice.content.length === 0 || slice.content.every((n) => n.isInline);
+      const slice = step.slice.content;
+      const textOnly = slice.content.length === 0 || slice.content.every((n) => n.isInline);
       if (textOnly) continue;
     }
     return false;
@@ -82,8 +82,7 @@ export const DocumentStructureLock = Extension.create({
         }
         let tr = editor.state.tr;
         if (idx >= doc.childCount) {
-          const paragraphType = editor.schema.nodes.paragraph ?? null;
-          if (!paragraphType) return false;
+          const paragraphType = editor.schema.nodes.paragraph;
           tr = tr.insert(doc.content.size, paragraphType.create());
         }
         // pos 是块边界位（如段落开头之前），TextSelection 建在无行内容处会触发 PM 警告/异常；

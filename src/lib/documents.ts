@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { JSONContent } from "@tiptap/core";
 import { mentionsApi } from "./mentions";
 import { logger } from "./logger";
 
@@ -22,7 +23,7 @@ async function saveNow(viewId: string, content: string): Promise<void> {
   await invoke("doc_save", { viewId, content });
   // mentions 重建是独立命令，失败不阻断文档保存（派生索引允许短暂滞后于文档内容）
   try {
-    const json = JSON.parse(content);
+    const json = JSON.parse(content) as JSONContent;
     await mentionsApi.rebuildFor(viewId, json);
   } catch (e) {
     logger.warn("documents.save", "mentions rebuild skipped", viewId, e);

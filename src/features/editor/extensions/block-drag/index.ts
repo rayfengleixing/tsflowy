@@ -31,9 +31,7 @@ const SKIP_BLOCK_TYPES = new Set(["image", "databaseView", "database_view", "ima
 function listTopBlocks(view: EditorView): { dom: HTMLElement; top: number; bottom: number; pos: number }[] {
   const docEl = view.dom;
   const rects: { dom: HTMLElement; top: number; bottom: number; pos: number }[] = [];
-  for (let i = 0; i < docEl.children.length; i++) {
-    const child = docEl.children[i] as HTMLElement;
-    if (!child || child.nodeType !== 1) continue;
+  for (const child of Array.from(docEl.children) as HTMLElement[]) {
     if (SKIP_BLOCK_TYPES.has(child.getAttribute("data-node-type") ?? "")) continue;
     const r = child.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) continue;

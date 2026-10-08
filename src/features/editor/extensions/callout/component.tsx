@@ -55,9 +55,9 @@ const COLORS = Object.keys(COLOR_TOKENS) as CalloutColor[];
  */
 export function CalloutNodeView(props: ReactNodeViewProps<HTMLElement>) {
   const { node, updateAttributes, deleteNode, selected } = props;
-  const emoji = (node.attrs.emoji as string) ?? "💡";
-  const color = (node.attrs.color as CalloutColor) ?? "blue";
-  const tokens = COLOR_TOKENS[color] ?? COLOR_TOKENS.blue;
+  const emoji = (node.attrs.emoji as string | undefined) ?? "💡";
+  const color = (node.attrs.color as CalloutColor | undefined) ?? "blue";
+  const tokens = COLOR_TOKENS[color];
 
   return (
     <NodeViewWrapper

@@ -9,7 +9,7 @@ import type { AttachmentRef } from "@/types/database";
 let dataDirPromise: Promise<string> | null = null;
 
 export function getAppDataDir(): Promise<string> {
-  if (!dataDirPromise) dataDirPromise = appDataDir();
+  dataDirPromise ??= appDataDir();
   return dataDirPromise;
 }
 
@@ -70,7 +70,7 @@ export function isImageFile(name: string): boolean {
 
 /** 从文件路径取原始文件名（Windows 反斜杠 / POSIX 斜杠都兼容） */
 function baseName(path: string): string {
-  return path.split(/[\\/]/).pop() || path;
+  return path.split(/[\\/]/).pop() ?? path;
 }
 
 /**
@@ -82,7 +82,7 @@ export function filesFromDataTransfer(dt: DataTransfer | null): File[] {
   const direct = Array.from(dt.files).filter((f) => f.size > 0);
   if (direct.length > 0) return direct;
   const out: File[] = [];
-  for (const item of Array.from(dt.items ?? [])) {
+  for (const item of Array.from(dt.items)) {
     if (item.kind !== "file") continue;
     const f = item.getAsFile();
     if (f && f.size > 0) out.push(f);

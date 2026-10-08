@@ -31,7 +31,7 @@ export function defaultValue(type: FieldType): CellValue {
 
 /** 类型校验：值与字段类型匹配（空值恒合法） */
 export function validateCellValue(type: FieldType, value: CellValue): boolean {
-  if (value === null || value === undefined) return true;
+  if (value === null) return true;
   switch (type) {
     case "text":
     case "url":
@@ -60,7 +60,6 @@ export function validateCellValue(type: FieldType, value: CellValue): boolean {
         value.every(
           (v) =>
             typeof v === "object" &&
-            v !== null &&
             typeof (v as { name?: unknown }).name === "string" &&
             typeof (v as { path?: unknown }).path === "string",
         )
@@ -77,8 +76,7 @@ export function validateCellValue(type: FieldType, value: CellValue): boolean {
 export function attachmentRefs(value: CellValue): AttachmentRef[] {
   if (!Array.isArray(value)) return [];
   return value.filter(
-    (v): v is AttachmentRef =>
-      typeof v === "object" && v !== null && typeof v.name === "string" && typeof v.path === "string",
+    (v): v is AttachmentRef => typeof v === "object" && typeof v.name === "string" && typeof v.path === "string",
   );
 }
 
@@ -104,7 +102,7 @@ export function formatNumber(value: number, opts: Extract<FieldOptions, { kind: 
 
 /** 展示用文本：不同类型不同格式（只读时间字段做本地化） */
 export function formatCellValue(type: FieldType, value: CellValue, options?: FieldOptions): string {
-  if (value === null || value === undefined || value === "") return "";
+  if (value === null || value === "") return "";
   switch (type) {
     case "number":
     case "formula": // 公式值由调用方算好传入（computeFormula），按数字字段格式展示
@@ -130,10 +128,10 @@ export function formatCellValue(type: FieldType, value: CellValue, options?: Fie
     // 反向关系同理：单元格无存储值，真正展示由 ReverseRelationChips 解析来源行标题。
     case "relation":
     case "reverse_relation":
-      return Array.isArray(value) ? value.join(", ") : "";
+      return Array.isArray(value) ? (value as string[]).join(", ") : "";
     // 汇总值由 computeRollup 算好传入，已经是展示文本
     case "rollup":
-      return String(value);
+      return Array.isArray(value) ? (value as string[]).join(",") : String(value);
     // 附件单元格存 [{name,path}]：静态展示只给文件名串（导出/看板卡片等无 AttachmentChips 时）
     case "attachment":
       return attachmentRefs(value)
@@ -158,7 +156,7 @@ export function formatCellValue(type: FieldType, value: CellValue, options?: Fie
       return value;
     }
     default:
-      return String(value);
+      return Array.isArray(value) ? (value as string[]).join(",") : String(value);
   }
 }
 
@@ -167,7 +165,7 @@ export function formatCellValue(type: FieldType, value: CellValue, options?: Fie
 export function parseFieldOptions(raw: string | null | undefined): FieldOptions {
   if (!raw) return { kind: "none" };
   try {
-    const obj = JSON.parse(raw) as FieldOptions;
+    const obj = JSON.parse(raw) as FieldOptions | null;
     if (obj && typeof obj === "object" && "kind" in obj) return obj;
   } catch {
     // fallthrough

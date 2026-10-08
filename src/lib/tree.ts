@@ -10,8 +10,9 @@ export function buildTree(views: View[]): ViewNode[] {
   }
   const roots: ViewNode[] = [];
   for (const node of map.values()) {
-    if (node.parent_id && map.has(node.parent_id)) {
-      map.get(node.parent_id)!.children.push(node);
+    const parent = node.parent_id ? map.get(node.parent_id) : undefined;
+    if (parent) {
+      parent.children.push(node);
     } else {
       roots.push(node);
     }

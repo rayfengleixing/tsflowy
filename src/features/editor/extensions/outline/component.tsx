@@ -17,9 +17,9 @@ function collectHeadings(editor: Editor): HeadingEntry[] {
   const result: HeadingEntry[] = [];
   editor.state.doc.descendants((node: PMNode, pos: number) => {
     if (node.type.name === "heading") {
-      const lvl = (node.attrs.level as number) ?? 1;
+      const lvl = (node.attrs.level as number | undefined) ?? 1;
       const level = (lvl >= 3 ? 3 : lvl <= 1 ? 1 : lvl) as 1 | 2 | 3;
-      result.push({ pos, level, text: node.textContent?.trim() ?? "" });
+      result.push({ pos, level, text: node.textContent.trim() });
     }
     return undefined;
   });

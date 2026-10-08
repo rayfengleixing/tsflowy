@@ -13,7 +13,7 @@ const dicts: Record<string, Record<MessageKey, string>> = {
 /** 按当前语言取文案；支持 {placeholder} 插值 */
 export function t(key: MessageKey, params?: Record<string, string | number>): string {
   const lang = useSettingsStore.getState().lang;
-  let s = dicts[lang]?.[key] ?? zh[key];
+  let s = dicts[lang][key];
   if (params) {
     for (const [k, val] of Object.entries(params)) {
       s = s.replace(`{${k}}`, String(val));

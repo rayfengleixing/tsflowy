@@ -27,7 +27,8 @@ export function relationRowIds(value: CellValue): string[] {
 /** 目标库的主字段：可见字段里 position 最小者，没有可见字段时退回全部字段的第一个 */
 export function primaryFieldOf(fields: DatabaseField[]): DatabaseField | null {
   const sorted = [...fields].sort((a, b) => a.position - b.position);
-  return sorted.find((f) => f.is_hidden === 0) ?? sorted[0] ?? null;
+  const visible = sorted.find((f) => f.is_hidden === 0);
+  return visible ?? (sorted.length > 0 ? sorted[0] : null);
 }
 
 /** 行在目标库里的展示文本：主字段 + 其它字段的显示值（选择类自动翻译成选项名） */
@@ -44,6 +45,7 @@ export function relationRowLabel(db: RelationDb, rowId: string): string | null {
   if (!db.rows.some((r) => r.id === rowId)) return null;
   const primary = primaryFieldOf(db.fields);
   if (!primary) return "";
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
   const value = db.cells[rowId]?.[primary.id] ?? null;
   return formatCellValue(primary.field_type, value, parseFieldOptions(primary.options));
 }
@@ -143,7 +145,10 @@ export function computeReverseRelation(
   if (!db) return null;
   const sourceField = db.fields.find((f) => f.id === cfg.source_field_id);
   if (!sourceField) return null;
-  return db.rows
-    .filter((r) => relationRowIds(db.cells[r.id]?.[sourceField.id] ?? null).includes(rowId))
-    .map((r) => r.id);
+  return (
+    db.rows
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
+      .filter((r) => relationRowIds(db.cells[r.id]?.[sourceField.id] ?? null).includes(rowId))
+      .map((r) => r.id)
+  );
 }

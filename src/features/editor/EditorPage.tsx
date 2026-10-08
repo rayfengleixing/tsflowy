@@ -88,10 +88,13 @@ const centeredCellAttrs = () => ({
   align: {
     default: "center",
     parseHTML: (el: HTMLElement) => {
-      const v = (el.style?.textAlign || el.getAttribute("align") || "").trim().toLowerCase();
+      const v = (el.style.textAlign || (el.getAttribute("align") ?? "")).trim().toLowerCase();
       return v === "left" || v === "center" || v === "right" ? v : "center";
     },
-    renderHTML: (attrs: Record<string, unknown>) => (attrs.align ? { style: `text-align: ${attrs.align}` } : {}),
+    renderHTML: (attrs: Record<string, unknown>) => {
+      const align = attrs.align;
+      return typeof align === "string" && align ? { style: `text-align: ${align}` } : {};
+    },
   },
 });
 const CenteredTableCell = TableCell.extend({
@@ -424,7 +427,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   // 避免副栏抢占大纲与导出目标。
   const isMainPane = useWorkspaceStore((s) => s.currentViewId === view.id);
   useEffect(() => {
-    if (!editor || !isMainPane) return;
+    if (!isMainPane) return;
     useEditorStore.getState().setEditor(editor, view.id);
     return () => {
       useEditorStore.getState().setEditor(null, null);
@@ -441,7 +444,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   // AI 助手桥接：供 AI 面板取当前页/选区文本、回填内容。分栏时只注册主栏
   // （与 useEditorStore 推送 editor 的约定一致），避免副栏抢占回填目标。
   useEffect(() => {
-    if (!editor || editor.isDestroyed || !isMainPane) return;
+    if (editor.isDestroyed || !isMainPane) return;
     // 回填文本 → ProseMirror 节点：含 markdown 结构（# 标题 / - 列表 / ``` 围栏…）时走
     // markdownToJson，否则按行拆段落保留换行。复用粘贴的转换逻辑，避免把 **粗体**、- 列表
     // 这类标记原样落成字面文本，也避免多段被合并成一段。
@@ -458,7 +461,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     return registerAiEditor({
       getPageText: () =>
         editor.isDestroyed ? "" : editor.state.doc.textBetween(0, editor.state.doc.content.size, "\n"),
-      getPageTitle: () => (editor.isDestroyed ? "" : (view?.name ?? "")),
+      getPageTitle: () => (editor.isDestroyed ? "" : view.name),
       getSelectionText: () => {
         if (editor.isDestroyed) return "";
         const { from, to } = editor.state.selection;
@@ -503,7 +506,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         if (!editor.isDestroyed) editor.commands.undo();
       },
     });
-  }, [editor, isMainPane, view?.name]);
+  }, [editor, isMainPane, view.name]);
 
   // 全库视图 id → View：mention hover 预览取标题走这张表。
   // mention 目标是任意被引页、不一定是反链来源，查 backlinkViews 会大面积落空显示成 id。
@@ -523,7 +526,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     if (!editor || editor.isDestroyed) return;
     const doc = editor.state.doc;
     const first = doc.childCount > 0 ? doc.child(0) : null;
-    if (!first || first.type.name !== "heading" || (first.attrs as { level: number }).level !== 1) return;
+    if (first?.type.name !== "heading" || (first.attrs as { level: number }).level !== 1) return;
     if (first.textContent === view.name) return;
     const tr = editor.state.tr.replaceWith(1, first.nodeSize - 1, editor.state.schema.text(view.name));
     tr.setMeta(STRUCTURE_SYNC_META, true);
@@ -712,7 +715,8 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       if (!target) return;
       const id = resolveMentionId(target);
       if (id) {
-        const nodeEl = target.closest<HTMLElement>(".mention")!;
+        const nodeEl = target.closest<HTMLElement>(".mention");
+        if (!nodeEl) return;
         const rect = nodeEl.getBoundingClientRect();
         if (hoverTimerRef.current !== null) {
           window.clearTimeout(hoverTimerRef.current);
@@ -735,7 +739,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         hoverTimerRef.current = null;
       }
     };
-  }, [editor?.view]);
+  }, [editor.view]);
 
   // 点击 mention 跳转到对应页面（双链跳转）：mention 节点 DOM 自带 data-id，直接取用
   useEffect(() => {
@@ -753,7 +757,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     };
     host.addEventListener("click", onClick);
     return () => host.removeEventListener("click", onClick);
-  }, [editor?.view]);
+  }, [editor.view]);
 
   // 反链按来源分组：src_view_id → MentionRow[]
   const groupedBacklinks = useMemo(() => {
@@ -773,8 +777,8 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       <div ref={scrollRef} data-editor-scroll className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto px-6 py-4" style={{ maxWidth: "var(--tiptap-max-width, 800px)" }}>
           <EditorContent editor={editor} />
-          <FloatingMenu editor={editor ?? undefined} />
-          <TableContextMenu editor={editor ?? undefined} />
+          <FloatingMenu editor={editor} />
+          <TableContextMenu editor={editor} />
           <BlockMenu />
           {/* 尾部留白：给"光标行不超过 70%"预留可滚动余量，否则文档末尾时光标只能停在视口底部 */}
           <div style={{ height: "var(--editor-tail, 0px)" }} />
@@ -834,11 +838,9 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       )}
 
       {/* 字数统计：右下角浮层 */}
-      {editor && (
-        <div className="pointer-events-none absolute bottom-2 right-4 text-[11px] text-neutral-400">
-          {editor.storage.characterCount?.characters?.() ?? 0} {t("editor.chars")}
-        </div>
-      )}
+      <div className="pointer-events-none absolute bottom-2 right-4 text-[11px] text-neutral-400">
+        {editor.storage.characterCount.characters()} {t("editor.chars")}
+      </div>
 
       {/* mention hover 预览浮层：定位到 mention 节点下方 */}
       {hoverMention && (

@@ -14,7 +14,7 @@ function loadKatex() {
 // 公式 NodeView：非编辑态渲染 KaTeX；双击切编辑态（textarea 写 TeX，Ctrl+Enter 保存 / Esc 取消）
 export function MathNodeView(props: ReactNodeViewProps<HTMLElement>) {
   const { node, updateAttributes, deleteNode, selected } = props;
-  const tex = (node.attrs.tex as string) ?? "";
+  const tex = (node.attrs.tex as string | undefined) ?? "";
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(tex);
   const textareaRef = useRef<HTMLTextAreaElement>(null);

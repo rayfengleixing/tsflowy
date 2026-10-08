@@ -43,7 +43,7 @@ export function CalendarView({
   const [dragOverDate, setDragOverDate] = useState<string | null>(null);
 
   useEffect(() => {
-    store.load(view).catch((e) => logger.error("calendar.load", e));
+    store.load(view).catch((e: unknown) => logger.error("calendar.load", e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.id]);
 
@@ -238,6 +238,7 @@ export function CalendarView({
                 const isWeekend = i % 7 >= 5;
                 const isToday = d.date === today;
                 const overThis = draggingRow && dragOverDate === d.date;
+                const date = d.date;
                 return (
                   <div
                     key={i}
@@ -282,10 +283,10 @@ export function CalendarView({
                           {d.day}
                         </span>
                       )}
-                      {d.date && (
+                      {date && (
                         <button
                           className="hidden rounded p-0.5 text-neutral-400 hover:bg-neutral-200 hover:text-neutral-600 group-hover/row:inline-flex dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-                          onClick={() => addRowAtDate(d.date!)}
+                          onClick={() => addRowAtDate(date)}
                           title={t("calendar.addRow")}
                         >
                           <Plus className="h-3 w-3" />
@@ -313,10 +314,10 @@ export function CalendarView({
                       ))}
                     </div>
 
-                    {d.date && d.rows.length < 3 && (
+                    {date && d.rows.length < 3 && (
                       <button
                         className="absolute inset-x-1 bottom-1 hidden rounded px-1 py-0.5 text-[10px] text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 group-hover/row:block dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-                        onClick={() => addRowAtDate(d.date!)}
+                        onClick={() => addRowAtDate(date)}
                       >
                         + {t("calendar.addRow")}
                       </button>
@@ -351,21 +352,23 @@ function CalCard(props: {
   onOpenDetail: () => void;
 }) {
   const { row, primaryField, visibleFields, cells, dragging, focused } = props;
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
   const value = primaryField ? (cells[row.id]?.[primaryField.id] ?? null) : null;
   const title = primaryField
     ? formatCellValue(primaryField.field_type, value, parseFieldOptions(primaryField.options))
     : t("row.detailName", { n: row.position + 1 });
 
   // 副信息：只取前 1 个可见单/多选/数字（紧凑）
-  const subField = visibleFields
-    .slice(1, 3)
-    .find(
-      (f) =>
-        f.field_type === "single_select" ||
-        f.field_type === "multi_select" ||
-        (f.field_type === "checkbox" && cells[row.id]?.[f.id] === true) ||
-        (f.field_type === "number" && cells[row.id]?.[f.id] != null),
-    );
+  const subField = visibleFields.slice(1, 3).find(
+    (f) =>
+      f.field_type === "single_select" ||
+      f.field_type === "multi_select" ||
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
+      (f.field_type === "checkbox" && cells[row.id]?.[f.id] === true) ||
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- 同上
+      (f.field_type === "number" && cells[row.id]?.[f.id] != null),
+  );
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- 同上
   const sub = subField ? { field: subField, value: cells[row.id]?.[subField.id] ?? null } : null;
 
   return (

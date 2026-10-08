@@ -127,7 +127,7 @@ export function toCsv(rows: string[][]): string {
 
 /** 从样例值推断字段类型（数字/日期/布尔 → 专用类型，否则文本） */
 export function inferFieldType(samples: string[]): FieldType {
-  const nonEmpty = samples.filter((v) => v !== null && v !== undefined && String(v).trim() !== "");
+  const nonEmpty = samples.filter((v) => String(v).trim() !== "");
   if (nonEmpty.length === 0) return "text";
   const looksLike = (re: RegExp) => nonEmpty.every((v) => re.test(String(v).trim()));
   if (looksLike(/^[+-]?\d+(\.\d+)?$/)) return "number";
@@ -165,14 +165,12 @@ export function csvValueToCell(type: FieldType, raw: string): CellValue {
 
 /** 单元格值 → CSV 字符串（导出用） */
 export function cellToCsv(_type: FieldType, value: CellValue): string {
-  if (value === null || value === undefined) return "";
+  if (value === null) return "";
   if (typeof value === "boolean") return value ? "true" : "false";
   if (Array.isArray(value)) {
     // 附件单元格是 [{name,path}]：导出只写文件名（多选/关联等则是字符串数组）
     return value
-      .map((v) =>
-        typeof v === "object" && v !== null && "name" in v ? String((v as { name: unknown }).name) : String(v),
-      )
+      .map((v) => (typeof v === "object" && "name" in v ? String((v as { name: unknown }).name) : String(v)))
       .join("; ");
   }
   return String(value);
@@ -235,7 +233,7 @@ export function resolveAttachmentNames(
     const key = name.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    const sourcePath = filesByLowerName[key];
+    const sourcePath = filesByLowerName[key] as string | undefined;
     if (sourcePath !== undefined) matched.push({ name, sourcePath });
     else missing.push(name);
   }
@@ -252,6 +250,7 @@ export function buildCsvExport(
   const header = visible.map((f) => f.name);
   const body = rows.map((r) =>
     visible.map((f) => {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
       const value = cells[r.id]?.[f.id] ?? null;
       const opts = parseFieldOptions(f.options);
       if (opts.kind === "select" && (f.field_type === "single_select" || f.field_type === "multi_select")) {

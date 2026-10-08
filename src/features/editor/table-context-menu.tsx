@@ -14,11 +14,11 @@ export function TableContextMenu({ editor }: { editor: Editor | null }) {
 
   // 右键表格单元格 → 定位选择到该单元格并弹出菜单
   useEffect(() => {
-    const dom = editor?.view?.dom;
+    const dom = editor?.view.dom;
     if (!dom) return;
     const onContextMenu = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
-      if (!target.closest?.("table")) return; // 非表格区域交给系统默认行为
+      if (!target.closest("table")) return; // 非表格区域交给系统默认行为
       event.preventDefault();
       // 将 ProseMirror 选择定位到被右键的单元格，确保增删命令作用于该单元格
       const at = editor.view.posAtCoords({ left: event.clientX, top: event.clientY });

@@ -35,10 +35,16 @@ export type FilterMode = "and" | "or";
 
 /** 空值判断：null / undefined / 空串 / 空数组 均视为空 */
 export function isCellEmpty(value: CellValue): boolean {
-  if (value === null || value === undefined) return true;
+  if (value === null) return true;
   if (typeof value === "string") return value === "";
   if (Array.isArray(value)) return value.length === 0;
   return false;
+}
+
+/** 单元格值 → 用于排序/比较的字符串（数组按元素拼接，与原生 String(数组) 一致；其余走原生 String） */
+function cellToCompareText(v: CellValue): string {
+  if (Array.isArray(v)) return (v as string[]).join(",");
+  return String(v);
 }
 
 function compareValues(a: CellValue, b: CellValue): number {
@@ -47,8 +53,7 @@ function compareValues(a: CellValue, b: CellValue): number {
   if (isCellEmpty(b)) return -1;
   if (typeof a === "number" && typeof b === "number") return a - b;
   if (typeof a === "boolean" && typeof b === "boolean") return Number(a) - Number(b);
-  if (Array.isArray(a) && Array.isArray(b)) return a.join(",").localeCompare(b.join(","));
-  return String(a).localeCompare(String(b));
+  return cellToCompareText(a).localeCompare(cellToCompareText(b));
 }
 
 /** 排序：空值恒排最后；asc 小在前，desc 大在前（空值仍最后） */
@@ -61,7 +66,9 @@ export function sortRows(
   const out = [...rows];
   out.sort((x, y) => {
     for (const s of sorts) {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
       const a = cells[x.id]?.[s.field_id] ?? null;
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- 同上
       const b = cells[y.id]?.[s.field_id] ?? null;
       const aEmpty = isCellEmpty(a);
       const bEmpty = isCellEmpty(b);
@@ -99,20 +106,22 @@ export function evaluateFilter(fieldType: FieldType, value: CellValue, op: Filte
       if (fieldType === "multi_select" || fieldType === "relation") {
         return Array.isArray(value) && typeof operand === "string" && value.includes(operand);
       }
-      if (typeof value === "string") return value.toLowerCase().includes(String(operand ?? "").toLowerCase());
+      if (typeof value === "string")
+        return value.toLowerCase().includes(cellToCompareText(operand ?? "").toLowerCase());
       return false;
     }
     case "not_contains": {
       if (fieldType === "multi_select" || fieldType === "relation") {
-        return Array.isArray(value) && (!value.includes(String(operand ?? "")) || operand === null);
+        return Array.isArray(value) && (!value.includes(cellToCompareText(operand ?? "")) || operand === null);
       }
-      if (typeof value === "string") return !value.toLowerCase().includes(String(operand ?? "").toLowerCase());
+      if (typeof value === "string")
+        return !value.toLowerCase().includes(cellToCompareText(operand ?? "").toLowerCase());
       return true;
     }
     case "equals":
-      return String(value) === String(operand ?? "");
+      return cellToCompareText(value) === cellToCompareText(operand ?? "");
     case "not_equals":
-      return String(value) !== String(operand ?? "");
+      return cellToCompareText(value) !== cellToCompareText(operand ?? "");
     case "gt":
       return compareValues(value, operand ?? null) > 0;
     case "gte":
@@ -138,6 +147,7 @@ export function applyFilters(
     const results = filters.map((f) => {
       const field = fieldMap.get(f.field_id);
       if (!field) return true;
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
       return evaluateFilter(field.field_type, cells[row.id]?.[f.field_id] ?? null, f.op, f.value);
     });
     return mode === "and" ? results.every(Boolean) : results.some(Boolean);
@@ -214,7 +224,12 @@ function bucketOf(field: DatabaseField, options: SelectOption[], value: CellValu
     const rest = value.filter((id) => !options.some((o) => o.id === id));
     const ids = [...known.map((o) => o.id), ...rest];
     const names = [...known.map((o) => o.name), ...rest];
-    return { ...base, key: ids.join("|"), label: names.join(", "), optionIndex: known.length ? 0 : options.length };
+    return {
+      ...base,
+      key: (ids as string[]).join("|"),
+      label: (names as string[]).join(", "),
+      optionIndex: known.length ? 0 : options.length,
+    };
   }
   const n = typeof value === "number" ? value : Number(value);
   return { ...base, key: label, numeric: Number.isFinite(n) ? n : null };
@@ -234,6 +249,7 @@ export function groupRowsForGrid(
   const buckets = new Map<string, Bucket>();
   const ungrouped: DatabaseRow[] = [];
   for (const row of rows) {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
     const value = cells[row.id]?.[field.id] ?? null;
     if (isCellEmpty(value)) {
       ungrouped.push(row);

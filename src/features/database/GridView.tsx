@@ -134,7 +134,7 @@ export function GridView({
   const pasteAnchorRef = useRef<{ rowId: string; fieldId: string } | null>(null);
 
   useEffect(() => {
-    store.load(view).catch((e) => logger.error("grid.load", e));
+    store.load(view).catch((e: unknown) => logger.error("grid.load", e));
     setCheckedRows(new Set());
     setCursor(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -166,7 +166,7 @@ export function GridView({
 
   const visibleFields = useMemo(() => fields.filter((f) => f.is_hidden === 0), [fields]);
   // 名称列（主列）：position 最小且不可隐藏，作为行详情入口
-  const primaryField = visibleFields[0] ?? null;
+  const primaryField: DatabaseField | null = visibleFields.length > 0 ? visibleFields[0] : null;
 
   // 关联/汇总要读目标库：把本表所有关联字段的目标视图拉进缓存（同一目标库只请求一次）
   const relationDbOf = useRelationDbs(fields);
@@ -501,7 +501,7 @@ export function GridView({
     const to = sortable.indexOf(targetId);
     if (from < 0 || to < 0) return;
     sortable.splice(to, 0, sortable.splice(from, 1)[0]);
-    void store.reorderFields([primaryField?.id, ...sortable].filter(Boolean));
+    void store.reorderFields([primaryField?.id, ...sortable].filter((id): id is string => Boolean(id)));
     setDraggingField(null);
   };
 
@@ -598,7 +598,8 @@ export function GridView({
       const updates: { rowId: string; fieldId: string; value: CellValue }[] = [];
       for (let i = 0; i < grid.length; i++) {
         for (let j = 0; j < grid[i].length; j++) {
-          const field = visibleFields[startCol + j];
+          const field: DatabaseField | undefined = visibleFields[startCol + j];
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- noUncheckedIndexedAccess 关闭使索引返回非空类型，但粘贴网格列数可能超出可见列，运行时会越界返回 undefined
           if (!field) {
             skipped++; // 超出最右列
             continue;
@@ -845,7 +846,8 @@ export function GridView({
               ? computeRollup(field, cells[row.id] ?? {}, fields, relationDbOf)
               : field.field_type === "reverse_relation"
                 ? computeReverseRelation(row.id, field, relationDbOf)
-                : (cells[row.id]?.[field.id] ?? null);
+                : // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
+                  (cells[row.id]?.[field.id] ?? null);
         return (
           <td
             key={field.id}
@@ -874,6 +876,7 @@ export function GridView({
               setCursor({ rowId: row.id, fieldId: field.id });
               if (field.field_type === "checkbox") {
                 // 复选框：单击直接切换勾选
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
                 void commitCell(row.id, field.id, cells[row.id]?.[field.id] !== true);
                 return;
               }
@@ -885,6 +888,7 @@ export function GridView({
                 <div className="min-w-0 flex-1">
                   <CellEditorSlot
                     field={field}
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
                     value={cells[row.id]?.[field.id] ?? null}
                     onCommit={(v) => void commitCell(row.id, field.id, v)}
                     onCancel={() => setEditing(null)}

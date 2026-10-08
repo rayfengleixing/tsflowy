@@ -54,7 +54,7 @@ async function renderMermaid(code: string): Promise<string> {
 // Mermaid NodeView：非编辑态渲染 SVG（双击切编辑）；编辑态仅编辑 textarea，退出时渲染草稿
 export function MermaidNodeView(props: ReactNodeViewProps<HTMLElement>) {
   const { node, updateAttributes, deleteNode, selected } = props;
-  const code = (node.attrs.code as string) ?? "";
+  const code = (node.attrs.code as string | undefined) ?? "";
   const [editing, setEditing] = useState(!code); // 空图表直接进入编辑
   const [draft, setDraft] = useState(code);
   const [svg, setSvg] = useState("");

@@ -442,7 +442,7 @@ function decodeHtmlEntities(s: string): string {
 // ——————————————————————————————————————
 
 // 与导入侧 ESCAPE_CHARS 保持同集：= 打头会触发高亮 ==、$ 触发 $$ 数学、| 拆表格、< 触发 HTML 块
-const ESCAPE_MD_RE = /([`*_\[\]()#+\-!~\\>=|<$])/g;
+const ESCAPE_MD_RE = /([`*_[\]()#+\-!~\\>=|<$])/g;
 function escapeInline(text: string): string {
   // 简单对特殊符号转义；不处理表格语法、避免过度转义破坏可读性。
   return text.replace(ESCAPE_MD_RE, "\\$1");
@@ -475,7 +475,7 @@ function marksOf(node: JSONContent): MarksRecord {
         m.code = true;
         break;
       case "link":
-        m.link = (mark.attrs?.href as string) ?? null;
+        m.link = (mark.attrs?.href as string | undefined) ?? null;
         break;
       case "highlight":
         m.highlight = true;
@@ -513,12 +513,12 @@ function renderInline(nodes: JSONContent[] | undefined): string {
     } else if (n.type === "hardBreak") {
       out += "\n";
     } else if (n.type === "mention") {
-      const id = (n.attrs?.id as string) ?? "";
-      const label = (n.attrs?.label as string) ?? id;
+      const id = (n.attrs?.id as string | undefined) ?? "";
+      const label = (n.attrs?.label as string | undefined) ?? id;
       out += `@[${label}](view:${id})`;
     } else if (n.type === "image") {
-      const src = (n.attrs?.src as string) ?? "";
-      const alt = (n.attrs?.alt as string) ?? "";
+      const src = (n.attrs?.src as string | undefined) ?? "";
+      const alt = (n.attrs?.alt as string | undefined) ?? "";
       const w = (n.attrs?.width as number | undefined) ?? 100;
       out += `![${alt}](${src}${w !== 100 ? `{width=${w}%}` : ""})`;
     } else {
@@ -544,7 +544,7 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
       return renderInline(node.content);
 
     case "heading": {
-      const level = Math.max(1, Math.min(6, (node.attrs?.level as number) ?? 1));
+      const level = Math.max(1, Math.min(6, (node.attrs?.level as number | undefined) ?? 1));
       const hashes = "#".repeat(level);
       return `${hashes} ${renderInline(node.content)}`;
     }
@@ -558,13 +558,13 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
     }
 
     case "codeBlock": {
-      const lang = (node.attrs?.language as string) ?? "";
+      const lang = (node.attrs?.language as string | undefined) ?? "";
       const code = node.content?.map((c) => c.text ?? "").join("") ?? "";
       return `\`\`\`${lang}\n${code}\n\`\`\``;
     }
 
     case "callout": {
-      const emoji = (node.attrs?.emoji as string) ?? "💡";
+      const emoji = (node.attrs?.emoji as string | undefined) ?? "💡";
       const inner = renderChildren(node.content, "");
       const lines = inner.split("\n");
       return `> ${emoji} **Callout**\n> ${lines.join("\n> ")}`;
@@ -573,9 +573,9 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
     case "toggle": {
       // toggle 唯一属性是 collapsed；首块（paragraph/heading）在 UI 中充当标题，导出时提升进 <summary>
       const blocks = node.content ?? [];
-      const first = blocks[0];
+      const first = blocks.length > 0 ? blocks[0] : undefined;
       const firstIsTitle = first?.type === "paragraph" || first?.type === "heading";
-      const rawTitle = firstIsTitle ? renderInline(first?.content).trim() : "";
+      const rawTitle = firstIsTitle ? renderInline(first.content).trim() : "";
       // <summary> 是 HTML 上下文，只做 HTML 转义（markdown 转义符会原样显示）
       const title = rawTitle.replace(/&/g, "&amp;").replace(/</g, "&lt;");
       const body = firstIsTitle ? blocks.slice(1) : blocks;
@@ -618,26 +618,26 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
     }
 
     case "image": {
-      const src = (node.attrs?.src as string) ?? "";
-      const alt = (node.attrs?.alt as string) ?? "";
+      const src = (node.attrs?.src as string | undefined) ?? "";
+      const alt = (node.attrs?.alt as string | undefined) ?? "";
       const w = (node.attrs?.width as number | undefined) ?? 100;
       return `![${alt}](${src}${w !== 100 ? `{width=${w}%}` : ""})`;
     }
 
     case "math": {
       // math 节点是块级 atom，唯一属性为 tex（extensions/math/node.ts），按 display math 围栏导出
-      const tex = (node.attrs?.tex as string) ?? "";
+      const tex = (node.attrs?.tex as string | undefined) ?? "";
       return `$$\n${tex}\n$$`;
     }
 
     case "mermaid": {
       // mermaid 节点是块级 atom，唯一属性为 code，按 ```mermaid 围栏导出
-      const code = (node.attrs?.code as string) ?? "";
+      const code = (node.attrs?.code as string | undefined) ?? "";
       return `\`\`\`mermaid\n${code}\n\`\`\``;
     }
 
     case "databaseView": {
-      const viewId = (node.attrs?.viewId as string) ?? "";
+      const viewId = (node.attrs?.viewId as string | undefined) ?? "";
       const name = (node.attrs?.name as string) || t("databaseView.defaultName");
       return `→[${name}](db:${viewId})`;
     }
@@ -651,7 +651,7 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
 
     case "imageGallery": {
       // gallery 无 attrs（子节点是 image，content: "image*"）；遍历子节点导出图片引用
-      const srcs = (node.content ?? []).map((img) => (img.attrs?.src as string) ?? "");
+      const srcs = (node.content ?? []).map((img) => (img.attrs?.src as string | undefined) ?? "");
       return `<!-- image gallery (${srcs.length} images) -->\n${srcs.map((u) => `![](${u})`).join("\n")}`;
     }
 
@@ -673,8 +673,8 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
 
     case "attachment": {
       // 附件节点 attrs 是 src/name（见 extensions/attachment/node.ts）
-      const name = (node.attrs?.name as string) ?? "";
-      const src = (node.attrs?.src as string) ?? "";
+      const name = (node.attrs?.name as string | undefined) ?? "";
+      const src = (node.attrs?.src as string | undefined) ?? "";
       return `[${name}](${ATTACH_PREFIX}${src})`;
     }
 

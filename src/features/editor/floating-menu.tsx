@@ -220,8 +220,8 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
      *  —— 防止打开页面/加载文档时因 ProseMirror 内部 NodeSelection 初始化事件触发工具栏默认显示（需求2彻底修复）
      */
     const isCharSelection = (sel: Selection): boolean => {
-      if (!sel || sel.empty) return false;
-      const name = sel.constructor?.name as string | undefined;
+      if (sel.empty) return false;
+      const name: string | undefined = sel.constructor.name;
       if (name) {
         if (name !== "TextSelection") return false; // NodeSelection/AllSelection/GapSelection etc 一律不显示
       } else {
@@ -283,8 +283,8 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
     editor.on("blur", () => {
       // 延迟：点击自己工具栏前 blur 会触发；用 rAF 让 onMouseDown 的 preventDefault 阻止 blur 之后再隐藏
       requestAnimationFrame(() => {
-        if (!document.activeElement || (boxRef.current && boxRef.current.contains(document.activeElement))) return;
-        if (boxRef.current && boxRef.current.matches(":hover")) return;
+        if (!document.activeElement || boxRef.current?.contains(document.activeElement)) return;
+        if (boxRef.current?.matches(":hover")) return;
         setVisible(false);
       });
     });
@@ -323,7 +323,7 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
     typeof selection.from === "number" &&
     typeof selection.to === "number" &&
     selection.from < selection.to &&
-    selection.constructor?.name === "TextSelection";
+    selection.constructor.name === "TextSelection";
   if (!editor || !visible || !isCharSelection) return null;
 
   const closeAll = () => {
