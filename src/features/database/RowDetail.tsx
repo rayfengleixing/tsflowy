@@ -10,7 +10,7 @@ import { useRelationStore } from "@/stores/relation";
 import { cn } from "@/lib/utils";
 import type { View } from "@/types/models";
 import { EditorPage } from "@/features/editor/EditorPage";
-import { CellEditorSlot, RelationChips, ReverseRelationChips, SelectChips } from "./editors";
+import { AttachmentChips, CellEditorSlot, RelationChips, ReverseRelationChips, SelectChips } from "./editors";
 import { fieldIcon } from "./field-icon";
 import { FieldTypeMenu } from "./FieldTypeMenu";
 import { t } from "@/lib/i18n";
@@ -82,6 +82,13 @@ function RowPropertyField({
     if (field.field_type === "reverse_relation") {
       return Array.isArray(value) && value.length > 0 ? (
         <ReverseRelationChips field={field} value={value} />
+      ) : (
+        <span className="text-neutral-300">{t("rowDetail.empty")}</span>
+      );
+    }
+    if (field.field_type === "attachment") {
+      return Array.isArray(value) && value.length > 0 ? (
+        <AttachmentChips value={value} />
       ) : (
         <span className="text-neutral-300">{t("rowDetail.empty")}</span>
       );

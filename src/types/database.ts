@@ -17,13 +17,15 @@ export type FieldType =
   | "formula"
   | "relation"
   | "rollup"
-  | "reverse_relation";
+  | "reverse_relation"
+  | "attachment";
 
 // 字段类型可选列表（created_at / last_edited_at 由触发器自动维护（READONLY_FIELD_TYPES）。
 // formula 由前端按表达式实时计算展示，无存储值，同样只读不可编辑。
 // relation 引用另一个数据库视图的行（单元格存对端行 id 数组）；rollup 对关联行做聚合，
 // 与 formula 一样无存储值、实时计算。
 // reverse_relation 是 relation 的镜像：只读展示「其它表里指向本行的关联行」，同样无存储值。
+// attachment 存放若干附件引用（单元格存 [{name,path}] 数组，文件落 assets/）。
 export const FIELD_TYPES: FieldType[] = [
   "text",
   "number",
@@ -40,6 +42,7 @@ export const FIELD_TYPES: FieldType[] = [
   "relation",
   "rollup",
   "reverse_relation",
+  "attachment",
 ];
 
 /** 时间戳/系统字段：创建时间手动改保留历史值；最后编辑时间由触发器强制刷新，不能在 UI 改。
@@ -77,9 +80,16 @@ export interface DatabaseRow {
  * - checkbox → boolean
  * - multi_select → string[]（选项 id）
  * - relation → string[]（对端行 id）
+ * - attachment → AttachmentRef[]（附件名 + assets 相对路径）
  * - 空单元格 → null
  */
-export type CellValue = string | number | boolean | string[] | null;
+export type CellValue = string | number | boolean | (string | AttachmentRef)[] | null;
+
+/** 附件引用：name 是原始文件名（展示用），path 是 assets/ 下的相对路径（打开用） */
+export interface AttachmentRef {
+  name: string;
+  path: string;
+}
 
 /** 单选/多选选项 */
 export interface SelectOption {

@@ -1,4 +1,4 @@
-import type { CellValue, FieldOptions, FieldType, SelectOption } from "@/types/database";
+import type { AttachmentRef, CellValue, FieldOptions, FieldType, SelectOption } from "@/types/database";
 
 // 字段值序列化/展示（项目说明书 7.2 / 11 节：纯逻辑，Vitest 单测）
 // database_cells.value 统一存 JSON 字符串；空单元格为 "null"
@@ -22,6 +22,7 @@ export function defaultValue(type: FieldType): CellValue {
       return false;
     case "multi_select":
     case "relation":
+    case "attachment":
       return [];
     default:
       return null;
@@ -52,12 +53,33 @@ export function validateCellValue(type: FieldType, value: CellValue): boolean {
     case "reverse_relation":
       // 反向关系无存储值，渲染时实时反查；防御性放行（值为对端行 id 数组）
       return Array.isArray(value) && value.every((v) => typeof v === "string");
+    case "attachment":
+      // 附件单元格存 [{name,path}]；老数据或脏数据里可能有裸字符串，一律判为非法
+      return (
+        Array.isArray(value) &&
+        value.every(
+          (v) =>
+            typeof v === "object" &&
+            v !== null &&
+            typeof (v as { name?: unknown }).name === "string" &&
+            typeof (v as { path?: unknown }).path === "string",
+        )
+      );
     case "checkbox":
       return typeof value === "boolean";
     case "multi_select":
     case "relation":
       return Array.isArray(value) && value.every((v) => typeof v === "string");
   }
+}
+
+/** 从单元格值里挑出合法的附件引用（容忍脏数据：非对象项直接丢弃） */
+export function attachmentRefs(value: CellValue): AttachmentRef[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (v): v is AttachmentRef =>
+      typeof v === "object" && v !== null && typeof v.name === "string" && typeof v.path === "string",
+  );
 }
 
 /** 数字按格式展示（说明书 5.1：整数/小数/百分比/货币） */
@@ -112,6 +134,11 @@ export function formatCellValue(type: FieldType, value: CellValue, options?: Fie
     // 汇总值由 computeRollup 算好传入，已经是展示文本
     case "rollup":
       return String(value);
+    // 附件单元格存 [{name,path}]：静态展示只给文件名串（导出/看板卡片等无 AttachmentChips 时）
+    case "attachment":
+      return attachmentRefs(value)
+        .map((a) => a.name)
+        .join(", ");
     case "date":
     case "created_at":
     case "last_edited_at": {

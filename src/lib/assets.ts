@@ -1,5 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { appDataDir, join } from "@tauri-apps/api/path";
+import { open } from "@tauri-apps/plugin-dialog";
+import type { AttachmentRef } from "@/types/database";
 
 // 图片资源地址（项目说明书 12 节风险 4：二进制存 assets/ + 相对路径入库）。
 // 相对路径 "assets/xxx.png" → asset 协议 URL（依赖 tauri.conf.json 的 assetProtocol 配置）。
@@ -47,6 +49,29 @@ export function pickImageExt(file: File): string {
   const m = /^image\/([a-z0-9.+-]+)/.exec(mime);
   if (m) return m[1];
   return "png";
+}
+
+/* ————— 附件上传 / 打开 ————— */
+
+/** 从文件路径取原始文件名（Windows 反斜杠 / POSIX 斜杠都兼容） */
+function baseName(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
+}
+
+/**
+ * 选文件 → save_asset 复制进 assets/ → 返回附件引用（原始名 + 相对路径）。
+ * 用户取消或失败返回 null（调用方决定是否提示）。
+ */
+export async function pickAttachment(): Promise<AttachmentRef | null> {
+  const selected = await open({ multiple: false });
+  if (typeof selected !== "string") return null;
+  const relative = await invoke<string>("save_asset", { sourcePath: selected });
+  return { name: baseName(selected), path: relative };
+}
+
+/** 用系统默认程序打开 assets/ 下的附件（路径越权校验在 Rust 侧） */
+export async function openAttachment(relative: string): Promise<void> {
+  await invoke("open_asset", { relative });
 }
 
 /* ————— 未引用资源扫描 / 回收 ————— */

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Link2, Plus, Search, Trash2, X } from "lucide-react";
-import type { CellValue, DatabaseField, SelectOption } from "@/types/database";
+import { Check, ChevronDown, File as FileIcon, Link2, Paperclip, Plus, Search, Trash2, X } from "lucide-react";
+import { toast } from "sonner";
+import type { AttachmentRef, CellValue, DatabaseField, SelectOption } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
-import { parseFieldOptions } from "@/lib/database-values";
+import { attachmentRefs, parseFieldOptions } from "@/lib/database-values";
+import { openAttachment, pickAttachment } from "@/lib/assets";
 import {
   relationRowIds,
   relationRowLabel,
@@ -12,6 +14,7 @@ import {
 } from "@/lib/relation";
 import { useRelationStore } from "@/stores/relation";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 import { t } from "@/lib/i18n";
 
 // 单元格内联编辑器（项目说明书 10-M4：每字段类型一个专用编辑器）
@@ -270,7 +273,9 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
   const opts = parseFieldOptions(field.options);
   const options = opts.kind === "select" ? opts.options : [];
   // 使用本地 draft：切换时不立即 commit，直到 outside-click 才提交并关闭
-  const [draft, setDraft] = useState<Set<string>>(() => new Set(Array.isArray(value) ? value : []));
+  const [draft, setDraft] = useState<Set<string>>(
+    () => new Set(Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []),
+  );
   const [query, setQuery] = useState("");
   const inputRef = useAutoFocus<HTMLInputElement>();
   const { text, list, exact } = matchOptions(options, query);
@@ -372,6 +377,93 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
               <X className="h-3.5 w-3.5" />
               {t("common.clearAll")}
             </button>
+          )}
+        </div>
+      </div>
+      {/* 点击外部：提交当前 draft 并关闭编辑器 */}
+      <div className="fixed inset-0 z-10" onMouseDown={() => commit()} />
+    </div>
+  );
+}
+
+/**
+ * 附件（attachment）：调用系统文件对话框选文件 → save_asset 存入 assets/，
+ * 单元格存 [{name,path}]。与多选一致：改动先攒在本地 draft，outside-click / Esc 才落库。
+ */
+export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
+  const [draft, setDraft] = useState<AttachmentRef[]>(() => attachmentRefs(value));
+  const [busy, setBusy] = useState(false);
+
+  const commit = () => onCommit(draft);
+
+  const add = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const ref = await pickAttachment();
+      if (ref) setDraft((prev) => [...prev, ref]);
+    } catch (e) {
+      logger.error("attachment.upload", e);
+      toast.error(t("error.upload", { message: String(e) }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const open = async (path: string) => {
+    try {
+      await openAttachment(path);
+    } catch (e) {
+      logger.error("attachment.open", e);
+      toast.error(t("error.openAttachment", { message: String(e) }));
+    }
+  };
+
+  const remove = (path: string) => setDraft((prev) => prev.filter((a) => a.path !== path));
+
+  return (
+    <div className="absolute inset-0 z-10" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="h-full w-full bg-white" />
+      <div className="absolute inset-x-0 top-full z-20 mt-0.5 flex max-h-64 flex-col rounded-lg border border-neutral-300 bg-white p-1 shadow-lg">
+        <button
+          type="button"
+          disabled={busy}
+          className="mb-1 flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-neutral-200 px-2 text-left text-[12px] text-neutral-600 hover:border-brand-500 hover:text-brand-600 disabled:opacity-60"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => void add()}
+        >
+          <Plus className="h-3.5 w-3.5" />
+          {t("field.attachmentAdd")}
+        </button>
+        <div className="min-h-0 flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
+          {draft.length === 0 ? (
+            <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.attachmentEmpty")}</div>
+          ) : (
+            draft.map((a) => (
+              <div
+                key={a.path}
+                className="group flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[13px] hover:bg-neutral-200/60"
+              >
+                <FileIcon className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 truncate text-left"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => void open(a.path)}
+                >
+                  {a.name}
+                </button>
+                <button
+                  type="button"
+                  className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-red-500"
+                  title={t("common.delete")}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => remove(a.path)}
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+            ))
           )}
         </div>
       </div>
@@ -553,6 +645,8 @@ export function CellEditorSlot(props: CellEditorProps) {
       );
     case "relation":
       return <RelationCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
+    case "attachment":
+      return <AttachmentCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
     default:
       return <TextCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
   }
@@ -634,7 +728,7 @@ export function SelectChips({
       />
     );
   }
-  const ids = Array.isArray(value) ? value : [];
+  const ids = Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
   return (
     <span className={cn("flex flex-wrap", compact ? "gap-0.5" : "gap-1")}>
       {ids.map((id) => (
@@ -743,6 +837,56 @@ export function RelationChips({
           compact={compact}
           label={(db ? relationRowLabel(db, id) : null) ?? (db ? t("field.relationMissing") : id)}
         />
+      ))}
+    </span>
+  );
+}
+
+/** 附件胶囊：文件名 + 回形针图标，点击用系统默认程序打开（路径越权校验在 Rust 侧） */
+export function AttachmentChip({ name, path, compact = false }: { name: string; path: string; compact?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const open = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await openAttachment(path);
+    } catch (e) {
+      logger.error("attachment.open", e);
+      toast.error(t("error.openAttachment", { message: String(e) }));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const size = compact ? "px-1 py-[1px] text-[10px]" : "px-2 py-0.5 text-[11px]";
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      title={t("attachment.clickToOpen")}
+      className={cn(
+        "inline-flex max-w-[220px] items-center gap-1 rounded-full bg-neutral-100 font-medium text-neutral-600 hover:bg-brand-100 hover:text-brand-600 disabled:opacity-60",
+        size,
+      )}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={(e) => {
+        e.stopPropagation();
+        void open();
+      }}
+    >
+      <Paperclip className="h-3 w-3 shrink-0 text-neutral-400" />
+      <span className="truncate">{name}</span>
+    </button>
+  );
+}
+
+/** 附件单元格的只读展示：value 为 [{name,path}] 数组（空则调用方给占位） */
+export function AttachmentChips({ value, compact = false }: { value: CellValue; compact?: boolean }) {
+  const refs = attachmentRefs(value);
+  if (refs.length === 0) return null;
+  return (
+    <span className={cn("flex flex-wrap", compact ? "gap-0.5" : "gap-1")}>
+      {refs.map((a) => (
+        <AttachmentChip key={a.path} name={a.name} path={a.path} compact={compact} />
       ))}
     </span>
   );

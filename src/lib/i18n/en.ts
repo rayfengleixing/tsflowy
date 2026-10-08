@@ -236,6 +236,7 @@ export const en: Record<MessageKey, string> = {
   "field.type.relation": "Relation",
   "field.type.rollup": "Rollup",
   "field.type.reverse_relation": "Reverse relation",
+  "field.type.attachment": "Attachment",
   "field.relationUnset": "No target table configured",
   "field.relationSearch": "Search rows to link…",
   "field.relationEmpty": "No matching rows",
@@ -256,6 +257,8 @@ export const en: Record<MessageKey, string> = {
   "field.reverseEmpty": "No source rows link to this row",
   "field.reverseHint":
     "First create a Relation field in the source table that points to this table, then come back and pick the source table and that relation field. This column lists, live, the source-table rows that link to the current row (read-only, nothing stored).",
+  "field.attachmentAdd": "Add file",
+  "field.attachmentEmpty": "No attachments",
   "field.formulaExpr": "Expression",
   "field.formulaPlaceholder": "{price} * {qty}",
   "field.formulaHint":

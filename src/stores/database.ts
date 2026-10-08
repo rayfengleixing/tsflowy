@@ -96,8 +96,9 @@ async function clearRemovedOptionRefs(
     if (typeof v === "string" && gone.has(v)) {
       rowCells[fieldId] = null;
       changed.push({ rowId, value: null });
-    } else if (Array.isArray(v) && v.some((x) => gone.has(x))) {
-      const next = v.filter((x) => !gone.has(x));
+    } else if (Array.isArray(v) && v.some((x) => typeof x === "string" && gone.has(x))) {
+      // 只清引用该选项字符串 id 的元素；附件等对象型数组项原样保留
+      const next = v.filter((x) => typeof x !== "string" || !gone.has(x));
       rowCells[fieldId] = next;
       changed.push({ rowId, value: next });
     }

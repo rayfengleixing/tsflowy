@@ -1,4 +1,4 @@
-import type { CellValue, DatabaseField, DatabaseRow, FieldType, SelectOption } from "@/types/database";
+import type { AttachmentRef, CellValue, DatabaseField, DatabaseRow, FieldType, SelectOption } from "@/types/database";
 import { parseFieldOptions } from "./database-values";
 import { t } from "./i18n";
 
@@ -167,7 +167,14 @@ export function csvValueToCell(type: FieldType, raw: string): CellValue {
 export function cellToCsv(_type: FieldType, value: CellValue): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "boolean") return value ? "true" : "false";
-  if (Array.isArray(value)) return value.join("; ");
+  if (Array.isArray(value)) {
+    // 附件单元格是 [{name,path}]：导出只写文件名（多选/关联等则是字符串数组）
+    return value
+      .map((v) =>
+        typeof v === "object" && v !== null && "name" in v ? String((v as { name: unknown }).name) : String(v),
+      )
+      .join("; ");
+  }
   return String(value);
 }
 
@@ -175,9 +182,9 @@ export function cellToCsv(_type: FieldType, value: CellValue): string {
 function selectCellToText(value: CellValue, options: SelectOption[]): string {
   if (value === null) return "";
   const nameOf = new Map(options.map((o) => [o.id, o.name]));
-  const one = (v: CellValue) => (typeof v === "string" ? (nameOf.get(v) ?? v) : String(v));
+  const one = (v: string | AttachmentRef): string => (typeof v === "string" ? (nameOf.get(v) ?? v) : v.name);
   if (Array.isArray(value)) return value.map(one).join("; ");
-  return one(value);
+  return typeof value === "string" ? one(value) : String(value);
 }
 
 /** 文本 → 选择类字段的选项 id：单选取整串，多选按 ; | 分列。

@@ -11,6 +11,7 @@ import {
   Link2,
   ListChecks,
   Mail,
+  Paperclip,
   Phone,
   Type as TypeIcon,
   Sigma,
@@ -52,5 +53,7 @@ export function fieldIcon(type: FieldType): ReactNode {
       return <Combine className={cls} />;
     case "reverse_relation":
       return <ArrowRightLeft className={cls} />;
+    case "attachment":
+      return <Paperclip className={cls} />;
   }
 }

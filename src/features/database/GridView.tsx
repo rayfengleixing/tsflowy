@@ -573,8 +573,12 @@ export function GridView({
             skipped++; // 超出最右列
             continue;
           }
-          if (isReadonlyType(field.field_type) || field.field_type === "relation") {
-            skipped++; // 公式/汇总/系统字段与关联字段跳过（关联值是对端行 id，粘贴的文本无法直接对应）
+          if (
+            isReadonlyType(field.field_type) ||
+            field.field_type === "relation" ||
+            field.field_type === "attachment"
+          ) {
+            skipped++; // 公式/汇总/系统字段、关联字段与附件字段跳过（粘贴的文本无法直接对应行 id / 文件）
             continue;
           }
           if (field.field_type === "single_select" || field.field_type === "multi_select") {

@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { NewFieldDialog } from "./NewFieldDialog";
-import { RelationChips, ReverseRelationChips, SelectChips } from "./editors";
+import { AttachmentChips, RelationChips, ReverseRelationChips, SelectChips } from "./editors";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -153,6 +153,18 @@ export function CellDisplay({
       <div className="flex h-full w-full items-center truncate px-2">
         {Array.isArray(value) && value.length > 0 ? (
           <ReverseRelationChips field={field} value={value} />
+        ) : (
+          <span className="text-neutral-300" />
+        )}
+      </div>
+    );
+  }
+  // 附件列：value 为 [{name,path}] 数组，用可点击的胶囊展示文件名
+  if (field.field_type === "attachment") {
+    return (
+      <div className="flex h-full w-full items-center truncate px-2">
+        {Array.isArray(value) && value.length > 0 ? (
+          <AttachmentChips value={value} />
         ) : (
           <span className="text-neutral-300" />
         )}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FieldOptions } from "@/types/database";
 import {
+  attachmentRefs,
   defaultValue,
   deserializeValue,
   formatCellValue,
@@ -28,6 +29,7 @@ describe("defaultValue", () => {
   it("returns typed defaults per field type", () => {
     expect(defaultValue("checkbox")).toBe(false);
     expect(defaultValue("multi_select")).toEqual([]);
+    expect(defaultValue("attachment")).toEqual([]);
     expect(defaultValue("text")).toBeNull();
     expect(defaultValue("number")).toBeNull();
     expect(defaultValue("single_select")).toBeNull();
@@ -53,6 +55,14 @@ describe("validateCellValue", () => {
     for (const type of ["text", "number", "date", "checkbox", "multi_select"] as const) {
       expect(validateCellValue(type, null)).toBe(true);
     }
+  });
+
+  it("validates attachment refs as well-formed objects", () => {
+    expect(validateCellValue("attachment", [{ name: "a.pdf", path: "assets/1.pdf" }])).toBe(true);
+    expect(validateCellValue("attachment", [])).toBe(true);
+    // 脏数据：裸字符串、缺 name/path 的对象都判非法
+    expect(validateCellValue("attachment", ["assets/1.pdf"])).toBe(false);
+    expect(validateCellValue("attachment", [{ name: "a.pdf" }] as never)).toBe(false);
   });
 });
 
@@ -107,6 +117,30 @@ describe("formatCellValue", () => {
   it("handles empty values", () => {
     expect(formatCellValue("text", null)).toBe("");
     expect(formatCellValue("text", "")).toBe("");
+  });
+
+  it("renders attachment names and ignores malformed entries", () => {
+    expect(formatCellValue("attachment", [{ name: "合同.pdf", path: "assets/1.pdf" }])).toBe("合同.pdf");
+    expect(
+      formatCellValue("attachment", [
+        { name: "a.pdf", path: "assets/1.pdf" },
+        { name: "b.png", path: "assets/2.png" },
+      ]),
+    ).toBe("a.pdf, b.png");
+    expect(formatCellValue("attachment", [])).toBe("");
+  });
+});
+
+describe("attachmentRefs", () => {
+  it("keeps only well-formed refs and tolerates non-array values", () => {
+    expect(attachmentRefs([{ name: "a.pdf", path: "assets/1.pdf" }])).toEqual([
+      { name: "a.pdf", path: "assets/1.pdf" },
+    ]);
+    expect(attachmentRefs(["assets/1.pdf", { name: "ok", path: "assets/2" }])).toEqual([
+      { name: "ok", path: "assets/2" },
+    ]);
+    expect(attachmentRefs(null)).toEqual([]);
+    expect(attachmentRefs("assets/1.pdf")).toEqual([]);
   });
 });
 

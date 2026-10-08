@@ -231,6 +231,7 @@ export const zh = {
   "field.type.relation": "关联",
   "field.type.rollup": "汇总",
   "field.type.reverse_relation": "反向关系",
+  "field.type.attachment": "附件",
   "field.relationUnset": "未配置关联表",
   "field.relationSearch": "搜索要关联的行…",
   "field.relationEmpty": "没有匹配的行",
@@ -251,6 +252,8 @@ export const zh = {
   "field.reverseEmpty": "没有指向本行的来源行",
   "field.reverseHint":
     "先在「来源表」里建一个指向本表的「关联」字段，再回到这里选来源表与那个关联字段。本列会实时列出来源表中关联到当前行的所有行（只读，不落库）。",
+  "field.attachmentAdd": "添加文件",
+  "field.attachmentEmpty": "暂无附件",
   "field.formulaExpr": "表达式",
   "field.formulaPlaceholder": "{单价} * {数量}",
   "field.formulaHint":

@@ -5,9 +5,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Button } from "@/components/ui/button";
 import { t } from "@/lib/i18n";
 
-/** 新建字段对话框（项目说明书 5.1：字段新增；输入名称 + 选择类型）
- *  —— 附件字段完整上传/落库功能未实现，已全部移除（FIELD_TYPES 中无 attachment）。
- */
+/** 新建字段对话框（项目说明书 5.1：字段新增；输入名称 + 选择类型） */
 export function NewFieldDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;

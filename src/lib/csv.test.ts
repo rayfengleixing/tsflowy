@@ -107,6 +107,31 @@ describe("cellToCsv / buildCsvExport", () => {
     expect(out).toBe("名称,标签\r\n苹果,水果; 红色\r\n");
     expect(cellToCsv("checkbox", true)).toBe("true");
     expect(cellToCsv("text", null)).toBe("");
+    // 附件单元格是 [{name,path}]：导出只写文件名
+    expect(cellToCsv("attachment", [{ name: "合同.pdf", path: "assets/1.pdf" }])).toBe("合同.pdf");
+    expect(
+      cellToCsv("attachment", [
+        { name: "a.pdf", path: "assets/1.pdf" },
+        { name: "b.png", path: "assets/2.png" },
+      ]),
+    ).toBe("a.pdf; b.png");
+  });
+
+  it("exports attachment field values by file name", () => {
+    const attField: DatabaseField = {
+      id: "f4",
+      database_view_id: "v",
+      name: "附件",
+      field_type: "attachment",
+      options: "{}",
+      width: 180,
+      is_hidden: 0,
+      position: 3,
+    };
+    const out = buildCsvExport([attField], rows, {
+      r1: { f4: [{ name: "合同.pdf", path: "assets/1.pdf" }] },
+    });
+    expect(out).toBe("附件\r\n合同.pdf\r\n");
   });
 });
 
