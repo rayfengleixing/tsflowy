@@ -1,6 +1,6 @@
 // 与 migrations/001_init.sql 表结构一一对应（项目说明书第 7 章）
 
-export type LayoutType = "document" | "grid" | "board" | "calendar";
+export type LayoutType = "document" | "grid" | "board" | "calendar" | "timeline";
 
 export interface Workspace {
   id: string;
@@ -47,8 +47,8 @@ export function parseViewTags(tags: string | null | undefined): string[] {
   }
 }
 
-export const LAYOUTS: LayoutType[] = ["document", "grid", "board", "calendar"];
+export const LAYOUTS: LayoutType[] = ["document", "grid", "board", "calendar", "timeline"];
 
 /** 数据库视图布局集合：一张表可拥有的视图类型（多视图阶段 2） */
-export const DB_LAYOUTS = ["grid", "board", "calendar"] as const;
+export const DB_LAYOUTS = ["grid", "board", "calendar", "timeline"] as const;
 export type DbLayout = (typeof DB_LAYOUTS)[number];

@@ -73,6 +73,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "database_fields_check_relations",
         sql: include_str!("../../../migrations/013_database_fields_check_relations.sql"),
     },
+    Migration {
+        version: 14,
+        description: "views_layout_timeline",
+        sql: include_str!("../../../migrations/014_views_layout_timeline.sql"),
+    },
 ];
 
 /// 自带事务的迁移：重建表改 CHECK 约束需要两个连接级 PRAGMA，而它们在事务内是 no-op，
@@ -81,7 +86,7 @@ pub const MIGRATIONS: &[Migration] = &[
 ///     把子表数据一并清空；
 ///   - legacy_alter_table=ON：RENAME 默认会重解析整个 schema 以改写其它对象里的引用，
 ///     而此刻旧表已删、其它触发器仍引用它，重解析会报 "no such table"。
-const OWN_TRANSACTION_VERSIONS: &[i64] = &[12, 13];
+const OWN_TRANSACTION_VERSIONS: &[i64] = &[12, 13, 14];
 
 pub fn ensure_migrated(conn: &rusqlite::Connection) -> Result<(), String> {
     ensure_migrated_with(conn, MIGRATIONS)
@@ -869,6 +874,166 @@ mod tests {
             )
             .unwrap();
         assert_eq!(indexed, 1);
+
+        let fk: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk, 1, "迁移后必须恢复 foreign_keys=ON");
+        let legacy: i64 = conn
+            .query_row("PRAGMA legacy_alter_table", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(legacy, 0, "迁移后必须恢复 legacy_alter_table=OFF");
+    }
+
+    /// 存量库（1–13 已应用）升到 014：重建 views 把 layout 白名单加入 'timeline'。
+    /// 同样必须在 foreign_keys=OFF 下进行，否则 DROP TABLE 的隐式 DELETE 会经
+    /// ON DELETE CASCADE 清空 documents / 派生视图等子表数据。
+    #[test]
+    fn migration_014_extends_layout_check_without_losing_views() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_older_than(&conn, 14);
+        // 模拟生产连接：迁移前 FK 已是开启状态
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute(
+            "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ('w1','W',1,1)",
+            [],
+        )
+        .unwrap();
+        // 宿主视图：带上 visited_at / tags 以验证重建后列与数据都不丢
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, name, layout, extra, position, is_favorite, is_trash, created_at, updated_at, visited_at, tags)
+             VALUES ('v1','w1','任务表','grid','{\"sorts\":[]}',0,1,0,1,1,123,'[\"工作\"]')",
+            [],
+        )
+        .unwrap();
+        // 派生视图：source_id 自引用宿主
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at, source_id)
+             VALUES ('v2','w1','日历','calendar','{}',0,1,1,'v1')",
+            [],
+        )
+        .unwrap();
+        // 子表数据（FK 指向 views / 触发器引用 views）：重建 views 时不能被级联删除
+        conn.execute(
+            "INSERT INTO documents(view_id, content, updated_at) VALUES ('v1','{}',1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO document_snapshots(view_id, content, reason, created_at) VALUES ('v1','{}','auto',1)",
+            [],
+        )
+        .unwrap();
+
+        ensure_migrated(&conn).unwrap();
+
+        // 行数不变、各列数据完好
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM views", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 2, "重建 views 不能丢失行");
+        let (name, layout, visited, tags, src): (String, String, i64, String, Option<String>) =
+            conn.query_row(
+                "SELECT name, layout, visited_at, tags, source_id FROM views WHERE id='v1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "任务表");
+        assert_eq!(layout, "grid");
+        assert_eq!(visited, 123, "visited_at 列必须保留");
+        assert_eq!(tags, "[\"工作\"]", "tags 列必须保留");
+        assert_eq!(src, None, "宿主视图 source_id 仍为 NULL");
+        let derived: Option<String> = conn
+            .query_row("SELECT source_id FROM views WHERE id='v2'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            derived.as_deref(),
+            Some("v1"),
+            "派生视图的自引用外键必须保留"
+        );
+
+        // 子表数据没被 DROP TABLE 的级联删掉
+        let docs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(docs, 1, "重建 views 不能级联删除文档");
+        let snaps: i64 = conn
+            .query_row("SELECT COUNT(*) FROM document_snapshots", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(snaps, 1, "重建 views 不能级联删除快照");
+
+        // 新 layout（timeline）现在可以写入
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at)
+             VALUES ('v3','w1','时间线','timeline','{}',0,1,1)",
+            [],
+        )
+        .unwrap_or_else(|e| panic!("timeline 应被 CHECK 接受: {e}"));
+        // 未知 layout 仍被拒绝
+        let err = conn
+            .execute(
+                "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at)
+                 VALUES ('v9','w1','x','ghost_layout','{}',0,1,1)",
+                [],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("CHECK"), "{err}");
+
+        // 重建的表结构完整：三个索引 + 派生视图 partial 索引都在
+        for idx in [
+            "idx_views_ws_favorite",
+            "idx_views_ws_layout",
+            "idx_views_source_id",
+        ] {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    [idx],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(exists, 1, "重建后缺少索引 {idx}");
+        }
+
+        // 重建的触发器仍在：改名同步 FTS、删除清理快照
+        conn.execute(
+            "INSERT INTO documents(view_id, content, updated_at) VALUES ('v3','{}',1)",
+            [],
+        )
+        .unwrap();
+        conn.execute("UPDATE views SET name='时间线2' WHERE id='v3'", [])
+            .unwrap();
+        let title: String = conn
+            .query_row(
+                "SELECT title FROM documents_fts WHERE view_id='v3'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(title, "时间线2", "重建后 trg_views_fts_rename 仍同步标题");
+
+        // 自引用外键的级联删除仍生效（证明 source_id 的 FK 约束被重建）
+        conn.execute("DELETE FROM views WHERE id='v1'", []).unwrap();
+        let left: Vec<String> = conn
+            .prepare("SELECT id FROM views ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(left, vec!["v3"], "删除宿主应级联删除派生视图 v2");
+        // 删除走 trg_snapshots_purge：v1 的快照被清理
+        let snaps: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM document_snapshots WHERE view_id='v1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(snaps, 0, "重建后 trg_snapshots_purge 仍清理快照");
 
         let fk: i64 = conn
             .query_row("PRAGMA foreign_keys", [], |r| r.get(0))

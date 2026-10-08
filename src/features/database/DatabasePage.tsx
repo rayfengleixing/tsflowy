@@ -9,6 +9,7 @@ import { DatabaseStoreProvider } from "@/stores/database-context";
 import { BoardView } from "./BoardView";
 import { CalendarView } from "./CalendarView";
 import { GridView } from "./GridView";
+import { TimelineView } from "./TimelineView";
 import { ViewChips } from "./ViewChips";
 import type { View } from "@/types/models";
 
@@ -97,6 +98,19 @@ export function DatabasePage({ view }: { view: View }) {
     return (
       <DatabaseStoreProvider value={store}>
         <CalendarView
+          key={active.id}
+          view={active}
+          source={view}
+          tabs={tabs}
+          onGoGrid={grid ? () => select(grid.id) : undefined}
+        />
+      </DatabaseStoreProvider>
+    );
+  }
+  if (active.layout === "timeline") {
+    return (
+      <DatabaseStoreProvider value={store}>
+        <TimelineView
           key={active.id}
           view={active}
           source={view}

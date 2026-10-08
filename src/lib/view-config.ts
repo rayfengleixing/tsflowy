@@ -18,6 +18,9 @@ export interface ViewConfig {
   sorts?: SortSpec[];
   boardFieldId?: string;
   calendarFieldId?: string;
+  /** 时间线视图：开始/结束日期字段（结束为空则只画点） */
+  timelineStartFieldId?: string;
+  timelineEndFieldId?: string;
   /** 表格分组字段（Grid 独有；看板分组字段是 boardFieldId） */
   groupFieldId?: string;
   /** 列汇总：field_id → 汇总函数；缺省即该列不显示汇总 */
@@ -70,6 +73,9 @@ export function parseViewConfig(text: string | null | undefined): ViewConfig {
   // 空串是"清除字段选择"的哨兵写法，读出时归一为未配置
   if (typeof o.boardFieldId === "string" && o.boardFieldId) out.boardFieldId = o.boardFieldId;
   if (typeof o.calendarFieldId === "string" && o.calendarFieldId) out.calendarFieldId = o.calendarFieldId;
+  if (typeof o.timelineStartFieldId === "string" && o.timelineStartFieldId)
+    out.timelineStartFieldId = o.timelineStartFieldId;
+  if (typeof o.timelineEndFieldId === "string" && o.timelineEndFieldId) out.timelineEndFieldId = o.timelineEndFieldId;
   if (typeof o.groupFieldId === "string" && o.groupFieldId) out.groupFieldId = o.groupFieldId;
   const aggregates = parseAggregates(o.aggregates);
   if (aggregates) out.aggregates = aggregates;
@@ -87,6 +93,8 @@ export function mergeViewConfig(text: string | null | undefined, patch: Partial<
   if (patch.sorts !== undefined) next.sorts = patch.sorts;
   if (patch.boardFieldId !== undefined) next.boardFieldId = patch.boardFieldId;
   if (patch.calendarFieldId !== undefined) next.calendarFieldId = patch.calendarFieldId;
+  if (patch.timelineStartFieldId !== undefined) next.timelineStartFieldId = patch.timelineStartFieldId;
+  if (patch.timelineEndFieldId !== undefined) next.timelineEndFieldId = patch.timelineEndFieldId;
   if (patch.groupFieldId !== undefined) next.groupFieldId = patch.groupFieldId;
   if (patch.aggregates !== undefined) next.aggregates = patch.aggregates;
   if (patch.cardFieldIds !== undefined) next.cardFieldIds = patch.cardFieldIds;

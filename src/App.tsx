@@ -43,7 +43,7 @@ function cycleTab(step: number) {
 /** 按视图布局渲染主内容（单栏与左右分栏共用） */
 function renderView(view: ViewNode | null) {
   if (view?.layout === "document") return <EditorPage key={view.id} view={view} />;
-  if (view && ["grid", "board", "calendar"].includes(view.layout)) {
+  if (view && ["grid", "board", "calendar", "timeline"].includes(view.layout)) {
     return <DatabasePage key={view.id} view={view} />;
   }
   return <PlaceholderPage />;
