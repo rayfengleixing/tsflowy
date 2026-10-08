@@ -254,6 +254,9 @@ export const zh = {
     "先在「来源表」里建一个指向本表的「关联」字段，再回到这里选来源表与那个关联字段。本列会实时列出来源表中关联到当前行的所有行（只读，不落库）。",
   "field.attachmentAdd": "添加文件",
   "field.attachmentEmpty": "暂无附件",
+  "field.attachmentDropHint": "松开即可添加附件",
+  "field.attachmentPasteHint": "也可拖入文件或 Ctrl+V 粘贴",
+  "field.attachmentPastedName": "粘贴的文件",
   "field.formulaExpr": "表达式",
   "field.formulaPlaceholder": "{单价} * {数量}",
   "field.formulaHint":
@@ -586,6 +589,9 @@ export const zh = {
   "settings.shortcuts.switchTab": "切换标签页",
   "settings.shortcuts.escape": "关闭浮层",
   "settings.shortcuts.search": "全局搜索",
+  "settings.shortcuts.newPage": "新建页面",
+  "settings.shortcuts.openSettings": "打开设置",
+  "settings.shortcuts.toggleTheme": "切换深浅色",
   "settings.shortcuts.save": "保存当前文档",
   "settings.shortcuts.bold": "加粗",
   "settings.shortcuts.italic": "斜体",
@@ -699,6 +705,14 @@ export const zh = {
   "settings.aiSaved": "已保存 AI 助手设置",
   "settings.aiSaveFailed": "保存失败：{message}",
   "settings.aiPrivacy": "对话内容将发送至你配置的服务商。",
+  // — CSV 导入选项对话框 —
+  "csv.importOptionsTitle": "确认导入字段类型",
+  "csv.importOptionsDesc": "为每列选择字段类型；附件列需选择存放文件的文件夹，按文件名匹配。",
+  "csv.attachment.chooseFolder": "选择文件夹",
+  "csv.attachment.noFolder": "未选择文件夹",
+  "csv.attachment.stats": "已匹配 {matched} / 未匹配 {missing}",
+  "csv.attachment.missingToast": "有 {n} 个附件未在所选文件夹中找到：{names}",
+  "csv.attachment.scanFailed": "读取文件夹失败：{message}",
 } as const;
 
 export type MessageKey = keyof typeof zh;

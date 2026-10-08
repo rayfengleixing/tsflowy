@@ -259,6 +259,9 @@ export const en: Record<MessageKey, string> = {
     "First create a Relation field in the source table that points to this table, then come back and pick the source table and that relation field. This column lists, live, the source-table rows that link to the current row (read-only, nothing stored).",
   "field.attachmentAdd": "Add file",
   "field.attachmentEmpty": "No attachments",
+  "field.attachmentDropHint": "Drop to add the file",
+  "field.attachmentPasteHint": "You can also drop files here or press Ctrl+V",
+  "field.attachmentPastedName": "pasted-file",
   "field.formulaExpr": "Expression",
   "field.formulaPlaceholder": "{price} * {qty}",
   "field.formulaHint":
@@ -599,6 +602,9 @@ export const en: Record<MessageKey, string> = {
   "settings.shortcuts.switchTab": "Switch tab",
   "settings.shortcuts.escape": "Close overlay",
   "settings.shortcuts.search": "Global search",
+  "settings.shortcuts.newPage": "New page",
+  "settings.shortcuts.openSettings": "Open settings",
+  "settings.shortcuts.toggleTheme": "Toggle light/dark theme",
   "settings.shortcuts.save": "Save current document",
   "settings.shortcuts.bold": "Bold",
   "settings.shortcuts.italic": "Italic",
@@ -715,4 +721,12 @@ export const en: Record<MessageKey, string> = {
   "settings.aiSaved": "AI assistant settings saved",
   "settings.aiSaveFailed": "Save failed: {message}",
   "settings.aiPrivacy": "Conversations are sent to the provider you configure.",
+  // — CSV import options dialog —
+  "csv.importOptionsTitle": "Confirm field types",
+  "csv.importOptionsDesc": "Choose a type for each column. Attachment columns need a folder, matched by file name.",
+  "csv.attachment.chooseFolder": "Choose folder",
+  "csv.attachment.noFolder": "No folder selected",
+  "csv.attachment.stats": "Matched {matched} / missing {missing}",
+  "csv.attachment.missingToast": "{n} attachment(s) not found in the selected folder: {names}",
+  "csv.attachment.scanFailed": "Failed to read folder: {message}",
 };

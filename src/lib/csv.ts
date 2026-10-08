@@ -217,6 +217,31 @@ export function resolveSelectRefs(
   return { ids, missing };
 }
 
+/** CSV 附件列原始值 → 候选文件名（`[;|]` 分隔、trim、去空、按小写去重）。
+ *  再按「小写文件名 → 绝对路径」表逐个精确匹配（大小写不敏感）。
+ *  纯函数、不做任何 I/O：命中的 sourcePath 交给调用方 save_asset 复制进 assets/。
+ *  同名候选只算一次（保留首次出现的原始写法，供 isImageFile 等按扩展名判断）。 */
+export function resolveAttachmentNames(
+  raw: string,
+  filesByLowerName: Record<string, string>,
+): { matched: { name: string; sourcePath: string }[]; missing: string[] } {
+  const seen = new Set<string>();
+  const matched: { name: string; sourcePath: string }[] = [];
+  const missing: string[] = [];
+  for (const name of raw
+    .split(/[;|]/)
+    .map((x) => x.trim())
+    .filter(Boolean)) {
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const sourcePath = filesByLowerName[key];
+    if (sourcePath !== undefined) matched.push({ name, sourcePath });
+    else missing.push(name);
+  }
+  return { matched, missing };
+}
+
 /** 导出当前视图：首行表头，之后每行一个数据库行 */
 export function buildCsvExport(
   fields: DatabaseField[],

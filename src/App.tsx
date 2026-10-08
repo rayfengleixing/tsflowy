@@ -17,7 +17,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { viewIcon } from "@/components/view-icon";
 import { ArrowLeftRight, X } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { bootstrapVisualSettings } from "@/stores/settings";
+import { bootstrapVisualSettings, useSettingsStore } from "@/stores/settings";
 import { loadDailyNotesConfig } from "@/lib/daily-notes";
 import { findNode } from "@/lib/tree";
 import type { ViewNode } from "@/types/models";
@@ -216,6 +216,24 @@ function App() {
       if (comboEquals(combo, combos.search)) {
         e.preventDefault();
         useWorkspaceStore.getState().openSearch("");
+        return;
+      }
+      if (comboEquals(combo, combos.newPage)) {
+        e.preventDefault();
+        void useWorkspaceStore.getState().createView({ parentId: null, layout: "document" });
+        return;
+      }
+      // 打开/关闭设置：与侧边栏齿轮按钮同义（再按一次回到工作区）
+      if (comboEquals(combo, combos.openSettings)) {
+        e.preventDefault();
+        const s = useWorkspaceStore.getState();
+        s.setRoute(s.route === "settings" ? "workspace" : "settings");
+        return;
+      }
+      if (comboEquals(combo, combos.toggleTheme)) {
+        e.preventDefault();
+        const s = useSettingsStore.getState();
+        s.setTheme(s.theme === "dark" ? "light" : "dark");
         return;
       }
     };

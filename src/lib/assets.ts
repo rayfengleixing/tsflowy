@@ -35,20 +35,35 @@ export async function uploadImageBytes(bytes: Uint8Array, ext: string): Promise<
   });
 }
 
+/** 从文件名取扩展名（小写、1-5 位字母数字），取不到返回 null */
+function nameExt(name: string): string | null {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return null;
+  const e = name.slice(dot + 1).toLowerCase();
+  return /^[a-z0-9]{1,5}$/.test(e) ? e : null;
+}
+
+/** 从 MIME 取子类型（image/png → png），取不到返回 null */
+function mimeExt(mime: string): string | null {
+  const m = /^[a-z0-9.+-]+\/([a-z0-9.+-]+)/.exec(mime.toLowerCase());
+  return m ? m[1] : null;
+}
+
 /**
  * 从 File 对象（剪贴板/拖拽）抽取扩展名。
  * 优先用 file.name 的扩展名，回落到 MIME（image/png → png），最后兜底 "png"。
  */
 export function pickImageExt(file: File): string {
-  const dot = file.name.lastIndexOf(".");
-  if (dot >= 0) {
-    const e = file.name.slice(dot + 1).toLowerCase();
-    if (/^[a-z0-9]{1,5}$/.test(e)) return e;
-  }
-  const mime = file.type.toLowerCase();
-  const m = /^image\/([a-z0-9.+-]+)/.exec(mime);
-  if (m) return m[1];
-  return "png";
+  return nameExt(file.name) ?? mimeExt(file.type) ?? "png";
+}
+
+/** 图片扩展名白名单（判断附件是否可用 <img> 渲染缩略图） */
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif", "ico"]);
+
+/** 附件名是否为图片（只按扩展名判断，供缩略图分支使用） */
+export function isImageFile(name: string): boolean {
+  const ext = nameExt(name);
+  return ext !== null && IMAGE_EXTS.has(ext);
 }
 
 /* ————— 附件上传 / 打开 ————— */
@@ -56,6 +71,36 @@ export function pickImageExt(file: File): string {
 /** 从文件路径取原始文件名（Windows 反斜杠 / POSIX 斜杠都兼容） */
 function baseName(path: string): string {
   return path.split(/[\\/]/).pop() || path;
+}
+
+/**
+ * 从 File（剪贴板粘贴 / 拖拽）取文件列表：dataTransfer.files 为空时回落到 items
+ * （部分来源只填 items），并过滤掉 0 字节的目录占位项。
+ */
+export function filesFromDataTransfer(dt: DataTransfer | null): File[] {
+  if (!dt) return [];
+  const direct = Array.from(dt.files).filter((f) => f.size > 0);
+  if (direct.length > 0) return direct;
+  const out: File[] = [];
+  for (const item of Array.from(dt.items ?? [])) {
+    if (item.kind !== "file") continue;
+    const f = item.getAsFile();
+    if (f && f.size > 0) out.push(f);
+  }
+  return out;
+}
+
+/**
+ * 把剪贴板 / 拖拽得到的 File 存进 assets/ 并返回附件引用。
+ * 走 save_asset_bytes（字节流）而非 save_asset（路径），因此不依赖文件对话框的路径白名单。
+ * file.name 为空时（部分剪贴板来源）用 fallbackName 兜底。
+ */
+export async function saveAttachmentFile(file: File, fallbackName: string): Promise<AttachmentRef> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const ext = nameExt(file.name) ?? mimeExt(file.type) ?? "bin";
+  const relative = await invoke<string>("save_asset_bytes", { bytes: Array.from(bytes), ext });
+  const name = file.name.trim() || `${fallbackName}.${ext}`;
+  return { name: baseName(name), path: relative };
 }
 
 /**

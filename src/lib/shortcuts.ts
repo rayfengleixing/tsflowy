@@ -1,13 +1,14 @@
-// 可自定义的全局快捷键。只覆盖 App 全局键盘处理里明确隔离的 4 个命令
-// （命令面板 / 快速打开 / 全局搜索 / 切换标签页）；编辑器内快捷键由 TipTap 与
-// 浏览器原生行为提供，保持只读展示，不做自定义。
+// 可自定义的全局快捷键。覆盖 App 全局键盘处理里明确隔离的命令
+// （命令面板 / 快速打开 / 全局搜索 / 切换标签页 / 新建页面 / 打开设置 / 切换主题）；
+// 编辑器内快捷键由 TipTap 与浏览器原生行为提供，保持只读展示，不做自定义。
 //
 // 组合键统一用 Ctrl 表示（Windows/Linux 的 Ctrl 与 macOS 的 ⌘ 等价），
 // 与既有快捷键表文案「Ctrl / ⌘」一致。
 
 import { create } from "zustand";
 
-export type ShortcutId = "commandPalette" | "quickOpen" | "search" | "switchTab";
+export type ShortcutId =
+  "commandPalette" | "quickOpen" | "search" | "switchTab" | "newPage" | "openSettings" | "toggleTheme";
 
 export interface Combo {
   /** Ctrl 或 ⌘（跨平台统一为一个开关） */
@@ -28,6 +29,9 @@ export const DEFAULT_SHORTCUTS: Record<ShortcutId, Combo> = {
   quickOpen: c("p"),
   search: c("f", { shift: true }),
   switchTab: c("tab"),
+  newPage: c("n"),
+  openSettings: c(","),
+  toggleTheme: c("d", { shift: true }),
 };
 
 /** 可自定义的全局快捷键（顺序即设置页展示顺序） */
@@ -36,6 +40,9 @@ export const CUSTOMIZABLE_SHORTCUTS: { id: ShortcutId; labelKey: string }[] = [
   { id: "quickOpen", labelKey: "settings.shortcuts.quickOpen" },
   { id: "search", labelKey: "settings.shortcuts.search" },
   { id: "switchTab", labelKey: "settings.shortcuts.switchTab" },
+  { id: "newPage", labelKey: "settings.shortcuts.newPage" },
+  { id: "openSettings", labelKey: "settings.shortcuts.openSettings" },
+  { id: "toggleTheme", labelKey: "settings.shortcuts.toggleTheme" },
 ];
 
 const STORAGE_KEY = "tsflowy-shortcuts";

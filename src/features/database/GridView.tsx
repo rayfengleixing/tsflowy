@@ -15,7 +15,7 @@ import {
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
+import type { AttachmentRef, CellValue, DatabaseField, DatabaseRow, FieldType } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { useDbStore, useDbStoreApi } from "@/stores/database-context";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -23,7 +23,16 @@ import { viewApi, newId } from "@/lib/db";
 import { parseFieldOptions } from "@/lib/database-values";
 import { UNGROUPED, applyFilters, canGroupBy, groupRowsForGrid, sortRows, type SortSpec } from "@/lib/database-query";
 import { normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
-import { buildCsvExport, csvValueToCell, parseCsv, planImport, parseTsv, resolveSelectRefs } from "@/lib/csv";
+import {
+  buildCsvExport,
+  csvValueToCell,
+  parseCsv,
+  planImport,
+  parseTsv,
+  resolveAttachmentNames,
+  resolveSelectRefs,
+} from "@/lib/csv";
+import { CsvImportDialog } from "./CsvImportDialog";
 import { computeFormula } from "@/lib/database-formula";
 import {
   computeReverseRelation,
@@ -61,6 +70,19 @@ import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { patchViewConfig, readViewConfig } from "@/lib/view-config";
 import type { View } from "@/types/models";
+
+/** 有并发上限的异步遍历：附件列复制时避免 N 行 × M 个附件同时发起 save_asset 打爆磁盘 I/O */
+async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  if (items.length === 0) return;
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const item = items[cursor++];
+      await fn(item);
+    }
+  });
+  await Promise.all(workers);
+}
 
 /** Grid 数据库视图（说明书 10-M4）：表头 32px / 行 32px / 单元格聚焦蓝框（6.6 节） */
 export function GridView({
@@ -100,6 +122,14 @@ export function GridView({
     () => readViewConfig(view).aggregates ?? {},
   );
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  // CSV 导入：解析完成后先暂存，等用户在 CsvImportDialog 里确认各列类型再落库
+  const [importPlan, setImportPlan] = useState<{
+    fileName: string;
+    headers: string[];
+    types: FieldType[];
+    /** 数据行（不含表头） */
+    dataRows: string[][];
+  } | null>(null);
   // TSV 粘贴的锚点：最近一次点击的可编辑单元格（粘贴从这里向右向下展开）
   const pasteAnchorRef = useRef<{ rowId: string; fieldId: string } | null>(null);
 
@@ -621,7 +651,7 @@ export function GridView({
     }
   };
 
-  // CSV 导入（新表）
+  // CSV 导入（新表）：先选文件并解析，再弹对话框让用户确认各列类型，确认后才落库
   const importCsv = async () => {
     try {
       const selected = await open({
@@ -636,30 +666,90 @@ export function GridView({
         return;
       }
       const { headers, types } = planImport(parsed);
-      const wsId = useWorkspaceStore.getState().currentWorkspaceId;
-      if (!wsId) return;
-      // 新表 = 新 grid 视图
+      // 新表名取文件名
       const base =
         selected
           .split(/[\\/]/)
           .pop()
           ?.replace(/\.csv$/i, "") ?? "";
       const fileName = base.length > 0 ? base : t("csv.importDefaultName");
-      const newView = await viewApi.create({ workspace_id: wsId, parent_id: null, name: fileName, layout: "grid" });
+      setImportPlan({ fileName, headers, types, dataRows: parsed.slice(1) });
+    } catch (e) {
+      logger.error("csv import failed", e);
+      toast.error(t("error.csv", { message: String(e) }));
+    }
+  };
+
+  /** 用户确认字段类型后执行真正的导入：建视图 → 建字段/行 → csv_import。
+   *  附件列把「候选文件名」在所选文件夹索引里匹配，命中的先复制进 assets/ 再写单元格。 */
+  const runImportCsv = async (types: FieldType[], foldersByColumn: Record<number, Record<string, string>>) => {
+    const plan = importPlan;
+    setImportPlan(null);
+    if (!plan) return;
+    try {
+      const wsId = useWorkspaceStore.getState().currentWorkspaceId;
+      if (!wsId) return;
+      // 新表 = 新 grid 视图
+      const newView = await viewApi.create({
+        workspace_id: wsId,
+        parent_id: null,
+        name: plan.fileName,
+        layout: "grid",
+      });
       // 建字段（重名则加序号）—— 解析/类型推断/消歧/id 生成在 JS，落库由 csv_import 单命令完成
       const used = new Set<string>();
-      const fields = headers.map((header, i) => {
+      const fields = plan.headers.map((header, i) => {
         let name = header;
         while (used.has(name)) name = name + " 2";
         used.add(name);
         return { id: newId(), name, field_type: types[i] };
       });
+
+      // 附件列：逐行解析候选名（纯函数），收集待复制文件（按源路径去重）
+      const attachmentCols: number[] = [];
+      fields.forEach((f, i) => {
+        if (f.field_type === "attachment") attachmentCols.push(i);
+      });
+      const resolved: Record<number, { matched: { name: string; sourcePath: string }[]; missing: string[] }[]> = {};
+      const pendingSources = new Set<string>();
+      for (const col of attachmentCols) {
+        const files = foldersByColumn[col] ?? {};
+        resolved[col] = plan.dataRows.map((line) => {
+          const r = resolveAttachmentNames(line[col] ?? "", files);
+          for (const m of r.matched) pendingSources.add(m.sourcePath);
+          return r;
+        });
+      }
+      // 先按去重后的源路径各复制一次（有上限并发），缓存「源路径 → assets 相对路径」避免重复复制
+      const relBySource = new Map<string, string>();
+      await mapWithConcurrency([...pendingSources], 8, async (sourcePath) => {
+        try {
+          relBySource.set(sourcePath, await invoke<string>("save_asset", { sourcePath }));
+        } catch (e) {
+          // 单个文件复制失败只记日志，后续按未匹配处理，不中断整次导入
+          logger.warn("csv-import.save_asset", "save_asset failed", sourcePath, e);
+        }
+      });
+
+      const missingNames = new Set<string>();
       // 嵌套 payload 按 Rust 结构体声明的 snake_case 键传（同 mention_rebuild 契约）
-      const rows = parsed.slice(1).map((line) => {
+      const rows = plan.dataRows.map((line, ri) => {
         const cells: { field_id: string; value: string }[] = [];
         for (let i = 0; i < fields.length; i++) {
           const raw = line[i] ?? "";
           if (raw.trim() === "") continue;
+          if (fields[i].field_type === "attachment") {
+            const refs: AttachmentRef[] = [];
+            for (const m of resolved[i][ri].matched) {
+              const path = relBySource.get(m.sourcePath);
+              if (path) refs.push({ name: m.name, path });
+              else missingNames.add(m.name);
+            }
+            for (const name of resolved[i][ri].missing) missingNames.add(name);
+            if (refs.length === 0) continue;
+            cells.push({ field_id: fields[i].id, value: JSON.stringify(refs) });
+            continue;
+          }
           const cell = csvValueToCell(fields[i].field_type, raw);
           if (cell !== null) cells.push({ field_id: fields[i].id, value: JSON.stringify(cell) });
         }
@@ -668,7 +758,12 @@ export function GridView({
       await invoke("csv_import", { viewId: newView.id, fields, rows });
       await useWorkspaceStore.getState().reload();
       useWorkspaceStore.getState().openView(newView.id);
-      toast.success(t("csv.imported", { count: String(parsed.length - 1) }));
+      toast.success(t("csv.imported", { count: String(plan.dataRows.length) }));
+      if (missingNames.size > 0) {
+        const names = [...missingNames];
+        const shown = names.slice(0, 5).join(", ") + (names.length > 5 ? ` …(+${names.length - 5})` : "");
+        toast.warning(t("csv.attachment.missingToast", { n: String(names.length), names: shown }));
+      }
     } catch (e) {
       logger.error("csv import failed", e);
       toast.error(t("error.csv", { message: String(e) }));
@@ -1193,6 +1288,17 @@ export function GridView({
         confirmLabel={t("common.delete")}
         onConfirm={() => void deleteSelected()}
       />
+
+      {/* CSV 导入确认：逐列选类型 + 附件列选文件夹（取消则不建视图） */}
+      {importPlan && (
+        <CsvImportDialog
+          headers={importPlan.headers}
+          initialTypes={importPlan.types}
+          dataRows={importPlan.dataRows}
+          onCancel={() => setImportPlan(null)}
+          onConfirm={(types, foldersByColumn) => void runImportCsv(types, foldersByColumn)}
+        />
+      )}
 
       {/* 行详情右侧滑出面板（说明书 6.1：宽 400px） */}
       {rowDetail && <RowDetailPanel row={rowDetail.row} view={rowDetail.view} onClose={closeRowDetail} />}

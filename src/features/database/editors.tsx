@@ -4,7 +4,14 @@ import { toast } from "sonner";
 import type { AttachmentRef, CellValue, DatabaseField, SelectOption } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { attachmentRefs, parseFieldOptions } from "@/lib/database-values";
-import { openAttachment, pickAttachment } from "@/lib/assets";
+import {
+  filesFromDataTransfer,
+  isImageFile,
+  openAttachment,
+  pickAttachment,
+  resolveAssetUrl,
+  saveAttachmentFile,
+} from "@/lib/assets";
 import {
   relationRowIds,
   relationRowLabel,
@@ -387,14 +394,43 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
 }
 
 /**
- * 附件（attachment）：调用系统文件对话框选文件 → save_asset 存入 assets/，
- * 单元格存 [{name,path}]。与多选一致：改动先攒在本地 draft，outside-click / Esc 才落库。
+ * 附件（attachment）：三种添加方式——系统文件对话框选择、把文件拖进面板、直接粘贴（Ctrl+V）。
+ * 后两种拿到的是 File，走 save_asset_bytes 存字节流，不依赖对话框路径白名单。
+ * 与多选一致：改动先攒在本地 draft，outside-click / Esc 才落库。
  */
 export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
   const [draft, setDraft] = useState<AttachmentRef[]>(() => attachmentRefs(value));
   const [busy, setBusy] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
 
   const commit = () => onCommit(draft);
+
+  const addFiles = async (files: File[]) => {
+    if (files.length === 0 || busy) return;
+    setBusy(true);
+    try {
+      const added: AttachmentRef[] = [];
+      for (const file of files) added.push(await saveAttachmentFile(file, t("field.attachmentPastedName")));
+      setDraft((prev) => [...prev, ...added]);
+    } catch (e) {
+      logger.error("attachment.upload", e);
+      toast.error(t("error.upload", { message: String(e) }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 粘贴：编辑器只在该单元格处于编辑态时挂载，因此文档级监听等价于"只处理此单元格的粘贴"
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const files = filesFromDataTransfer(e.clipboardData);
+      if (files.length === 0) return;
+      e.preventDefault();
+      void addFiles(files);
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  });
 
   const add = async () => {
     if (busy) return;
@@ -424,7 +460,22 @@ export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
   return (
     <div className="absolute inset-0 z-10" onMouseDown={(e) => e.stopPropagation()}>
       <div className="h-full w-full bg-white" />
-      <div className="absolute inset-x-0 top-full z-20 mt-0.5 flex max-h-64 flex-col rounded-lg border border-neutral-300 bg-white p-1 shadow-lg">
+      <div
+        className={cn(
+          "absolute inset-x-0 top-full z-20 mt-0.5 flex max-h-64 flex-col rounded-lg border bg-white p-1 shadow-lg",
+          dragOver ? "border-brand-500 ring-1 ring-brand-300" : "border-neutral-300",
+        )}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          void addFiles(filesFromDataTransfer(e.dataTransfer));
+        }}
+      >
         <button
           type="button"
           disabled={busy}
@@ -436,7 +487,9 @@ export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
           {t("field.attachmentAdd")}
         </button>
         <div className="min-h-0 flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
-          {draft.length === 0 ? (
+          {dragOver ? (
+            <div className="px-2 py-3 text-center text-[12px] text-brand-600">{t("field.attachmentDropHint")}</div>
+          ) : draft.length === 0 ? (
             <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.attachmentEmpty")}</div>
           ) : (
             draft.map((a) => (
@@ -444,7 +497,7 @@ export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
                 key={a.path}
                 className="group flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[13px] hover:bg-neutral-200/60"
               >
-                <FileIcon className="h-3.5 w-3.5 shrink-0 text-neutral-400" />
+                <AttachmentThumb name={a.name} path={a.path} />
                 <button
                   type="button"
                   className="min-w-0 flex-1 truncate text-left"
@@ -466,6 +519,7 @@ export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
             ))
           )}
         </div>
+        <div className="mt-1 shrink-0 px-2 pb-0.5 text-[11px] text-neutral-400">{t("field.attachmentPasteHint")}</div>
       </div>
       {/* 点击外部：提交当前 draft 并关闭编辑器 */}
       <div className="fixed inset-0 z-10" onMouseDown={() => commit()} />
@@ -842,7 +896,55 @@ export function RelationChips({
   );
 }
 
-/** 附件胶囊：文件名 + 回形针图标，点击用系统默认程序打开（路径越权校验在 Rust 侧） */
+/** assets 相对路径 → 可加载 URL（异步解析；path 变为 null 或组件卸载后不再 setState） */
+function useAssetUrl(path: string | null): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!path) {
+      setUrl(null);
+      return;
+    }
+    let alive = true;
+    resolveAssetUrl(path)
+      .then((u) => {
+        if (alive) setUrl(u);
+      })
+      .catch(() => {
+        if (alive) setUrl(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [path]);
+  return url;
+}
+
+/**
+ * 附件缩略图：图片类显示小图，非图片或加载失败回落到图标。
+ * 走 asset 协议（CSP 的 img-src 已放行 asset:），失败不抛错只换图标。
+ */
+function AttachmentThumb({ name, path, small = false }: { name: string; path: string; small?: boolean }) {
+  const image = isImageFile(name);
+  const url = useAssetUrl(image ? path : null);
+  const [failed, setFailed] = useState(false);
+  const size = small ? "h-3.5 w-3.5" : "h-4 w-4";
+  if (!image || !url || failed) {
+    const Icon = image ? FileIcon : Paperclip;
+    return <Icon className={cn(size, "shrink-0 text-neutral-400")} />;
+  }
+  return (
+    <img
+      src={url}
+      alt={name}
+      loading="lazy"
+      draggable={false}
+      className={cn(size, "shrink-0 rounded object-cover ring-1 ring-inset ring-black/10")}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+/** 附件胶囊：缩略图 + 文件名，点击用系统默认程序打开（路径越权校验在 Rust 侧） */
 export function AttachmentChip({ name, path, compact = false }: { name: string; path: string; compact?: boolean }) {
   const [busy, setBusy] = useState(false);
   const open = async () => {
@@ -873,7 +975,7 @@ export function AttachmentChip({ name, path, compact = false }: { name: string; 
         void open();
       }}
     >
-      <Paperclip className="h-3 w-3 shrink-0 text-neutral-400" />
+      <AttachmentThumb name={name} path={path} small />
       <span className="truncate">{name}</span>
     </button>
   );

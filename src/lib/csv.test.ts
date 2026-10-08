@@ -6,6 +6,7 @@ import {
   inferFieldType,
   parseCsv,
   planImport,
+  resolveAttachmentNames,
   resolveSelectRefs,
   toCsv,
 } from "./csv";
@@ -185,6 +186,44 @@ describe("resolveSelectRefs / 选择类导出", () => {
     );
     // 失效 id（x9）原样保留，避免静默丢数据；空单元格导出为空串而不是 "null"
     expect(out).toBe("类别,标签\r\n蔬菜,水果; x9\r\n,\r\n");
+  });
+});
+
+describe("resolveAttachmentNames", () => {
+  const files: Record<string, string> = {
+    "合同.pdf": "C:/docs/合同.pdf",
+    "photo.png": "C:/docs/PHOTO.PNG",
+  };
+
+  it("按分号/竖线分隔并保留原始文件名", () => {
+    expect(resolveAttachmentNames("合同.pdf; photo.png | 报价.xlsx", files)).toEqual({
+      matched: [
+        { name: "合同.pdf", sourcePath: "C:/docs/合同.pdf" },
+        { name: "photo.png", sourcePath: "C:/docs/PHOTO.PNG" },
+      ],
+      missing: ["报价.xlsx"],
+    });
+  });
+
+  it("大小写不敏感匹配", () => {
+    expect(resolveAttachmentNames("PHOTO.png", files)).toEqual({
+      matched: [{ name: "PHOTO.png", sourcePath: "C:/docs/PHOTO.PNG" }],
+      missing: [],
+    });
+    expect(resolveAttachmentNames("hoto", files)).toEqual({ matched: [], missing: ["hoto"] });
+  });
+
+  it("未匹配进 missing，空串返回空", () => {
+    expect(resolveAttachmentNames("", files)).toEqual({ matched: [], missing: [] });
+    expect(resolveAttachmentNames("   ", files)).toEqual({ matched: [], missing: [] });
+    expect(resolveAttachmentNames("a;; |b", files)).toEqual({ matched: [], missing: ["a", "b"] });
+  });
+
+  it("同一个文件重复出现只算一次（保留首次写法）", () => {
+    expect(resolveAttachmentNames("合同.pdf; 合同.pdf|合同.PDF", files)).toEqual({
+      matched: [{ name: "合同.pdf", sourcePath: "C:/docs/合同.pdf" }],
+      missing: [],
+    });
   });
 });
 
