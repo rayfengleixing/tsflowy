@@ -30,6 +30,23 @@ export default defineConfig(async () => ({
     },
   },
 
+  // 依赖分包：把 React / Radix / 图标 / 状态库拆成独立 chunk，
+  // 主包更小、冷启动可并行解析，升级依赖时缓存命中率也更高（业务代码改动不再让 vendor 失效）。
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("react-dom") || id.includes("/react/") || id.includes("scheduler")) return "react";
+          if (id.includes("@radix-ui") || id.includes("radix-ui")) return "radix";
+          if (id.includes("lucide-react")) return "icons";
+          if (id.includes("zustand")) return "state";
+          return undefined;
+        },
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
