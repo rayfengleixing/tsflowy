@@ -14,6 +14,7 @@ pub mod backup;
 pub mod config;
 pub mod data_dir;
 pub mod health;
+pub mod secret;
 
 // —— 配置读写（config.json）——
 pub use config::{

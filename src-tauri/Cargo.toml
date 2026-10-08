@@ -1,6 +1,6 @@
 [package]
 name = "tsflowy"
-version = "0.8.18"
+version = "0.8.19"
 description = "TsFlowy - 本地优先的笔记与知识管理应用"
 authors = ["you"]
 edition = "2021"
@@ -45,6 +45,11 @@ tauri-plugin-single-instance = "2.4.5"
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+
+# Windows 凭据管理器：把 AI 的 API Key 从 config.json 明文迁移到系统凭据库。
+# 仅 Windows 目标引入（其它平台 secret 模块走"不可用"分支，保持跨平台可编译）。
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 # Release 构建优化：减小二进制体积并提升运行性能
 # · lto + codegen-units=1：跨 crate 内联与死代码消除

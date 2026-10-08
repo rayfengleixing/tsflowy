@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { LANGUAGES, type LangCode } from "@/lib/i18n/languages";
 
 export type ThemeMode = "light" | "dark" | "system";
 export type AccentColor = "blue" | "green" | "orange" | "purple" | "red" | "yellow" | "slate" | "rose";
@@ -69,7 +70,7 @@ function loadEditorWidth(): EditorWidth {
 }
 
 interface SettingsState {
-  lang: "zh-CN" | "en-US";
+  lang: LangCode;
   theme: ThemeMode;
   themePreset: ThemePresetId;
   accent: AccentColor;
@@ -78,7 +79,7 @@ interface SettingsState {
   lineHeight: LineHeight;
   editorWidth: EditorWidth;
 
-  setLang: (lang: "zh-CN" | "en-US") => void;
+  setLang: (lang: LangCode) => void;
   setTheme: (t: ThemeMode) => void;
   setThemePreset: (p: ThemePresetId) => void;
   setAccent: (a: AccentColor) => void;
@@ -526,12 +527,10 @@ const LANG_KEY = "tsflowy-lang";
 const THEME_KEY = "tsflowy-theme";
 const FONT_KEY = "tsflowy-font";
 
-type Lang = "zh-CN" | "en-US";
-
-function loadLang(): Lang {
+function loadLang(): LangCode {
   try {
     const v = localStorage.getItem(LANG_KEY);
-    return v === "zh-CN" || v === "en-US" ? v : "zh-CN";
+    return LANGUAGES.some((l) => l.code === v) ? (v as LangCode) : "zh-CN";
   } catch {
     return "zh-CN";
   }
@@ -556,7 +555,7 @@ function loadFont(): FontFamily {
 }
 
 /** 同步 <html lang>（无障碍 / 断行规则）；文案切换的重渲染由 App 订阅 lang 触发 */
-export function applyLangToDocument(lang: Lang) {
+export function applyLangToDocument(lang: LangCode) {
   document.documentElement.lang = lang;
 }
 

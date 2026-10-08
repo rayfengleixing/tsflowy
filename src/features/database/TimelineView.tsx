@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { patchViewConfig, readViewConfig } from "@/lib/view-config";
+import { DAY_MS, autoScale, buildAxis, parseDateKey, type Scale, type ScaleMode } from "@/lib/timeline";
 import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
 import { RowDetailPanel } from "./RowDetail";
 import type { DatabaseRow } from "@/types/database";
@@ -17,54 +18,7 @@ import type { View } from "@/types/models";
 // 开始日期字段决定落点；再选一个结束日期字段则画成横跨的条，否则只画点。
 // 「本视图用哪个日期字段」这类配置写在 views.extra（view-config 的 timelineStartFieldId /
 // timelineEndFieldId），与日历的 calendarFieldId 同一套机制。
-
-type Scale = "day" | "week" | "month";
-type ScaleMode = "auto" | Scale;
-
-const DAY_MS = 86_400_000;
-/** 轴刻度上限：极端数据（如跨数十年 + 日粒度）下兜底，避免渲染爆炸 */
-const MAX_TICKS = 600;
-
-function pad(n: number): string {
-  return String(n).padStart(2, "0");
-}
-
-/** "YYYY-MM-DD" → 本地零点时间戳；非法返回 null（按本地时区构造，避开 Date.parse 的时区歧义） */
-function parseDateKey(key: string): number | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(key);
-  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime() : null;
-}
-
-/** 把时间戳下取整到刻度边界（日/周一起/月初） */
-function floorToScale(ms: number, scale: Scale): number {
-  const d = new Date(ms);
-  if (scale === "month") return new Date(d.getFullYear(), d.getMonth(), 1).getTime();
-  if (scale === "week") {
-    const back = (d.getDay() + 6) % 7;
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate() - back).getTime();
-  }
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-}
-
-/** 推进一个刻度单位 */
-function addUnit(scale: Scale, ms: number): number {
-  const d = new Date(ms);
-  if (scale === "month") return new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
-  if (scale === "week") return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7).getTime();
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
-}
-
-function tickLabel(scale: Scale, ms: number): string {
-  const d = new Date(ms);
-  return scale === "month" ? `${d.getFullYear()}/${pad(d.getMonth() + 1)}` : `${d.getMonth() + 1}/${d.getDate()}`;
-}
-
-/** 自动分档：跨度小时日，大时周/月（粗粒度） */
-function autoScale(spanDays: number): Scale {
-  if (spanDays <= 21) return "day";
-  if (spanDays <= 120) return "week";
-  return "month";
-}
+// 日期/刻度纯逻辑见 @/lib/timeline（可单测）。
 
 /** Timeline 时间线视图：横向时间轴（只读，v1 不做拖拽改期） */
 export function TimelineView({
@@ -168,18 +122,7 @@ export function TimelineView({
 
   const axis = useMemo(() => {
     if (!range) return null;
-    const domainStart = floorToScale(range.min, scale);
-    const domainEnd = addUnit(scale, floorToScale(range.max, scale));
-    const span = domainEnd - domainStart || DAY_MS;
-    const ticks: { pct: number; label: string }[] = [];
-    let t0 = domainStart;
-    let guard = 0;
-    while (t0 <= domainEnd && guard < MAX_TICKS) {
-      ticks.push({ pct: ((t0 - domainStart) / span) * 100, label: tickLabel(scale, t0) });
-      t0 = addUnit(scale, t0);
-      guard++;
-    }
-    return { domainStart, span, ticks };
+    return buildAxis(range, scale);
   }, [range, scale]);
 
   const { scrollerRef, focusRowId } = useRowFocus(axis ? `${scale}:${axis.domainStart}:${axis.span}` : "empty");

@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 
-use super::files::{self, AiConfig};
+use super::files::{self, secret, AiConfig};
 
 /// 流式请求的「世代」计数：ai_cancel 自增后，正在跑的 ai_chat 会发现自己记录的世代已过期而中断。
 static AI_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -76,7 +76,9 @@ pub struct AiConfigInput {
 /// 读取 AI 配置（掩码返回，不泄露 key）
 #[tauri::command]
 pub fn ai_get_config(app: tauri::AppHandle) -> Result<AiConfigPublic, String> {
-    Ok(public_of(&files::load_app_config(&app)))
+    let cfg = files::load_app_config(&app);
+    let key = effective_api_key(&app);
+    Ok(public_of(&cfg, &key))
 }
 
 /// 保存 AI 配置
@@ -89,9 +91,21 @@ pub fn ai_save_config(app: tauri::AppHandle, cfg: AiConfigInput) -> Result<(), S
     ai.base_url = cfg.base_url;
     ai.model = cfg.model;
     ai.max_chars = cfg.max_chars;
-    // None 保持原值不变；Some("") 清空；Some(s) 覆盖
-    if let Some(key) = cfg.api_key {
-        ai.api_key = key;
+    // None 保持原值不变；Some("") 清空；Some(s) 覆盖。
+    // 非空 key 优先写入系统凭据库：成功则 config.json 不留明文；失败则回退明文，保证可用。
+    match cfg.api_key {
+        None => {}
+        Some(key) if key.trim().is_empty() => {
+            secret::delete_key();
+            ai.api_key = String::new();
+        }
+        Some(key) => {
+            if secret::store_key(&key) {
+                ai.api_key = String::new();
+            } else {
+                ai.api_key = key;
+            }
+        }
     }
     app_cfg.ai = Some(ai);
     files::save_app_config(&app, &app_cfg)
@@ -248,8 +262,9 @@ fn cancelled(generation: u64) -> bool {
     AI_GENERATION.load(Ordering::SeqCst) != generation
 }
 
-/// 从 AppConfig 构造回传前端的掩码视图
-fn public_of(cfg: &files::AppConfig) -> AiConfigPublic {
+/// 从 AppConfig 构造回传前端的掩码视图；key 相关字段基于「生效 key」计算
+/// （生效 key = 系统凭据库优先，回退 config.json 明文）。
+fn public_of(cfg: &files::AppConfig, effective_key: &str) -> AiConfigPublic {
     let ai = cfg.ai.clone().unwrap_or_default();
     AiConfigPublic {
         enabled: ai.enabled,
@@ -257,8 +272,8 @@ fn public_of(cfg: &files::AppConfig) -> AiConfigPublic {
         base_url: ai.base_url,
         model: ai.model,
         max_chars: ai.max_chars,
-        has_api_key: !ai.api_key.is_empty(),
-        api_key_masked: mask_api_key(&ai.api_key),
+        has_api_key: !effective_key.is_empty(),
+        api_key_masked: mask_api_key(effective_key),
     }
 }
 
@@ -397,9 +412,38 @@ fn parse_completion_text(body: &str) -> Result<String, String> {
     }
 }
 
+/// 取「生效 key」：系统凭据库优先；为空则回退 config.json 明文，
+/// 并在读到时尝试一次性迁移（写入凭据库成功后清空 config.json 明文；失败则保持明文回退）。
+fn effective_api_key(app: &tauri::AppHandle) -> String {
+    if let Some(key) = secret::load_key().filter(|k| !k.trim().is_empty()) {
+        return key;
+    }
+    let mut app_cfg = files::load_app_config(app);
+    let plain = app_cfg
+        .ai
+        .as_ref()
+        .map(|a| a.api_key.clone())
+        .unwrap_or_default();
+    if plain.trim().is_empty() {
+        return String::new();
+    }
+    // 迁移：明文写入凭据库成功后，把 config.json 的明文清空并写回（一次性）
+    if secret::store_key(&plain) {
+        if let Some(ai) = app_cfg.ai.as_mut() {
+            ai.api_key = String::new();
+        }
+        match files::save_app_config(app, &app_cfg) {
+            Ok(()) => tracing::info!("api key migrated out of config.json"),
+            Err(e) => tracing::warn!("clear plaintext api key in config failed: {e}"),
+        }
+    }
+    plain
+}
+
 /// 读配置并校验：base_url / api_key 为空时返回统一错误
 fn effective_ai(app: &tauri::AppHandle) -> Result<AiConfig, String> {
-    let ai = files::load_app_config(app).ai.unwrap_or_default();
+    let mut ai = files::load_app_config(app).ai.unwrap_or_default();
+    ai.api_key = effective_api_key(app);
     if ai.base_url.trim().is_empty() || ai.api_key.trim().is_empty() {
         return Err(NOT_CONFIGURED.to_string());
     }

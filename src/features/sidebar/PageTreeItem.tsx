@@ -117,6 +117,7 @@ export function PageTreeItem({ node, depth, draggingId, dropHint, onRowMouseDown
           {hasChildren ? (
             <button
               className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-neutral-500 hover:bg-neutral-300"
+              aria-label={isExpanded ? t("tree.collapse") : t("tree.expand")}
               onClick={(e) => {
                 e.stopPropagation();
                 toggleExpand(node.id);
@@ -160,6 +161,7 @@ export function PageTreeItem({ node, depth, draggingId, dropHint, onRowMouseDown
                 <button
                   data-testid="row-menu"
                   className="flex h-5 w-5 items-center justify-center rounded text-neutral-500 hover:bg-neutral-300"
+                  aria-label={t("common.moreActions")}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <MoreHorizontal className="h-3.5 w-3.5" />

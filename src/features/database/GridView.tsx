@@ -4,7 +4,6 @@ import {
   CheckSquare,
   Copy,
   Download,
-  ExternalLink,
   FileUp,
   Filter,
   GripVertical,
@@ -47,10 +46,10 @@ import { FieldOptionsEditor } from "./FieldOptionsEditor";
 import { FilterBar } from "./FilterBar";
 import { SortBar } from "./SortBar";
 import { AggregateMenu } from "./AggregateMenu";
-import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
-import { CellEditorSlot } from "./editors";
+import { useRowFocus } from "./rowFocus";
 import { RowDetailPanel } from "./RowDetail";
-import { AddFieldButton, CellDisplay, HiddenColumnsMenu, RenameInput, needsFieldSettings } from "./grid-parts";
+import { AddFieldButton, HiddenColumnsMenu, RenameInput, needsFieldSettings } from "./grid-parts";
+import { renderGridRow, type GridRowContext } from "./grid-row";
 import { GridAddRow, GridGroupHeaderRow, GridSpacerRow, GridSubtotalRow } from "./grid-rows";
 import {
   ROW_H_FALLBACK,
@@ -60,6 +59,7 @@ import {
   clampColumnWidth,
   computeEvaluatedCells,
   computeVirtualWindow,
+  mapWithConcurrency,
   rowCenterScrollTop,
 } from "./grid-view-helpers";
 import { Button } from "@/components/ui/button";
@@ -70,19 +70,6 @@ import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { patchViewConfig, readViewConfig } from "@/lib/view-config";
 import type { View } from "@/types/models";
-
-/** 有并发上限的异步遍历：附件列复制时避免 N 行 × M 个附件同时发起 save_asset 打爆磁盘 I/O */
-async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
-  if (items.length === 0) return;
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (cursor < items.length) {
-      const item = items[cursor++];
-      await fn(item);
-    }
-  });
-  await Promise.all(workers);
-}
 
 /** Grid 数据库视图（说明书 10-M4）：表头 32px / 行 32px / 单元格聚焦蓝框（6.6 节） */
 export function GridView({
@@ -100,7 +87,7 @@ export function GridView({
   const store = useDbStore();
   const storeApi = useDbStoreApi();
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
-  const { openRowDetail, closeRowDetail } = store;
+  const { closeRowDetail } = store;
 
   const [editing, setEditing] = useState<{ rowId: string; fieldId: string } | null>(null);
   const [renamingField, setRenamingField] = useState<string | null>(null);
@@ -772,161 +759,29 @@ export function GridView({
   };
 
   // 单行渲染：不分组时顺序铺开，分组时按组铺开（组内顺序沿用当前视图排序）
-  const renderRow = (row: DatabaseRow) => (
-    <tr
-      key={row.id}
-      data-row-id={row.id}
-      draggable
-      onDragStart={() => setDraggingRow(row.id)}
-      onDragEnd={() => setDraggingRow(null)}
-      onDragOver={(e) => {
-        if (draggingRow && draggingRow !== row.id) e.preventDefault();
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        onRowDrop(row.id);
-      }}
-      className={cn(
-        "group/row hover:bg-neutral-100 dark:hover:bg-neutral-800/60",
-        draggingRow === row.id && "opacity-40",
-        checkedRows.has(row.id) && "bg-brand-50/70 dark:bg-brand-500/10",
-        focusRowId === row.id && ROW_FOCUS_CLASS,
-      )}
-    >
-      <td className="sticky left-0 z-[5] border-b border-r border-neutral-200 bg-white px-2 text-center text-[11px] text-neutral-400 group-hover/row:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-500 dark:group-hover/row:bg-neutral-800/60">
-        <span className="flex items-center justify-center gap-1">
-          {/* icon 区域固定 16px 宽：消除 GripVertical(12px) → Square/CheckSquare(16px) 的占位跳动 */}
-          <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-            {checkedRows.has(row.id) ? (
-              <button
-                className="flex h-4 w-4 items-center justify-center rounded text-brand-600 hover:bg-brand-100 dark:hover:bg-brand-500/10"
-                title={t("row.select")}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleRowChecked(row.id);
-                }}
-              >
-                <CheckSquare className="h-3.5 w-3.5" />
-              </button>
-            ) : (
-              <>
-                <button
-                  className="hidden h-4 w-4 items-center justify-center rounded text-neutral-300 hover:text-brand-600 group-hover/row:flex dark:text-neutral-600"
-                  title={t("row.select")}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleRowChecked(row.id);
-                  }}
-                >
-                  <Square className="h-3 w-3" />
-                </button>
-                <GripVertical className="h-3 w-3 cursor-grab text-neutral-200 group-hover/row:hidden dark:text-neutral-700" />
-              </>
-            )}
-          </span>
-          {/* 序号等宽数字 + 固定宽度：防止 1(窄) vs 0/2-9(宽) 及位数变化导致的列宽抖动 */}
-          <span className="tabular-nums w-5 shrink-0 text-center">{row.position + 1}</span>
-        </span>
-        <button
-          className="absolute right-0.5 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-neutral-400 hover:bg-red-100 hover:text-red-500 group-hover/row:flex dark:hover:bg-red-500/10"
-          title={t("row.delete")}
-          onClick={() => setDeleteRowTarget(row)}
-        >
-          <Trash2 className="h-3 w-3" />
-        </button>
-      </td>
-      {visibleFields.map((field) => {
-        const isPrimary = field.id === primaryField?.id;
-        const isEditing = editing?.rowId === row.id && editing.fieldId === field.id;
-        // 公式/汇总/反向关系字段无存储值：渲染时按表达式/关联行/来源行实时计算
-        const value =
-          field.field_type === "formula"
-            ? computeFormula(field, cells[row.id] ?? {}, fields)
-            : field.field_type === "rollup"
-              ? computeRollup(field, cells[row.id] ?? {}, fields, relationDbOf)
-              : field.field_type === "reverse_relation"
-                ? computeReverseRelation(row.id, field, relationDbOf)
-                : // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
-                  (cells[row.id]?.[field.id] ?? null);
-        return (
-          <td
-            key={field.id}
-            data-cell-row={row.id}
-            data-cell-field={field.id}
-            tabIndex={-1}
-            className={cn(
-              "relative h-8 border-b border-r border-neutral-200 p-0 align-middle outline-none dark:border-neutral-700",
-              isEditing && "z-10 ring-1 ring-inset ring-brand-500 dark:ring-brand-500",
-              !isEditing && "focus:z-10 focus:ring-1 focus:ring-inset focus:ring-brand-500",
-              // 冻结主列：跟随序号列（44px）右侧
-              isPrimary && "sticky left-[44px] z-[5] bg-white dark:bg-neutral-900",
-              isPrimary && "cursor-pointer",
-            )}
-            onClick={() => {
-              if (isPrimary) {
-                // 名称列：单击编辑值（编辑框后的"打开"图标/双击打开所属页面）
-                setCursor({ rowId: row.id, fieldId: field.id });
-                setEditing({ rowId: row.id, fieldId: field.id });
-                pasteAnchorRef.current = { rowId: row.id, fieldId: field.id };
-                return;
-              }
-              // TSV 粘贴锚点与键盘光标：任何可编辑格都记录
-              if (!isReadonlyType(field.field_type)) pasteAnchorRef.current = { rowId: row.id, fieldId: field.id };
-              if (isReadonlyType(field.field_type) || isEditing) return;
-              setCursor({ rowId: row.id, fieldId: field.id });
-              if (field.field_type === "checkbox") {
-                // 复选框：单击直接切换勾选
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
-                void commitCell(row.id, field.id, cells[row.id]?.[field.id] !== true);
-                return;
-              }
-              setEditing({ rowId: row.id, fieldId: field.id });
-            }}
-          >
-            {isEditing ? (
-              <div className="flex h-full items-center pr-1">
-                <div className="min-w-0 flex-1">
-                  <CellEditorSlot
-                    field={field}
-                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
-                    value={cells[row.id]?.[field.id] ?? null}
-                    onCommit={(v) => void commitCell(row.id, field.id, v)}
-                    onCancel={() => setEditing(null)}
-                    onAddOption={(name) => store.addSelectOption(field.id, name)}
-                    onDeleteOption={(optId) => void store.removeSelectOption(field.id, optId)}
-                  />
-                </div>
-                {isPrimary && (
-                  <button
-                    type="button"
-                    className="ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-brand-600"
-                    title={t("row.openDetail")}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditing(null);
-                      void openRowDetail(row, source);
-                    }}
-                  >
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </div>
-            ) : (
-              <CellDisplay
-                field={field}
-                value={value}
-                primary={isPrimary}
-                onChipRemove={(newVal) => void store.setCell(row.id, field.id, newVal)}
-                onOpenRowDetail={() => void openRowDetail(row, source)}
-              />
-            )}
-          </td>
-        );
-      })}
-      <td className="border-b border-neutral-200 dark:border-neutral-700" />
-    </tr>
-  );
+  // 行内容搬到 grid-row.tsx（普通函数而非组件，调用方式与行为与原内联 renderRow 一致）
+  const rowCtx: GridRowContext = {
+    store,
+    source,
+    visibleFields,
+    primaryField,
+    editing,
+    cells,
+    fields,
+    relationDbOf,
+    checkedRows,
+    focusRowId,
+    draggingRow,
+    setDraggingRow,
+    onRowDrop,
+    toggleRowChecked,
+    setDeleteRowTarget,
+    commitCell,
+    setCursor,
+    setEditing,
+    pasteAnchorRef,
+  };
+  const renderRow = (row: DatabaseRow) => renderGridRow(row, rowCtx);
 
   const toggleGroup = (key: string) => {
     const next = new Set(collapsedGroups);

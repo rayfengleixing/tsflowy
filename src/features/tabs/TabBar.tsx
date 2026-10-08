@@ -123,6 +123,7 @@ export function TabBar() {
                 <button
                   data-testid="tab-close"
                   className="hidden h-4 w-4 shrink-0 items-center justify-center rounded text-neutral-500 hover:bg-neutral-300 group-hover:flex"
+                  aria-label={t("tabs.close")}
                   onClick={(e) => {
                     e.stopPropagation();
                     closeTab(v.id);
