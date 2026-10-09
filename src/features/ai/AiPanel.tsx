@@ -22,7 +22,7 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { viewIcon } from "@/components/view-icon";
-import { useAiStore, type AiMessage } from "@/stores/ai";
+import { useAiStore, type AiEditRecord, type AiMessage } from "@/stores/ai";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { aiErrorText } from "@/lib/ai";
 import { getAiEditor } from "@/lib/ai-editor";
@@ -30,6 +30,7 @@ import { detectMentionQuery } from "@/lib/ai-mention";
 import { flattenTree } from "@/lib/tree";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { EditDiffDialog } from "./EditDiffDialog";
 import { Markdown } from "./Markdown";
 
 /** AI 助手右侧面板（约 360px、可折叠、可拖拽调宽） */
@@ -55,9 +56,13 @@ export function AiPanel() {
   const newChat = useAiStore((s) => s.newChat);
   const switchSession = useAiStore((s) => s.switchSession);
   const deleteSession = useAiStore((s) => s.deleteSession);
+  const applyPendingEdit = useAiStore((s) => s.applyPendingEdit);
+  const rejectPendingEdit = useAiStore((s) => s.rejectPendingEdit);
   const setRoute = useWorkspaceStore((s) => s.setRoute);
 
   const [input, setInput] = useState("");
+  // 正在查看的改动对比（AI 建议的编辑指令 + 所属消息，便于弹窗内直接「应用」）
+  const [diff, setDiff] = useState<{ id: string; record: AiEditRecord } | null>(null);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [mentionActive, setMentionActive] = useState(0);
   const [showHistory, setShowHistory] = useState(false);
@@ -307,15 +312,21 @@ export function AiPanel() {
         <>
           <div ref={listRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
             {messages.length === 0 && <p className="mt-6 text-center text-[12px] text-neutral-400">{t("ai.empty")}</p>}
-            {messages.map((m) => (
-              <MessageBubble
-                key={m.id}
-                message={m}
-                onReplace={m.role === "assistant" ? () => writeBack(m.content, "replace") : undefined}
-                onInsert={m.role === "assistant" ? () => writeBack(m.content, "insert") : undefined}
-                onUndo={m.edit ? () => undoEdit(m.id) : undefined}
-              />
-            ))}
+            {messages.map((m) => {
+              const rec = m.edit;
+              return (
+                <MessageBubble
+                  key={m.id}
+                  message={m}
+                  onReplace={m.role === "assistant" ? () => writeBack(m.content, "replace") : undefined}
+                  onInsert={m.role === "assistant" ? () => writeBack(m.content, "insert") : undefined}
+                  onUndo={rec ? () => undoEdit(m.id) : undefined}
+                  onApply={rec?.state === "pending" ? () => applyPendingEdit(m.id) : undefined}
+                  onReject={rec?.state === "pending" ? () => rejectPendingEdit(m.id) : undefined}
+                  onViewDiff={rec && rec.state !== "malformed" ? () => setDiff({ id: m.id, record: rec }) : undefined}
+                />
+              );
+            })}
             {/* 推理型模型（deepseek-flash / deepseek-reasoner 等）的思考过程：仅展示，不参与回填 */}
             {streaming && reasoning && (
               <div className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-[11px] text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800/50 dark:text-neutral-400">
@@ -417,6 +428,14 @@ export function AiPanel() {
           </div>
         </>
       )}
+      <EditDiffDialog
+        record={diff?.record ?? null}
+        open={!!diff}
+        onOpenChange={(v) => {
+          if (!v) setDiff(null);
+        }}
+        onApply={diff ? () => applyPendingEdit(diff.id) : undefined}
+      />
     </div>
   );
 }
@@ -426,11 +445,17 @@ function MessageBubble({
   onReplace,
   onInsert,
   onUndo,
+  onApply,
+  onReject,
+  onViewDiff,
 }: {
   message: AiMessage;
   onReplace?: () => void;
   onInsert?: () => void;
   onUndo?: () => void;
+  onApply?: () => void;
+  onReject?: () => void;
+  onViewDiff?: () => void;
 }) {
   const isUser = message.role === "user";
   const edit = message.edit;
@@ -450,38 +475,49 @@ function MessageBubble({
             className="max-w-[85%] rounded-lg bg-neutral-100 px-2.5 py-1.5 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200"
           />
         ))}
-      {/* AI 自主修改的落地结果：已写入 / 未写入 + 撤销 */}
+      {/* AI 自主修改的落地结果：待确认 / 已写入 / 未写入 / 已忽略 / 指令有误，附查看改动与撤销 */}
       {edit && (
-        <div
-          className={cn(
-            "mt-1.5 flex max-w-[85%] items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]",
-            edit.malformed
-              ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
-              : edit.applied
+        <div className="mt-1.5 max-w-[85%]">
+          <div
+            className={cn(
+              "flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]",
+              edit.state === "applied"
                 ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
-                : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
-          )}
-        >
-          {edit.applied && !edit.malformed ? (
-            <Check className="h-3 w-3 shrink-0" />
-          ) : (
-            <TriangleAlert className="h-3 w-3 shrink-0" />
-          )}
-          <span className="min-w-0 flex-1 truncate">
-            {edit.malformed
-              ? t("ai.editMalformed")
-              : edit.applied
+                : edit.state === "pending"
+                  ? "border-brand-400 bg-brand-50 text-brand-700 dark:border-brand-500 dark:bg-neutral-800 dark:text-neutral-200"
+                  : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
+            )}
+          >
+            {edit.state === "applied" ? (
+              <Check className="h-3 w-3 shrink-0" />
+            ) : edit.state === "pending" ? (
+              <Sparkles className="h-3 w-3 shrink-0" />
+            ) : (
+              <TriangleAlert className="h-3 w-3 shrink-0" />
+            )}
+            <span className="min-w-0 flex-1 truncate">
+              {edit.state === "applied"
                 ? edit.undone
                   ? t("ai.editUndone")
                   : t("ai.editApplied")
-                : t("ai.editNotApplied")}
-            {edit.summary && !edit.undone && !edit.malformed ? `：${edit.summary}` : ""}
-          </span>
-          {edit.applied && !edit.undone && onUndo && (
-            <button className="shrink-0 underline hover:no-underline" onClick={onUndo}>
-              {t("ai.undoEdit")}
-            </button>
-          )}
+                : edit.state === "pending"
+                  ? t("ai.editPending")
+                  : edit.state === "rejected"
+                    ? t("ai.editRejected")
+                    : edit.state === "malformed"
+                      ? t("ai.editMalformed")
+                      : t("ai.editNotApplied")}
+              {edit.summary && !edit.undone && edit.state !== "malformed" ? `：${edit.summary}` : ""}
+            </span>
+          </div>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {onViewDiff && <MiniButton label={t("ai.viewDiff")} onClick={onViewDiff} />}
+            {edit.state === "pending" && onApply && <MiniButton label={t("ai.applyEdit")} onClick={onApply} />}
+            {edit.state === "pending" && onReject && <MiniButton label={t("ai.rejectEdit")} onClick={onReject} />}
+            {edit.state === "applied" && !edit.undone && onUndo && (
+              <MiniButton label={t("ai.undoEdit")} onClick={onUndo} />
+            )}
+          </div>
         </div>
       )}
       {!isUser && bubbleText.trim() && (onReplace ?? onInsert) && (
@@ -509,6 +545,18 @@ function MessageBubble({
         </div>
       )}
     </div>
+  );
+}
+
+/** 消息卡片下方的小号操作按钮（查看改动 / 应用 / 忽略 / 撤销） */
+function MiniButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      className="rounded-md border border-neutral-200 px-1.5 py-0.5 text-[11px] text-neutral-600 hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+      onClick={onClick}
+    >
+      {label}
+    </button>
   );
 }
 

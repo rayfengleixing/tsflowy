@@ -129,6 +129,7 @@ export function SettingsPage() {
     baseUrl: "",
     model: "",
     maxChars: 8000,
+    confirmEdit: false,
   });
   const [aiApiKey, setAiApiKey] = useState("");
   const [busyAiTest, setBusyAiTest] = useState(false);
@@ -475,6 +476,7 @@ export function SettingsPage() {
       baseUrl: c.base_url,
       model: c.model,
       maxChars: c.max_chars,
+      confirmEdit: c.confirm_edit,
     });
   };
 
@@ -488,6 +490,7 @@ export function SettingsPage() {
       baseUrl: next.baseUrl,
       model: next.model,
       maxChars: next.maxChars,
+      confirmEdit: next.confirmEdit,
       apiKey: apiKey.trim() === "" ? null : apiKey,
     });
     const c = await aiGetConfig();
@@ -1187,6 +1190,15 @@ export function SettingsPage() {
               className="h-7 w-28 rounded-md border border-neutral-300 bg-white px-2 text-[12px] text-neutral-800 outline-none focus:border-brand-500"
             />
           </Row>
+          <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">
+            <input
+              type="checkbox"
+              checked={aiForm.confirmEdit}
+              onChange={(e) => saveAi({ confirmEdit: e.target.checked })}
+            />
+            {t("settings.aiConfirmEdit")}
+          </label>
+          <p className="-mt-2 text-[11px] text-neutral-500">{t("settings.aiConfirmEditDesc")}</p>
           <Row label="">
             <Button size="sm" variant="outline" onClick={testAi} disabled={busyAiTest}>
               {busyAiTest ? (

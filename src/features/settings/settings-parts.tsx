@@ -115,6 +115,8 @@ export interface AiFormState {
   baseUrl: string;
   model: string;
   maxChars: number;
+  /** AI 自主修改文档前先弹 diff 确认 */
+  confirmEdit: boolean;
 }
 
 /** AI 服务商预设 → i18n 文案 */

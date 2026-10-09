@@ -710,6 +710,15 @@ export const en: Record<MessageKey, string> = {
   "ai.undoFailed":
     "Cannot undo precisely: the document was edited manually after the AI change. Use Ctrl+Z to roll back yourself.",
   "ai.editMalformed": "The AI returned a malformed edit instruction; the document was not changed. You can retry.",
+  "ai.editPending": "Pending: the AI suggests a document change",
+  "ai.editRejected": "Change suggestion discarded",
+  "ai.viewDiff": "View diff",
+  "ai.applyEdit": "Apply",
+  "ai.rejectEdit": "Discard",
+  "ai.diffTitle": "Change diff",
+  "ai.diffBefore": "Before",
+  "ai.diffAfter": "After",
+  "ai.diffNoBefore": "(new content, nothing replaced)",
   "ai.noEditor": "No editor available",
   "ai.close": "Collapse panel",
   "ai.retry": "Retry",
@@ -765,6 +774,9 @@ export const en: Record<MessageKey, string> = {
   "settings.aiSaved": "AI assistant settings saved",
   "settings.aiSaveFailed": "Save failed: {message}",
   "settings.aiPrivacy": "Conversations are sent to the provider you configure.",
+  "settings.aiConfirmEdit": "Ask me before changing the document",
+  "settings.aiConfirmEditDesc":
+    "When enabled, AI document changes are shown as a before/after diff for you to confirm before they are written.",
   // — CSV import options dialog —
   "csv.importOptionsTitle": "Confirm field types",
   "csv.importOptionsDesc": "Choose a type for each column. Attachment columns need a folder, matched by file name.",

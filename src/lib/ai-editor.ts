@@ -30,6 +30,11 @@ export interface AiEditorBridge {
   getPageTitle: () => string;
   /** 当前选区纯文本；未选中返回空串 */
   getSelectionText: () => string;
+  /**
+   * 某类编辑指令即将改动的原文（用于落地前的 diff 预览）。
+   * replace_selection 返回选区文本；插入/追加类没有原文，返回空串。
+   */
+  getEditTargetText: (op: AiEditOp) => string;
   /** 用文本替换当前选区（无选区时等价于在光标处插入） */
   replaceSelection: (text: string) => void;
   /** 在光标处插入文本 */

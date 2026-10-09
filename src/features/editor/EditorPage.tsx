@@ -524,6 +524,12 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         const { from, to } = editor.state.selection;
         return from === to ? "" : editor.state.doc.textBetween(from, to, "\n");
       },
+      // diff 预览的「原文」：只有替换选区类指令有被覆盖的原文，插入/追加类没有
+      getEditTargetText: (op) => {
+        if (editor.isDestroyed || op !== "replace_selection") return "";
+        const { from, to } = editor.state.selection;
+        return from === to ? "" : editor.state.doc.textBetween(from, to, "\n");
+      },
       replaceSelection: (text) => {
         if (editor.isDestroyed) return;
         const slice = toSlice(text);

@@ -30,24 +30,34 @@ import { t, type MessageKey } from "@/lib/i18n";
 // AI 助手面板状态：开关/宽度（localStorage 偏好）、消息列表、流式状态、
 // 配置缓存与 send / stop / clear / retry / quickAction / undoEdit 动作。
 
+/**
+ * 编辑指令的落地状态：
+ * pending 待用户确认 / applied 已写入 / rejected 已忽略 /
+ * unavailable 没有可编辑文档或事务被结构锁定拦下 / malformed 指令块解析失败
+ */
+export type AiEditState = "pending" | "applied" | "rejected" | "unavailable" | "malformed";
+
+/** 一条回复附带的文档编辑指令及其落地情况 */
+export interface AiEditRecord {
+  /** op 为 null 表示指令块解析失败（malformed） */
+  op: AiEditOp | null;
+  summary: string;
+  /** 建议写入的 Markdown 内容 */
+  content: string;
+  /** 将被替换的原文（插入/追加类为空），用于落地前的 diff 预览 */
+  before: string;
+  state: AiEditState;
+  undone?: boolean;
+  /** 撤销句柄（含改前快照），仅当前编辑器实例内有效，不参与持久化 */
+  revert?: AiEditRevert;
+}
+
 export interface AiMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  /**
-   * 本条回复下发的文档编辑指令及其落地结果（用于展示与撤销）。
-   * op 为 null 表示模型给了指令块但没能解析（malformed），此时没有落地动作。
-   */
-  edit?: {
-    op: AiEditOp | null;
-    summary: string;
-    applied: boolean;
-    undone?: boolean;
-    /** 指令块存在但 JSON/字段不合法：提示用户重试，不要展示裸 JSON */
-    malformed?: boolean;
-    /** 撤销句柄（含改前快照），仅当前编辑器实例内有效，不参与持久化 */
-    revert?: AiEditRevert;
-  };
+  /** 本条回复下发的文档编辑指令及其落地结果（用于展示、确认与撤销） */
+  edit?: AiEditRecord;
 }
 
 export type AiQuickAction = "summarize" | "translate" | "rewrite" | "explain";
@@ -181,6 +191,10 @@ interface AiState {
   deleteSession: (id: string) => void;
   /** 撤销某条回复造成的文档改动 */
   undoEdit: (messageId: string) => void;
+  /** 应用待确认的编辑指令（设置开启「改前确认」后由用户触发） */
+  applyPendingEdit: (messageId: string) => void;
+  /** 忽略待确认的编辑指令 */
+  rejectPendingEdit: (messageId: string) => void;
 }
 
 export const useAiStore = create<AiState>()((set, get) => {
@@ -321,7 +335,17 @@ export const useAiStore = create<AiState>()((set, get) => {
                 ...m,
                 content: text,
                 // 指令块有问题：正文已剥掉坏块，这里只留一张提示卡片（没有落地动作，也就没有撤销）
-                ...(malformed ? { edit: { op: null, summary: "", applied: false, malformed: true } } : {}),
+                ...(malformed
+                  ? {
+                      edit: {
+                        op: null,
+                        summary: "",
+                        content: "",
+                        before: "",
+                        state: "malformed" as AiEditState,
+                      },
+                    }
+                  : {}),
               }
             : m,
         ),
@@ -329,8 +353,25 @@ export const useAiStore = create<AiState>()((set, get) => {
       return;
     }
     const bridge = getAiEditor();
-    // 没有打开中的文档时无法落地；据实标记，界面会给「未应用」提示
-    const result = bridge ? bridge.applyEdit(edit.op, edit.content) : null;
+    // 没有打开中的文档时无处落地；据实标记，界面会给「未写入」提示
+    const record: AiEditRecord = {
+      op: edit.op,
+      summary: edit.summary,
+      content: edit.content,
+      // 改前原文：即便直接落地也留一份，之后随时可以「查看改动」
+      before: bridge ? bridge.getEditTargetText(edit.op) : "",
+      state: "unavailable",
+    };
+    if (bridge) {
+      if (get().config?.confirm_edit) {
+        // 设置里要求先确认：只给出 diff，等用户点「应用」再写
+        record.state = "pending";
+      } else {
+        const result = bridge.applyEdit(edit.op, edit.content);
+        record.state = result.applied ? "applied" : "unavailable";
+        record.revert = result.revert;
+      }
+    }
     set((s) => ({
       messages: s.messages.map((m) =>
         m.id === assistantId
@@ -338,12 +379,7 @@ export const useAiStore = create<AiState>()((set, get) => {
               ...m,
               // 正文为空时用 summary 兜底，保证这条消息留在后续对话上下文里
               content: display.trim() || edit.summary,
-              edit: {
-                op: edit.op,
-                summary: edit.summary,
-                applied: result?.applied ?? false,
-                revert: result?.revert,
-              },
+              edit: record,
             }
           : m,
       ),
@@ -528,6 +564,44 @@ export const useAiStore = create<AiState>()((set, get) => {
       set((s) => ({
         messages: s.messages.map((m) =>
           m.id === messageId && m.edit ? { ...m, edit: { ...m.edit, undone: true } } : m,
+        ),
+      }));
+      persistSessions();
+    },
+
+    // 用户在 diff 预览后点「应用」：这才真正写文档
+    applyPendingEdit: (messageId) => {
+      const bridge = getAiEditor();
+      const edit = get().messages.find((m) => m.id === messageId)?.edit;
+      if (!edit) return;
+      if (edit.state !== "pending" || !edit.op) return;
+      if (!bridge) {
+        toast.error(t("ai.noEditor"));
+        return;
+      }
+      const result = bridge.applyEdit(edit.op, edit.content);
+      set((s) => ({
+        messages: s.messages.map((m) =>
+          m.id === messageId && m.edit
+            ? {
+                ...m,
+                edit: {
+                  ...m.edit,
+                  state: result.applied ? "applied" : "unavailable",
+                  revert: result.revert,
+                },
+              }
+            : m,
+        ),
+      }));
+      if (result.applied) toast.success(t("ai.editApplied"));
+      persistSessions();
+    },
+
+    rejectPendingEdit: (messageId) => {
+      set((s) => ({
+        messages: s.messages.map((m) =>
+          m.id === messageId && m.edit?.state === "pending" ? { ...m, edit: { ...m.edit, state: "rejected" } } : m,
         ),
       }));
       persistSessions();
