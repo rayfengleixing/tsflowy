@@ -45,6 +45,28 @@ pub struct AiConfig {
     /// AI 自主修改文档前是否先弹 diff 让用户确认。默认 false：直接落地，靠「撤销」兜底。
     #[serde(default)]
     pub confirm_edit: bool,
+    /// 采样温度（0–2）：写代码偏确定性用 0.2，写作可到 0.8
+    #[serde(default = "default_temperature")]
+    pub temperature: f64,
+    /// 单次回答的最大 token 数；0 表示不限制（用服务端默认）
+    #[serde(default)]
+    pub max_tokens: u32,
+    /// 用户追加的自定义系统提示，拼在内置协议之后
+    #[serde(default)]
+    pub system_prompt: String,
+    /// 可选的模型档位（快速 / 强力 / 本地…），面板顶部可切换
+    #[serde(default)]
+    pub profiles: Vec<AiProfile>,
+    /// 当前生效的档位 id；空串表示用上面的单档配置
+    #[serde(default)]
+    pub active_profile: String,
+    /// 用户自定义快捷指令（追加在内置动作之后）
+    #[serde(default)]
+    pub quick_actions: Vec<AiQuickAction>,
+}
+
+fn default_temperature() -> f64 {
+    0.7
 }
 
 impl Default for AiConfig {
@@ -57,6 +79,58 @@ impl Default for AiConfig {
             api_key: String::new(),
             max_chars: 8000,
             confirm_edit: false,
+            temperature: default_temperature(),
+            max_tokens: 0,
+            system_prompt: String::new(),
+            profiles: Vec::new(),
+            active_profile: String::new(),
+            quick_actions: Vec::new(),
+        }
+    }
+}
+
+/// 一个模型档位：同一套 Key 下切换不同服务商 / 模型 / 温度
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiProfile {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    pub model: String,
+    pub temperature: f64,
+}
+
+impl Default for AiProfile {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            base_url: String::new(),
+            model: String::new(),
+            temperature: default_temperature(),
+        }
+    }
+}
+
+/// 用户自定义快捷指令。scope 决定取哪段文本填进 prompt：
+/// selection 选中文本 / page 整页文本 / none 不取（如「续写」）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiQuickAction {
+    pub id: String,
+    pub name: String,
+    /// 提示词模板，含 {content} 占位符（scope 为 none 时不需要）
+    pub prompt: String,
+    pub scope: String,
+}
+
+impl Default for AiQuickAction {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            prompt: String::new(),
+            scope: "selection".to_string(),
         }
     }
 }

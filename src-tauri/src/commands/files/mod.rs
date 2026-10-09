@@ -18,8 +18,8 @@ pub mod secret;
 
 // —— 配置读写（config.json）——
 pub use config::{
-    app_config_dir_raw, config_file_path, load_config_raw, AiConfig, AppConfig, AutoBackupConfig,
-    SyncConfig,
+    app_config_dir_raw, config_file_path, load_config_raw, AiConfig, AiProfile, AiQuickAction,
+    AppConfig, AutoBackupConfig, SyncConfig,
 };
 pub(crate) use config::{load_app_config, save_app_config};
 

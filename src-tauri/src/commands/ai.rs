@@ -83,8 +83,39 @@ pub struct AiConfigPublic {
     pub max_chars: u32,
     /// AI 自主修改文档前先弹 diff 确认
     pub confirm_edit: bool,
+    /// 采样温度（0–2）
+    pub temperature: f64,
+    /// 最大 token 数，0 表示不限制
+    pub max_tokens: u32,
+    /// 用户追加的自定义系统提示
+    pub system_prompt: String,
+    /// 可选模型档位
+    pub profiles: Vec<AiProfilePublic>,
+    /// 当前生效档位 id，空串表示单档配置
+    pub active_profile: String,
+    /// 用户自定义快捷指令
+    pub quick_actions: Vec<AiQuickActionPublic>,
     pub has_api_key: bool,
     pub api_key_masked: String,
+}
+
+/// 档位（不含任何敏感字段，直接回传前端）
+#[derive(Serialize, Clone)]
+pub struct AiProfilePublic {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    pub model: String,
+    pub temperature: f64,
+}
+
+/// 自定义快捷指令
+#[derive(Serialize, Clone)]
+pub struct AiQuickActionPublic {
+    pub id: String,
+    pub name: String,
+    pub prompt: String,
+    pub scope: String,
 }
 
 /// 前端保存配置的入参：api_key 为 None 时保持原值、Some("") 清空、Some(s) 覆盖
@@ -96,7 +127,31 @@ pub struct AiConfigInput {
     pub model: String,
     pub max_chars: u32,
     pub confirm_edit: bool,
+    pub temperature: f64,
+    pub max_tokens: u32,
+    pub system_prompt: String,
+    /// 档位整体覆盖（前端编辑后整份传回）
+    pub profiles: Vec<AiProfileInput>,
+    pub active_profile: String,
+    pub quick_actions: Vec<AiQuickActionInput>,
     pub api_key: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct AiProfileInput {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    pub model: String,
+    pub temperature: f64,
+}
+
+#[derive(Deserialize)]
+pub struct AiQuickActionInput {
+    pub id: String,
+    pub name: String,
+    pub prompt: String,
+    pub scope: String,
 }
 
 // ---------- 命令 ----------
@@ -120,6 +175,36 @@ pub fn ai_save_config(app: tauri::AppHandle, cfg: AiConfigInput) -> Result<(), S
     ai.model = cfg.model;
     ai.max_chars = cfg.max_chars;
     ai.confirm_edit = cfg.confirm_edit;
+    ai.temperature = cfg.temperature.clamp(0.0, 2.0);
+    ai.max_tokens = cfg.max_tokens;
+    ai.system_prompt = cfg.system_prompt;
+    ai.profiles = cfg
+        .profiles
+        .into_iter()
+        .map(|p| files::AiProfile {
+            id: p.id,
+            name: p.name,
+            base_url: p.base_url,
+            model: p.model,
+            temperature: p.temperature.clamp(0.0, 2.0),
+        })
+        .collect();
+    ai.active_profile = cfg.active_profile;
+    ai.quick_actions = cfg
+        .quick_actions
+        .into_iter()
+        .map(|a| files::AiQuickAction {
+            id: a.id,
+            name: a.name,
+            prompt: a.prompt,
+            // 只认三种取值，其它一律回落 selection
+            scope: match a.scope.as_str() {
+                "page" => "page".to_string(),
+                "none" => "none".to_string(),
+                _ => "selection".to_string(),
+            },
+        })
+        .collect();
     // None 保持原值不变；Some("") 清空；Some(s) 覆盖。
     // 非空 key 优先写入系统凭据库：成功则 config.json 不留明文；失败则回退明文，保证可用。
     match cfg.api_key {
@@ -173,6 +258,41 @@ pub async fn ai_test_connection(app: tauri::AppHandle) -> Result<String, String>
     parse_completion_text(&text)
 }
 
+/// 拉取当前 base_url 下的可用模型列表（GET /models），供设置页下拉选择。
+/// 服务商不提供该接口时会报错，设置页提示改为手工填写即可。
+#[tauri::command]
+pub async fn ai_list_models(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let ai = effective_ai(&app)?;
+    let client = build_client()?;
+    let resp = timeout(
+        TEST_TIMEOUT,
+        client.get(models_url(&ai.base_url)).bearer_auth(&ai.api_key).send(),
+    )
+    .await
+    .map_err(|_| "拉取模型列表超时（30 秒）".to_string())?
+    .map_err(|e| format!("连接失败：{e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(readable_http_error(status.as_u16(), &text));
+    }
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("响应解析失败：{e}"))?;
+    let mut out: Vec<String> = v
+        .get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    if out.is_empty() {
+        return Err("服务端没有返回可用模型".to_string());
+    }
+    Ok(out)
+}
+
 /// 中断当前正在进行的流式请求
 #[tauri::command]
 pub fn ai_cancel() -> Result<(), String> {
@@ -191,13 +311,29 @@ pub async fn ai_chat(
     let ai = effective_ai(&app)?;
     let generation = AI_GENERATION.load(Ordering::SeqCst);
     let client = build_client()?;
-    let body = serde_json::json!({
+    // 自定义系统提示放在消息序列最后：离用户问题越近，模型越容易遵守
+    let mut messages = req.messages;
+    let custom = ai.system_prompt.trim();
+    if !custom.is_empty() {
+        messages.push(AiMessage {
+            role: "system".to_string(),
+            content: custom.to_string(),
+        });
+    }
+    let mut body = serde_json::json!({
         "model": ai.model,
-        "messages": req.messages,
+        "messages": messages,
         "stream": true,
         // 让支持的服务商在尾帧回传 token 用量；不支持的会忽略这个字段
         "stream_options": { "include_usage": true },
     });
+    // 温度夹到合法区间，避免用户填出界让服务端直接 400；max_tokens 为 0 时不下发（用服务端默认）
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("temperature".into(), serde_json::json!(ai.temperature.clamp(0.0, 2.0)));
+        if ai.max_tokens > 0 {
+            obj.insert("max_tokens".into(), serde_json::json!(ai.max_tokens));
+        }
+    }
     let resp = match client
         .post(chat_url(&ai.base_url))
         .bearer_auth(&ai.api_key)
@@ -339,6 +475,31 @@ fn public_of(cfg: &files::AppConfig, effective_key: &str) -> AiConfigPublic {
         model: ai.model,
         max_chars: ai.max_chars,
         confirm_edit: ai.confirm_edit,
+        temperature: ai.temperature,
+        max_tokens: ai.max_tokens,
+        system_prompt: ai.system_prompt.clone(),
+        profiles: ai
+            .profiles
+            .iter()
+            .map(|p| AiProfilePublic {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                base_url: p.base_url.clone(),
+                model: p.model.clone(),
+                temperature: p.temperature,
+            })
+            .collect(),
+        active_profile: ai.active_profile.clone(),
+        quick_actions: ai
+            .quick_actions
+            .iter()
+            .map(|a| AiQuickActionPublic {
+                id: a.id.clone(),
+                name: a.name.clone(),
+                prompt: a.prompt.clone(),
+                scope: a.scope.clone(),
+            })
+            .collect(),
         has_api_key: !effective_key.is_empty(),
         api_key_masked: mask_api_key(effective_key),
     }
@@ -361,6 +522,11 @@ fn mask_api_key(key: &str) -> String {
 /// 拼请求地址：去掉 base_url 结尾的 `/`，直接拼 `/chat/completions`（不再补 `/v1`）
 fn chat_url(base_url: &str) -> String {
     format!("{}/chat/completions", base_url.trim_end_matches('/'))
+}
+
+/// 拼模型列表地址：`GET {base_url}/models`
+fn models_url(base_url: &str) -> String {
+    format!("{}/models", base_url.trim_end_matches('/'))
 }
 
 /// 从 `{"error": ...}` 里提取可读信息（error 可能是对象或字符串）
@@ -525,6 +691,18 @@ fn effective_api_key(app: &tauri::AppHandle) -> String {
 fn effective_ai(app: &tauri::AppHandle) -> Result<AiConfig, String> {
     let mut ai = files::load_app_config(app).ai.unwrap_or_default();
     ai.api_key = effective_api_key(app);
+    // 档位覆盖：选中某个档位时，用它的地址 / 模型 / 温度（字段为空的档位项保持原值）
+    if !ai.active_profile.trim().is_empty() {
+        if let Some(p) = ai.profiles.iter().find(|p| p.id == ai.active_profile).cloned() {
+            if !p.base_url.trim().is_empty() {
+                ai.base_url = p.base_url;
+            }
+            if !p.model.trim().is_empty() {
+                ai.model = p.model;
+            }
+            ai.temperature = p.temperature;
+        }
+    }
     if ai.base_url.trim().is_empty() || ai.api_key.trim().is_empty() {
         return Err(NOT_CONFIGURED.to_string());
     }
@@ -662,6 +840,12 @@ data: [DONE]
         assert!(!ai.enabled);
         assert_eq!(ai.max_chars, 8000);
         assert!(ai.api_key.is_empty());
+    }
+
+    #[test]
+    fn models_url_trims_trailing_slash_only() {
+        assert_eq!(models_url("https://api.deepseek.com"), "https://api.deepseek.com/models");
+        assert_eq!(models_url("https://api.openai.com/v1/"), "https://api.openai.com/v1/models");
     }
 
     #[test]
