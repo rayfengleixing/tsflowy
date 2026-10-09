@@ -3,9 +3,10 @@ import { flushAllForClose } from "./close-flush";
 import { logger } from "./logger";
 
 // 同步自动化（B7）：启动时拉取一次 + 本机写入静置后自动同步。
-// 全部在前端实现：main.tsx 包装 __TAURI_INTERNALS__.invoke 这一个咽喉点识别写命令，
-// 各写入口（编辑器/表格/视图配置…）无需任何改动；到点直接调用已有 run_sync 命令，
+// 全部在前端实现：业务模块统一从 @/lib/invoke 导入 invoke，包装层识别写命令后
+// 调用 markLocalWrite 驱动防抖定时器；到点直接调用已有 run_sync 命令，
 // 与设置页手动同步同一条链路（先冲刷挂起写入，pulled 后重载窗口）。
+// 本模块自身仍直接用 @tauri-apps/api/core（run_sync 不是写命令，且避免循环依赖）。
 
 const CONFIG_KEY = "tsflowy:auto-sync";
 

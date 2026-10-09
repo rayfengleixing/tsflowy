@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import type { JSONContent } from "@tiptap/core";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { documentApi } from "./documents";

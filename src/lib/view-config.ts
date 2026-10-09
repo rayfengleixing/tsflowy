@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { toast } from "sonner";
 import type { FilterMode, FilterSpec, SortSpec } from "@/lib/database-query";
 import { isAggregateFn, type AggregateFn } from "@/lib/database-aggregate";

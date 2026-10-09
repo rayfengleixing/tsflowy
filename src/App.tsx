@@ -24,7 +24,7 @@ import { flushAllForClose, registerCloseFlush } from "@/lib/close-flush";
 import { startAutoSync } from "@/lib/auto-sync";
 import { flushPendingUiPersist } from "@/stores/workspace";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { requestEscapeClose } from "@/lib/escape-close";
 import { useShortcutsStore, comboEquals, eventToCombo } from "@/lib/shortcuts";
 

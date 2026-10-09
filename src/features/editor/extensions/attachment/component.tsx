@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { File as FileIcon } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { toast } from "sonner";
 import { NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import { logger } from "@/lib/logger";

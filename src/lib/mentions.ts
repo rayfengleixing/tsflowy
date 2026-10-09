@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { newId } from "./db";
 import type { JSONContent } from "@tiptap/core";
 import { logger } from "./logger";

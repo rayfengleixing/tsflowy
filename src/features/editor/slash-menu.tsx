@@ -30,7 +30,7 @@ import {
   AtSign,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { toast } from "sonner";
 import { t, type MessageKey } from "@/lib/i18n";
 import { pinyinInitials } from "@/lib/pinyin-initials";

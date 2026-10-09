@@ -1,5 +1,5 @@
 import { parseViewTags, type LayoutType, type View } from "@/types/models";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { pinyinInitials } from "@/lib/pinyin-initials";
 
 // 全文搜索（项目说明书 12 节风险 1：FTS5 trigram 支持中文子串检索）。

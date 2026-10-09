@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import type { LayoutType, View, Workspace } from "@/types/models";
 
 // Phase A–C 完成：全部持久化已下沉 Rust 领域命令（invoke），tauri-plugin-sql 已移除。

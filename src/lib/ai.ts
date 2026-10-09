@@ -1,4 +1,5 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 
 // AI 助手 invoke 封装：配置读写 / 连接测试 / 流式对话 / 取消。
 // 契约由 Rust 侧固定，JS 参数一律 camelCase（Tauri 2 自动映射到 Rust snake_case）；

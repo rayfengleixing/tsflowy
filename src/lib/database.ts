@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import type { CellValue, DatabaseField, DatabaseRow, FieldOptions, FieldType } from "@/types/database";
 import { newId } from "./db";
 import { deserializeValue } from "./database-values";

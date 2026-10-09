@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { NodeViewContent, NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import { Upload, X, ImagePlus } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/invoke";
 import { toast } from "sonner";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
