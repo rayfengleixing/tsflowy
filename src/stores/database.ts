@@ -160,6 +160,16 @@ export function createDatabaseStore() {
         // 等待期间已切到别的视图（viewId 变了）或有更新的请求 → 丢弃本次结果，不碰 loading
         if (seq !== loadSeq || get().viewId !== viewId) return;
         set({ fields, rows, cells, loading: false });
+        // 自愈：extra 里可能残留已删除字段的排序/筛选引用（旧版 removeField 未持久化清理），
+        // 悬空引用会让排序条显示条目但表头无箭头、数据也不排序。按现有字段过滤并回写。
+        const ids = new Set(fields.map((f) => f.id));
+        const cur = get();
+        const nextSorts = cur.sorts.filter((s) => ids.has(s.field_id));
+        const nextFilters = cur.filters.filter((f) => ids.has(f.field_id));
+        if (nextSorts.length !== cur.sorts.length || nextFilters.length !== cur.filters.length) {
+          set({ sorts: nextSorts, filters: nextFilters });
+          patchViewConfig(view, { sorts: nextSorts, filters: nextFilters });
+        }
       } catch (e) {
         if (seq === loadSeq) {
           logger.error("database.load", e);
@@ -223,11 +233,12 @@ export function createDatabaseStore() {
         const { [id]: _removed, ...rest } = cells[rowId];
         cells[rowId] = rest;
       }
-      set({
-        cells,
-        sorts: get().sorts.filter((s) => s.field_id !== id),
-        filters: get().filters.filter((f) => f.field_id !== id),
-      });
+      const sorts = get().sorts.filter((s) => s.field_id !== id);
+      const filters = get().filters.filter((f) => f.field_id !== id);
+      set({ cells, sorts, filters });
+      // 必须同步回写 extra：只改内存的话，重开页面仍会读回已删字段的排序/筛选（悬空引用）
+      const view = get().view;
+      if (view) patchViewConfig(view, { sorts, filters });
     },
 
     setFieldWidth: async (id, width) => {
