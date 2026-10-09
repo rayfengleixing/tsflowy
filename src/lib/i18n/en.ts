@@ -4,6 +4,10 @@ export const en: Record<MessageKey, string> = {
   "sidebar.newSpace": "New Space",
   "sidebar.search": "Search…",
   "app.loading": "Loading…",
+  "app.errorTitle": "Something went wrong",
+  "app.errorDesc":
+    "Failed to render this content (caught, no blank screen). Retry this page, or switch to another page and back.",
+  "app.errorRetry": "Retry",
   "sidebar.newPage": "New Page",
   "template.fromTemplate": "From template",
   "template.meeting": "Meeting notes",

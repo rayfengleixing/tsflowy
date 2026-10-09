@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { TabBar } from "@/features/tabs/TabBar";
 import { PlaceholderPage } from "@/features/placeholder/PlaceholderPage";
@@ -7,6 +7,7 @@ import { DbUnavailable, type DbHealth } from "@/features/errors/DbUnavailable";
 import { CommandPalette } from "@/features/search/CommandPalette";
 import { DatabaseViewPicker } from "@/features/editor/DatabaseViewPicker";
 import { EmojiPickerDialog } from "@/features/editor/EmojiPickerDialog";
+import { RouteErrorBoundary } from "@/components/error-boundary";
 import { Toaster } from "@/components/ui/sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { viewIcon } from "@/components/view-icon";
@@ -27,14 +28,20 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@/lib/invoke";
 import { requestEscapeClose } from "@/lib/escape-close";
 import { useShortcutsStore, comboEquals, eventToCombo } from "@/lib/shortcuts";
+import { lazyWithRetry } from "@/lib/lazy";
 
 // 路由级懒加载：编辑页（含 TipTap 及全部扩展）/ 数据库页 / 设置页 / 回收站 / 搜索结果页
 // 体积较大且互斥，拆成独立 chunk 按需加载，缩短启动时主包的解析时间（fallback 复用 app.loading）。
-const EditorPage = lazy(() => import("@/features/editor/EditorPage").then((m) => ({ default: m.EditorPage })));
-const DatabasePage = lazy(() => import("@/features/database/DatabasePage").then((m) => ({ default: m.DatabasePage })));
-const SettingsPage = lazy(() => import("@/features/settings/SettingsPage").then((m) => ({ default: m.SettingsPage })));
-const TrashPage = lazy(() => import("@/features/trash/TrashPage").then((m) => ({ default: m.TrashPage })));
-const SearchResultsPage = lazy(() =>
+// lazyWithRetry：chunk 请求偶发失败自动重试，避免加载异常直接把整棵树打崩（白屏）。
+const EditorPage = lazyWithRetry(() => import("@/features/editor/EditorPage").then((m) => ({ default: m.EditorPage })));
+const DatabasePage = lazyWithRetry(() =>
+  import("@/features/database/DatabasePage").then((m) => ({ default: m.DatabasePage })),
+);
+const SettingsPage = lazyWithRetry(() =>
+  import("@/features/settings/SettingsPage").then((m) => ({ default: m.SettingsPage })),
+);
+const TrashPage = lazyWithRetry(() => import("@/features/trash/TrashPage").then((m) => ({ default: m.TrashPage })));
+const SearchResultsPage = lazyWithRetry(() =>
   import("@/features/search/SearchResultsPage").then((m) => ({ default: m.SearchResultsPage })),
 );
 
@@ -306,24 +313,26 @@ function App() {
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
-        <Suspense
-          fallback={
-            <div className="flex h-full items-center justify-center text-sm text-neutral-500">{t("app.loading")}</div>
-          }
-        >
-          {route === "trash" ? (
-            <TrashPage />
-          ) : route === "search" ? (
-            <SearchResultsPage />
-          ) : route === "settings" ? (
-            <SettingsPage />
-          ) : (
-            <>
-              <TabBar />
-              {splitView ? <SplitView left={view} right={splitView} /> : renderView(view)}
-            </>
-          )}
-        </Suspense>
+        <RouteErrorBoundary resetKey={`${route}:${currentViewId ?? ""}:${splitViewId ?? ""}`}>
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center text-sm text-neutral-500">{t("app.loading")}</div>
+            }
+          >
+            {route === "trash" ? (
+              <TrashPage />
+            ) : route === "search" ? (
+              <SearchResultsPage />
+            ) : route === "settings" ? (
+              <SettingsPage />
+            ) : (
+              <>
+                <TabBar />
+                {splitView ? <SplitView left={view} right={splitView} /> : renderView(view)}
+              </>
+            )}
+          </Suspense>
+        </RouteErrorBoundary>
       </div>
       <AiPanel />
       <CommandPalette />
