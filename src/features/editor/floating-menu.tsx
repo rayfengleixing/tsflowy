@@ -95,9 +95,7 @@ function usePopoverFlip(editor: Editor | undefined, childRef: React.RefObject<HT
     const spaceBelow = bottom - pr.bottom;
     const spaceAbove = pr.top - top;
     setFlip(spaceBelow < h && spaceAbove > spaceBelow);
-    // childRef 是稳定 ref 引用，无需列入依赖
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editor]);
+  }, [editor, childRef]);
   return flip;
 }
 

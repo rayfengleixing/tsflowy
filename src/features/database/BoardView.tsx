@@ -43,6 +43,7 @@ export function BoardView({
   onGoGrid?: () => void;
 }) {
   const store = useDbStore();
+  const load = useDbStore((s) => s.load);
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
 
@@ -56,9 +57,8 @@ export function BoardView({
   const [newGroupOpen, setNewGroupOpen] = useState(false);
 
   useEffect(() => {
-    store.load(view).catch((e: unknown) => logger.error("board.load", e));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view.id]);
+    load(view).catch((e: unknown) => logger.error("board.load", e));
+  }, [load, view]);
 
   const changeGroupField = (id: string | null) => {
     setGroupFieldId(id);

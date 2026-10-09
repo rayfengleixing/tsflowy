@@ -1,6 +1,25 @@
 use super::*;
 use std::collections::BTreeMap;
 
+/// 测试便捷包装：位置参数转 NewView 结构体，避免每个用例手写结构体字面量。
+/// 显式定义优先于 `use super::*` 导入的同名函数，故测试内的 create 调用都走这里。
+#[allow(clippy::too_many_arguments)] // 刻意与旧位置参数签名一致，让既有用例零改动
+fn create(
+    conn: &Connection,
+    id: &str,
+    workspace_id: &str,
+    parent_id: Option<&str>,
+    name: &str,
+    layout: &str,
+    extra: &str,
+    source_id: Option<&str>,
+) -> Result<ViewRow, String> {
+    super::create(
+        conn,
+        NewView { id, workspace_id, parent_id, name, layout, extra, source_id },
+    )
+}
+
 fn setup() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     super::super::migrations::ensure_migrated(&conn).unwrap();

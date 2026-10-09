@@ -172,7 +172,7 @@ fn prune_conflicts(dir: &Path) {
             Some((m.modified().ok()?, e.path()))
         })
         .collect();
-    items.sort_by(|a, b| b.0.cmp(&a.0)); // 新的在前
+    items.sort_by_key(|item| std::cmp::Reverse(item.0)); // 新的在前
     for (_, p) in items.into_iter().skip(KEEP_CONFLICTS) {
         let _ = fs::remove_file(&p);
     }
@@ -452,7 +452,7 @@ pub fn list_sync_conflicts(app: tauri::AppHandle) -> Result<Vec<ConflictFile>, S
             ))
         })
         .collect();
-    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.sort_by_key(|item| std::cmp::Reverse(item.0));
     Ok(out.into_iter().map(|(_, f)| f).collect())
 }
 

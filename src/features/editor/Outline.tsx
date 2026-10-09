@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Hash } from "lucide-react";
 import { useEditorStore } from "@/stores/editor";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -28,6 +28,30 @@ function sameHeadings(a: HeadingItem[], b: HeadingItem[]): boolean {
     if (a[i].pos !== b[i].pos || a[i].level !== b[i].level || a[i].text !== b[i].text) return false;
   }
   return true;
+}
+
+/** 按 PM pos 找到 <h1>..<h6> DOM（含缓存） */
+function findHeadingDom(
+  ed: { view: { domAtPos: (p: number) => { node: Node; offset: number } } },
+  pos: number,
+  list: HeadingItem[],
+): HTMLElement | null {
+  const cached = list.find((x) => x.pos === pos)?.cachedDom;
+  if (cached !== undefined) return cached ?? null;
+  try {
+    const result = ed.view.domAtPos(pos + 1);
+    let node: Node | null = result.node;
+    while (node && node.nodeType !== 1) node = node.parentNode;
+    let el = node as HTMLElement | null;
+    while (el && !/^h[1-6]$/i.test(el.tagName)) {
+      el = el.parentElement;
+    }
+    const item = list.find((x) => x.pos === pos);
+    if (item) item.cachedDom = el ?? null;
+    return el;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -127,6 +151,27 @@ export function DocumentOutline() {
     };
   }, [editor, isDocument]);
 
+  /** 兜底：遍历 headings DOM，找视口最上方那个 */
+  const scrollFindActive = useCallback(() => {
+    if (!editor) return;
+    const current = headingsRef.current;
+    let best: { pos: number; top: number } | null = null;
+    const containerRect =
+      scrollElRef.current instanceof HTMLElement ? scrollElRef.current.getBoundingClientRect() : null;
+    const baseTop = containerRect ? containerRect.top : 0;
+    for (const h of current) {
+      const dom = findHeadingDom(editor, h.pos, current);
+      if (!dom) continue;
+      const r = dom.getBoundingClientRect();
+      const rel = r.top - baseTop;
+      const metric = rel <= 0 ? -1000000 + rel : rel;
+      if (best === null || metric < best.top) {
+        best = { pos: h.pos, top: metric };
+      }
+    }
+    if (best) setActivePos(best.pos);
+  }, [editor]);
+
   // IntersectionObserver：监听每个 heading dom 进入视口
   useEffect(() => {
     if (!editor?.view.dom || !isDocument) return;
@@ -182,53 +227,7 @@ export function DocumentOutline() {
       io.disconnect();
       activeItems.clear();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editor, isDocument, headings]);
-
-  /** 兜底：遍历 headings DOM，找视口最上方那个 */
-  function scrollFindActive() {
-    if (!editor) return;
-    const current = headingsRef.current;
-    let best: { pos: number; top: number } | null = null;
-    const containerRect =
-      scrollElRef.current instanceof HTMLElement ? scrollElRef.current.getBoundingClientRect() : null;
-    const baseTop = containerRect ? containerRect.top : 0;
-    for (const h of current) {
-      const dom = findHeadingDom(editor, h.pos, current);
-      if (!dom) continue;
-      const r = dom.getBoundingClientRect();
-      const rel = r.top - baseTop;
-      const metric = rel <= 0 ? -1000000 + rel : rel;
-      if (best === null || metric < best.top) {
-        best = { pos: h.pos, top: metric };
-      }
-    }
-    if (best) setActivePos(best.pos);
-  }
-
-  /** 按 PM pos 找到 <h1>..<h6> DOM（含缓存） */
-  function findHeadingDom(
-    ed: { view: { domAtPos: (p: number) => { node: Node; offset: number } } },
-    pos: number,
-    list: HeadingItem[],
-  ): HTMLElement | null {
-    const cached = list.find((x) => x.pos === pos)?.cachedDom;
-    if (cached !== undefined) return cached ?? null;
-    try {
-      const result = ed.view.domAtPos(pos + 1);
-      let node: Node | null = result.node;
-      while (node && node.nodeType !== 1) node = node.parentNode;
-      let el = node as HTMLElement | null;
-      while (el && !/^h[1-6]$/i.test(el.tagName)) {
-        el = el.parentElement;
-      }
-      const item = list.find((x) => x.pos === pos);
-      if (item) item.cachedDom = el ?? null;
-      return el;
-    } catch {
-      return null;
-    }
-  }
+  }, [editor, isDocument, headings, scrollFindActive]);
 
   /** 点击：平滑滚动到该标题 + 光标定位 */
   function jumpTo(h: HeadingItem) {

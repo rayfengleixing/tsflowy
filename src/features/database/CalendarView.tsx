@@ -33,6 +33,7 @@ export function CalendarView({
   onGoGrid?: () => void;
 }) {
   const store = useDbStore();
+  const load = useDbStore((s) => s.load);
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
 
@@ -43,9 +44,8 @@ export function CalendarView({
   const [dragOverDate, setDragOverDate] = useState<string | null>(null);
 
   useEffect(() => {
-    store.load(view).catch((e: unknown) => logger.error("calendar.load", e));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view.id]);
+    load(view).catch((e: unknown) => logger.error("calendar.load", e));
+  }, [load, view]);
 
   const changeDateField = (id: string | null) => {
     setDateFieldId(id);

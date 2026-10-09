@@ -123,7 +123,19 @@ mod tests {
     }
 
     fn seed_doc(conn: &Connection) {
-        views::create(conn, "v1", "w1", None, "文档", "document", "{}", None).unwrap();
+        views::create(
+            conn,
+            views::NewView {
+                id: "v1",
+                workspace_id: "w1",
+                parent_id: None,
+                name: "文档",
+                layout: "document",
+                extra: "{}",
+                source_id: None,
+            },
+        )
+        .unwrap();
     }
 
     #[test]

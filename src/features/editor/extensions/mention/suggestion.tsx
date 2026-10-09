@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import type { MentionOptions } from "@tiptap/extension-mention";
 import { ReactRenderer } from "@tiptap/react";
 import { FileText, Table2 } from "lucide-react";
@@ -43,23 +43,92 @@ export function MentionList(props: MentionListProps) {
   useEffect(() => setSearchText(query), [query]);
 
   // 客户端二次过滤（基于 searchText）
-  const filteredItems = searchText.trim()
-    ? items.filter((it) => it.label.toLowerCase().includes(searchText.toLowerCase()))
-    : items;
+  const filteredItems = useMemo(
+    () => (searchText.trim() ? items.filter((it) => it.label.toLowerCase().includes(searchText.toLowerCase())) : items),
+    [items, searchText],
+  );
 
   // 是否显示"新建"选项：列表为空且搜索词非空
   const showCreate = filteredItems.length === 0 && searchText.trim().length > 0;
 
-  // 所有可选项（已有项 + 新建项）
-  const allOptions = [...filteredItems];
-  if (showCreate) {
-    allOptions.push(
-      { id: "__create_doc__", label: searchText.trim() },
-      { id: "__create_table__", label: searchText.trim() },
-    );
-  }
+  // 所有可选项（已有项 + 新建项）：useMemo 稳定引用，供 onKeyDown 的 useCallback 依赖
+  const allOptions = useMemo(() => {
+    const list = [...filteredItems];
+    if (showCreate) {
+      list.push(
+        { id: "__create_doc__", label: searchText.trim() },
+        { id: "__create_table__", label: searchText.trim() },
+      );
+    }
+    return list;
+  }, [filteredItems, showCreate, searchText]);
 
   useEffect(() => setActive(0), [searchText, items, showCreate]);
+
+  const handleCreateDoc = useCallback(
+    async (name: string) => {
+      try {
+        const ws = useWorkspaceStore.getState();
+        const wsId = ws.currentWorkspaceId;
+        if (!wsId) return;
+        // 1. 创建视图（不走 store.createView 避免 reload 导致 editor 失效）
+        const newView = await viewApi.create({ workspace_id: wsId, parent_id: null, name, layout: "document" });
+        // 2. 先插入 mention 节点（此时 editor 还活着）
+        command({ id: newView.id, label: name, view: newView });
+        // 3. 再 reload 更新目录树
+        await ws.reload();
+      } catch (e) {
+        logger.error("create doc from mention failed", e);
+        toast.error(t("error.db", { message: String(e) }));
+      }
+    },
+    [command],
+  );
+
+  const handleCreateTable = useCallback(
+    async (name: string) => {
+      try {
+        const ws = useWorkspaceStore.getState();
+        const wsId = ws.currentWorkspaceId;
+        if (!wsId) return;
+        // 1. 创建 grid 视图
+        const newView = await viewApi.create({ workspace_id: wsId, parent_id: null, name, layout: "grid" });
+        // 2. 预置默认字段（名称/日期/单选 + 两个选项 + 一行空行）
+        await databaseApi.createField(newView.id, "text", t("field.exampleName"));
+        await databaseApi.createField(newView.id, "date", t("field.exampleDate"));
+        const select = await databaseApi.createField(newView.id, "single_select", t("field.exampleSelect"));
+        await databaseApi.updateFieldOptions(select.id, {
+          kind: "select",
+          options: [
+            newSelectOption(t("field.exampleOption", { n: 1 })),
+            newSelectOption(t("field.exampleOption", { n: 2 })),
+          ],
+        });
+        await databaseApi.createRow(newView.id);
+        // 3. 先插入 mention 节点（此时 editor 还活着）
+        command({ id: newView.id, label: name, view: newView });
+        // 4. 再 reload 更新目录树
+        await ws.reload();
+      } catch (e) {
+        logger.error("create table from mention failed", e);
+        toast.error(t("error.db", { message: String(e) }));
+      }
+    },
+    [command],
+  );
+
+  const handleSelect = useCallback(
+    (item: MentionItem) => {
+      if (item.id === "__create_doc__") {
+        void handleCreateDoc(item.label);
+      } else if (item.id === "__create_table__") {
+        void handleCreateTable(item.label);
+      } else {
+        command(item);
+      }
+    },
+    [command, handleCreateDoc, handleCreateTable],
+  );
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent): boolean => {
@@ -81,8 +150,7 @@ export function MentionList(props: MentionListProps) {
       }
       return false;
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [allOptions, active],
+    [allOptions, active, handleSelect],
   );
 
   useImperativeHandle(ref, () => ({ onKeyDown }));
@@ -90,62 +158,6 @@ export function MentionList(props: MentionListProps) {
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>("[data-active='true']")?.scrollIntoView({ block: "nearest" });
   }, [active]);
-
-  const handleCreateDoc = async (name: string) => {
-    try {
-      const ws = useWorkspaceStore.getState();
-      const wsId = ws.currentWorkspaceId;
-      if (!wsId) return;
-      // 1. 创建视图（不走 store.createView 避免 reload 导致 editor 失效）
-      const newView = await viewApi.create({ workspace_id: wsId, parent_id: null, name, layout: "document" });
-      // 2. 先插入 mention 节点（此时 editor 还活着）
-      command({ id: newView.id, label: name, view: newView });
-      // 3. 再 reload 更新目录树
-      await ws.reload();
-    } catch (e) {
-      logger.error("create doc from mention failed", e);
-      toast.error(t("error.db", { message: String(e) }));
-    }
-  };
-
-  const handleCreateTable = async (name: string) => {
-    try {
-      const ws = useWorkspaceStore.getState();
-      const wsId = ws.currentWorkspaceId;
-      if (!wsId) return;
-      // 1. 创建 grid 视图
-      const newView = await viewApi.create({ workspace_id: wsId, parent_id: null, name, layout: "grid" });
-      // 2. 预置默认字段（名称/日期/单选 + 两个选项 + 一行空行）
-      await databaseApi.createField(newView.id, "text", t("field.exampleName"));
-      await databaseApi.createField(newView.id, "date", t("field.exampleDate"));
-      const select = await databaseApi.createField(newView.id, "single_select", t("field.exampleSelect"));
-      await databaseApi.updateFieldOptions(select.id, {
-        kind: "select",
-        options: [
-          newSelectOption(t("field.exampleOption", { n: 1 })),
-          newSelectOption(t("field.exampleOption", { n: 2 })),
-        ],
-      });
-      await databaseApi.createRow(newView.id);
-      // 3. 先插入 mention 节点（此时 editor 还活着）
-      command({ id: newView.id, label: name, view: newView });
-      // 4. 再 reload 更新目录树
-      await ws.reload();
-    } catch (e) {
-      logger.error("create table from mention failed", e);
-      toast.error(t("error.db", { message: String(e) }));
-    }
-  };
-
-  const handleSelect = (item: MentionItem) => {
-    if (item.id === "__create_doc__") {
-      void handleCreateDoc(item.label);
-    } else if (item.id === "__create_table__") {
-      void handleCreateTable(item.label);
-    } else {
-      command(item);
-    }
-  };
 
   return (
     <div className="w-[280px] rounded-lg border border-neutral-300 bg-white shadow-lg">

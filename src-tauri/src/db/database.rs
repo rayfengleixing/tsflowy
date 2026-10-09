@@ -471,24 +471,24 @@ pub fn create_rows(
     let host = data_view_id(conn, view_id)?;
     let view_id = host.as_str();
     let tx = conn.unchecked_transaction().map_err(dberr("create rows"))?;
-    let mut start = next_position(conn, "database_rows", view_id)?;
+    let start = next_position(conn, "database_rows", view_id)?;
     let mut out = Vec::with_capacity(ids.len());
-    for id in ids {
+    for (offset, id) in ids.iter().enumerate() {
+        let position = start + offset as i64;
         let t = now_ms();
         tx.execute(
             "INSERT INTO database_rows(id, database_view_id, position, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
-            params![id, view_id, start, t],
+            params![id, view_id, position, t],
         )
         .map_err(dberr("create rows"))?;
         out.push(DatabaseRowRow {
             id: id.clone(),
             database_view_id: view_id.to_string(),
-            position: start,
+            position,
             document_id: None,
             created_at: t,
             updated_at: t,
         });
-        start += 1;
     }
     tx.commit().map_err(dberr("create rows (commit)"))?;
     Ok(out)

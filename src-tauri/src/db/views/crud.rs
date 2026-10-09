@@ -132,16 +132,20 @@ pub fn get(conn: &Connection, id: &str) -> Result<Option<ViewRow>, String> {
 ///
 /// `source_id = Some(host)` 建的是宿主表的一个派生视图（多视图）：不进树（parent_id 强制 NULL）、
 /// position 在"该宿主的视图列表"内递增、不碰宿主的树内 position。
-pub fn create(
-    conn: &Connection,
-    id: &str,
-    workspace_id: &str,
-    parent_id: Option<&str>,
-    name: &str,
-    layout: &str,
-    extra: &str,
-    source_id: Option<&str>,
-) -> Result<ViewRow, String> {
+///
+/// 参数打包成结构体：字段多达 7 个，裸传触发 clippy::too_many_arguments，且调用点可读性差。
+pub struct NewView<'a> {
+    pub id: &'a str,
+    pub workspace_id: &'a str,
+    pub parent_id: Option<&'a str>,
+    pub name: &'a str,
+    pub layout: &'a str,
+    pub extra: &'a str,
+    pub source_id: Option<&'a str>,
+}
+
+pub fn create(conn: &Connection, nv: NewView<'_>) -> Result<ViewRow, String> {
+    let NewView { id, workspace_id, parent_id, name, layout, extra, source_id } = nv;
     if source_id.is_some() && layout == "document" {
         return Err("a derived view of a database cannot use the document layout".to_string());
     }

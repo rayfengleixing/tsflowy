@@ -49,6 +49,7 @@ export function TimelineView({
   onGoGrid?: () => void;
 }) {
   const store = useDbStore();
+  const load = useDbStore((s) => s.load);
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
 
@@ -59,9 +60,8 @@ export function TimelineView({
   const [scaleMode, setScaleMode] = useState<ScaleMode>("auto");
 
   useEffect(() => {
-    store.load(view).catch((e: unknown) => logger.error("timeline.load", e));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view.id]);
+    load(view).catch((e: unknown) => logger.error("timeline.load", e));
+  }, [load, view]);
 
   const dateFields = useMemo(
     () => fields.filter((f) => ["date", "created_at", "last_edited_at"].includes(f.field_type)),

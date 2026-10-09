@@ -94,20 +94,23 @@ export function PageTree() {
     };
   }, [virtual, measureWindow]);
 
-  const onMoveFail = (e: unknown) => {
+  const onMoveFail = useCallback((e: unknown) => {
     logger.error("move view failed", e);
     toast.error(t("error.db", { message: String(e) }));
-  };
+  }, []);
 
-  const handleDrop = async (viewId: string, targetId: string, zone: DropZone) => {
-    const target = dropTarget(tree, targetId, zone);
-    if (!target) return;
-    try {
-      await moveView(viewId, target.parentId, target.index);
-    } catch (e: unknown) {
-      onMoveFail(e);
-    }
-  };
+  const handleDrop = useCallback(
+    async (viewId: string, targetId: string, zone: DropZone) => {
+      const target = dropTarget(tree, targetId, zone);
+      if (!target) return;
+      try {
+        await moveView(viewId, target.parentId, target.index);
+      } catch (e: unknown) {
+        onMoveFail(e);
+      }
+    },
+    [tree, moveView, onMoveFail],
+  );
 
   useEffect(() => {
     const zoneForEl = (row: HTMLElement, clientY: number): DropZone => {
@@ -176,8 +179,7 @@ export function PageTree() {
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tree, expand]);
+  }, [tree, expand, handleDrop, moveView, onMoveFail]);
 
   /** 行点击（会话未变成拖拽时打开页面） */
   const onRowClick = (id: string) => {

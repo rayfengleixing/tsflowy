@@ -155,19 +155,19 @@ fn import_backup_into(data_dir: &Path, src: &Path) -> Result<(), String> {
     }
 
     // 解 zip；任何一步失败都回滚到导入前状态（含解压了一半的文件）
-    if let Err(e) = extract_backup_zip(src, &data_dir) {
-        rollback_import_stash(&data_dir, &suffix);
+    if let Err(e) = extract_backup_zip(src, data_dir) {
+        rollback_import_stash(data_dir, &suffix);
         return Err(e);
     }
     // 必须有数据库文件，否则视为恢复失败，回滚备份
     if !db.is_file() {
-        rollback_import_stash(&data_dir, &suffix);
+        rollback_import_stash(data_dir, &suffix);
         return Err(format!(
             "backup zip does not contain valid database file (previous data kept at *.bak-{suffix})"
         ));
     }
     // 恢复成功：清掉更早的历史备份（导入会不断产生 .bak-*，不清理会无限堆积）
-    prune_stale_backups(&data_dir);
+    prune_stale_backups(data_dir);
     Ok(())
 }
 
@@ -193,7 +193,7 @@ fn prune_stale_backups(data_dir: &Path) {
         };
         items.push((stamp, entry.path()));
     }
-    items.sort_by(|a, b| b.0.cmp(&a.0)); // 新的在前
+    items.sort_by_key(|item| std::cmp::Reverse(item.0)); // 新的在前
     let mut kept: Vec<u64> = Vec::new();
     for (stamp, path) in items {
         if kept.contains(&stamp) {

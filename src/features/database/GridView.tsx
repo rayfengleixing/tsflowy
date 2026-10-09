@@ -89,6 +89,7 @@ export function GridView({
 }) {
   const store = useDbStore();
   const storeApi = useDbStoreApi();
+  const load = useDbStore((s) => s.load);
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { closeRowDetail } = store;
 
@@ -124,10 +125,13 @@ export function GridView({
   const pasteAnchorRef = useRef<{ rowId: string; fieldId: string } | null>(null);
 
   useEffect(() => {
-    store.load(view).catch((e: unknown) => logger.error("grid.load", e));
+    load(view).catch((e: unknown) => logger.error("grid.load", e));
+  }, [load, view]);
+
+  // 换视图才清空多选/光标（同一视图的树快照刷新不打断编辑）
+  useEffect(() => {
     setCheckedRows(new Set());
     setCursor(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.id]);
 
   // 列宽拖拽：拖拽期间直接改 <col> 宽度（纯 DOM，零重渲/零 IPC），mouseup 才落库一次
@@ -291,11 +295,13 @@ export function GridView({
     if (idx < 0 || !el || !body) return;
     if (win && idx >= win.start && idx < win.end) return;
     const dataTop = body.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
-    el.scrollTop = rowCenterScrollTop({
-      dataTop,
-      index: idx,
-      rowHeight: rowHeightRef.current,
-      clientHeight: el.clientHeight,
+    el.scrollTo({
+      top: rowCenterScrollTop({
+        dataTop,
+        index: idx,
+        rowHeight: rowHeightRef.current,
+        clientHeight: el.clientHeight,
+      }),
     });
   }, [focusRowId, virtual, displayRows, win, scrollerRef]);
 
@@ -327,11 +333,13 @@ export function GridView({
       const body = tbodyRef.current;
       if (el && body) {
         const dataTop = body.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
-        el.scrollTop = rowCenterScrollTop({
-          dataTop,
-          index: ri,
-          rowHeight: rowHeightRef.current,
-          clientHeight: el.clientHeight,
+        el.scrollTo({
+          top: rowCenterScrollTop({
+            dataTop,
+            index: ri,
+            rowHeight: rowHeightRef.current,
+            clientHeight: el.clientHeight,
+          }),
         });
       }
     }

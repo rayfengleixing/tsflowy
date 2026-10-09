@@ -73,7 +73,7 @@ fn auto_backup_files(dir: &Path) -> Vec<(String, PathBuf, SystemTime)> {
             Some((name, entry.path(), mtime))
         })
         .collect();
-    items.sort_by(|a, b| b.2.cmp(&a.2));
+    items.sort_by_key(|item| std::cmp::Reverse(item.2));
     items
 }
 

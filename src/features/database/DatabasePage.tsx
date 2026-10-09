@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { viewApi } from "@/lib/db";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
@@ -28,18 +28,24 @@ export function DatabasePage({ view }: { view: View }) {
   // 两栏同时打开不同数据库时各读各的字段/行/单元格，互不覆盖。
   const [store] = useState(createDatabaseStore);
 
+  // view 是树快照（改名等会换新对象），但重取派生视图列表只应在换页面时发生：
+  // 用 ref 承接最新快照，effect 依赖仍只写 view.id
+  const viewRef = useRef(view);
+  viewRef.current = view;
+
   useEffect(() => {
     let alive = true;
-    setRows([view]);
-    setActiveId(view.id);
+    const v = viewRef.current;
+    setRows([v]);
+    setActiveId(v.id);
     viewApi
-      .listForSource(view.id)
+      .listForSource(v.id)
       .then((list) => {
         if (!alive) return;
-        setRows(list.length > 0 ? list : [view]);
+        setRows(list.length > 0 ? list : [v]);
         // 上次停留的视图可能已被删除：校验存在后再恢复，否则回落到宿主
-        const saved = readViewConfig(view).activeViewId;
-        if (saved && list.some((v) => v.id === saved)) setActiveId(saved);
+        const saved = readViewConfig(v).activeViewId;
+        if (saved && list.some((x) => x.id === saved)) setActiveId(saved);
       })
       .catch((e: unknown) => {
         if (!alive) return;
@@ -49,8 +55,6 @@ export function DatabasePage({ view }: { view: View }) {
     return () => {
       alive = false;
     };
-    // view 是树快照，只有换页面才需要重取（改名等由本地 state 同步）
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.id]);
 
   // 宿主那一行以树快照为准：侧边栏改名后标签立刻跟上（重取只在换页时发生）

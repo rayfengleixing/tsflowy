@@ -102,6 +102,8 @@ pub async fn view_touch_visited(db: State<'_, Db>, id: String) -> Result<(), Str
     db::views::touch_visited(&conn, &id)
 }
 
+// IPC 契约：参数名即前端 invoke 的字段名，不能打包成结构体，故豁免 too_many_arguments。
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn view_create(
     db: State<'_, Db>,
@@ -116,13 +118,15 @@ pub async fn view_create(
     let conn = db.write_conn()?;
     db::views::create(
         &conn,
-        &id, // 前端 newId() 生成
-        &workspace_id,
-        parent_id.as_deref(),
-        &name,
-        &layout,
-        extra.as_deref().unwrap_or("{}"),
-        source_id.as_deref(),
+        db::views::NewView {
+            id: &id, // 前端 newId() 生成
+            workspace_id: &workspace_id,
+            parent_id: parent_id.as_deref(),
+            name: &name,
+            layout: &layout,
+            extra: extra.as_deref().unwrap_or("{}"),
+            source_id: source_id.as_deref(),
+        },
     )
 }
 
