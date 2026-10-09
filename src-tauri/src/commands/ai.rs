@@ -70,6 +70,8 @@ pub enum AiEvent {
     },
     Error {
         message: String,
+        /// 错误归类码，前端据此给出不同引导（去改 Key / 稍后重试 / 充值 …）
+        code: Option<String>,
     },
 }
 
@@ -345,6 +347,7 @@ pub async fn ai_chat(
         Err(e) => {
             let _ = on_event.send(AiEvent::Error {
                 message: format!("连接失败：{e}"),
+                code: Some("network".to_string()),
             });
             return Ok(());
         }
@@ -352,8 +355,10 @@ pub async fn ai_chat(
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
+        let code = error_code(status.as_u16(), &text);
         let _ = on_event.send(AiEvent::Error {
             message: readable_http_error(status.as_u16(), &text),
+            code: Some(code.to_string()),
         });
         return Ok(());
     }
@@ -387,6 +392,7 @@ pub async fn ai_chat(
                 };
                 let _ = on_event.send(AiEvent::Error {
                     message: message.to_string(),
+                    code: Some("timeout".to_string()),
                 });
                 return Ok(());
             }
@@ -394,6 +400,7 @@ pub async fn ai_chat(
         if cancelled(generation) {
             let _ = on_event.send(AiEvent::Error {
                 message: "cancelled".to_string(),
+                code: Some("cancelled".to_string()),
             });
             return Ok(());
         }
@@ -405,6 +412,7 @@ pub async fn ai_chat(
             Err(e) => {
                 let _ = on_event.send(AiEvent::Error {
                     message: format!("读取流失败：{e}"),
+                    code: Some("network".to_string()),
                 });
                 return Ok(());
             }
@@ -418,6 +426,7 @@ pub async fn ai_chat(
                     if cancelled(generation) {
                         let _ = on_event.send(AiEvent::Error {
                             message: "cancelled".to_string(),
+                            code: Some("cancelled".to_string()),
                         });
                         return Ok(());
                     }
@@ -430,6 +439,7 @@ pub async fn ai_chat(
                     if cancelled(generation) {
                         let _ = on_event.send(AiEvent::Error {
                             message: "cancelled".to_string(),
+                            code: Some("cancelled".to_string()),
                         });
                         return Ok(());
                     }
@@ -439,7 +449,12 @@ pub async fn ai_chat(
                     }
                 }
                 SseParse::Error(message) => {
-                    let _ = on_event.send(AiEvent::Error { message });
+                    // 流里报的错拿不到状态码，按关键字猜一个归类
+                    let code = guess_error_code(&message);
+                    let _ = on_event.send(AiEvent::Error {
+                        message,
+                        code: Some(code.to_string()),
+                    });
                     return Ok(());
                 }
                 SseParse::Usage(u) => {
@@ -608,6 +623,52 @@ fn parse_sse_line(line: &str) -> SseParse {
         }
     }
     SseParse::Ignore
+}
+
+/// 依据状态码给出错误归类码，前端据此提示不同的处理办法。
+/// 各家「余额不足」的文案与状态码不统一，状态码判不出来时再按关键字兜底。
+fn error_code(status: u16, payload: &str) -> &'static str {
+    match status {
+        401 | 403 => "auth",
+        429 => "rate_limit",
+        402 => "quota",
+        _ => {
+            let lower = payload.to_lowercase();
+            if lower.contains("insufficient")
+                || lower.contains("balance")
+                || lower.contains("quota")
+                || lower.contains("余额")
+            {
+                "quota"
+            } else if status >= 500 {
+                "server"
+            } else {
+                "request"
+            }
+        }
+    }
+}
+
+/// 流开始之后才报出的错误拿不到状态码，只能从文本里猜归类
+fn guess_error_code(message: &str) -> &'static str {
+    let lower = message.to_lowercase();
+    if lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("unauthor")
+        || lower.contains("invalid api key")
+    {
+        "auth"
+    } else if lower.contains("429") || lower.contains("rate limit") || lower.contains("rate_limit") {
+        "rate_limit"
+    } else if lower.contains("insufficient")
+        || lower.contains("balance")
+        || lower.contains("quota")
+        || lower.contains("余额")
+    {
+        "quota"
+    } else {
+        "server"
+    }
 }
 
 /// HTTP 非 2xx：尽量把服务端的 error.message 提取出来，否则回退到响应片段

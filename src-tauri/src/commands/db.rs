@@ -336,6 +336,65 @@ pub async fn search(
     db::search::search(&conn, &workspace_id, &query)
 }
 
+// ---------- AI 会话 ----------
+
+/// AI 会话行。messages 存整条会话消息数组的 JSON 字符串。
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct AiSessionRow {
+    pub id: String,
+    pub title: String,
+    /// 会话发起时所在的页面（用于提示「这个会话是哪一页的上下文」）
+    pub page_id: Option<String>,
+    pub page_title: Option<String>,
+    pub updated_at: String,
+    pub messages: String,
+}
+
+#[tauri::command]
+pub async fn ai_session_list(db: State<'_, Db>) -> Result<Vec<AiSessionRow>, String> {
+    let conn = db.read_conn()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, title, page_id, page_title, updated_at, messages
+             FROM ai_sessions ORDER BY updated_at DESC",
+        )
+        .map_err(|e| format!("读取 AI 会话失败：{e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(AiSessionRow {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                page_id: r.get(2)?,
+                page_title: r.get(3)?,
+                updated_at: r.get(4)?,
+                messages: r.get(5)?,
+            })
+        })
+        .map_err(|e| format!("读取 AI 会话失败：{e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("读取 AI 会话失败：{e}"))?;
+    Ok(rows)
+}
+
+/// 整份覆盖保存：会话条数有上限、总量不大，一个事务删旧写新最简单可靠。
+#[tauri::command]
+pub async fn ai_session_save_all(db: State<'_, Db>, sessions: Vec<AiSessionRow>) -> Result<(), String> {
+    let mut conn = db.write_conn()?;
+    let tx = conn.transaction().map_err(|e| format!("保存 AI 会话失败：{e}"))?;
+    tx.execute_batch("DELETE FROM ai_sessions")
+        .map_err(|e| format!("保存 AI 会话失败：{e}"))?;
+    for s in &sessions {
+        tx.execute(
+            "INSERT OR REPLACE INTO ai_sessions (id, title, page_id, page_title, updated_at, messages)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![s.id, s.title, s.page_id, s.page_title, s.updated_at, s.messages],
+        )
+        .map_err(|e| format!("保存 AI 会话失败：{e}"))?;
+    }
+    tx.commit().map_err(|e| format!("保存 AI 会话失败：{e}"))?;
+    Ok(())
+}
+
 /// 单篇文档内检索与问题相关的片段，供 AI 的 @ 引用拼上下文（避免整篇硬塞后被静默截断）。
 /// 命中为空时返回空数组，由前端回退到整篇截断。
 #[tauri::command]

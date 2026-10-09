@@ -312,6 +312,8 @@ pub fn run() {
             commands::db::mention_count,
             commands::db::search,
             commands::db::doc_search_snippets,
+            commands::db::ai_session_list,
+            commands::db::ai_session_save_all,
             commands::db::pp_list,
             commands::db::pp_set,
             commands::db::pp_remove,
@@ -340,6 +342,7 @@ pub fn run() {
             commands::ai::ai_get_config,
             commands::ai::ai_save_config,
             commands::ai::ai_test_connection,
+            commands::ai::ai_list_models,
             commands::ai::ai_chat,
             commands::ai::ai_cancel,
         ])
