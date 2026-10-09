@@ -44,6 +44,9 @@ export function AiPanel() {
   const error = useAiStore((s) => s.error);
   const usage = useAiStore((s) => s.usage);
   const usageTotal = useAiStore((s) => s.usageTotal);
+  const pendingContext = useAiStore((s) => s.pendingContext);
+  const setPendingContext = useAiStore((s) => s.setPendingContext);
+  const focusTick = useAiStore((s) => s.focusTick);
   const config = useAiStore((s) => s.config);
   const configLoaded = useAiStore((s) => s.configLoaded);
   const closePanel = useAiStore((s) => s.closePanel);
@@ -97,6 +100,11 @@ export function AiPanel() {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, reasoning, streaming]);
+
+  // 从编辑器（浮动工具栏 / 斜杠菜单 / 命令面板）唤起时把光标交给输入框
+  useEffect(() => {
+    if (open && focusTick > 0) textareaRef.current?.focus();
+  }, [open, focusTick]);
 
   if (!open) return null;
 
@@ -384,10 +392,27 @@ export function AiPanel() {
               disabled={streaming}
               onClick={() => void quickAction("explain")}
             />
+            <QuickButton
+              icon={<Sparkles className="h-3 w-3" />}
+              label={t("ai.continue")}
+              disabled={streaming}
+              onClick={() => void quickAction("continue")}
+            />
           </div>
 
           {/* 输入区：Enter 发送、Shift+Enter 换行；输入 @ 引用工作区文件 */}
           <div className="relative shrink-0 border-t border-neutral-200 p-2 dark:border-neutral-700">
+            {/* 编辑器带入的选中内容：随本轮提问一起下发 */}
+            {pendingContext && (
+              <div className="mb-1 flex items-center gap-1.5 rounded-md border border-brand-300 bg-brand-50 px-2 py-1 text-[11px] text-brand-700 dark:border-brand-600 dark:bg-neutral-800 dark:text-neutral-200">
+                <span className="min-w-0 flex-1 truncate">
+                  {t("ai.pendingContext", { count: pendingContext.length })}
+                </span>
+                <button className="shrink-0 underline hover:no-underline" onClick={() => setPendingContext(null)}>
+                  {t("ai.clearPendingContext")}
+                </button>
+              </div>
+            )}
             {mention && (
               <div className="absolute inset-x-2 bottom-full mb-1 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800">
                 {mentionItems.length === 0 ? (

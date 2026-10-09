@@ -168,6 +168,7 @@ export const en: Record<MessageKey, string> = {
   "float.linkPlaceholder": "Paste a link…",
   "float.unlink": "Remove link",
   "float.clearFormat": "Clear formatting",
+  "float.ai": "Ask AI about the selection",
   "blockMenu.align": "Align",
   "blockMenu.alignLeft": "Left",
   "blockMenu.alignCenter": "Center",
@@ -379,6 +380,8 @@ export const en: Record<MessageKey, string> = {
   "slash.mention": "Mention page (@)",
   "slash.emoji": "Insert emoji",
   "slash.imageGallery": "Image gallery",
+  "slash.aiAsk": "Ask AI",
+  "slash.aiContinue": "AI continue writing",
   "callout.changeIcon": "Change icon",
   "callout.changeColor": "Change color",
   "callout.colorBlue": "Blue",
@@ -743,6 +746,11 @@ export const en: Record<MessageKey, string> = {
   "ai.prompt.rewrite":
     "Rewrite the following to be clearer and smoother while keeping the meaning. Output only the rewritten text:\n\n{content}",
   "ai.prompt.explain": "Explain the meaning and context of the following:\n\n{content}",
+  "ai.prompt.continue":
+    "Continue writing from where the document ends, matching its content and style. Output only the new text, do not repeat existing content.",
+  "ai.continue": "Continue",
+  "ai.pendingContext": "Selection attached ({count} chars); it will be sent with your next question",
+  "ai.clearPendingContext": "Remove",
   "ai.newChat": "New chat",
   "ai.history": "Session history",
   "ai.historyEmpty": "No past sessions",

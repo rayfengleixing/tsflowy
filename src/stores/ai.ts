@@ -62,7 +62,8 @@ export interface AiMessage {
   edit?: AiEditRecord;
 }
 
-export type AiQuickAction = "summarize" | "translate" | "rewrite" | "explain";
+/** 快捷动作：前四个基于选中文本，continue 基于整页上下文（不需要选中） */
+export type AiQuickAction = "summarize" | "translate" | "rewrite" | "explain" | "continue";
 
 const PANEL_WIDTH_KEY = "tsflowy-ai-panel-width";
 const DEFAULT_WIDTH = 360;
@@ -159,6 +160,7 @@ const QUICK_PROMPT_KEY: Record<AiQuickAction, MessageKey> = {
   translate: "ai.prompt.translate",
   rewrite: "ai.prompt.rewrite",
   explain: "ai.prompt.explain",
+  continue: "ai.prompt.continue",
 };
 
 interface AiState {
@@ -178,6 +180,13 @@ interface AiState {
   usageTotal: { prompt: number; completion: number; total: number };
   config: AiConfig | null;
   configLoaded: boolean;
+  /**
+   * 从编辑器（浮动工具栏 / 斜杠菜单）带入的选中内容。
+   * 只随下一轮提问生效，发完即清空——作为 system 上下文下发，不占用用户消息正文。
+   */
+  pendingContext: string | null;
+  /** 输入框聚焦请求计数：从编辑器唤起面板时递增，面板据此把光标交给输入框 */
+  focusTick: number;
 
   toggle: () => void;
   openPanel: () => void;
@@ -185,6 +194,8 @@ interface AiState {
   setWidth: (w: number) => void;
   loadConfig: () => Promise<void>;
   setConfig: (c: AiConfig) => void;
+  /** 设置/清除下一条提问要附带的选中内容 */
+  setPendingContext: (text: string | null) => void;
   send: (text: string) => Promise<void>;
   stop: () => void;
   clear: () => void;
@@ -285,9 +296,12 @@ export const useAiStore = create<AiState>()((set, get) => {
       budget -= m.content.length;
       kept.unshift(m);
     }
+    // 编辑器带入的选中内容：单独一条 system 下发，不塞进用户消息正文（气泡里不必重复一大段原文）
+    const pending = get().pendingContext?.trim();
     return [
       systemMessage(),
       ...(referenceContext ? [{ role: "system" as const, content: referenceContext }] : []),
+      ...(pending ? [{ role: "system" as const, content: `【用户在文档中选中的内容】\n${pending}` }] : []),
       ...kept,
     ];
   };
@@ -416,7 +430,10 @@ export const useAiStore = create<AiState>()((set, get) => {
     try {
       // @ 引用的文档要先读盘转文本，再随 system 一起下发
       const referenceContext = await buildReferenceContext();
-      await aiChat(requestMessages(assistantId, referenceContext), (ev: AiChatEvent) => {
+      const outgoing = requestMessages(assistantId, referenceContext);
+      // 选中内容只随本轮生效：消息组装完就清掉，下一轮不再重复带
+      if (get().pendingContext) set({ pendingContext: null });
+      await aiChat(outgoing, (ev: AiChatEvent) => {
         if (ev.type === "chunk") {
           raw += ev.delta;
           const display = hideEditBlock(raw);
@@ -469,9 +486,12 @@ export const useAiStore = create<AiState>()((set, get) => {
     usageTotal: { prompt: 0, completion: 0, total: 0 },
     config: null,
     configLoaded: false,
+    pendingContext: null,
+    focusTick: 0,
 
     toggle: () => set((s) => ({ open: !s.open })),
-    openPanel: () => set({ open: true }),
+    // 打开面板的同时请求聚焦输入框：编辑器里点「问 AI」后可以立刻开始打字
+    openPanel: () => set((s) => ({ open: true, focusTick: s.focusTick + 1 })),
     closePanel: () => set({ open: false }),
     setWidth: (w) => {
       const width = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w));
@@ -492,6 +512,7 @@ export const useAiStore = create<AiState>()((set, get) => {
       }
     },
     setConfig: (config) => set({ config, configLoaded: true }),
+    setPendingContext: (text) => set({ pendingContext: text }),
 
     send: async (text) => {
       const content = text.trim();
@@ -581,6 +602,15 @@ export const useAiStore = create<AiState>()((set, get) => {
     quickAction: async (kind) => {
       const bridge = getAiEditor();
       const limit = maxChars();
+      // 续写不需要选中：整页上下文已随 system prompt 下发，只要文档在就行
+      if (kind === "continue") {
+        if (!bridge) {
+          toast.error(t("ai.noPage"));
+          return;
+        }
+        await get().send(t(QUICK_PROMPT_KEY[kind]));
+        return;
+      }
       let content: string;
       if (kind === "summarize") {
         const page = bridge?.getPageText().trim() ?? "";
