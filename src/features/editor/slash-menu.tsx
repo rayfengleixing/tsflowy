@@ -28,7 +28,9 @@ import {
   Type,
   Workflow,
   AtSign,
+  Sparkles,
 } from "lucide-react";
+import { useAiStore } from "@/stores/ai";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@/lib/invoke";
 import { toast } from "sonner";
@@ -266,6 +268,25 @@ export const slashItems: SlashItem[] = [
     alias: "gallery",
     icon: <Images className="h-4 w-4" />,
     run: (e) => e.chain().focus().insertContent({ type: "imageGallery" }).run(),
+  },
+  {
+    key: "aiAsk",
+    alias: "AI",
+    icon: <Sparkles className="h-4 w-4 text-brand-500" />,
+    keywords: "ai wen ai zhishou 助手 提问",
+    run: () => {
+      // 只是把面板叫出来并聚焦输入：文档上下文由面板自行从编辑器读取
+      useAiStore.getState().openPanel();
+    },
+  },
+  {
+    key: "aiContinue",
+    alias: "AI",
+    icon: <Sparkles className="h-4 w-4 text-brand-500" />,
+    keywords: "ai xuxie 续写 shengcheng 生成",
+    run: () => {
+      void useAiStore.getState().quickAction("continue");
+    },
   },
 ];
 

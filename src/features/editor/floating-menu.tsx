@@ -13,8 +13,10 @@ import {
   Eraser,
   Check,
   Unlink,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAiStore } from "@/stores/ai";
 import { t } from "@/lib/i18n";
 import { clampFloatToEditor, getEditorViewportRect } from "./float-clamp";
 
@@ -485,6 +487,21 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
           onClick={() => editor.chain().focus().clearNodes().unsetAllMarks().run()}
         >
           <Eraser className="h-4 w-4" />
+        </IconBtn>
+        <Divider />
+        {/* 就选中内容问 AI：把选中文本带进面板，省去「复制—切面板—粘贴」 */}
+        <IconBtn
+          title={t("float.ai")}
+          onClick={() => {
+            closeAll();
+            const { from, to } = editor.state.selection;
+            const selected = from === to ? "" : editor.state.doc.textBetween(from, to, "\n").trim();
+            const ai = useAiStore.getState();
+            ai.openPanel();
+            ai.setPendingContext(selected || null);
+          }}
+        >
+          <Sparkles className="h-4 w-4 text-brand-500" />
         </IconBtn>
       </div>
     </div>
