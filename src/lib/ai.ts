@@ -24,6 +24,8 @@ export interface AiConfig {
   /** 当前生效档位 id，空串表示单档配置 */
   active_profile: string;
   quick_actions: AiQuickActionDef[];
+  /** 是否用 function calling 下发编辑指令（默认关闭，兼容工具支持不全的服务商） */
+  use_tools: boolean;
   has_api_key: boolean;
   api_key_masked: string;
 }
@@ -106,6 +108,7 @@ export async function aiSaveConfig(input: {
   profiles: AiProfile[];
   activeProfile: string;
   quickActions: AiQuickActionDef[];
+  useTools: boolean;
   apiKey: string | null;
 }): Promise<void> {
   // 顶层参数名走 Tauri 的 camelCase 映射，但结构体内部字段由 serde 按 Rust 原名反序列化，
@@ -124,6 +127,7 @@ export async function aiSaveConfig(input: {
       profiles: input.profiles,
       active_profile: input.activeProfile,
       quick_actions: input.quickActions,
+      use_tools: input.useTools,
       api_key: input.apiKey,
     },
   });

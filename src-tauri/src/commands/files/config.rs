@@ -63,6 +63,10 @@ pub struct AiConfig {
     /// 用户自定义快捷指令（追加在内置动作之后）
     #[serde(default)]
     pub quick_actions: Vec<AiQuickAction>,
+    /// 是否改用 function calling 下发编辑指令（结构化输出更可靠）。
+    /// 默认 false：走文本协议，兼容 Ollama 这类工具调用支持不全的服务商。
+    #[serde(default)]
+    pub use_tools: bool,
 }
 
 fn default_temperature() -> f64 {
@@ -85,6 +89,7 @@ impl Default for AiConfig {
             profiles: Vec::new(),
             active_profile: String::new(),
             quick_actions: Vec::new(),
+            use_tools: false,
         }
     }
 }

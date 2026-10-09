@@ -806,6 +806,9 @@ export const zh = {
   "settings.aiScopeSelection": "选中文本",
   "settings.aiScopePage": "整页文本",
   "settings.aiScopeNone": "不取内容",
+  "settings.aiUseTools": "用 function calling 下发编辑指令",
+  "settings.aiUseToolsDesc":
+    "开启后 AI 的文档改动走结构化输出，更不容易写坏；Ollama 等工具调用支持不全的服务商请保持关闭。",
   // — CSV 导入选项对话框 —
   "csv.importOptionsTitle": "确认导入字段类型",
   "csv.importOptionsDesc": "为每列选择字段类型；附件列需选择存放文件的文件夹，按文件名匹配。",

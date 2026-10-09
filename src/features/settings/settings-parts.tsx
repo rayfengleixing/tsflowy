@@ -130,6 +130,8 @@ export interface AiFormState {
   activeProfile: string;
   /** 用户自定义快捷指令 */
   quickActions: AiQuickActionDef[];
+  /** 编辑指令改用 function calling 下发 */
+  useTools: boolean;
 }
 
 /** AI 服务商预设 → i18n 文案 */

@@ -22,6 +22,9 @@ const FIRST_CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
 const IDLE_CHUNK_TIMEOUT: Duration = Duration::from_secs(120);
 /// 连通性测试的整体上限：只要服务端 30 秒内没给出完整响应就判定不可用。
 const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// 文本协议里编辑指令块的标记（与前端 lib/ai-edit.ts 的 EDIT_BLOCK_TAG 保持一致）。
+/// 开启工具调用时，会把函数参数原样包成这个块，好让前端的解析逻辑完全复用。
+const EDIT_BLOCK_TAG: &str = "tsflowy-edit";
 
 /// 未配置 AI 时的统一错误文案（前后端约定）
 const NOT_CONFIGURED: &str = "尚未配置 AI：请在设置中填写服务商与 API Key";
@@ -97,6 +100,8 @@ pub struct AiConfigPublic {
     pub active_profile: String,
     /// 用户自定义快捷指令
     pub quick_actions: Vec<AiQuickActionPublic>,
+    /// 是否用 function calling 下发编辑指令
+    pub use_tools: bool,
     pub has_api_key: bool,
     pub api_key_masked: String,
 }
@@ -136,6 +141,7 @@ pub struct AiConfigInput {
     pub profiles: Vec<AiProfileInput>,
     pub active_profile: String,
     pub quick_actions: Vec<AiQuickActionInput>,
+    pub use_tools: bool,
     pub api_key: Option<String>,
 }
 
@@ -207,6 +213,7 @@ pub fn ai_save_config(app: tauri::AppHandle, cfg: AiConfigInput) -> Result<(), S
             },
         })
         .collect();
+    ai.use_tools = cfg.use_tools;
     // None 保持原值不变；Some("") 清空；Some(s) 覆盖。
     // 非空 key 优先写入系统凭据库：成功则 config.json 不留明文；失败则回退明文，保证可用。
     match cfg.api_key {
@@ -335,6 +342,33 @@ pub async fn ai_chat(
         if ai.max_tokens > 0 {
             obj.insert("max_tokens".into(), serde_json::json!(ai.max_tokens));
         }
+        // 开启后改用 function calling 让模型下发编辑指令：结构化输出比自由文本更不容易写坏
+        if ai.use_tools {
+            obj.insert(
+                "tools".into(),
+                serde_json::json!([{
+                    "type": "function",
+                    "function": {
+                        "name": "apply_edit",
+                        "description": "把改动写进用户当前打开的文档。需要改动文档时调用；只是回答问题时不要调用。",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "op": {
+                                    "type": "string",
+                                    "enum": ["replace_selection", "insert_at_cursor", "append_to_document"],
+                                    "description": "replace_selection 替换选中文字（无选中时退化成光标处插入）；insert_at_cursor 光标处插入；append_to_document 追加到文档末尾"
+                                },
+                                "summary": { "type": "string", "description": "一句话中文说明改了什么" },
+                                "content": { "type": "string", "description": "改动后的 Markdown 内容" }
+                            },
+                            "required": ["op", "summary", "content"]
+                        }
+                    }
+                }]),
+            );
+            obj.insert("tool_choice".into(), serde_json::json!("auto"));
+        }
     }
     let resp = match client
         .post(chat_url(&ai.base_url))
@@ -369,6 +403,8 @@ pub async fn ai_chat(
     // 累积字节而非字符串，避免多字节 UTF-8（中文）被拆到两个块时解码成乱码。
     let mut buf: Vec<u8> = Vec::new();
     let mut full = String::new();
+    // 工具调用的函数参数增量（开启 use_tools 时才有），最后整体拼成指令块
+    let mut tool_args = String::new();
     let mut usage: Option<AiUsage> = None;
     // 首帧用较短的等待上限，之后放宽：推理型模型会先长时间吐 reasoning，期间帧是连续的。
     let mut awaiting_first = true;
@@ -460,7 +496,11 @@ pub async fn ai_chat(
                 SseParse::Usage(u) => {
                     usage = Some(u);
                 }
+                SseParse::ToolArgs(args) => {
+                    tool_args.push_str(&args);
+                }
                 SseParse::Done => {
+                    append_tool_block(&mut full, &tool_args);
                     let _ = on_event.send(AiEvent::Done { full, usage });
                     return Ok(());
                 }
@@ -469,6 +509,7 @@ pub async fn ai_chat(
         }
     }
     // 服务端未发 [DONE] 就断流：按正常结束处理，把已收到的内容交给前端
+    append_tool_block(&mut full, &tool_args);
     let _ = on_event.send(AiEvent::Done { full, usage });
     Ok(())
 }
@@ -515,6 +556,7 @@ fn public_of(cfg: &files::AppConfig, effective_key: &str) -> AiConfigPublic {
                 scope: a.scope.clone(),
             })
             .collect(),
+        use_tools: ai.use_tools,
         has_api_key: !effective_key.is_empty(),
         api_key_masked: mask_api_key(effective_key),
     }
@@ -544,6 +586,16 @@ fn models_url(base_url: &str) -> String {
     format!("{}/models", base_url.trim_end_matches('/'))
 }
 
+/// 把工具调用的函数参数包成文本协议的指令块，追加到回答末尾。
+/// 这样「结构化输出」和「文本协议」两条路最终交给前端的是同一种形态，解析逻辑不必分叉。
+fn append_tool_block(full: &mut String, tool_args: &str) {
+    let args = tool_args.trim();
+    if args.is_empty() {
+        return;
+    }
+    full.push_str(&format!("\n```{EDIT_BLOCK_TAG}\n{}\n```", args));
+}
+
 /// 从 `{"error": ...}` 里提取可读信息（error 可能是对象或字符串）
 fn extract_error_message(v: &serde_json::Value) -> Option<String> {
     let err = v.get("error")?;
@@ -567,6 +619,8 @@ enum SseParse {
     Error(String),
     /// 尾帧携带的 token 用量
     Usage(AiUsage),
+    /// 工具调用的函数参数增量（开启 use_tools 时）
+    ToolArgs(String),
     /// 非 data 行，或空 delta
     Ignore,
 }
@@ -609,6 +663,18 @@ fn parse_sse_line(line: &str) -> SseParse {
         .unwrap_or("");
     if !reasoning.is_empty() {
         return SseParse::Reasoning(reasoning.to_string());
+    }
+    // 工具调用：函数名不关心（只有一个 apply_edit），只要参数的增量
+    let tool_args = delta
+        .and_then(|d| d.get("tool_calls"))
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|c| c.get("function"))
+        .and_then(|f| f.get("arguments"))
+        .and_then(|a| a.as_str())
+        .unwrap_or("");
+    if !tool_args.is_empty() {
+        return SseParse::ToolArgs(tool_args.to_string());
     }
     // 内容帧走完了才看用量：部分服务商（含带 null usage 的流式实现）会在每一帧都带上 usage 字段，
     // 先判用量会把正常内容帧当成空帧丢掉。只有拿到了完整用量才算一条 Usage 事件。
@@ -849,6 +915,25 @@ data: [DONE]
                 total_tokens: Some(46),
             })
         );
+    }
+
+    #[test]
+    fn parse_sse_tool_call_arguments() {
+        let line = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"op\":"}}]}}]}"#;
+        assert_eq!(parse_sse_line(line), SseParse::ToolArgs("{\"op\":".to_string()));
+    }
+
+    #[test]
+    fn append_tool_block_wraps_arguments() {
+        let mut full = "正文".to_string();
+        append_tool_block(&mut full, r#"{"op":"insert_at_cursor","summary":"加一句","content":"新内容"}"#);
+        assert!(full.starts_with("正文"));
+        assert!(full.contains(&format!("```{EDIT_BLOCK_TAG}")));
+        assert!(full.ends_with("```"));
+        // 空参数不追加任何内容
+        let mut unchanged = "只有正文".to_string();
+        append_tool_block(&mut unchanged, "   ");
+        assert_eq!(unchanged, "只有正文");
     }
 
     #[test]

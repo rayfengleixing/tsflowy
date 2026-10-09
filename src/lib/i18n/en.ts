@@ -826,6 +826,9 @@ export const en: Record<MessageKey, string> = {
   "settings.aiScopeSelection": "Selection",
   "settings.aiScopePage": "Whole page",
   "settings.aiScopeNone": "No content",
+  "settings.aiUseTools": "Send edit instructions via function calling",
+  "settings.aiUseToolsDesc":
+    "When enabled, document changes use structured output and are less likely to be malformed. Keep it off for providers with incomplete tool support such as Ollama.",
   // — CSV import options dialog —
   "csv.importOptionsTitle": "Confirm field types",
   "csv.importOptionsDesc": "Choose a type for each column. Attachment columns need a folder, matched by file name.",

@@ -153,6 +153,7 @@ export function SettingsPage() {
     profiles: [],
     activeProfile: "",
     quickActions: [],
+    useTools: false,
   });
   const [aiApiKey, setAiApiKey] = useState("");
   const [busyAiTest, setBusyAiTest] = useState(false);
@@ -509,6 +510,7 @@ export function SettingsPage() {
       profiles: c.profiles,
       activeProfile: c.active_profile,
       quickActions: c.quick_actions,
+      useTools: c.use_tools,
     });
   };
 
@@ -529,6 +531,7 @@ export function SettingsPage() {
       profiles: next.profiles,
       activeProfile: next.activeProfile,
       quickActions: next.quickActions,
+      useTools: next.useTools,
       apiKey: apiKey.trim() === "" ? null : apiKey,
     });
     const c = await aiGetConfig();
@@ -1511,6 +1514,11 @@ export function SettingsPage() {
             )}
           </div>
 
+          <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">
+            <input type="checkbox" checked={aiForm.useTools} onChange={(e) => saveAi({ useTools: e.target.checked })} />
+            {t("settings.aiUseTools")}
+          </label>
+          <p className="-mt-2 text-[11px] text-neutral-500">{t("settings.aiUseToolsDesc")}</p>
           <Row label="">
             <Button size="sm" variant="outline" onClick={testAi} disabled={busyAiTest}>
               {busyAiTest ? (

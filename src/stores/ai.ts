@@ -887,6 +887,7 @@ export const useAiStore = create<AiState>()((set, get) => {
           profiles: c.profiles,
           activeProfile: id,
           quickActions: c.quick_actions,
+          useTools: c.use_tools,
           apiKey: null,
         });
         set({ config: await aiGetConfig() });
