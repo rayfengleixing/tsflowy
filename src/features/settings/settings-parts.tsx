@@ -82,6 +82,14 @@ export interface SyncInfo {
   last_time: string | null;
 }
 
+/** list_sync_conflicts 返回结构 */
+export interface ConflictFile {
+  name: string;
+  size: number;
+  /** 修改时间（本地时间串） */
+  modified: string;
+}
+
 /** run_sync 返回结构 */
 export interface SyncRunResult {
   action: string;

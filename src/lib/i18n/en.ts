@@ -562,6 +562,17 @@ export const en: Record<MessageKey, string> = {
   "settings.syncAssets": "{n} attachment(s) copied",
   "settings.syncConflictFiles": "Conflict copies",
   "settings.syncFailed": "Sync failed",
+  "settings.syncAutoPull": "Auto-sync once on startup (pull updates from other devices)",
+  "settings.syncAutoWrite": "Auto-sync after local writes",
+  "settings.syncAutoDelay": "Idle",
+  "settings.syncAutoDelayUnit": "s before running",
+  "settings.syncAutoHint":
+    "Auto-sync runs only after writes have been idle for the full delay; don't close the app meanwhile. When remote data is pulled, the window reloads automatically.",
+  "settings.syncConflictsTitle": "Conflict copies",
+  "settings.syncConflictsOpen": "Open folder",
+  "settings.syncConflictRestore": "Restore this copy",
+  "settings.syncConflictRestoreConfirm":
+    "Replace local data entirely with conflict copy “{name}” (your current data is backed up first), then reload. Continue?",
   "daily.today": "Today's note",
   "daily.openToday": "Open today's note",
   "daily.pickDate": "Pick a date",

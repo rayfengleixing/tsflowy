@@ -552,6 +552,17 @@ export const zh = {
   "settings.syncAssets": "补齐附件 {n} 个",
   "settings.syncConflictFiles": "冲突副本",
   "settings.syncFailed": "同步失败",
+  "settings.syncAutoPull": "启动时自动同步一次（拉取其他设备的更新）",
+  "settings.syncAutoWrite": "本机写入后自动同步",
+  "settings.syncAutoDelay": "静置",
+  "settings.syncAutoDelayUnit": "秒后执行",
+  "settings.syncAutoHint":
+    "自动同步在最后一次写入静置满延迟后才执行，期间请勿关闭应用；同步取回远端数据时窗口会自动重新加载。",
+  "settings.syncConflictsTitle": "冲突副本",
+  "settings.syncConflictsOpen": "打开所在文件夹",
+  "settings.syncConflictRestore": "用这份恢复本机",
+  "settings.syncConflictRestoreConfirm":
+    "将用冲突副本「{name}」整体替换本机当前数据（本机现有数据会先自动备份），应用随后重新加载。确定继续？",
   "daily.today": "今日笔记",
   "daily.openToday": "打开今日笔记",
   "daily.pickDate": "选择日期",

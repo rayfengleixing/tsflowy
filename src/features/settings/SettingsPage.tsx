@@ -41,6 +41,7 @@ import { importMarkdownFolder } from "@/lib/import-folder";
 import { loadDailyNotesConfig, saveDailyNotesConfig, type DailyNotesConfig } from "@/lib/daily-notes";
 import { exportMarkdownFolder } from "@/lib/export-folder";
 import { flushAllForClose } from "@/lib/close-flush";
+import { loadAutoSyncConfig, saveAutoSyncConfig, type AutoSyncConfig } from "@/lib/auto-sync";
 import { aiGetConfig, aiSaveConfig, aiTestConnection, AI_PROVIDER_PRESETS, type AiConfig } from "@/lib/ai";
 import { t, LANGUAGES, type LangCode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -66,6 +67,7 @@ import {
   type AutoBackupInfo,
   type SyncInfo,
   type SyncRunResult,
+  type ConflictFile,
   type AiFormState,
 } from "./settings-parts";
 
@@ -107,6 +109,12 @@ export function SettingsPage() {
   const [purgeAssetsOpen, setPurgeAssetsOpen] = useState(false);
   const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null);
   const [busySync, setBusySync] = useState(false);
+  // 冲突副本列表（进入同步区块时拉取；恢复/打开目录后刷新）
+  const [conflictFiles, setConflictFiles] = useState<ConflictFile[]>([]);
+  // 待确认恢复的冲突副本（恢复会替换本机库，先确认）
+  const [restoreTarget, setRestoreTarget] = useState<ConflictFile | null>(null);
+  // 同步自动化选项（localStorage，见 lib/auto-sync.ts）
+  const [autoSync, setAutoSync] = useState<AutoSyncConfig>(() => loadAutoSyncConfig());
   // 自动更新：idle → checking → available → downloading → installing
   const [updateState, setUpdateState] = useState<"idle" | "checking" | "available" | "downloading" | "installing">(
     "idle",
@@ -417,8 +425,44 @@ export function SettingsPage() {
 
   const refreshSyncInfo = () => {
     invoke<SyncInfo>("get_sync_info")
-      .then(setSyncInfo)
+      .then((info) => {
+        setSyncInfo(info);
+        if (info.dir) {
+          invoke<ConflictFile[]>("list_sync_conflicts")
+            .then(setConflictFiles)
+            .catch((e: unknown) => logger.error("failed to list sync conflicts", e));
+        } else {
+          setConflictFiles([]);
+        }
+      })
       .catch((e: unknown) => logger.error("failed to get sync info", e));
+  };
+
+  /** 自动化选项：存 localStorage（前端定时器读它，无需后端往返） */
+  const updateAutoSync = (patch: Partial<AutoSyncConfig>) => {
+    const next = { ...autoSync, ...patch };
+    setAutoSync(next);
+    saveAutoSyncConfig(next);
+  };
+
+  /** 用冲突副本替换本机库：成功后必须重载（本机库已被换掉） */
+  const restoreConflict = async (name: string) => {
+    try {
+      await flushAllForClose();
+      await invoke("restore_sync_conflict", { name });
+      window.location.reload();
+    } catch (e) {
+      logger.error("restore conflict failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
+  };
+
+  const openConflictsDir = async () => {
+    try {
+      await invoke("open_conflicts_dir");
+    } catch (e) {
+      toast.error(t("error.db", { message: String(e) }));
+    }
   };
 
   // ————— AI 助手：读取/保存配置 —————
@@ -518,6 +562,10 @@ export function SettingsPage() {
       await flushAllForClose();
       const r = await invoke<SyncRunResult>("run_sync");
       setSyncInfo(r.info);
+      // 本次可能新产生/清理了冲突副本，重新拉取列表
+      invoke<ConflictFile[]>("list_sync_conflicts")
+        .then(setConflictFiles)
+        .catch((e: unknown) => logger.error("failed to list sync conflicts", e));
       const key = SYNC_ACTION_KEY[r.action] ?? "settings.syncActionNone";
       const extra = r.assets_copied > 0 ? ` · ${t("settings.syncAssets", { n: r.assets_copied })}` : "";
       if (r.action === "conflict") {
@@ -939,6 +987,72 @@ export function SettingsPage() {
                 {t("settings.syncLast")}：{syncInfo.last_time ?? t("settings.syncNever")}
                 {syncLastActionKey && <span className="ml-2">{t(syncLastActionKey)}</span>}
               </div>
+              <div className="mt-3 flex flex-col gap-2">
+                <label className="flex items-center gap-2 text-[12px] text-neutral-700 dark:text-neutral-200">
+                  <input
+                    type="checkbox"
+                    checked={autoSync.pullOnStart}
+                    onChange={(e) => updateAutoSync({ pullOnStart: e.target.checked })}
+                  />
+                  {t("settings.syncAutoPull")}
+                </label>
+                <label className="flex items-center gap-2 text-[12px] text-neutral-700 dark:text-neutral-200">
+                  <input
+                    type="checkbox"
+                    checked={autoSync.syncAfterWrite}
+                    onChange={(e) => updateAutoSync({ syncAfterWrite: e.target.checked })}
+                  />
+                  {t("settings.syncAutoWrite")}
+                  {autoSync.syncAfterWrite && (
+                    <span className="ml-1 flex items-center gap-1 text-[11px] text-neutral-500">
+                      {t("settings.syncAutoDelay")}
+                      <input
+                        type="number"
+                        min={5}
+                        max={3600}
+                        defaultValue={autoSync.delaySecs}
+                        key={autoSync.delaySecs}
+                        onBlur={(e) => updateAutoSync({ delaySecs: Number(e.target.value) })}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                        }}
+                        className="h-6 w-16 rounded-md border border-neutral-300 bg-white px-1.5 text-[11px] text-neutral-800 outline-none focus:border-brand-500 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100"
+                      />
+                      {t("settings.syncAutoDelayUnit")}
+                    </span>
+                  )}
+                </label>
+                <p className="max-w-lg text-[11px] text-neutral-400">{t("settings.syncAutoHint")}</p>
+              </div>
+              {conflictFiles.length > 0 && (
+                <div className="mt-3">
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="text-[11px] font-medium text-neutral-600 dark:text-neutral-300">
+                      {t("settings.syncConflictsTitle")}（{conflictFiles.length}）
+                    </span>
+                    <button className="text-[11px] text-brand-600 hover:underline" onClick={openConflictsDir}>
+                      {t("settings.syncConflictsOpen")}
+                    </button>
+                  </div>
+                  <ul className="divide-y divide-neutral-200 rounded-md border border-neutral-200 dark:divide-neutral-700 dark:border-neutral-700">
+                    {conflictFiles.map((f) => (
+                      <li key={f.name} className="flex items-center gap-2 px-2 py-1.5">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-mono text-[11px] text-neutral-700 dark:text-neutral-200">
+                            {f.name}
+                          </div>
+                          <div className="text-[10px] text-neutral-400">
+                            {f.modified} · {formatBytes(f.size)}
+                          </div>
+                        </div>
+                        <Button size="sm" variant="outline" onClick={() => setRestoreTarget(f)}>
+                          {t("settings.syncConflictRestore")}
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </>
           ) : (
             <div className="flex flex-wrap items-center gap-3">
@@ -950,6 +1064,22 @@ export function SettingsPage() {
             </div>
           )}
         </Section>
+
+        <ConfirmDialog
+          open={restoreTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) setRestoreTarget(null);
+          }}
+          danger
+          title={t("settings.syncConflictRestore")}
+          description={t("settings.syncConflictRestoreConfirm", { name: restoreTarget?.name ?? "" })}
+          confirmLabel={t("settings.syncConflictRestore")}
+          onConfirm={() => {
+            const name = restoreTarget?.name;
+            setRestoreTarget(null);
+            if (name) void restoreConflict(name);
+          }}
+        />
 
         <Section title={t("settings.dailyNotes")}>
           <p className="max-w-lg text-xs text-neutral-500">{t("settings.dailyNotesDesc")}</p>

@@ -21,6 +21,7 @@ import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 import { t, useLanguage } from "@/lib/i18n";
 import { flushAllForClose, registerCloseFlush } from "@/lib/close-flush";
+import { startAutoSync } from "@/lib/auto-sync";
 import { flushPendingUiPersist } from "@/stores/workspace";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
@@ -185,6 +186,13 @@ function App() {
   useEffect(() => {
     if (!ready) return;
     mentionsApi.backfillIfEmpty().catch(logger.catch("App.backfillMentions", "mentions backfill failed"));
+  }, [ready]);
+
+  // 自动同步（B7）：数据就绪后启动。启动拉取立即执行一次；
+  // 写入后自动同步由 main.tsx 包装的 invoke 咽喉点驱动防抖定时器（见 lib/auto-sync.ts）。
+  useEffect(() => {
+    if (!ready) return;
+    startAutoSync();
   }, [ready]);
 
   // 全局快捷键（可在 设置 → 快捷键 里自定义）：

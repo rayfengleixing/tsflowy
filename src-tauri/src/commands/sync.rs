@@ -233,7 +233,7 @@ pub fn open_sync_dir(app: tauri::AppHandle) -> Result<(), String> {
     files::open_path_in_system(&path)
 }
 
-/// 手动双向同步（设置页按钮）。
+/// 手动双向同步（设置页按钮与前端自动同步定时器共用）。
 /// 拉取路径要替换本机库，因此先整体关库、换完再开库——Windows 下连接未关时主库无法改名。
 #[tauri::command]
 pub async fn run_sync(
@@ -412,6 +412,84 @@ fn restore_stashed_db(local_db: &Path, suffix: &str) {
             let _ = fs::rename(&from, &to);
         }
     }
+}
+
+/// conflicts/ 里的一份冲突副本
+#[derive(Serialize)]
+pub struct ConflictFile {
+    pub name: String,
+    pub size: u64,
+    /// 修改时间（本地时间串）
+    pub modified: String,
+}
+
+/// 列出冲突副本（按修改时间倒序）。未开启同步或目录不存在时返回空列表。
+#[tauri::command]
+pub fn list_sync_conflicts(app: tauri::AppHandle) -> Result<Vec<ConflictFile>, String> {
+    let cfg = files::load_app_config(&app);
+    let Some(dir) = cfg.sync.dir.clone().filter(|d| !d.trim().is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let cdir = sync_dir_of(&dir).join(CONFLICT_DIR);
+    let Ok(entries) = fs::read_dir(&cdir) else {
+        return Ok(Vec::new());
+    };
+    let mut out: Vec<(SystemTime, ConflictFile)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let m = e.metadata().ok()?;
+            if !m.is_file() {
+                return None;
+            }
+            let modified = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            Some((
+                modified,
+                ConflictFile {
+                    name: e.file_name().to_string_lossy().to_string(),
+                    size: m.len(),
+                    modified: files::format_local_time(modified),
+                },
+            ))
+        })
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(out.into_iter().map(|(_, f)| f).collect())
+}
+
+/// 在系统文件管理器里打开 conflicts/ 目录
+#[tauri::command]
+pub fn open_conflicts_dir(app: tauri::AppHandle) -> Result<(), String> {
+    let cfg = files::load_app_config(&app);
+    let Some(dir) = cfg.sync.dir.clone().filter(|d| !d.trim().is_empty()) else {
+        return Err("sync dir not configured".to_string());
+    };
+    let path = sync_dir_of(&dir).join(CONFLICT_DIR);
+    fs::create_dir_all(&path).map_err(|e| format!("create conflicts dir failed: {e}"))?;
+    files::open_path_in_system(&path)
+}
+
+/// 用一份冲突副本替换本机库（与拉取同一条替换路径：关库→备份旧库→原子换库）。
+/// 替换后本机库比远端"新"，下一次同步会自动把它推上去。前端调用成功后必须重载窗口。
+#[tauri::command]
+pub async fn restore_sync_conflict(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, Db>,
+    name: String,
+) -> Result<(), String> {
+    // 只接受 conflicts/ 下的纯文件名，拒绝任何路径成分
+    if name.is_empty() || Path::new(&name).file_name().and_then(|s| s.to_str()) != Some(name.as_str()) {
+        return Err("invalid conflict name".to_string());
+    }
+    let cfg = files::load_app_config(&app);
+    let Some(dir) = cfg.sync.dir.clone().filter(|d| !d.trim().is_empty()) else {
+        return Err("sync dir not configured".to_string());
+    };
+    let src = sync_dir_of(&dir).join(CONFLICT_DIR).join(&name);
+    if !src.is_file() {
+        return Err(format!("conflict file not found: {name}"));
+    }
+    let local_db = files::real_data_dir(&app)?.join(DB_FILE);
+    pull_into_local(&db, &local_db, &src)
 }
 
 #[cfg(test)]
