@@ -693,6 +693,8 @@ export const zh = {
   "ai.editNotApplied": "未写入文档（当前没有可编辑的文档）",
   "ai.undoEdit": "撤销",
   "ai.editUndone": "已撤销本次修改",
+  "ai.undoFailed": "无法精确撤销：文档在 AI 修改后又被手动编辑过，请用 Ctrl+Z 自行回退",
+  "ai.editMalformed": "AI 返回的编辑指令格式有误，未修改文档，可重试一次",
   "ai.noEditor": "当前没有可用的编辑器",
   "ai.close": "收起面板",
   "ai.retry": "重试",

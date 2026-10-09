@@ -542,9 +542,9 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       },
       // AI 自主修改：按 op 决定改写范围，直接落到文档上
       applyEdit: (op, markdown) => {
-        if (editor.isDestroyed) return false;
+        if (editor.isDestroyed) return { applied: false };
         const slice = toSlice(markdown);
-        if (!slice) return false;
+        if (!slice) return { applied: false };
         const { doc, selection } = editor.state;
         const range =
           op === "append_to_document"
@@ -557,10 +557,30 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         editor.view.dispatch(editor.state.tr.replaceRange(range.from, range.to, slice).scrollIntoView());
         editor.view.focus();
         // 结构锁定（首行标题/第二行分割线）会拦掉落在保护区里的事务：据实回报是否真的改了
-        return !editor.state.doc.eq(before);
+        if (editor.state.doc.eq(before)) return { applied: false };
+        // 留下改前快照作为撤销凭据：撤销时据此判断「撤掉的到底是不是这次改动」
+        return { applied: true, revert: { before: before.toJSON() } };
       },
-      undo: () => {
-        if (!editor.isDestroyed) editor.commands.undo();
+      undoAiEdit: (revert) => {
+        if (editor.isDestroyed || !revert) return false;
+        let beforeNode;
+        try {
+          beforeNode = PMNode.fromJSON(editor.state.schema, revert.before);
+        } catch (e) {
+          logger.error("ai undo: snapshot invalid", e);
+          return false;
+        }
+        // 试探性撤销：先撤一步，若正好回到 AI 改动前的快照，说明撤掉的就是这次改动。
+        // 否则这一步撤的是用户后来的编辑，立刻 redo 复原，绝不静默丢弃用户内容。
+        const current = editor.state.doc;
+        editor.commands.undo();
+        if (beforeNode.eq(editor.state.doc)) return true;
+        editor.commands.redo();
+        if (!editor.state.doc.eq(current)) {
+          // redo 没能复原（撤销栈被清空等极端情况）：整体写回原文兜底
+          editor.view.dispatch(editor.state.tr.replaceWith(0, editor.state.doc.content.size, current.content));
+        }
+        return false;
       },
     });
   }, [editor, isMainPane, view.name]);

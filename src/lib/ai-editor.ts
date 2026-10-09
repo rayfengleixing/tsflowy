@@ -5,6 +5,24 @@
 
 import type { AiEditOp } from "./ai-edit";
 
+/**
+ * AI 编辑的落地结果。
+ * applied 为假表示没写成（没有目标 / 结构锁定拦掉了事务）；
+ * revert 是撤销句柄，里面存着改之前的文档快照。
+ */
+export interface AiEditApplyResult {
+  applied: boolean;
+  revert?: AiEditRevert;
+}
+
+/**
+ * 撤销句柄（不透明）。只在产生它的那个编辑器实例里有效，跨页面/跨重启一律失效，
+ * 因此不参与会话持久化（见 stores/ai.ts 的 sanitizeMessage）。
+ */
+export interface AiEditRevert {
+  readonly before: unknown;
+}
+
 export interface AiEditorBridge {
   /** 当前文档纯文本（块之间用换行连接） */
   getPageText: () => string;
@@ -18,11 +36,16 @@ export interface AiEditorBridge {
   insertAtCursor: (text: string) => void;
   /**
    * 应用 AI 下发的编辑指令（依据 op 决定作用范围）。
-   * 成功写入返回 true；没有可用目标或转换失败返回 false。
+   * 返回落地结果：applied 表示真的改了文档，revert 供 undoAiEdit 精确回滚。
    */
-  applyEdit: (op: AiEditOp, markdown: string) => boolean;
-  /** 撤销上一次文档改动（等价于 Ctrl+Z），用于给自动改写兜底 */
-  undo: () => void;
+  applyEdit: (op: AiEditOp, markdown: string) => AiEditApplyResult;
+  /**
+   * 精确回滚一次 AI 编辑。
+   * 直接 editor.undo() 会撤销「最后一次改动」——若 AI 改完之后用户自己又编辑过，
+   * 那一步撤的是用户的操作，界面却显示「已撤销本次修改」，属于静默破坏用户内容。
+   * 这里先 undo 一次并与改前快照比对：一致才算成功；不一致立刻 redo 复原并返回 false。
+   */
+  undoAiEdit: (revert: AiEditRevert | undefined) => boolean;
 }
 
 let current: AiEditorBridge | null = null;

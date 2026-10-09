@@ -707,6 +707,9 @@ export const en: Record<MessageKey, string> = {
   "ai.editNotApplied": "Not written (no editable document)",
   "ai.undoEdit": "Undo",
   "ai.editUndone": "Change undone",
+  "ai.undoFailed":
+    "Cannot undo precisely: the document was edited manually after the AI change. Use Ctrl+Z to roll back yourself.",
+  "ai.editMalformed": "The AI returned a malformed edit instruction; the document was not changed. You can retry.",
   "ai.noEditor": "No editor available",
   "ai.close": "Collapse panel",
   "ai.retry": "Retry",

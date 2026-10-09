@@ -10,7 +10,7 @@ import {
   type AiChatMessage,
   type AiConfig,
 } from "@/lib/ai";
-import { getAiEditor } from "@/lib/ai-editor";
+import { getAiEditor, type AiEditRevert } from "@/lib/ai-editor";
 import {
   buildEditSystemPrompt,
   CHAT_ONLY_SYSTEM_PROMPT,
@@ -34,8 +34,20 @@ export interface AiMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  /** 本条回复下发的文档编辑指令及其落地结果（用于展示与撤销） */
-  edit?: { op: AiEditOp; summary: string; applied: boolean; undone?: boolean };
+  /**
+   * 本条回复下发的文档编辑指令及其落地结果（用于展示与撤销）。
+   * op 为 null 表示模型给了指令块但没能解析（malformed），此时没有落地动作。
+   */
+  edit?: {
+    op: AiEditOp | null;
+    summary: string;
+    applied: boolean;
+    undone?: boolean;
+    /** 指令块存在但 JSON/字段不合法：提示用户重试，不要展示裸 JSON */
+    malformed?: boolean;
+    /** 撤销句柄（含改前快照），仅当前编辑器实例内有效，不参与持久化 */
+    revert?: AiEditRevert;
+  };
 }
 
 export type AiQuickAction = "summarize" | "translate" | "rewrite" | "explain";
@@ -299,15 +311,26 @@ export const useAiStore = create<AiState>()((set, get) => {
 
   /** 一轮结束：提取编辑指令并直接应用到文档（AI 自主修改），同时留下结果卡片供撤销 */
   const finishAssistant = (assistantId: string, full: string) => {
-    const { edit, display } = extractEdit(full);
+    const { edit, display, malformed } = extractEdit(full);
     if (!edit) {
       const text = display.trim() || full;
-      set((s) => ({ messages: s.messages.map((m) => (m.id === assistantId ? { ...m, content: text } : m)) }));
+      set((s) => ({
+        messages: s.messages.map((m) =>
+          m.id === assistantId
+            ? {
+                ...m,
+                content: text,
+                // 指令块有问题：正文已剥掉坏块，这里只留一张提示卡片（没有落地动作，也就没有撤销）
+                ...(malformed ? { edit: { op: null, summary: "", applied: false, malformed: true } } : {}),
+              }
+            : m,
+        ),
+      }));
       return;
     }
     const bridge = getAiEditor();
     // 没有打开中的文档时无法落地；据实标记，界面会给「未应用」提示
-    const applied = bridge ? bridge.applyEdit(edit.op, edit.content) : false;
+    const result = bridge ? bridge.applyEdit(edit.op, edit.content) : null;
     set((s) => ({
       messages: s.messages.map((m) =>
         m.id === assistantId
@@ -315,7 +338,12 @@ export const useAiStore = create<AiState>()((set, get) => {
               ...m,
               // 正文为空时用 summary 兜底，保证这条消息留在后续对话上下文里
               content: display.trim() || edit.summary,
-              edit: { op: edit.op, summary: edit.summary, applied },
+              edit: {
+                op: edit.op,
+                summary: edit.summary,
+                applied: result?.applied ?? false,
+                revert: result?.revert,
+              },
             }
           : m,
       ),
@@ -488,11 +516,15 @@ export const useAiStore = create<AiState>()((set, get) => {
       await get().send(t(QUICK_PROMPT_KEY[kind], { content }));
     },
 
-    // 撤销 AI 的自动改写：走编辑器自身的 undo 栈（与 Ctrl+Z 同一条链路）
+    // 撤销 AI 的自动改写：按改前快照精确回滚，撤不动时明确告知而不是静默撤掉用户的编辑
     undoEdit: (messageId) => {
       const bridge = getAiEditor();
-      if (!bridge) return;
-      bridge.undo();
+      const target = get().messages.find((m) => m.id === messageId);
+      if (!bridge || !target?.edit) return;
+      if (!bridge.undoAiEdit(target.edit.revert)) {
+        toast.error(t("ai.undoFailed"));
+        return;
+      }
       set((s) => ({
         messages: s.messages.map((m) =>
           m.id === messageId && m.edit ? { ...m, edit: { ...m.edit, undone: true } } : m,

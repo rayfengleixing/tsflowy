@@ -455,15 +455,27 @@ function MessageBubble({
         <div
           className={cn(
             "mt-1.5 flex max-w-[85%] items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]",
-            edit.applied
-              ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
-              : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
+            edit.malformed
+              ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+              : edit.applied
+                ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+                : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
           )}
         >
-          {edit.applied ? <Check className="h-3 w-3 shrink-0" /> : <TriangleAlert className="h-3 w-3 shrink-0" />}
+          {edit.applied && !edit.malformed ? (
+            <Check className="h-3 w-3 shrink-0" />
+          ) : (
+            <TriangleAlert className="h-3 w-3 shrink-0" />
+          )}
           <span className="min-w-0 flex-1 truncate">
-            {edit.applied ? (edit.undone ? t("ai.editUndone") : t("ai.editApplied")) : t("ai.editNotApplied")}
-            {edit.summary && !edit.undone ? `：${edit.summary}` : ""}
+            {edit.malformed
+              ? t("ai.editMalformed")
+              : edit.applied
+                ? edit.undone
+                  ? t("ai.editUndone")
+                  : t("ai.editApplied")
+                : t("ai.editNotApplied")}
+            {edit.summary && !edit.undone && !edit.malformed ? `：${edit.summary}` : ""}
           </span>
           {edit.applied && !edit.undone && onUndo && (
             <button className="shrink-0 underline hover:no-underline" onClick={onUndo}>
