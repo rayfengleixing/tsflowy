@@ -52,6 +52,8 @@ export function AiPanel() {
   const closePanel = useAiStore((s) => s.closePanel);
   const setWidth = useAiStore((s) => s.setWidth);
   const loadConfig = useAiStore((s) => s.loadConfig);
+  const switchProfile = useAiStore((s) => s.switchProfile);
+  const runQuickAction = useAiStore((s) => s.runQuickAction);
   const send = useAiStore((s) => s.send);
   const stop = useAiStore((s) => s.stop);
   const clear = useAiStore((s) => s.clear);
@@ -366,8 +368,25 @@ export function AiPanel() {
             </div>
           )}
 
-          {/* 快捷动作：总结当前页 / 翻译选中 / 改写选中 / 解释选中 */}
+          {/* 快捷动作：内置四项 + 用户在设置里自定义的指令；有档位时可在最前面切换 */}
           <div className="flex flex-wrap gap-1 border-t border-neutral-200 px-2 py-1.5 dark:border-neutral-700">
+            {/* 模型档位切换：只在配置里存在档位时出现 */}
+            {config.profiles.length > 0 && (
+              <select
+                value={config.active_profile}
+                onChange={(e) => void switchProfile(e.target.value)}
+                disabled={streaming}
+                title={t("settings.aiProfiles")}
+                className="h-6 max-w-[9rem] rounded-md border border-neutral-200 bg-white px-1 text-[11px] text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+              >
+                <option value="">{t("ai.profileDefault")}</option>
+                {config.profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name || p.model || p.id}
+                  </option>
+                ))}
+              </select>
+            )}
             <QuickButton
               icon={<FileText className="h-3 w-3" />}
               label={t("ai.summarize")}
@@ -398,6 +417,16 @@ export function AiPanel() {
               disabled={streaming}
               onClick={() => void quickAction("continue")}
             />
+            {/* 用户自定义快捷指令（设置里维护） */}
+            {config.quick_actions.map((a) => (
+              <QuickButton
+                key={a.id}
+                icon={<Sparkles className="h-3 w-3" />}
+                label={a.name || t("ai.customAction")}
+                disabled={streaming}
+                onClick={() => void runQuickAction(a)}
+              />
+            ))}
           </div>
 
           {/* 输入区：Enter 发送、Shift+Enter 换行；输入 @ 引用工作区文件 */}

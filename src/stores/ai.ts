@@ -6,10 +6,12 @@ import {
   aiChat,
   aiErrorText,
   aiGetConfig,
+  aiSaveConfig,
   docSearchSnippets,
   type AiChatEvent,
   type AiChatMessage,
   type AiConfig,
+  type AiQuickActionDef,
   type AiUsage,
 } from "@/lib/ai";
 import { getAiEditor, type AiEditRevert } from "@/lib/ai-editor";
@@ -212,6 +214,10 @@ interface AiState {
   applyPendingEdit: (messageId: string) => void;
   /** 忽略待确认的编辑指令 */
   rejectPendingEdit: (messageId: string) => void;
+  /** 切换模型档位（会持久化到配置） */
+  switchProfile: (id: string) => Promise<void>;
+  /** 执行用户在设置里自定义的快捷指令 */
+  runQuickAction: (action: AiQuickActionDef) => Promise<void>;
 }
 
 export const useAiStore = create<AiState>()((set, get) => {
@@ -683,6 +689,58 @@ export const useAiStore = create<AiState>()((set, get) => {
         ),
       }));
       persistSessions();
+    },
+
+    // 切换档位：只改 active_profile，其余配置原样回传（apiKey 传 null 表示不改动已保存的 Key）
+    switchProfile: async (id) => {
+      const c = get().config;
+      if (!c) return;
+      try {
+        await aiSaveConfig({
+          enabled: c.enabled,
+          provider: c.provider,
+          baseUrl: c.base_url,
+          model: c.model,
+          maxChars: c.max_chars,
+          confirmEdit: c.confirm_edit,
+          temperature: c.temperature,
+          maxTokens: c.max_tokens,
+          systemPrompt: c.system_prompt,
+          profiles: c.profiles,
+          activeProfile: id,
+          quickActions: c.quick_actions,
+          apiKey: null,
+        });
+        set({ config: await aiGetConfig() });
+      } catch (e) {
+        logger.error("ai switch profile failed", e);
+        toast.error(t("ai.errorPrefix", { message: String(e) }));
+      }
+    },
+
+    // 自定义快捷指令：按 scope 取文本填进模板的 {content} 占位符
+    runQuickAction: async (action) => {
+      const bridge = getAiEditor();
+      let content = "";
+      if (action.scope === "selection") {
+        content = bridge?.getSelectionText().trim() ?? "";
+        if (!content) {
+          toast.error(t("ai.noSelection"));
+          return;
+        }
+      } else if (action.scope === "page") {
+        content = (bridge?.getPageText().trim() ?? "").slice(0, maxChars());
+        if (!content) {
+          toast.error(t("ai.noPage"));
+          return;
+        }
+      }
+      const prompt = action.prompt.includes("{content}")
+        ? action.prompt.replace("{content}", content)
+        : content
+          ? `${action.prompt}\n\n${content}`
+          : action.prompt;
+      await get().send(prompt);
     },
   };
 });
