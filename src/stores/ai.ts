@@ -7,7 +7,10 @@ import {
   aiErrorText,
   aiGetConfig,
   aiSaveConfig,
+  aiSessionList,
+  aiSessionSaveAll,
   docSearchSnippets,
+  type AiSessionRow,
   type AiChatEvent,
   type AiChatMessage,
   type AiConfig,
@@ -90,6 +93,48 @@ export interface StoredSession {
   title: string;
   updatedAt: number;
   messages: AiMessage[];
+  /** 会话发起时所在的页面：历史会话的上下文是那一页，切换页面后不应混淆 */
+  pageId?: string | null;
+  pageTitle?: string | null;
+}
+
+function toSessionRow(s: StoredSession): AiSessionRow {
+  return {
+    id: s.id,
+    title: s.title,
+    page_id: s.pageId ?? null,
+    page_title: s.pageTitle ?? null,
+    updated_at: String(s.updatedAt),
+    messages: JSON.stringify(s.messages),
+  };
+}
+
+function fromSessionRow(row: AiSessionRow): StoredSession | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.messages);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const messages = parsed.map(sanitizeMessage).filter((m): m is AiMessage => m !== null);
+  if (messages.length === 0) return null;
+  return {
+    id: row.id,
+    title: row.title,
+    updatedAt: Number(row.updated_at) || Date.now(),
+    messages,
+    pageId: row.page_id,
+    pageTitle: row.page_title,
+  };
+}
+
+/** 当前打开的页面（用于给会话标注上下文来源） */
+function currentPageRef(): { id: string; name: string } | null {
+  const s = useWorkspaceStore.getState();
+  if (!s.currentViewId) return null;
+  const node = flattenTree(s.tree).find((v) => v.id === s.currentViewId);
+  return { id: s.currentViewId, name: node?.name ?? "" };
 }
 
 /** 会话标题：第一条用户消息前 30 字 */
@@ -125,11 +170,17 @@ function restoreSession(raw: unknown): StoredSession | null {
     title: typeof rec.title === "string" && rec.title ? rec.title : sessionTitle(messages),
     updatedAt: typeof rec.updatedAt === "number" ? rec.updatedAt : Date.now(),
     messages,
+    pageId: typeof rec.pageId === "string" ? rec.pageId : null,
+    pageTitle: typeof rec.pageTitle === "string" ? rec.pageTitle : null,
   };
 }
 
-/** 从 localStorage 恢复会话（损坏/缺失时返回空态） */
-function loadSessions(): { activeId: string; sessions: StoredSession[]; active: StoredSession | null } {
+/** 从 localStorage 恢复会话（损坏/缺失时返回空态）——库不可用时的兜底来源 */
+function loadSessionsFromStorage(): {
+  activeId: string;
+  sessions: StoredSession[];
+  active: StoredSession | null;
+} {
   const empty = { activeId: newId(), sessions: [] as StoredSession[], active: null as StoredSession | null };
   try {
     const raw = localStorage.getItem(SESSIONS_KEY);
@@ -176,6 +227,13 @@ interface AiState {
   reasoning: string;
   streaming: boolean;
   error: string | null;
+  /** 上一条错误的归类码（auth / rate_limit / quota / timeout / network / server / cancelled） */
+  errorCode: string | null;
+  /** 当前会话发起时所在的页面（历史会话据此标注上下文来源） */
+  sessionPageId: string | null;
+  sessionPageTitle: string | null;
+  /** 历史会话是否已从库里加载过（避免重复拉取） */
+  sessionsLoaded: boolean;
   /** 最近一轮的 token 用量（服务商不返回时保持 null） */
   usage: AiUsage | null;
   /** 本会话累计用量，只在服务商返回用量时累加 */
@@ -195,6 +253,8 @@ interface AiState {
   closePanel: () => void;
   setWidth: (w: number) => void;
   loadConfig: () => Promise<void>;
+  /** 从库中恢复历史会话（库不可用时回退 localStorage），只在首次打开面板时执行一次 */
+  loadSessions: () => Promise<void>;
   setConfig: (c: AiConfig) => void;
   /** 设置/清除下一条提问要附带的选中内容 */
   setPendingContext: (text: string | null) => void;
@@ -218,16 +278,20 @@ interface AiState {
   switchProfile: (id: string) => Promise<void>;
   /** 执行用户在设置里自定义的快捷指令 */
   runQuickAction: (action: AiQuickActionDef) => Promise<void>;
+  /** 从上一条被中断的回答接着往下生成 */
+  continueGenerate: () => Promise<void>;
 }
 
 export const useAiStore = create<AiState>()((set, get) => {
-  const restored = loadSessions();
+  const restored = loadSessionsFromStorage();
 
   /** 当前对话有内容时归档进 sessions（超出上限丢最老），供 newChat / 切换会话复用 */
   const archiveCurrent = (s: {
     messages: AiMessage[];
     sessions: StoredSession[];
     activeSessionId: string;
+    sessionPageId: string | null;
+    sessionPageTitle: string | null;
   }): StoredSession[] => {
     if (s.messages.length === 0) return s.sessions;
     const entry: StoredSession = {
@@ -235,29 +299,54 @@ export const useAiStore = create<AiState>()((set, get) => {
       title: sessionTitle(s.messages),
       updatedAt: Date.now(),
       messages: s.messages,
+      pageId: s.sessionPageId,
+      pageTitle: s.sessionPageTitle,
     };
     return [entry, ...s.sessions].slice(0, MAX_SESSIONS);
   };
 
   /** 会话快照落盘（流式增量不触发，只在轮次结束 / 显式操作时调用） */
-  const persistSessions = () => {
-    const s = get();
-    const active: StoredSession | null =
-      s.messages.length > 0
-        ? { id: s.activeSessionId, title: sessionTitle(s.messages), updatedAt: Date.now(), messages: s.messages }
-        : null;
-    const write = (sessions: StoredSession[]) =>
-      localStorage.setItem(SESSIONS_KEY, JSON.stringify({ activeId: s.activeSessionId, sessions, active }));
+  /** localStorage 兜底：只在落库失败时用；配额溢出则丢一半最老的归档重试一次 */
+  const writeLocal = (active: StoredSession | null, sessions: StoredSession[]) => {
+    const activeId = get().activeSessionId;
     try {
-      write(s.sessions);
+      localStorage.setItem(SESSIONS_KEY, JSON.stringify({ activeId, sessions, active }));
     } catch {
-      // 配额溢出：丢一半最老的归档重试一次，仍失败则放弃（不影响使用）
       try {
-        write(s.sessions.slice(0, Math.floor(MAX_SESSIONS / 2)));
+        localStorage.setItem(
+          SESSIONS_KEY,
+          JSON.stringify({
+            activeId,
+            sessions: sessions.slice(0, Math.floor(MAX_SESSIONS / 2)),
+            active,
+          }),
+        );
       } catch (e) {
         logger.warn("ai sessions persist failed", e);
       }
     }
+  };
+
+  const persistSessions = () => {
+    const s = get();
+    const active: StoredSession | null =
+      s.messages.length > 0
+        ? {
+            id: s.activeSessionId,
+            title: sessionTitle(s.messages),
+            updatedAt: Date.now(),
+            messages: s.messages,
+            pageId: s.sessionPageId,
+            pageTitle: s.sessionPageTitle,
+          }
+        : null;
+    const rows = (active ? [active, ...s.sessions] : s.sessions).map(toSessionRow);
+    // 默认落库：localStorage 只有约 5MB 配额，长对话写满后会被迫丢弃历史；落库则没有这个上限。
+    // 落库失败（比如数据库还没迁移）时退回本地，保证会话不至于丢失。
+    void aiSessionSaveAll(rows).catch((e: unknown) => {
+      logger.warn("ai sessions save to db failed, fallback to localStorage", e);
+      writeLocal(active, s.sessions);
+    });
   };
 
   /** 当前配置的最大上下文字符数 */
@@ -433,6 +522,31 @@ export const useAiStore = create<AiState>()((set, get) => {
   /** 流式跑一轮：raw 累积模型原始输出，state 里只放「去掉编辑指令块」的展示文本 */
   const runStream = async (assistantId: string) => {
     let raw = "";
+    // 流式节流：每个增量都 set 会重建整条消息数组并重解析 Markdown，长回答会掉帧。
+    // 把约 60ms 内的增量合并成一帧提交（约 16 次/秒，肉眼仍是连贯的打字效果）。
+    let pendingDelta = "";
+    let pendingReasoning = "";
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flush = () => {
+      flushTimer = null;
+      if (!pendingDelta && !pendingReasoning) return;
+      const r = pendingReasoning;
+      pendingDelta = "";
+      pendingReasoning = "";
+      // 正文一律由 raw 重算：指令块开始之后的增量不能显示出来
+      const display = hideEditBlock(raw);
+      set((s) => ({
+        messages: s.messages.map((m) => (m.id === assistantId ? { ...m, content: display } : m)),
+        reasoning: r ? s.reasoning + r : s.reasoning,
+      }));
+    };
+    const flushNow = () => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      flush();
+    };
     try {
       // @ 引用的文档要先读盘转文本，再随 system 一起下发
       const referenceContext = await buildReferenceContext();
@@ -442,14 +556,15 @@ export const useAiStore = create<AiState>()((set, get) => {
       await aiChat(outgoing, (ev: AiChatEvent) => {
         if (ev.type === "chunk") {
           raw += ev.delta;
-          const display = hideEditBlock(raw);
-          set((s) => ({
-            messages: s.messages.map((m) => (m.id === assistantId ? { ...m, content: display } : m)),
-          }));
+          pendingDelta += ev.delta;
+          flushTimer ??= setTimeout(flush, 60);
         } else if (ev.type === "reasoning") {
           // 推理型模型的思考增量：单独累积，只用于展示，不写进助手消息
-          set((s) => ({ reasoning: s.reasoning + ev.delta }));
+          pendingReasoning += ev.delta;
+          flushTimer ??= setTimeout(flush, 60);
         } else if (ev.type === "done") {
+          // 收尾前先把没来得及提交的增量补上，否则会被 finishAssistant 的结果覆盖
+          flushNow();
           finishAssistant(assistantId, ev.full || raw);
           const u = ev.usage;
           if (u) {
@@ -464,13 +579,18 @@ export const useAiStore = create<AiState>()((set, get) => {
           }
         } else {
           // 用户主动「停止」时 Rust 会回 cancelled：不算错误，保留已生成的部分内容
-          if (ev.message === "cancelled") return;
-          set({ error: ev.message });
+          if (ev.message === "cancelled") {
+            flushNow();
+            return;
+          }
+          flushNow();
+          set({ error: ev.message, errorCode: ev.code ?? null });
           dropEmptyAssistant(assistantId);
         }
       });
     } catch (e) {
-      set({ error: aiErrorText(e) });
+      // 起手就失败（未配置 / 命令报错）：没有归类码，界面按通用错误处理
+      set({ error: aiErrorText(e), errorCode: null });
       dropEmptyAssistant(assistantId);
     } finally {
       set({ streaming: false });
@@ -488,6 +608,10 @@ export const useAiStore = create<AiState>()((set, get) => {
     reasoning: "",
     streaming: false,
     error: null,
+    errorCode: null,
+    sessionPageId: null,
+    sessionPageTitle: null,
+    sessionsLoaded: false,
     usage: null,
     usageTotal: { prompt: 0, completion: 0, total: 0 },
     config: null,
@@ -517,6 +641,42 @@ export const useAiStore = create<AiState>()((set, get) => {
         set({ configLoaded: true, error: aiErrorText(e) });
       }
     },
+
+    // 历史会话优先从库里读（localStorage 只有约 5MB 配额）；库为空或不可用时再用本地老数据
+    loadSessions: async () => {
+      if (get().sessionsLoaded) return;
+      try {
+        const rows = await aiSessionList();
+        const all = rows
+          .slice(0, MAX_SESSIONS + 1)
+          .map(fromSessionRow)
+          .filter((s): s is StoredSession => s !== null);
+        if (all.length > 0) {
+          // 库按 updated_at 降序返回，第一条即最近会话
+          const active = all[0];
+          set({
+            messages: active.messages,
+            activeSessionId: active.id,
+            sessions: all.slice(1),
+            sessionPageId: active.pageId ?? null,
+            sessionPageTitle: active.pageTitle ?? null,
+            sessionsLoaded: true,
+          });
+          return;
+        }
+      } catch (e) {
+        logger.warn("ai sessions load from db failed, fallback to localStorage", e);
+      }
+      const local = loadSessionsFromStorage();
+      set({
+        sessions: local.sessions,
+        activeSessionId: local.activeId,
+        messages: local.active?.messages ?? [],
+        sessionPageId: local.active?.pageId ?? null,
+        sessionPageTitle: local.active?.pageTitle ?? null,
+        sessionsLoaded: true,
+      });
+    },
     setConfig: (config) => set({ config, configLoaded: true }),
     setPendingContext: (text) => set({ pendingContext: text }),
 
@@ -524,12 +684,16 @@ export const useAiStore = create<AiState>()((set, get) => {
       const content = text.trim();
       if (!content || get().streaming) return;
       const assistant: AiMessage = { id: newId(), role: "assistant", content: "" };
+      // 会话首条消息：记下发起时所在的页面，之后历史会话列表能标注它的上下文来源
+      const pageRef = get().messages.length === 0 ? currentPageRef() : null;
       set((s) => ({
         open: true,
         error: null,
+        errorCode: null,
         reasoning: "",
         streaming: true,
         messages: [...s.messages, { id: newId(), role: "user", content }, assistant],
+        ...(pageRef ? { sessionPageId: pageRef.id, sessionPageTitle: pageRef.name } : {}),
       }));
       // 用户消息先落盘，流式中途崩溃也不丢提问
       persistSessions();
@@ -546,6 +710,7 @@ export const useAiStore = create<AiState>()((set, get) => {
         messages: [],
         reasoning: "",
         error: null,
+        errorCode: null,
         usage: null,
         usageTotal: { prompt: 0, completion: 0, total: 0 },
       });
@@ -559,6 +724,10 @@ export const useAiStore = create<AiState>()((set, get) => {
         messages: [],
         reasoning: "",
         error: null,
+        errorCode: null,
+        // 新会话的关联页面等第一条消息时再定
+        sessionPageId: null,
+        sessionPageTitle: null,
         usage: null,
         usageTotal: { prompt: 0, completion: 0, total: 0 },
         activeSessionId: newId(),
@@ -577,8 +746,11 @@ export const useAiStore = create<AiState>()((set, get) => {
         sessions: archiveCurrent({ ...s, sessions: rest }),
         messages: target.messages,
         activeSessionId: target.id,
+        sessionPageId: target.pageId ?? null,
+        sessionPageTitle: target.pageTitle ?? null,
         reasoning: "",
         error: null,
+        errorCode: null,
         // 累计用量按会话统计，切过去无从得知历史用量，重置为 0
         usage: null,
         usageTotal: { prompt: 0, completion: 0, total: 0 },
@@ -600,7 +772,13 @@ export const useAiStore = create<AiState>()((set, get) => {
       }
       if (msgs.length === 0 || msgs[msgs.length - 1].role !== "user") return;
       const assistant: AiMessage = { id: newId(), role: "assistant", content: "" };
-      set({ messages: [...msgs, assistant], reasoning: "", streaming: true, error: null });
+      set({
+        messages: [...msgs, assistant],
+        reasoning: "",
+        streaming: true,
+        error: null,
+        errorCode: null,
+      });
       await runStream(assistant.id);
     },
 
@@ -741,6 +919,15 @@ export const useAiStore = create<AiState>()((set, get) => {
           ? `${action.prompt}\n\n${content}`
           : action.prompt;
       await get().send(prompt);
+    },
+
+    // 继续生成：半截回答留在上下文里再问一次，模型会接着往下写（不重复已有内容）
+    continueGenerate: async () => {
+      const s = get();
+      const total = s.messages.length;
+      if (s.streaming || total === 0) return;
+      if (s.messages[total - 1].role !== "assistant") return;
+      await s.send(t("ai.continueGeneratePrompt"));
     },
   };
 });

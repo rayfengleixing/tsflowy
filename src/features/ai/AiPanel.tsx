@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   Copy,
@@ -28,10 +28,16 @@ import { aiErrorText } from "@/lib/ai";
 import { getAiEditor } from "@/lib/ai-editor";
 import { detectMentionQuery } from "@/lib/ai-mention";
 import { flattenTree } from "@/lib/tree";
-import { t } from "@/lib/i18n";
+import { t, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { EditDiffDialog } from "./EditDiffDialog";
 import { Markdown } from "./Markdown";
+
+/**
+ * 长回答流式刷新时只有最后一条内容在变，历史消息不必跟着重解析 Markdown。
+ * 这里对渲染组件做记忆化，props（text）不变就跳过。
+ */
+const MarkdownMemo = memo(Markdown);
 
 /** AI 助手右侧面板（约 360px、可折叠、可拖拽调宽） */
 export function AiPanel() {
@@ -42,6 +48,7 @@ export function AiPanel() {
   const reasoning = useAiStore((s) => s.reasoning);
   const streaming = useAiStore((s) => s.streaming);
   const error = useAiStore((s) => s.error);
+  const errorCode = useAiStore((s) => s.errorCode);
   const usage = useAiStore((s) => s.usage);
   const usageTotal = useAiStore((s) => s.usageTotal);
   const pendingContext = useAiStore((s) => s.pendingContext);
@@ -52,8 +59,11 @@ export function AiPanel() {
   const closePanel = useAiStore((s) => s.closePanel);
   const setWidth = useAiStore((s) => s.setWidth);
   const loadConfig = useAiStore((s) => s.loadConfig);
+  const loadSessions = useAiStore((s) => s.loadSessions);
+  const sessionsLoaded = useAiStore((s) => s.sessionsLoaded);
   const switchProfile = useAiStore((s) => s.switchProfile);
   const runQuickAction = useAiStore((s) => s.runQuickAction);
+  const continueGenerate = useAiStore((s) => s.continueGenerate);
   const send = useAiStore((s) => s.send);
   const stop = useAiStore((s) => s.stop);
   const clear = useAiStore((s) => s.clear);
@@ -97,6 +107,11 @@ export function AiPanel() {
     if (open && !configLoaded) void loadConfig();
   }, [open, configLoaded, loadConfig]);
 
+  // 历史会话从库里恢复（首次打开面板时）
+  useEffect(() => {
+    if (open && !sessionsLoaded) void loadSessions();
+  }, [open, sessionsLoaded, loadSessions]);
+
   // 新消息/流式增量时滚到底部
   useEffect(() => {
     const el = listRef.current;
@@ -110,6 +125,9 @@ export function AiPanel() {
 
   if (!open) return null;
 
+  // 最后一条是 AI 的半截回答（被手动停止或超时中断）时，才提供「继续生成」
+  const canContinue = !streaming && messages.length > 0 && messages[messages.length - 1].role === "assistant";
+  const errorHint = errorCode ? AI_ERROR_HINT[errorCode] : undefined;
   const configured = !!config && config.enabled && config.has_api_key && !!config.base_url && !!config.model;
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content.trim().length > 0);
 
@@ -176,8 +194,9 @@ export function AiPanel() {
   };
 
   const copyLast = () => {
-    if (!lastAssistant) return;
-    navigator.clipboard.writeText(lastAssistant.content).then(
+    const text = lastAssistant?.content;
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(
       () => toast.success(t("ai.copied")),
       (e: unknown) => toast.error(aiErrorText(e)),
     );
@@ -291,6 +310,8 @@ export function AiPanel() {
                     }}
                   >
                     {sess.title}
+                    {/* 标注这个会话是基于哪一页问的，避免切页后张冠李戴 */}
+                    {sess.pageTitle && <span className="ml-1 text-[10px] text-neutral-400">· {sess.pageTitle}</span>}
                   </button>
                   <button
                     className="shrink-0 rounded p-1 text-neutral-400 opacity-0 hover:text-red-500 group-hover:opacity-100"
@@ -324,6 +345,10 @@ export function AiPanel() {
         <>
           <div ref={listRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
             {messages.length === 0 && <p className="mt-6 text-center text-[12px] text-neutral-400">{t("ai.empty")}</p>}
+            {/* 隐私提示：本地优先的应用，明确告知这一轮会发到哪个服务商 */}
+            <p className="px-2 pb-1 text-[11px] text-neutral-400">
+              {t("ai.sendHint", { host: safeHost(config.base_url) })}
+            </p>
             {messages.map((m) => {
               const rec = m.edit;
               return (
@@ -339,17 +364,33 @@ export function AiPanel() {
                 />
               );
             })}
-            {/* 推理型模型（deepseek-flash / deepseek-reasoner 等）的思考过程：仅展示，不参与回填 */}
-            {streaming && reasoning && (
-              <div className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-[11px] text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800/50 dark:text-neutral-400">
-                <p className="mb-1 font-medium">{t("ai.reasoning")}</p>
-                <div className="max-h-32 overflow-y-auto break-words whitespace-pre-wrap">{reasoning}</div>
-              </div>
+            {/* 推理型模型的思考过程：流式时展开，结束后折叠保留，方便回看模型是怎么想的 */}
+            {reasoning && (
+              <details
+                open={streaming}
+                className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-[11px] text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800/50 dark:text-neutral-400"
+              >
+                <summary className="cursor-pointer font-medium">{t("ai.reasoning")}</summary>
+                <div className="mt-1 max-h-32 overflow-y-auto break-words whitespace-pre-wrap">{reasoning}</div>
+              </details>
             )}
             {streaming && !reasoning && <p className="text-[11px] text-neutral-400">{t("ai.thinking")}</p>}
+            {/* 被中断/超时的回答可以接着往下写：把半截内容留在上下文里再问一次 */}
+            {!streaming && canContinue && (
+              <div className="px-2 pb-1">
+                <button
+                  className="rounded-md border border-neutral-200 px-2 py-0.5 text-[11px] text-neutral-600 hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                  onClick={() => void continueGenerate()}
+                >
+                  {t("ai.continueGenerate")}
+                </button>
+              </div>
+            )}
             {error && (
               <div className="rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-[11px] text-red-600">
                 {t("ai.errorPrefix", { message: error })}
+                {/* 按错误归类给出对应的处理办法，而不是让所有失败都停在「请求失败」 */}
+                {errorHint && <p className="mt-0.5">{t(errorHint)}</p>}
                 <button className="ml-2 underline hover:no-underline" onClick={() => void retry()}>
                   {t("ai.retry")}
                 </button>
@@ -537,7 +578,7 @@ function MessageBubble({
           </div>
         ) : (
           // 助手回复走 Markdown 渲染（GFM 表格/代码块/链接），AI 输出不含原始 HTML，无注入风险
-          <Markdown
+          <MarkdownMemo
             text={bubbleText || "…"}
             className="max-w-[85%] rounded-lg bg-neutral-100 px-2.5 py-1.5 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200"
           />
@@ -613,6 +654,28 @@ function MessageBubble({
       )}
     </div>
   );
+}
+
+/** 错误归类码 → 对应的处理引导（Rust 侧下发 code） */
+const AI_ERROR_HINT: Record<string, MessageKey> = {
+  auth: "ai.errorHintAuth",
+  rate_limit: "ai.errorHintRateLimit",
+  quota: "ai.errorHintQuota",
+  timeout: "ai.errorHintTimeout",
+  network: "ai.errorHintNetwork",
+  server: "ai.errorHintServer",
+  request: "ai.errorHintRequest",
+  not_configured: "ai.errorHintNotConfigured",
+  cancelled: "ai.errorHintCancelled",
+};
+
+/** 取 Base URL 的主机名用于隐私提示；解析失败时原样返回 */
+function safeHost(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host || baseUrl;
+  } catch {
+    return baseUrl;
+  }
 }
 
 /** 消息卡片下方的小号操作按钮（查看改动 / 应用 / 忽略 / 撤销） */

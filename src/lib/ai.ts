@@ -63,7 +63,8 @@ export type AiChatEvent =
   | { type: "chunk"; delta: string }
   | { type: "reasoning"; delta: string }
   | { type: "done"; full: string; usage?: AiUsage | null }
-  | { type: "error"; message: string };
+  /** code 为错误归类码（auth / rate_limit / quota / timeout / network / server …），可能为 null */
+  | { type: "error"; message: string; code?: string | null };
 
 /** 服务商预设：选中后自动填充 Base URL 与模型（用户仍可手改） */
 export interface AiProviderPreset {
@@ -135,6 +136,26 @@ export async function aiTestConnection(): Promise<string> {
 /** 拉取当前 Base URL 下的可用模型列表；服务商不提供该接口时会抛错 */
 export async function aiListModels(): Promise<string[]> {
   return invoke<string[]>("ai_list_models");
+}
+
+/** 库中的 AI 会话行；messages 是整条会话消息数组的 JSON 字符串 */
+export interface AiSessionRow {
+  id: string;
+  title: string;
+  page_id: string | null;
+  page_title: string | null;
+  updated_at: string;
+  messages: string;
+}
+
+/** 读取库中的 AI 会话（按 updated_at 降序） */
+export async function aiSessionList(): Promise<AiSessionRow[]> {
+  return invoke<AiSessionRow[]>("ai_session_list");
+}
+
+/** 整份覆盖保存 AI 会话 */
+export async function aiSessionSaveAll(sessions: AiSessionRow[]): Promise<void> {
+  await invoke("ai_session_save_all", { sessions });
 }
 
 /** 流式对话：用 Channel 接收事件，逐段回调给上层 */
