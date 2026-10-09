@@ -14,6 +14,7 @@ import {
   type ShortcutId,
 } from "@/lib/shortcuts";
 import { t, type MessageKey } from "@/lib/i18n";
+import type { AiProfile, AiQuickActionDef } from "@/lib/ai";
 import { cn } from "@/lib/utils";
 import type { DataDirRisk } from "@/lib/data-dir-risk";
 
@@ -117,6 +118,18 @@ export interface AiFormState {
   maxChars: number;
   /** AI 自主修改文档前先弹 diff 确认 */
   confirmEdit: boolean;
+  /** 采样温度 0–2 */
+  temperature: number;
+  /** 最大 token 数，0 表示不限制 */
+  maxTokens: number;
+  /** 追加的自定义系统提示 */
+  systemPrompt: string;
+  /** 模型档位（可切换多套服务商/模型/温度） */
+  profiles: AiProfile[];
+  /** 当前生效档位 id，空串表示单档配置 */
+  activeProfile: string;
+  /** 用户自定义快捷指令 */
+  quickActions: AiQuickActionDef[];
 }
 
 /** AI 服务商预设 → i18n 文案 */

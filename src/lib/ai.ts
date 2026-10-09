@@ -14,6 +14,16 @@ export interface AiConfig {
   max_chars: number;
   /** AI 自主修改文档前先弹 diff 确认 */
   confirm_edit: boolean;
+  /** 采样温度 0–2 */
+  temperature: number;
+  /** 最大 token 数，0 表示不限制 */
+  max_tokens: number;
+  /** 用户追加的自定义系统提示 */
+  system_prompt: string;
+  profiles: AiProfile[];
+  /** 当前生效档位 id，空串表示单档配置 */
+  active_profile: string;
+  quick_actions: AiQuickActionDef[];
   has_api_key: boolean;
   api_key_masked: string;
 }
@@ -21,6 +31,24 @@ export interface AiConfig {
 export interface AiChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
+}
+
+/** 一个模型档位：同一套 Key 下切换不同服务商 / 模型 / 温度 */
+export interface AiProfile {
+  id: string;
+  name: string;
+  base_url: string;
+  model: string;
+  temperature: number;
+}
+
+/** 用户自定义快捷指令；scope 决定用哪段文本填进提示词 */
+export interface AiQuickActionDef {
+  id: string;
+  name: string;
+  /** 提示词模板，含 {content} 占位符（scope 为 none 时不需要） */
+  prompt: string;
+  scope: "selection" | "page" | "none";
 }
 
 /** 单次请求的 token 用量（服务商未返回时字段为 null） */
@@ -71,6 +99,12 @@ export async function aiSaveConfig(input: {
   model: string;
   maxChars: number;
   confirmEdit: boolean;
+  temperature: number;
+  maxTokens: number;
+  systemPrompt: string;
+  profiles: AiProfile[];
+  activeProfile: string;
+  quickActions: AiQuickActionDef[];
   apiKey: string | null;
 }): Promise<void> {
   // 顶层参数名走 Tauri 的 camelCase 映射，但结构体内部字段由 serde 按 Rust 原名反序列化，
@@ -83,6 +117,12 @@ export async function aiSaveConfig(input: {
       model: input.model,
       max_chars: input.maxChars,
       confirm_edit: input.confirmEdit,
+      temperature: input.temperature,
+      max_tokens: input.maxTokens,
+      system_prompt: input.systemPrompt,
+      profiles: input.profiles,
+      active_profile: input.activeProfile,
+      quick_actions: input.quickActions,
       api_key: input.apiKey,
     },
   });
@@ -90,6 +130,11 @@ export async function aiSaveConfig(input: {
 
 export async function aiTestConnection(): Promise<string> {
   return invoke<string>("ai_test_connection");
+}
+
+/** 拉取当前 Base URL 下的可用模型列表；服务商不提供该接口时会抛错 */
+export async function aiListModels(): Promise<string[]> {
+  return invoke<string[]>("ai_list_models");
 }
 
 /** 流式对话：用 Channel 接收事件，逐段回调给上层 */

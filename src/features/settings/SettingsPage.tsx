@@ -11,6 +11,8 @@ import {
   DownloadCloud,
   HardDrive,
   Sparkles,
+  Plus,
+  Trash2,
 } from "lucide-react";
 import { invoke } from "@/lib/invoke";
 import { getVersion } from "@tauri-apps/api/app";
@@ -42,7 +44,16 @@ import { loadDailyNotesConfig, saveDailyNotesConfig, type DailyNotesConfig } fro
 import { exportMarkdownFolder } from "@/lib/export-folder";
 import { flushAllForClose } from "@/lib/close-flush";
 import { loadAutoSyncConfig, saveAutoSyncConfig, type AutoSyncConfig } from "@/lib/auto-sync";
-import { aiGetConfig, aiSaveConfig, aiTestConnection, AI_PROVIDER_PRESETS, type AiConfig } from "@/lib/ai";
+import {
+  aiGetConfig,
+  aiListModels,
+  aiSaveConfig,
+  aiTestConnection,
+  AI_PROVIDER_PRESETS,
+  type AiConfig,
+  type AiProfile,
+  type AiQuickActionDef,
+} from "@/lib/ai";
 import { t, LANGUAGES, type LangCode } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
@@ -70,6 +81,12 @@ import {
   type ConflictFile,
   type AiFormState,
 } from "./settings-parts";
+
+// AI 设置里反复用到的输入控件样式（档位与快捷指令的编辑行数较多，抽出来避免重复）
+const AI_NUM_INPUT =
+  "h-7 w-24 rounded-md border border-neutral-300 bg-white px-2 text-[12px] text-neutral-800 outline-none focus:border-brand-500";
+const AI_TEXT_INPUT =
+  "h-7 rounded-md border border-neutral-300 bg-white px-2 text-[12px] text-neutral-800 outline-none focus:border-brand-500";
 
 /** 设置页（M6）：外观/语言/数据目录/备份/快捷键 */
 export function SettingsPage() {
@@ -130,9 +147,18 @@ export function SettingsPage() {
     model: "",
     maxChars: 8000,
     confirmEdit: false,
+    temperature: 0.7,
+    maxTokens: 0,
+    systemPrompt: "",
+    profiles: [],
+    activeProfile: "",
+    quickActions: [],
   });
   const [aiApiKey, setAiApiKey] = useState("");
   const [busyAiTest, setBusyAiTest] = useState(false);
+  // 从服务端拉取到的模型列表（为空表示未拉取或服务商不支持，此时模型名仍手填）
+  const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [busyModels, setBusyModels] = useState(false);
   const openDailyNote = useWorkspaceStore((s) => s.openDailyNote);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
   // 上次同步动作对应的文案 key；未知动作返回 undefined（不渲染）
@@ -477,6 +503,12 @@ export function SettingsPage() {
       model: c.model,
       maxChars: c.max_chars,
       confirmEdit: c.confirm_edit,
+      temperature: c.temperature,
+      maxTokens: c.max_tokens,
+      systemPrompt: c.system_prompt,
+      profiles: c.profiles,
+      activeProfile: c.active_profile,
+      quickActions: c.quick_actions,
     });
   };
 
@@ -491,6 +523,12 @@ export function SettingsPage() {
       model: next.model,
       maxChars: next.maxChars,
       confirmEdit: next.confirmEdit,
+      temperature: next.temperature,
+      maxTokens: next.maxTokens,
+      systemPrompt: next.systemPrompt,
+      profiles: next.profiles,
+      activeProfile: next.activeProfile,
+      quickActions: next.quickActions,
       apiKey: apiKey.trim() === "" ? null : apiKey,
     });
     const c = await aiGetConfig();
@@ -523,6 +561,57 @@ export function SettingsPage() {
     } finally {
       setBusyAiTest(false);
     }
+  };
+
+  /** 拉取服务端可用模型列表：需先填好 Base URL 与 Key（Rust 侧读持久化配置） */
+  const fetchModels = async () => {
+    setBusyModels(true);
+    try {
+      await persistAi();
+      const list = await aiListModels();
+      setModelOptions(list);
+      toast.success(t("settings.aiModelsFetched", { count: list.length }));
+    } catch (e) {
+      logger.error("ai list models failed", e);
+      toast.error(t("settings.aiFetchModelsFailed", { message: String(e) }));
+    } finally {
+      setBusyModels(false);
+    }
+  };
+
+  // — 模型档位 —
+  const addProfile = () => {
+    const profile: AiProfile = {
+      id: `p${Date.now().toString(36)}`,
+      name: t("settings.aiProfileDefaultName"),
+      base_url: aiForm.baseUrl,
+      model: aiForm.model,
+      temperature: aiForm.temperature,
+    };
+    saveAi({ profiles: [...aiForm.profiles, profile] });
+  };
+  const removeProfile = (id: string) => {
+    saveAi({
+      profiles: aiForm.profiles.filter((p) => p.id !== id),
+      activeProfile: aiForm.activeProfile === id ? "" : aiForm.activeProfile,
+    });
+  };
+
+  // — 自定义快捷指令 —
+  const addQuickAction = () => {
+    const action: AiQuickActionDef = {
+      id: `q${Date.now().toString(36)}`,
+      name: t("settings.aiActionDefaultName"),
+      prompt: "",
+      scope: "selection",
+    };
+    saveAi({ quickActions: [...aiForm.quickActions, action] });
+  };
+  const updateQuickAction = (id: string, patch: Partial<AiQuickActionDef>) => {
+    saveAi({ quickActions: aiForm.quickActions.map((a) => (a.id === id ? { ...a, ...patch } : a)) });
+  };
+  const removeQuickAction = (id: string) => {
+    saveAi({ quickActions: aiForm.quickActions.filter((a) => a.id !== id) });
   };
 
   /** 选/换同步文件夹（传空串 = 关闭同步） */
@@ -1153,13 +1242,40 @@ export function SettingsPage() {
             />
           </Row>
           <Row label={t("settings.aiModel")}>
-            <input
-              value={aiForm.model}
-              onChange={(e) => setAiForm((f) => ({ ...f, model: e.target.value }))}
-              onBlur={() => saveAiQuietly()}
-              placeholder={t("settings.aiModelPlaceholder")}
-              className="h-7 w-80 rounded-md border border-neutral-300 bg-white px-2 font-mono text-[12px] text-neutral-800 outline-none focus:border-brand-500"
-            />
+            <div className="flex items-center gap-1.5">
+              {modelOptions.length > 0 ? (
+                // 拉取到列表后改走下拉，避免手抄模型名出错（本地 Ollama 尤其容易记错）
+                <select
+                  value={aiForm.model}
+                  onChange={(e) => saveAi({ model: e.target.value })}
+                  className="h-7 w-64 rounded-md border border-neutral-300 bg-white px-2 font-mono text-[12px] text-neutral-800 outline-none focus:border-brand-500"
+                >
+                  {(modelOptions.includes(aiForm.model) ? modelOptions : [aiForm.model, ...modelOptions])
+                    .filter((m) => m !== "")
+                    .map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                </select>
+              ) : (
+                <input
+                  value={aiForm.model}
+                  onChange={(e) => setAiForm((f) => ({ ...f, model: e.target.value }))}
+                  onBlur={() => saveAiQuietly()}
+                  placeholder={t("settings.aiModelPlaceholder")}
+                  className="h-7 w-64 rounded-md border border-neutral-300 bg-white px-2 font-mono text-[12px] text-neutral-800 outline-none focus:border-brand-500"
+                />
+              )}
+              <Button size="sm" variant="outline" onClick={fetchModels} disabled={busyModels}>
+                {busyModels ? (
+                  <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="mr-1 h-3.5 w-3.5" />
+                )}
+                {busyModels ? t("settings.aiFetchingModels") : t("settings.aiFetchModels")}
+              </Button>
+            </div>
           </Row>
           <Row label={t("settings.aiApiKey")}>
             <input
@@ -1199,6 +1315,202 @@ export function SettingsPage() {
             {t("settings.aiConfirmEdit")}
           </label>
           <p className="-mt-2 text-[11px] text-neutral-500">{t("settings.aiConfirmEditDesc")}</p>
+
+          {/* 采样参数 */}
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Row label={t("settings.aiTemperature")}>
+              <input
+                type="number"
+                min={0}
+                max={2}
+                step={0.1}
+                value={aiForm.temperature}
+                onChange={(e) => setAiForm((f) => ({ ...f, temperature: Number(e.target.value) }))}
+                onBlur={() => saveAiQuietly()}
+                className={AI_NUM_INPUT}
+              />
+            </Row>
+            <Row label={t("settings.aiMaxTokens")}>
+              <input
+                type="number"
+                min={0}
+                max={200000}
+                step={100}
+                value={aiForm.maxTokens}
+                onChange={(e) => setAiForm((f) => ({ ...f, maxTokens: Number(e.target.value) }))}
+                onBlur={() => saveAiQuietly()}
+                className={AI_NUM_INPUT}
+              />
+            </Row>
+          </div>
+
+          {/* 自定义系统提示 */}
+          <div>
+            <p className="mb-1 text-sm font-medium text-neutral-800">{t("settings.aiSystemPrompt")}</p>
+            <textarea
+              rows={3}
+              value={aiForm.systemPrompt}
+              onChange={(e) => setAiForm((f) => ({ ...f, systemPrompt: e.target.value }))}
+              onBlur={() => saveAiQuietly()}
+              placeholder={t("settings.aiSystemPromptPlaceholder")}
+              className="w-full resize-y rounded-md border border-neutral-300 bg-white px-2 py-1 text-[12px] text-neutral-800 outline-none focus:border-brand-500"
+            />
+          </div>
+
+          {/* 模型档位 */}
+          <div>
+            <div className="mb-1 flex items-center justify-between">
+              <p className="text-sm font-medium text-neutral-800">{t("settings.aiProfiles")}</p>
+              <Button size="sm" variant="outline" onClick={addProfile}>
+                <Plus className="mr-1 h-3.5 w-3.5" />
+                {t("settings.aiAddProfile")}
+              </Button>
+            </div>
+            {aiForm.profiles.length === 0 ? (
+              <p className="text-[11px] text-neutral-500">{t("settings.aiProfilesEmpty")}</p>
+            ) : (
+              <div className="space-y-1.5">
+                {aiForm.profiles.map((p) => (
+                  <div key={p.id} className="rounded-md border border-neutral-200 p-2 dark:border-neutral-700">
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        value={p.name}
+                        onChange={(e) =>
+                          setAiForm((f) => ({
+                            ...f,
+                            profiles: f.profiles.map((x) => (x.id === p.id ? { ...x, name: e.target.value } : x)),
+                          }))
+                        }
+                        onBlur={() => saveAiQuietly()}
+                        placeholder={t("settings.aiProfileName")}
+                        className={`${AI_TEXT_INPUT} w-24`}
+                      />
+                      <input
+                        value={p.model}
+                        onChange={(e) =>
+                          setAiForm((f) => ({
+                            ...f,
+                            profiles: f.profiles.map((x) => (x.id === p.id ? { ...x, model: e.target.value } : x)),
+                          }))
+                        }
+                        onBlur={() => saveAiQuietly()}
+                        placeholder={t("settings.aiModelPlaceholder")}
+                        className={`${AI_TEXT_INPUT} min-w-0 flex-1 font-mono`}
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        max={2}
+                        step={0.1}
+                        value={p.temperature}
+                        onChange={(e) =>
+                          setAiForm((f) => ({
+                            ...f,
+                            profiles: f.profiles.map((x) =>
+                              x.id === p.id ? { ...x, temperature: Number(e.target.value) } : x,
+                            ),
+                          }))
+                        }
+                        onBlur={() => saveAiQuietly()}
+                        title={t("settings.aiTemperature")}
+                        className={`${AI_NUM_INPUT} w-16`}
+                      />
+                      <button
+                        className="shrink-0 rounded p-1 text-neutral-400 hover:text-red-500"
+                        title={t("settings.aiRemoveProfile")}
+                        onClick={() => removeProfile(p.id)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <input
+                      value={p.base_url}
+                      onChange={(e) =>
+                        setAiForm((f) => ({
+                          ...f,
+                          profiles: f.profiles.map((x) => (x.id === p.id ? { ...x, base_url: e.target.value } : x)),
+                        }))
+                      }
+                      onBlur={() => saveAiQuietly()}
+                      placeholder={t("settings.aiBaseUrlPlaceholder")}
+                      className={`${AI_TEXT_INPUT} mt-1 w-full font-mono`}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 自定义快捷指令 */}
+          <div>
+            <div className="mb-1 flex items-center justify-between">
+              <p className="text-sm font-medium text-neutral-800">{t("settings.aiActions")}</p>
+              <Button size="sm" variant="outline" onClick={addQuickAction}>
+                <Plus className="mr-1 h-3.5 w-3.5" />
+                {t("settings.aiAddAction")}
+              </Button>
+            </div>
+            {aiForm.quickActions.length === 0 ? (
+              <p className="text-[11px] text-neutral-500">{t("settings.aiActionsEmpty")}</p>
+            ) : (
+              <div className="space-y-1.5">
+                {aiForm.quickActions.map((a) => (
+                  <div key={a.id} className="rounded-md border border-neutral-200 p-2 dark:border-neutral-700">
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        value={a.name}
+                        onChange={(e) =>
+                          setAiForm((f) => ({
+                            ...f,
+                            quickActions: f.quickActions.map((x) =>
+                              x.id === a.id ? { ...x, name: e.target.value } : x,
+                            ),
+                          }))
+                        }
+                        onBlur={() => saveAiQuietly()}
+                        placeholder={t("settings.aiActionName")}
+                        className={`${AI_TEXT_INPUT} w-24`}
+                      />
+                      <select
+                        value={a.scope}
+                        onChange={(e) =>
+                          updateQuickAction(a.id, { scope: e.target.value as AiQuickActionDef["scope"] })
+                        }
+                        className={`${AI_TEXT_INPUT} w-28`}
+                      >
+                        <option value="selection">{t("settings.aiScopeSelection")}</option>
+                        <option value="page">{t("settings.aiScopePage")}</option>
+                        <option value="none">{t("settings.aiScopeNone")}</option>
+                      </select>
+                      <button
+                        className="shrink-0 rounded p-1 text-neutral-400 hover:text-red-500"
+                        title={t("settings.aiRemoveAction")}
+                        onClick={() => removeQuickAction(a.id)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <textarea
+                      rows={2}
+                      value={a.prompt}
+                      onChange={(e) =>
+                        setAiForm((f) => ({
+                          ...f,
+                          quickActions: f.quickActions.map((x) =>
+                            x.id === a.id ? { ...x, prompt: e.target.value } : x,
+                          ),
+                        }))
+                      }
+                      onBlur={() => saveAiQuietly()}
+                      placeholder={t("settings.aiActionPromptPlaceholder")}
+                      className="mt-1 w-full resize-y rounded-md border border-neutral-300 bg-white px-2 py-1 text-[12px] text-neutral-800 outline-none focus:border-brand-500"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <Row label="">
             <Button size="sm" variant="outline" onClick={testAi} disabled={busyAiTest}>
               {busyAiTest ? (
