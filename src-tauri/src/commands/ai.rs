@@ -9,11 +9,19 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
+use tokio::time::timeout;
 
 use super::files::{self, secret, AiConfig};
 
 /// 流式请求的「世代」计数：ai_cancel 自增后，正在跑的 ai_chat 会发现自己记录的世代已过期而中断。
 static AI_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// 等待首个响应帧的上限：连上之后服务商迟迟不吐第一个字节（队列排队、鉴权卡住等）时及时报错。
+const FIRST_CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
+/// 两帧之间的静默上限。推理型模型会先长时间输出 reasoning，期间帧不断，因此给得较宽。
+const IDLE_CHUNK_TIMEOUT: Duration = Duration::from_secs(120);
+/// 连通性测试的整体上限：只要服务端 30 秒内没给出完整响应就判定不可用。
+const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 未配置 AI 时的统一错误文案（前后端约定）
 const NOT_CONFIGURED: &str = "尚未配置 AI：请在设置中填写服务商与 API Key";
@@ -122,13 +130,17 @@ pub async fn ai_test_connection(app: tauri::AppHandle) -> Result<String, String>
         "max_tokens": 8,
         "stream": false,
     });
-    let resp = client
+    // connect_timeout 只管建连，服务端接受连接后迟迟不响应（队列排队、鉴权卡住）仍会永久挂住，
+    // 因此再套一层整体超时：30 秒内拿不到响应就判定不可用。
+    let pending = client
         .post(chat_url(&ai.base_url))
         .bearer_auth(&ai.api_key)
         .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("连接失败：{e}"))?;
+        .send();
+    let resp = match timeout(TEST_TIMEOUT, pending).await {
+        Ok(r) => r.map_err(|e| format!("连接失败：{e}"))?,
+        Err(_) => return Err("连接超时（30 秒），请检查网络或 Base URL 是否正确".to_string()),
+    };
     let status = resp.status();
     let text = resp
         .text()
@@ -193,8 +205,32 @@ pub async fn ai_chat(
     // 累积字节而非字符串，避免多字节 UTF-8（中文）被拆到两个块时解码成乱码。
     let mut buf: Vec<u8> = Vec::new();
     let mut full = String::new();
+    // 首帧用较短的等待上限，之后放宽：推理型模型会先长时间吐 reasoning，期间帧是连续的。
+    let mut awaiting_first = true;
 
-    while let Some(item) = stream.next().await {
+    loop {
+        let wait = if awaiting_first {
+            FIRST_CHUNK_TIMEOUT
+        } else {
+            IDLE_CHUNK_TIMEOUT
+        };
+        // 没有总超时（长回答可能持续数分钟），但任何一段「静默」都必须在上限内出新帧，
+        // 否则视为网络假死，主动报错而不是让用户面对一个永远转圈的界面。
+        let item = match timeout(wait, stream.next()).await {
+            Ok(Some(item)) => item,
+            Ok(None) => break,
+            Err(_) => {
+                let message = if awaiting_first {
+                    "等待模型首个响应超时（30 秒），请检查网络或服务商状态后重试"
+                } else {
+                    "模型响应中断超过 120 秒，已停止等待"
+                };
+                let _ = on_event.send(AiEvent::Error {
+                    message: message.to_string(),
+                });
+                return Ok(());
+            }
+        };
         if cancelled(generation) {
             let _ = on_event.send(AiEvent::Error {
                 message: "cancelled".to_string(),
@@ -202,7 +238,10 @@ pub async fn ai_chat(
             return Ok(());
         }
         match item {
-            Ok(bytes) => buf.extend_from_slice(&bytes),
+            Ok(bytes) => {
+                awaiting_first = false;
+                buf.extend_from_slice(&bytes);
+            }
             Err(e) => {
                 let _ = on_event.send(AiEvent::Error {
                     message: format!("读取流失败：{e}"),

@@ -32,6 +32,8 @@ serde_json = "1"
 # 用 native-tls（Windows 走 Schannel），避免 rustls/openssl 带来的 cmake/nasm 构建依赖。
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "native-tls"] }
 futures-util = "0.3"
+# 流式对话的等待超时（首帧 / 帧间静默），避免网络假死时请求永久挂住
+tokio = { version = "1", features = ["time"] }
 # SQLite 绑定（bundled：随应用编译分发，杜绝系统库版本差异）
 rusqlite = { version = "0.32", features = ["bundled"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
