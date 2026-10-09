@@ -53,7 +53,9 @@ op 只能取以下三个值之一：
 
 注意：文档第一行是标题（不能改动），第二行是分割线；不要试图改动这两行。
 content 用 Markdown 语法书写；summary 是一句话中文说明，会展示给用户。
-每次回复最多输出一个该代码块。如果用户只是在提问、不需要改动文档，就不要输出这个代码块。
+每次回复最多输出一个该代码块，且必须放在整条回复的最后，代码块之后不要再写任何内容。
+不要在正文中举例或解释这个标记，也不要输出第二个该代码块。
+如果用户只是在提问、不需要改动文档，就不要输出这个代码块。
 始终使用与用户提问相同的语言作答。`;
 
 /** 当前没有可编辑文档时的 system prompt：只作答，不产出编辑指令 */
@@ -89,27 +91,50 @@ function validateEdit(value: unknown): AiEdit | null {
   return { op: op as AiEditOp, content, summary };
 }
 
+/** 提取结果：edit 为落地指令；malformed 表示「有指令块但没能解析」，界面应提示而不是展示裸 JSON */
+export interface ExtractEditResult {
+  edit: AiEdit | null;
+  display: string;
+  malformed: boolean;
+}
+
+/** 删掉文本中所有指令块（含未闭合的），只留下给用户看的正文 */
+function stripEditBlocks(text: string): string {
+  let out = text;
+  for (;;) {
+    const start = out.indexOf(FENCE + EDIT_BLOCK_TAG);
+    if (start === -1) return out.trim();
+    const bodyStart = out.indexOf("\n", start);
+    if (bodyStart === -1) return out.slice(0, start).trim();
+    const end = out.indexOf(FENCE, bodyStart);
+    out = out.slice(0, start) + (end === -1 ? "" : out.slice(end + FENCE.length));
+  }
+}
+
 /**
  * 从模型回复里提取编辑指令，并给出「去掉指令块之后」的展示文本。
- * 解析失败时原样返回全文（宁可让用户看到原始输出，也不要静默吞掉内容）。
+ *
+ * 取最后一个指令块解析：模型偶尔会在正文里先复述/举例协议，按第一个匹配会解析到错误的块。
+ * 块存在但 JSON 不合法或字段不合法时置 malformed——展示裸 JSON 对用户毫无意义，
+ * 但正文（所有指令块之外的部分）仍完整保留，不会静默吞掉答案。
  */
-export function extractEdit(text: string): { edit: AiEdit | null; display: string } {
-  const start = text.indexOf(FENCE + EDIT_BLOCK_TAG);
-  if (start === -1) return { edit: null, display: text };
+export function extractEdit(text: string): ExtractEditResult {
+  const start = text.lastIndexOf(FENCE + EDIT_BLOCK_TAG);
+  if (start === -1) return { edit: null, display: text, malformed: false };
   const bodyStart = text.indexOf("\n", start);
-  if (bodyStart === -1) return { edit: null, display: text };
+  // 只有标记、没有内容（流式被截断在标记那一行）：视为残缺指令
+  if (bodyStart === -1) return { edit: null, display: stripEditBlocks(text), malformed: true };
   const end = text.indexOf(FENCE, bodyStart);
   const body = (end === -1 ? text.slice(bodyStart) : text.slice(bodyStart, end)).trim();
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
   } catch {
-    return { edit: null, display: text };
+    return { edit: null, display: stripEditBlocks(text), malformed: true };
   }
   const edit = validateEdit(parsed);
-  if (!edit) return { edit: null, display: text };
-  const display = (text.slice(0, start) + (end === -1 ? "" : text.slice(end + FENCE.length))).trim();
-  return { edit, display };
+  if (!edit) return { edit: null, display: stripEditBlocks(text), malformed: true };
+  return { edit, display: stripEditBlocks(text), malformed: false };
 }
 
 /**
@@ -117,6 +142,6 @@ export function extractEdit(text: string): { edit: AiEdit | null; display: strin
  * 指令是一段 JSON，逐字流式显示又长又难看，而且它并不是给用户看的答案。
  */
 export function hideEditBlock(text: string): string {
-  const start = text.indexOf(FENCE + EDIT_BLOCK_TAG);
+  const start = text.lastIndexOf(FENCE + EDIT_BLOCK_TAG);
   return start === -1 ? text : text.slice(0, start);
 }

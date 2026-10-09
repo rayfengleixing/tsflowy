@@ -25,10 +25,26 @@ describe("extractEdit", () => {
     expect(r.edit).toEqual({ op: "append_to_document", summary: "", content: "结尾" });
   });
 
-  it("JSON 不合法时保留全文，不静默吞掉内容", () => {
-    const text = block("{不是 json}");
-    expect(extractEdit(text).edit).toBeNull();
-    expect(extractEdit(text).display).toBe(text);
+  it("JSON 不合法时剥掉坏块并报告 malformed，正文仍保留", () => {
+    const text = `正文说明。\n\n${block("{不是 json}")}`;
+    const r = extractEdit(text);
+    expect(r.edit).toBeNull();
+    expect(r.malformed).toBe(true);
+    expect(r.display).toBe("正文说明。");
+  });
+
+  it("正文里出现多个指令块时取最后一个（模型可能先复述协议）", () => {
+    const first = block('{"op":"insert_at_cursor","summary":"错的位置","content":"不该用这个"}');
+    const last = block('{"op":"append_to_document","summary":"对的位置","content":"用这个"}');
+    const r = extractEdit(`开头\n${first}\n中间说明\n${last}\n`);
+    expect(r.edit).toEqual({ op: "append_to_document", summary: "对的位置", content: "用这个" });
+    expect(r.display).toContain("开头");
+    expect(r.display).toContain("中间说明");
+    expect(r.display).not.toContain("不该用这个");
+  });
+
+  it("正常回答不误报 malformed", () => {
+    expect(extractEdit("普通回答，没有指令块。").malformed).toBe(false);
   });
 
   it("op 不在允许范围内时拒绝（含被结构锁定挡掉的整篇重写）", () => {
