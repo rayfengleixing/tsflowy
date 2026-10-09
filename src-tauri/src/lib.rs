@@ -311,6 +311,7 @@ pub fn run() {
             commands::db::mention_list_backlinks,
             commands::db::mention_count,
             commands::db::search,
+            commands::db::doc_search_snippets,
             commands::db::pp_list,
             commands::db::pp_set,
             commands::db::pp_remove,

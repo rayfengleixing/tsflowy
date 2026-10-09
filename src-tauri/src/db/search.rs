@@ -173,6 +173,87 @@ pub fn search(
     Ok(dedupe_by_view(rows))
 }
 
+/// 从自然语言问题里切出 FTS5 可命中的关键词。
+///
+/// documents_fts 用 trigram 分词，1–2 字的词匹配不到、整句短语又几乎不可能命中，
+/// 因此对中文串切 3 字滑窗、对英数串按空白/标点切词，再用 OR 组合交给 bm25 排序。
+pub(crate) fn keywords(query: &str, max: usize) -> Vec<String> {
+    const SEPARATORS: &[char] = &[
+        ' ', '\t', '\n', '\r', '，', '。', '！', '？', '；', '：', '、', '（', '）', '《', '》', '“', '”', '‘',
+        '’', ',', '.', '!', '?', ';', ':', '(', ')', '[', ']', '{', '}', '/', '-',
+    ];
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for token in query.split(|c| SEPARATORS.contains(&c)) {
+        let t = token.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let chars: Vec<char> = t.chars().collect();
+        let ascii = chars.iter().all(|c| c.is_ascii_alphanumeric() || *c == '_');
+        if ascii {
+            if chars.len() >= 2 && seen.insert(t.to_ascii_lowercase()) {
+                out.push(t.to_string());
+            }
+        } else if chars.len() <= 3 {
+            if chars.len() >= 2 && seen.insert(t.to_string()) {
+                out.push(t.to_string());
+            }
+        } else {
+            // 3 字滑窗：与 trigram 索引同宽，命中率最高
+            for w in chars.windows(3) {
+                let s: String = w.iter().collect();
+                if seen.insert(s.clone()) {
+                    out.push(s);
+                }
+                if out.len() >= max {
+                    break;
+                }
+            }
+        }
+        if out.len() >= max {
+            break;
+        }
+    }
+    out.truncate(max);
+    out
+}
+
+/// 把关键词拼成 FTS5 的 MATCH 表达式：`"词一" OR "词二"`（每个词已按短语转义）
+pub(crate) fn match_expr(words: &[String]) -> String {
+    words.iter().map(|w| escape_fts(w)).collect::<Vec<_>>().join(" OR ")
+}
+
+/// 在单篇文档内检索与查询词相关的片段（AI @ 引用的上下文用）。
+///
+/// 与全局 search 的区别：只看这一篇，返回可直接拼进 prompt 的纯文本片段（不含 <em> 标记）。
+/// 命中为空（查询太短或文档没索引）时返回空数组，由调用方回退到整篇截断。
+pub fn search_in_view(
+    conn: &Connection,
+    view_id: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<String>, String> {
+    let words = keywords(query, 24);
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = "SELECT snippet(documents_fts, 2, '', '', '…', 24) AS snippet
+               FROM documents_fts
+               WHERE documents_fts.view_id = ?1 AND documents_fts MATCH ?2
+               ORDER BY bm25(documents_fts) LIMIT ?3";
+    let mut stmt = conn.prepare(sql).map_err(dberr("search in view"))?;
+    let rows = stmt
+        .query_map(
+            params![view_id, match_expr(&words), limit as i64],
+            |r| r.get::<_, String>(0),
+        )
+        .map_err(dberr("search in view"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(dberr("search in view"))?;
+    Ok(rows)
+}
+
 /// 同一视图可能有多条命中（一张表里多个单元格、FTS 与兜底重复），保留先出现的一条。
 fn dedupe_by_view(rows: Vec<SearchRowOut>) -> Vec<SearchRowOut> {
     let mut seen: HashSet<String> = HashSet::with_capacity(rows.len());
@@ -255,6 +336,66 @@ mod tests {
         let conn = setup();
         assert!(search(&conn, "w1", "").unwrap().is_empty());
         assert!(search(&conn, "w1", "   ").unwrap().is_empty());
+    }
+
+    // --- AI 上下文检索：单篇文档内的相关片段 ---
+
+    #[test]
+    fn keywords_slices_cjk_into_trigrams() {
+        let w = keywords("总结这篇文章的核心观点", 24);
+        assert!(w.contains(&"总结这".to_string()));
+        assert!(w.len() <= 24);
+        // 去重：连续滑窗不会把同一个词塞两遍
+        let dup = keywords("啊啊啊啊啊", 24);
+        assert_eq!(dup.iter().filter(|s| *s == "啊啊啊").count(), 1);
+    }
+
+    #[test]
+    fn keywords_keeps_ascii_words_and_drops_tiny() {
+        let w = keywords("Tell me about Rust tokio", 24);
+        assert!(w.contains(&"Rust".to_string()));
+        assert!(w.contains(&"tokio".to_string()));
+        assert!(keywords("", 24).is_empty());
+        // 单字在 trigram 下匹配不到，不进查询
+        assert!(keywords("的", 24).is_empty());
+    }
+
+    #[test]
+    fn match_expr_joins_with_or() {
+        assert_eq!(match_expr(&["甲乙丙".to_string(), "丙丁戊".to_string()]), "\"甲乙丙\" OR \"丙丁戊\"");
+    }
+
+    #[test]
+    fn search_in_view_returns_relevant_snippets() {
+        let conn = setup();
+        seed_doc_view(
+            &conn,
+            "v1",
+            "周报",
+            "本周完成了同步功能的开发，并修复了三处缺陷。下周计划做性能优化。",
+        );
+        let hits = search_in_view(&conn, "v1", "性能优化", 5).unwrap();
+        assert!(!hits.is_empty());
+        assert!(hits.iter().any(|s| s.contains("性能优化")));
+        // 片段里不带高亮标记：直接拼进 prompt
+        assert!(hits.iter().all(|s| !s.contains("<em>")));
+    }
+
+    #[test]
+    fn search_in_view_scoped_to_one_view() {
+        let conn = setup();
+        seed_doc_view(&conn, "v1", "甲", "这是一篇关于前端渲染的笔记。");
+        seed_doc_view(&conn, "v2", "乙", "这是一篇关于数据库索引的笔记。");
+        // 关键词只出现在 v2，查 v1 应当没有命中
+        assert!(search_in_view(&conn, "v1", "数据库索引", 5).unwrap().is_empty());
+        assert!(!search_in_view(&conn, "v2", "数据库索引", 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_in_view_empty_query_returns_nothing() {
+        let conn = setup();
+        seed_doc_view(&conn, "v1", "甲", "内容内容内容");
+        assert!(search_in_view(&conn, "v1", "", 5).unwrap().is_empty());
     }
 
     #[test]

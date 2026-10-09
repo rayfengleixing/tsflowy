@@ -336,6 +336,19 @@ pub async fn search(
     db::search::search(&conn, &workspace_id, &query)
 }
 
+/// 单篇文档内检索与问题相关的片段，供 AI 的 @ 引用拼上下文（避免整篇硬塞后被静默截断）。
+/// 命中为空时返回空数组，由前端回退到整篇截断。
+#[tauri::command]
+pub async fn doc_search_snippets(
+    db: State<'_, Db>,
+    view_id: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<String>, String> {
+    let conn = db.read_conn()?;
+    db::search::search_in_view(&conn, &view_id, &query, limit.unwrap_or(8).clamp(1, 20))
+}
+
 // ---------- page_properties ----------
 
 #[tauri::command]
