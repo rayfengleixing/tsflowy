@@ -49,6 +49,23 @@ export function autoScale(spanDays: number): Scale {
   return "month";
 }
 
+/** 时间戳 → 本地 "YYYY-MM-DD"（拖拽改期写回单元格的格式） */
+export function msToDateKey(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** 指针横坐标 → 轴上对应的时间戳（下取整到日）；超出轨道范围按端点截断 */
+export function pointerToDayMs(
+  clientX: number,
+  rect: { left: number; width: number },
+  domainStart: number,
+  span: number,
+): number {
+  const ratio = rect.width > 0 ? Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)) : 0;
+  return floorToScale(domainStart + ratio * span, "day");
+}
+
 /** 计算轴的域（起止）与刻度列表；pct 为相对轴宽的百分比 */
 export function buildAxis(
   range: { min: number; max: number },

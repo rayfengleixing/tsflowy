@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { DAY_MS, MAX_TICKS, addUnit, autoScale, buildAxis, floorToScale, parseDateKey, tickLabel } from "./timeline";
+import {
+  DAY_MS,
+  MAX_TICKS,
+  addUnit,
+  autoScale,
+  buildAxis,
+  floorToScale,
+  msToDateKey,
+  parseDateKey,
+  pointerToDayMs,
+  tickLabel,
+} from "./timeline";
 
 // 期望值统一用本地 Date 构造，避免依赖运行机的时区设置
 
@@ -106,5 +117,41 @@ describe("buildAxis", () => {
     const max = new Date(2026, 0, 1).getTime();
     const axis = buildAxis({ min, max }, "day");
     expect(axis.ticks.length).toBeLessThanOrEqual(MAX_TICKS + 1);
+  });
+});
+
+describe("msToDateKey", () => {
+  it("本地时间戳 → YYYY-MM-DD（补零）", () => {
+    expect(msToDateKey(new Date(2026, 9, 8, 23, 59).getTime())).toBe("2026-10-08");
+    expect(msToDateKey(new Date(2026, 0, 1).getTime())).toBe("2026-01-01");
+  });
+
+  it("与 parseDateKey 往返一致", () => {
+    const ms = new Date(2026, 9, 8).getTime();
+    expect(parseDateKey(msToDateKey(ms))).toBe(ms);
+  });
+});
+
+describe("pointerToDayMs", () => {
+  const domainStart = new Date(2026, 9, 1).getTime();
+  const span = 10 * DAY_MS;
+  const rect = { left: 100, width: 1000 };
+
+  it("轨道起点落在域起点的当天", () => {
+    expect(pointerToDayMs(100, rect, domainStart, span)).toBe(domainStart);
+  });
+
+  it("轨道中点按跨度换算并下取整到日", () => {
+    // 中点 = 域起点 + 5 天
+    expect(pointerToDayMs(600, rect, domainStart, span)).toBe(new Date(2026, 9, 6).getTime());
+  });
+
+  it("超出轨道左右端按端点截断", () => {
+    expect(pointerToDayMs(0, rect, domainStart, span)).toBe(domainStart);
+    expect(pointerToDayMs(1100, rect, domainStart, span)).toBe(new Date(2026, 9, 11).getTime());
+  });
+
+  it("零宽轨道退化为域起点", () => {
+    expect(pointerToDayMs(500, { left: 0, width: 0 }, domainStart, span)).toBe(domainStart);
   });
 });

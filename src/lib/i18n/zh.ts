@@ -443,6 +443,7 @@ export const zh = {
   "timeline.scaleDay": "日",
   "timeline.scaleWeek": "周",
   "timeline.scaleMonth": "月",
+  "timeline.dragHint": "拖动改期",
   // — M6 设置页新增文案 —
   "settings.title": "设置",
   "settings.appearance": "外观",

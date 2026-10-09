@@ -448,6 +448,7 @@ export const en: Record<MessageKey, string> = {
   "timeline.scaleDay": "Day",
   "timeline.scaleWeek": "Week",
   "timeline.scaleMonth": "Month",
+  "timeline.dragHint": "drag to reschedule",
   // — M6 Settings new keys —
   "settings.title": "Settings",
   "settings.appearance": "Appearance",

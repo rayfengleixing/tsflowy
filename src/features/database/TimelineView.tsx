@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDbStore } from "@/stores/database-context";
 import { applyFilters, sortRows } from "@/lib/database-query";
 import { defaultCalendarField, rowDateKey } from "@/lib/board-calendar";
@@ -8,19 +8,31 @@ import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { patchViewConfig, readViewConfig } from "@/lib/view-config";
-import { DAY_MS, autoScale, buildAxis, parseDateKey, type Scale, type ScaleMode } from "@/lib/timeline";
+import {
+  DAY_MS,
+  autoScale,
+  buildAxis,
+  floorToScale,
+  msToDateKey,
+  parseDateKey,
+  pointerToDayMs,
+  type Scale,
+  type ScaleMode,
+} from "@/lib/timeline";
 import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
 import { RowDetailPanel } from "./RowDetail";
 import type { DatabaseRow } from "@/types/database";
 import type { View } from "@/types/models";
 
-// 时间线视图（只读 v1）：一条横向时间轴 + 每行按日期落位。
+// 时间线视图：一条横向时间轴 + 每行按日期落位。
 // 开始日期字段决定落点；再选一个结束日期字段则画成横跨的条，否则只画点。
 // 「本视图用哪个日期字段」这类配置写在 views.extra（view-config 的 timelineStartFieldId /
 // timelineEndFieldId），与日历的 calendarFieldId 同一套机制。
 // 日期/刻度纯逻辑见 @/lib/timeline（可单测）。
+// v2 交互：拖动点/条改开始日期（条整体拖动保持时长不变），拖条右缘改结束日期；
+// 仅当字段类型为 date 时可写（created_at/last_edited_at 只读，拖了不生效）。
 
-/** Timeline 时间线视图：横向时间轴（只读，v1 不做拖拽改期） */
+/** Timeline 时间线视图：横向时间轴，支持拖拽改期（条可拖整体或拖右缘） */
 export function TimelineView({
   view,
   source,
@@ -127,6 +139,90 @@ export function TimelineView({
 
   const { scrollerRef, focusRowId } = useRowFocus(axis ? `${scale}:${axis.domainStart}:${axis.span}` : "empty");
 
+  // ---- 拖拽改期（v2）----
+  // 仅 date 类型字段可写：created_at 手动可改但语义上是历史值、last_edited_at 由触发器强制刷新，
+  // 都不可拖。拖拽期间用 dragPreview 覆盖该行的起止做即时渲染，pointerup 时一次写入。
+  const [dragPreview, setDragPreview] = useState<{ rowId: string; startMs: number; endMs: number } | null>(null);
+  const suppressClickRef = useRef(false);
+  const startWritable = startField?.field_type === "date";
+  const endWritable = endField?.field_type === "date";
+  // 整体拖动要同时写起止两列：选了结束字段但它不可写时，只挪开始日会改变时长，故禁用整体拖动
+  const moveDraggable = startWritable && (!endField || endWritable);
+
+  const beginDrag = (
+    e: React.PointerEvent<HTMLElement>,
+    entry: { row: DatabaseRow; startMs: number; endMs: number },
+    mode: "move" | "resize",
+  ) => {
+    if (!axis || !startField) return;
+    if (mode === "move" ? !moveDraggable : !(startWritable && endWritable)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const track = e.currentTarget.closest("[data-track]")?.getBoundingClientRect();
+    if (!track) return;
+    const origin = { startMs: entry.startMs, endMs: entry.endMs };
+    const startX = e.clientX;
+    const axisRef = axis;
+    let moved = false;
+    let latest = { ...origin };
+    const onMove = (ev: PointerEvent) => {
+      // 4px 死区：轻微抖动仍按点击处理（打开行详情）
+      if (!moved && Math.abs(ev.clientX - startX) < 4) return;
+      moved = true;
+      const dayMs = pointerToDayMs(ev.clientX, track, axisRef.domainStart, axisRef.span);
+      if (mode === "move") {
+        const delta = dayMs - origin.startMs;
+        latest = { startMs: origin.startMs + delta, endMs: origin.endMs + delta };
+      } else {
+        latest = { startMs: origin.startMs, endMs: Math.max(dayMs, origin.startMs) };
+      }
+      setDragPreview({ rowId: entry.row.id, ...latest });
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      if (!moved) return;
+      // 拖完紧跟的 click 要吞掉；若指针在元素外释放（click 不触发），下一拍自动过期
+      suppressClickRef.current = true;
+      setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+      setDragPreview(null);
+      void (async () => {
+        try {
+          const updates: { rowId: string; fieldId: string; value: string }[] = [
+            { rowId: entry.row.id, fieldId: startField.id, value: msToDateKey(latest.startMs) },
+          ];
+          if (endField && endWritable && latest.endMs !== origin.endMs) {
+            updates.push({ rowId: entry.row.id, fieldId: endField.id, value: msToDateKey(latest.endMs) });
+          }
+          await store.setCellsMany(updates);
+        } catch (err) {
+          logger.error("timeline.drag", err);
+        }
+      })();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  const openFromClick = (row: DatabaseRow) => {
+    // 拖拽结束会触发一次 click，吞掉它，避免拖完误开详情面板
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
+    void openRowDetail(row, source);
+  };
+
+  // 「今天」参考线：今天在轴域内才画
+  const todayPct = useMemo(() => {
+    if (!axis) return null;
+    const t0 = floorToScale(Date.now(), "day");
+    if (t0 < axis.domainStart || t0 >= axis.domainStart + axis.span) return null;
+    return ((t0 - axis.domainStart) / axis.span) * 100;
+  }, [axis]);
+
   const titleOf = (row: DatabaseRow): string => {
     if (!primaryField) return t("row.detailName", { n: row.position + 1 });
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
@@ -230,13 +326,18 @@ export function TimelineView({
               </div>
             </div>
 
-            {/* 每行一条轨道：有结束日期画条，否则画点 */}
-            {entries.map(({ row, startMs, endMs }) => {
+            {/* 每行一条轨道：有结束日期画条，否则画点；可拖拽改期 */}
+            {entries.map((entry) => {
+              const { row } = entry;
+              const preview = dragPreview?.rowId === row.id ? dragPreview : null;
+              const startMs = preview ? preview.startMs : entry.startMs;
+              const endMs = preview ? preview.endMs : entry.endMs;
               const left = ((startMs - axis.domainStart) / axis.span) * 100;
               const width = ((endMs - startMs) / axis.span) * 100;
               const isSpan = endMs > startMs;
               const title = titleOf(row);
               const focused = focusRowId === row.id;
+              const draggable = moveDraggable;
               return (
                 <div key={row.id} className="flex border-b border-neutral-100 dark:border-neutral-800">
                   <div
@@ -247,7 +348,7 @@ export function TimelineView({
                       <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>
                     )}
                   </div>
-                  <div className="relative h-9 flex-1">
+                  <div data-track className="relative h-9 flex-1">
                     {/* 刻度线 */}
                     {axis.ticks.map((tk, i) => (
                       <div
@@ -256,33 +357,71 @@ export function TimelineView({
                         style={{ left: `${tk.pct}%` }}
                       />
                     ))}
+                    {/* 「今天」参考线 */}
+                    {todayPct !== null && (
+                      <div className="absolute inset-y-0 w-px bg-red-400/70" style={{ left: `${todayPct}%` }} />
+                    )}
                     {isSpan ? (
-                      <button
+                      <div
                         data-row-id={row.id}
+                        role="button"
+                        tabIndex={0}
                         className={cn(
-                          "absolute top-1/2 h-5 -translate-y-1/2 overflow-hidden rounded bg-brand-500 px-2 text-left text-[11px] font-medium text-white shadow-sm transition hover:bg-brand-600",
+                          "absolute top-1/2 h-5 -translate-y-1/2 overflow-visible rounded bg-brand-500 text-left text-[11px] font-medium text-white shadow-sm transition",
+                          draggable ? "cursor-grab active:cursor-grabbing hover:bg-brand-600" : "hover:bg-brand-600",
                           focused && ROW_FOCUS_CLASS,
+                          dragPreview?.rowId === row.id && "opacity-80",
                         )}
                         style={{ left: `${left}%`, width: `${Math.max(width, 1)}%` }}
-                        onClick={() => void openRowDetail(row, source)}
-                        title={title}
+                        onClick={() => openFromClick(row)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            openFromClick(row);
+                          }
+                        }}
+                        onPointerDown={(e) => beginDrag(e, entry, "move")}
+                        title={
+                          draggable ? `${title || t("board.cardNamePlaceholder")}（${t("timeline.dragHint")}）` : title
+                        }
                       >
-                        <span className="block truncate leading-5">{title || t("board.cardNamePlaceholder")}</span>
-                      </button>
+                        <span className="block truncate rounded bg-brand-500 leading-5 px-2">
+                          {title || t("board.cardNamePlaceholder")}
+                        </span>
+                        {startWritable && endWritable && (
+                          <span
+                            className="absolute inset-y-0 -right-1 w-2 cursor-ew-resize rounded-r bg-brand-700/60 hover:bg-brand-700"
+                            onPointerDown={(e) => beginDrag(e, entry, "resize")}
+                          />
+                        )}
+                      </div>
                     ) : (
-                      <button
+                      <div
                         data-row-id={row.id}
+                        role="button"
+                        tabIndex={0}
                         className={cn(
                           "absolute top-1/2 flex -translate-y-1/2 items-center gap-1 rounded px-1 py-0.5 text-left text-[11px] text-neutral-700 transition hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800",
+                          draggable && "cursor-grab active:cursor-grabbing",
                           focused && ROW_FOCUS_CLASS,
+                          dragPreview?.rowId === row.id && "opacity-80",
                         )}
                         style={{ left: `${left}%` }}
-                        onClick={() => void openRowDetail(row, source)}
-                        title={title}
+                        onClick={() => openFromClick(row)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            openFromClick(row);
+                          }
+                        }}
+                        onPointerDown={(e) => beginDrag(e, entry, "move")}
+                        title={
+                          draggable ? `${title || t("board.cardNamePlaceholder")}（${t("timeline.dragHint")}）` : title
+                        }
                       >
                         <span className="-ml-[5px] h-2.5 w-2.5 shrink-0 rounded-full bg-brand-500" />
                         <span className="truncate">{title || t("board.cardNamePlaceholder")}</span>
-                      </button>
+                      </div>
                     )}
                   </div>
                 </div>
