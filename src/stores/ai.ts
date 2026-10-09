@@ -6,9 +6,11 @@ import {
   aiChat,
   aiErrorText,
   aiGetConfig,
+  docSearchSnippets,
   type AiChatEvent,
   type AiChatMessage,
   type AiConfig,
+  type AiUsage,
 } from "@/lib/ai";
 import { getAiEditor, type AiEditRevert } from "@/lib/ai-editor";
 import {
@@ -170,6 +172,10 @@ interface AiState {
   reasoning: string;
   streaming: boolean;
   error: string | null;
+  /** 最近一轮的 token 用量（服务商不返回时保持 null） */
+  usage: AiUsage | null;
+  /** 本会话累计用量，只在服务商返回用量时累加 */
+  usageTotal: { prompt: number; completion: number; total: number };
   config: AiConfig | null;
   configLoaded: boolean;
 
@@ -287,7 +293,9 @@ export const useAiStore = create<AiState>()((set, get) => {
   };
 
   /**
-   * 用户消息里 `@文件名` 引用的文档 → 参考上下文：读磁盘快照、转 Markdown、按 max_chars 截断。
+   * 用户消息里 `@文件名` 引用的文档 → 参考上下文。
+   * 短文档整篇给出；长文档先按问题检索相关片段，检索不到才回退整篇截断并写明截断了多少，
+   * 避免模型拿着被静默砍掉的上下文作答。
    * 引用名解析不到（改名/删除/未同步）时静默跳过，不影响本轮提问。
    */
   const buildReferenceContext = async (): Promise<string> => {
@@ -301,6 +309,8 @@ export const useAiStore = create<AiState>()((set, get) => {
     );
     if (refs.length === 0) return "";
     const limit = maxChars();
+    // 检索词取用户问题的正文（去掉 @ 提及的文档名，它们不是查询意图）
+    const query = lastUser.content.replace(/@\S+/g, " ").trim() || lastUser.content;
     const parts: string[] = [];
     for (const ref of refs) {
       try {
@@ -310,7 +320,21 @@ export const useAiStore = create<AiState>()((set, get) => {
         const doc: JSONContent = Array.isArray(parsed) ? { type: "doc", content: parsed } : parsed;
         const md = jsonToMarkdown(doc).trim();
         if (!md) continue;
-        parts.push(`### ${ref.name}\n${md.slice(0, limit)}`);
+        if (md.length <= limit) {
+          parts.push(`### ${ref.name}\n${md}`);
+          continue;
+        }
+        // 超长：优先按问题取相关片段
+        const snippets = await docSearchSnippets(ref.id, query, 8).catch(() => [] as string[]);
+        if (snippets.length > 0) {
+          const body = snippets.join("\n…\n").slice(0, limit);
+          parts.push(`### ${ref.name}（长文档，已按问题检索出 ${snippets.length} 个相关片段）\n${body}`);
+        } else {
+          const cut = md.length - limit;
+          parts.push(
+            `### ${ref.name}（长文档，未命中相关片段，仅取前 ${limit} 字，已截断 ${cut} 字）\n${md.slice(0, limit)}`,
+          );
+        }
       } catch (e) {
         logger.error("ai reference load failed", ref.id, e);
       }
@@ -404,6 +428,17 @@ export const useAiStore = create<AiState>()((set, get) => {
           set((s) => ({ reasoning: s.reasoning + ev.delta }));
         } else if (ev.type === "done") {
           finishAssistant(assistantId, ev.full || raw);
+          const u = ev.usage;
+          if (u) {
+            set((s) => ({
+              usage: u,
+              usageTotal: {
+                prompt: s.usageTotal.prompt + (u.prompt_tokens ?? 0),
+                completion: s.usageTotal.completion + (u.completion_tokens ?? 0),
+                total: s.usageTotal.total + (u.total_tokens ?? 0),
+              },
+            }));
+          }
         } else {
           // 用户主动「停止」时 Rust 会回 cancelled：不算错误，保留已生成的部分内容
           if (ev.message === "cancelled") return;
@@ -430,6 +465,8 @@ export const useAiStore = create<AiState>()((set, get) => {
     reasoning: "",
     streaming: false,
     error: null,
+    usage: null,
+    usageTotal: { prompt: 0, completion: 0, total: 0 },
     config: null,
     configLoaded: false,
 
@@ -478,7 +515,13 @@ export const useAiStore = create<AiState>()((set, get) => {
     },
 
     clear: () => {
-      set({ messages: [], reasoning: "", error: null });
+      set({
+        messages: [],
+        reasoning: "",
+        error: null,
+        usage: null,
+        usageTotal: { prompt: 0, completion: 0, total: 0 },
+      });
       persistSessions();
     },
 
@@ -489,6 +532,8 @@ export const useAiStore = create<AiState>()((set, get) => {
         messages: [],
         reasoning: "",
         error: null,
+        usage: null,
+        usageTotal: { prompt: 0, completion: 0, total: 0 },
         activeSessionId: newId(),
       }));
       persistSessions();
@@ -507,6 +552,9 @@ export const useAiStore = create<AiState>()((set, get) => {
         activeSessionId: target.id,
         reasoning: "",
         error: null,
+        // 累计用量按会话统计，切过去无从得知历史用量，重置为 0
+        usage: null,
+        usageTotal: { prompt: 0, completion: 0, total: 0 },
       });
       persistSessions();
     },

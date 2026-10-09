@@ -42,6 +42,8 @@ export function AiPanel() {
   const reasoning = useAiStore((s) => s.reasoning);
   const streaming = useAiStore((s) => s.streaming);
   const error = useAiStore((s) => s.error);
+  const usage = useAiStore((s) => s.usage);
+  const usageTotal = useAiStore((s) => s.usageTotal);
   const config = useAiStore((s) => s.config);
   const configLoaded = useAiStore((s) => s.configLoaded);
   const closePanel = useAiStore((s) => s.closePanel);
@@ -344,6 +346,17 @@ export function AiPanel() {
               </div>
             )}
           </div>
+
+          {/* token 用量：服务商返回 usage 时才显示 */}
+          {usage && (
+            <div className="border-t border-neutral-200 px-2 py-1 text-[11px] text-neutral-400 dark:border-neutral-700">
+              {t("ai.usageLast", {
+                prompt: (usage.prompt_tokens ?? 0).toLocaleString(),
+                completion: (usage.completion_tokens ?? 0).toLocaleString(),
+              })}
+              {usageTotal.total > 0 ? ` · ${t("ai.usageTotal", { total: usageTotal.total.toLocaleString() })}` : ""}
+            </div>
+          )}
 
           {/* 快捷动作：总结当前页 / 翻译选中 / 改写选中 / 解释选中 */}
           <div className="flex flex-wrap gap-1 border-t border-neutral-200 px-2 py-1.5 dark:border-neutral-700">

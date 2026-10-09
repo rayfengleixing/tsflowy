@@ -37,6 +37,21 @@ pub struct AiChatRequest {
     pub messages: Vec<AiMessage>,
 }
 
+/// 单次请求的 token 用量（来自响应尾帧的 usage；服务商不返回时整块为 null）
+#[derive(Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct AiUsage {
+    pub prompt_tokens: Option<u32>,
+    pub completion_tokens: Option<u32>,
+    pub total_tokens: Option<u32>,
+}
+
+impl AiUsage {
+    /// 服务商可能在每一帧都带上 usage 字段但值为 null，只有真正有数字时才算拿到用量
+    fn is_meaningful(&self) -> bool {
+        self.prompt_tokens.is_some() || self.completion_tokens.is_some() || self.total_tokens.is_some()
+    }
+}
+
 #[derive(Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AiEvent {
@@ -50,6 +65,8 @@ pub enum AiEvent {
     },
     Done {
         full: String,
+        /// 服务商未返回用量时为 null（前端据此决定要不要显示）
+        usage: Option<AiUsage>,
     },
     Error {
         message: String,
@@ -178,6 +195,8 @@ pub async fn ai_chat(
         "model": ai.model,
         "messages": req.messages,
         "stream": true,
+        // 让支持的服务商在尾帧回传 token 用量；不支持的会忽略这个字段
+        "stream_options": { "include_usage": true },
     });
     let resp = match client
         .post(chat_url(&ai.base_url))
@@ -209,6 +228,7 @@ pub async fn ai_chat(
     // 累积字节而非字符串，避免多字节 UTF-8（中文）被拆到两个块时解码成乱码。
     let mut buf: Vec<u8> = Vec::new();
     let mut full = String::new();
+    let mut usage: Option<AiUsage> = None;
     // 首帧用较短的等待上限，之后放宽：推理型模型会先长时间吐 reasoning，期间帧是连续的。
     let mut awaiting_first = true;
 
@@ -286,8 +306,11 @@ pub async fn ai_chat(
                     let _ = on_event.send(AiEvent::Error { message });
                     return Ok(());
                 }
+                SseParse::Usage(u) => {
+                    usage = Some(u);
+                }
                 SseParse::Done => {
-                    let _ = on_event.send(AiEvent::Done { full });
+                    let _ = on_event.send(AiEvent::Done { full, usage });
                     return Ok(());
                 }
                 SseParse::Ignore => {}
@@ -295,7 +318,7 @@ pub async fn ai_chat(
         }
     }
     // 服务端未发 [DONE] 就断流：按正常结束处理，把已收到的内容交给前端
-    let _ = on_event.send(AiEvent::Done { full });
+    let _ = on_event.send(AiEvent::Done { full, usage });
     Ok(())
 }
 
@@ -361,6 +384,8 @@ enum SseParse {
     Done,
     /// 服务端返回的错误信息
     Error(String),
+    /// 尾帧携带的 token 用量
+    Usage(AiUsage),
     /// 非 data 行，或空 delta
     Ignore,
 }
@@ -403,6 +428,18 @@ fn parse_sse_line(line: &str) -> SseParse {
         .unwrap_or("");
     if !reasoning.is_empty() {
         return SseParse::Reasoning(reasoning.to_string());
+    }
+    // 内容帧走完了才看用量：部分服务商（含带 null usage 的流式实现）会在每一帧都带上 usage 字段，
+    // 先判用量会把正常内容帧当成空帧丢掉。只有拿到了完整用量才算一条 Usage 事件。
+    if let Some(u) = v.get("usage") {
+        let usage = AiUsage {
+            prompt_tokens: u.get("prompt_tokens").and_then(|x| x.as_u64()).map(|x| x as u32),
+            completion_tokens: u.get("completion_tokens").and_then(|x| x.as_u64()).map(|x| x as u32),
+            total_tokens: u.get("total_tokens").and_then(|x| x.as_u64()).map(|x| x as u32),
+        };
+        if usage.is_meaningful() {
+            return SseParse::Usage(usage);
+        }
     }
     SseParse::Ignore
 }
@@ -560,6 +597,27 @@ data: [DONE]
             parse_sse_line(r#"data: {"choices":[{"delta":{}}]}"#),
             SseParse::Ignore
         );
+    }
+
+    #[test]
+    fn parse_sse_usage_frame() {
+        let line = r#"data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":34,"total_tokens":46}}"#;
+        assert_eq!(
+            parse_sse_line(line),
+            SseParse::Usage(AiUsage {
+                prompt_tokens: Some(12),
+                completion_tokens: Some(34),
+                total_tokens: Some(46),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_sse_null_usage_is_ignored() {
+        // 每帧都带 usage:null 的服务商：不能把内容帧吞掉，也不产生用量事件
+        let line = r#"data: {"choices":[{"delta":{"content":"好"}}],"usage":null}"#;
+        assert_eq!(parse_sse_line(line), SseParse::Delta("好".to_string()));
+        assert_eq!(parse_sse_line(r#"data: {"choices":[],"usage":null}"#), SseParse::Ignore);
     }
 
     #[test]

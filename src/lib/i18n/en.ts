@@ -719,6 +719,8 @@ export const en: Record<MessageKey, string> = {
   "ai.diffBefore": "Before",
   "ai.diffAfter": "After",
   "ai.diffNoBefore": "(new content, nothing replaced)",
+  "ai.usageLast": "Last turn: {prompt} in / {completion} out tokens",
+  "ai.usageTotal": "{total} tokens this session",
   "ai.noEditor": "No editor available",
   "ai.close": "Collapse panel",
   "ai.retry": "Retry",

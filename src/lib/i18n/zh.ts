@@ -704,6 +704,8 @@ export const zh = {
   "ai.diffBefore": "原文",
   "ai.diffAfter": "改为",
   "ai.diffNoBefore": "（新增内容，无原文）",
+  "ai.usageLast": "上轮 输入 {prompt} / 输出 {completion} tokens",
+  "ai.usageTotal": "本会话累计 {total} tokens",
   "ai.noEditor": "当前没有可用的编辑器",
   "ai.close": "收起面板",
   "ai.retry": "重试",

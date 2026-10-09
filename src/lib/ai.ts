@@ -23,11 +23,18 @@ export interface AiChatMessage {
   content: string;
 }
 
-/** `ai_chat` 流式事件：chunk 增量 / reasoning 思考增量 / done 收尾全量 / error 报错 */
+/** 单次请求的 token 用量（服务商未返回时字段为 null） */
+export interface AiUsage {
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+}
+
+/** `ai_chat` 流式事件：chunk 增量 / reasoning 思考增量 / done 收尾全量与用量 / error 报错 */
 export type AiChatEvent =
   | { type: "chunk"; delta: string }
   | { type: "reasoning"; delta: string }
-  | { type: "done"; full: string }
+  | { type: "done"; full: string; usage?: AiUsage | null }
   | { type: "error"; message: string };
 
 /** 服务商预设：选中后自动填充 Base URL 与模型（用户仍可手改） */
@@ -95,4 +102,12 @@ export async function aiChat(messages: AiChatMessage[], onEvent: (ev: AiChatEven
 
 export async function aiCancel(): Promise<void> {
   await invoke("ai_cancel");
+}
+
+/**
+ * 单篇文档内检索与问题相关的片段（AI @ 引用的上下文用）。
+ * 命中为空（查询太短 / 该文档还没进索引）时返回空数组，调用方回退到整篇截断。
+ */
+export async function docSearchSnippets(viewId: string, query: string, limit = 8): Promise<string[]> {
+  return invoke<string[]>("doc_search_snippets", { viewId, query, limit });
 }
