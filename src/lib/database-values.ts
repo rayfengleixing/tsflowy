@@ -105,12 +105,23 @@ export function formatCellValue(type: FieldType, value: CellValue, options?: Fie
   if (value === null || value === "") return "";
   switch (type) {
     case "number":
-    case "formula": // 公式值由调用方算好传入（computeFormula），按数字字段格式展示
       if (typeof value !== "number") return "";
       return formatNumber(
         value,
         options?.kind === "number" ? options : { kind: "number", format: "decimal", precision: 2, currency: "CNY" },
       );
+    case "formula": {
+      // 公式值由 computeFormula 算好传入，可能是数值/文本/布尔（IF/CONCAT/比较等）
+      if (typeof value === "number") {
+        return formatNumber(
+          value,
+          options?.kind === "number" ? options : { kind: "number", format: "decimal", precision: 2, currency: "CNY" },
+        );
+      }
+      if (typeof value === "boolean") return value ? "✓" : "";
+      if (typeof value === "string") return value;
+      return ""; // 数组等非标量（公式不会产生）→ 空
+    }
     case "checkbox":
       return value ? "✓" : "";
     case "multi_select": {

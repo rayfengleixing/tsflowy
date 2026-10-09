@@ -269,7 +269,7 @@ export const en: Record<MessageKey, string> = {
   "field.formulaExpr": "Expression",
   "field.formulaPlaceholder": "{price} * {qty}",
   "field.formulaHint":
-    "Supports + - * / and parentheses; use {field} to reference a field in the same row (click a tag below to insert). Empty references show blank.",
+    "Supports + - * / and parentheses, comparisons (= != < > <= >=), logic (AND OR NOT) and functions (IF/SUM/AVG/MIN/MAX/ROUND/ABS/CONCAT/TODAY/YEAR/MONTH/DAY); use {field} to reference a field in the same row (click a tag below to insert). Empty references show blank.",
   "field.removeOption": "Remove this option",
   "field.selected": "Selected",
   "backlinks.title": "Referenced by {n} pages",

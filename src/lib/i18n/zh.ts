@@ -264,7 +264,7 @@ export const zh = {
   "field.formulaExpr": "表达式",
   "field.formulaPlaceholder": "{单价} * {数量}",
   "field.formulaHint":
-    "支持 + - * / 和括号；用 {字段名} 引用同行字段（点下方标签可快速插入）。引用字段为空时结果显示为空。",
+    "支持 + - * / 与括号、比较（= != < > <= >=）、逻辑（AND OR NOT）与函数（IF/SUM/AVG/MIN/MAX/ROUND/ABS/CONCAT/TODAY/YEAR/MONTH/DAY）；用 {字段名} 引用同行字段（点下方标签可快速插入）。引用字段为空时结果显示为空。",
   "field.removeOption": "移除此选项",
   "field.selected": "已选",
   "backlinks.title": "被 {n} 个页面引用",
