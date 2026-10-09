@@ -12,6 +12,8 @@ export interface AiConfig {
   base_url: string;
   model: string;
   max_chars: number;
+  /** AI 自主修改文档前先弹 diff 确认 */
+  confirm_edit: boolean;
   has_api_key: boolean;
   api_key_masked: string;
 }
@@ -61,6 +63,7 @@ export async function aiSaveConfig(input: {
   baseUrl: string;
   model: string;
   maxChars: number;
+  confirmEdit: boolean;
   apiKey: string | null;
 }): Promise<void> {
   // 顶层参数名走 Tauri 的 camelCase 映射，但结构体内部字段由 serde 按 Rust 原名反序列化，
@@ -72,6 +75,7 @@ export async function aiSaveConfig(input: {
       base_url: input.baseUrl,
       model: input.model,
       max_chars: input.maxChars,
+      confirm_edit: input.confirmEdit,
       api_key: input.apiKey,
     },
   });

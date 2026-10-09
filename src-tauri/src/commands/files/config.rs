@@ -42,6 +42,9 @@ pub struct AiConfig {
     pub api_key: String,
     /// 请求上下文允许的最大字符数，默认 8000
     pub max_chars: u32,
+    /// AI 自主修改文档前是否先弹 diff 让用户确认。默认 false：直接落地，靠「撤销」兜底。
+    #[serde(default)]
+    pub confirm_edit: bool,
 }
 
 impl Default for AiConfig {
@@ -53,6 +56,7 @@ impl Default for AiConfig {
             model: String::new(),
             api_key: String::new(),
             max_chars: 8000,
+            confirm_edit: false,
         }
     }
 }

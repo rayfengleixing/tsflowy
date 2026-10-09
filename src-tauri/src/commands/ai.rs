@@ -64,6 +64,8 @@ pub struct AiConfigPublic {
     pub base_url: String,
     pub model: String,
     pub max_chars: u32,
+    /// AI 自主修改文档前先弹 diff 确认
+    pub confirm_edit: bool,
     pub has_api_key: bool,
     pub api_key_masked: String,
 }
@@ -76,6 +78,7 @@ pub struct AiConfigInput {
     pub base_url: String,
     pub model: String,
     pub max_chars: u32,
+    pub confirm_edit: bool,
     pub api_key: Option<String>,
 }
 
@@ -99,6 +102,7 @@ pub fn ai_save_config(app: tauri::AppHandle, cfg: AiConfigInput) -> Result<(), S
     ai.base_url = cfg.base_url;
     ai.model = cfg.model;
     ai.max_chars = cfg.max_chars;
+    ai.confirm_edit = cfg.confirm_edit;
     // None 保持原值不变；Some("") 清空；Some(s) 覆盖。
     // 非空 key 优先写入系统凭据库：成功则 config.json 不留明文；失败则回退明文，保证可用。
     match cfg.api_key {
@@ -311,6 +315,7 @@ fn public_of(cfg: &files::AppConfig, effective_key: &str) -> AiConfigPublic {
         base_url: ai.base_url,
         model: ai.model,
         max_chars: ai.max_chars,
+        confirm_edit: ai.confirm_edit,
         has_api_key: !effective_key.is_empty(),
         api_key_masked: mask_api_key(effective_key),
     }
