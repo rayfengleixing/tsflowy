@@ -5,14 +5,17 @@ import {
   CornerDownLeft,
   Eraser,
   FileText,
+  History,
   Languages,
   Lightbulb,
+  MessageSquarePlus,
   PenLine,
   Replace,
   Send,
   Settings,
   Sparkles,
   Square,
+  Trash2,
   TriangleAlert,
   X,
 } from "lucide-react";
@@ -27,12 +30,14 @@ import { detectMentionQuery } from "@/lib/ai-mention";
 import { flattenTree } from "@/lib/tree";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { Markdown } from "./Markdown";
 
 /** AI 助手右侧面板（约 360px、可折叠、可拖拽调宽） */
 export function AiPanel() {
   const open = useAiStore((s) => s.open);
   const width = useAiStore((s) => s.width);
   const messages = useAiStore((s) => s.messages);
+  const sessions = useAiStore((s) => s.sessions);
   const reasoning = useAiStore((s) => s.reasoning);
   const streaming = useAiStore((s) => s.streaming);
   const error = useAiStore((s) => s.error);
@@ -47,11 +52,15 @@ export function AiPanel() {
   const retry = useAiStore((s) => s.retry);
   const quickAction = useAiStore((s) => s.quickAction);
   const undoEdit = useAiStore((s) => s.undoEdit);
+  const newChat = useAiStore((s) => s.newChat);
+  const switchSession = useAiStore((s) => s.switchSession);
+  const deleteSession = useAiStore((s) => s.deleteSession);
   const setRoute = useWorkspaceStore((s) => s.setRoute);
 
   const [input, setInput] = useState("");
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [mentionActive, setMentionActive] = useState(0);
+  const [showHistory, setShowHistory] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const tree = useWorkspaceStore((s) => s.tree);
@@ -199,11 +208,26 @@ export function AiPanel() {
         onMouseDown={startDrag}
       />
 
-      {/* 头部：标题 + 清空 / 复制 / 收起 */}
+      {/* 头部：标题 + 新对话 / 历史 / 清空 / 复制 / 收起 */}
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-neutral-200 px-2 dark:border-neutral-700">
         <Sparkles className="h-3.5 w-3.5 text-brand-500" />
         <span className="text-[13px] font-medium text-neutral-800 dark:text-neutral-200">{t("ai.title")}</span>
         <div className="ml-auto flex items-center gap-0.5">
+          <button
+            className="flex h-6 w-6 items-center justify-center rounded text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-700"
+            title={t("ai.newChat")}
+            onClick={newChat}
+          >
+            <MessageSquarePlus className="h-3.5 w-3.5" />
+          </button>
+          <button
+            className="flex h-6 w-6 items-center justify-center rounded text-neutral-500 hover:bg-neutral-200 disabled:opacity-40 dark:hover:bg-neutral-700"
+            title={t("ai.history")}
+            disabled={sessions.length === 0}
+            onClick={() => setShowHistory((v) => !v)}
+          >
+            <History className="h-3.5 w-3.5" />
+          </button>
           <button
             className="flex h-6 w-6 items-center justify-center rounded text-neutral-500 hover:bg-neutral-200 disabled:opacity-40 dark:hover:bg-neutral-700"
             title={t("ai.clear")}
@@ -229,6 +253,41 @@ export function AiPanel() {
           </button>
         </div>
       </div>
+
+      {/* 历史会话下拉：点击切换（当前对话自动归档），悬浮可删除 */}
+      {showHistory && (
+        <>
+          <button
+            className="fixed inset-0 z-20 cursor-default"
+            aria-label={t("ai.closeHistory")}
+            onClick={() => setShowHistory(false)}
+          />
+          <div className="absolute top-9 right-2 z-30 w-64 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800">
+            <div className="max-h-72 overflow-y-auto py-1">
+              {sessions.map((sess) => (
+                <div key={sess.id} className="group flex items-center pr-1">
+                  <button
+                    className="min-w-0 flex-1 truncate rounded px-2.5 py-1.5 text-left text-[12px] text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                    onClick={() => {
+                      switchSession(sess.id);
+                      setShowHistory(false);
+                    }}
+                  >
+                    {sess.title}
+                  </button>
+                  <button
+                    className="shrink-0 rounded p-1 text-neutral-400 opacity-0 hover:text-red-500 group-hover:opacity-100"
+                    title={t("ai.deleteSession")}
+                    onClick={() => deleteSession(sess.id)}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
 
       {!configLoaded ? (
         <div className="flex flex-1 items-center justify-center text-xs text-neutral-400">{t("app.loading")}</div>
@@ -379,18 +438,18 @@ function MessageBubble({
   const bubbleText = message.content === edit?.summary ? "" : message.content;
   return (
     <div className={cn("flex flex-col", isUser ? "items-end" : "items-start")}>
-      {(bubbleText.trim() || !edit) && (
-        <div
-          className={cn(
-            "max-w-[85%] whitespace-pre-wrap break-words rounded-lg px-2.5 py-1.5 text-[12px] leading-relaxed",
-            isUser
-              ? "bg-brand-500 text-white"
-              : "bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200",
-          )}
-        >
-          {bubbleText || "…"}
-        </div>
-      )}
+      {(bubbleText.trim() || !edit) &&
+        (isUser ? (
+          <div className="max-w-[85%] rounded-lg bg-brand-500 px-2.5 py-1.5 text-[12px] leading-relaxed whitespace-pre-wrap break-words text-white">
+            {bubbleText || "…"}
+          </div>
+        ) : (
+          // 助手回复走 Markdown 渲染（GFM 表格/代码块/链接），AI 输出不含原始 HTML，无注入风险
+          <Markdown
+            text={bubbleText || "…"}
+            className="max-w-[85%] rounded-lg bg-neutral-100 px-2.5 py-1.5 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200"
+          />
+        ))}
       {/* AI 自主修改的落地结果：已写入 / 未写入 + 撤销 */}
       {edit && (
         <div

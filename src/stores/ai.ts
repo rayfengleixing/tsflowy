@@ -48,6 +48,79 @@ const DEFAULT_MAX_CHARS = 8000;
 
 export const AI_WIDTH_LIMITS = { min: MIN_WIDTH, max: MAX_WIDTH };
 
+const SESSIONS_KEY = "tsflowy-ai-sessions-v1";
+const MAX_SESSIONS = 20;
+const MAX_SESSION_MESSAGES = 200;
+const MAX_MESSAGE_CHARS = 100_000;
+// 长对话防超限：历史消息从最新往前收进字符预算，放不下的早期轮次直接丢弃
+// （system prompt 与 @ 引用上下文不占预算，不受影响）
+const HISTORY_CHAR_BUDGET = 8000;
+const HISTORY_MAX_MESSAGES = 40;
+
+/** 归档的历史会话（不含进行中的当前对话） */
+export interface StoredSession {
+  id: string;
+  title: string;
+  updatedAt: number;
+  messages: AiMessage[];
+}
+
+/** 会话标题：第一条用户消息前 30 字 */
+function sessionTitle(messages: AiMessage[]): string {
+  const first = messages.find((m) => m.role === "user");
+  const text = (first?.content ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return t("ai.fallbackTitle");
+  return text.length > 30 ? `${text.slice(0, 30)}…` : text;
+}
+
+/** 恢复时逐条校验消息；edit 指令卡片不恢复（重启后编辑器 undo 栈已空，撤销会错伤无关内容） */
+function sanitizeMessage(raw: unknown): AiMessage | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const m = raw as Record<string, unknown>;
+  if ((m.role !== "user" && m.role !== "assistant") || typeof m.content !== "string") return null;
+  return {
+    id: typeof m.id === "string" && m.id ? m.id : newId(),
+    role: m.role,
+    content: m.content.slice(0, MAX_MESSAGE_CHARS),
+  };
+}
+
+function restoreSession(raw: unknown): StoredSession | null {
+  if (typeof raw !== "object" || raw === null || !Array.isArray((raw as Record<string, unknown>).messages)) return null;
+  const rec = raw as Record<string, unknown>;
+  const messages = (rec.messages as unknown[])
+    .slice(-MAX_SESSION_MESSAGES)
+    .map(sanitizeMessage)
+    .filter((m): m is AiMessage => m !== null);
+  if (messages.length === 0) return null;
+  return {
+    id: typeof rec.id === "string" && rec.id ? rec.id : newId(),
+    title: typeof rec.title === "string" && rec.title ? rec.title : sessionTitle(messages),
+    updatedAt: typeof rec.updatedAt === "number" ? rec.updatedAt : Date.now(),
+    messages,
+  };
+}
+
+/** 从 localStorage 恢复会话（损坏/缺失时返回空态） */
+function loadSessions(): { activeId: string; sessions: StoredSession[]; active: StoredSession | null } {
+  const empty = { activeId: newId(), sessions: [] as StoredSession[], active: null as StoredSession | null };
+  try {
+    const raw = localStorage.getItem(SESSIONS_KEY);
+    if (!raw) return empty;
+    const data = JSON.parse(raw) as Record<string, unknown>;
+    const sessions = Array.isArray(data.sessions)
+      ? (data.sessions as unknown[])
+          .slice(0, MAX_SESSIONS)
+          .map(restoreSession)
+          .filter((s): s is StoredSession => s !== null)
+      : [];
+    const active = restoreSession(data.active);
+    return { activeId: active?.id ?? empty.activeId, sessions, active };
+  } catch {
+    return empty;
+  }
+}
+
 function loadWidth(): number {
   try {
     const v = Number(localStorage.getItem(PANEL_WIDTH_KEY));
@@ -68,6 +141,9 @@ interface AiState {
   open: boolean;
   width: number;
   messages: AiMessage[];
+  /** 归档的历史会话（不含进行中的当前对话） */
+  sessions: StoredSession[];
+  activeSessionId: string;
   /** 推理型模型的思考过程（仅展示，不参与回填/复制） */
   reasoning: string;
   streaming: boolean;
@@ -86,11 +162,55 @@ interface AiState {
   clear: () => void;
   retry: () => Promise<void>;
   quickAction: (kind: AiQuickAction) => Promise<void>;
+  /** 归档当前对话并开始新会话 */
+  newChat: () => void;
+  /** 切换到历史会话（当前对话有内容时先归档） */
+  switchSession: (id: string) => void;
+  deleteSession: (id: string) => void;
   /** 撤销某条回复造成的文档改动 */
   undoEdit: (messageId: string) => void;
 }
 
 export const useAiStore = create<AiState>()((set, get) => {
+  const restored = loadSessions();
+
+  /** 当前对话有内容时归档进 sessions（超出上限丢最老），供 newChat / 切换会话复用 */
+  const archiveCurrent = (s: {
+    messages: AiMessage[];
+    sessions: StoredSession[];
+    activeSessionId: string;
+  }): StoredSession[] => {
+    if (s.messages.length === 0) return s.sessions;
+    const entry: StoredSession = {
+      id: s.activeSessionId,
+      title: sessionTitle(s.messages),
+      updatedAt: Date.now(),
+      messages: s.messages,
+    };
+    return [entry, ...s.sessions].slice(0, MAX_SESSIONS);
+  };
+
+  /** 会话快照落盘（流式增量不触发，只在轮次结束 / 显式操作时调用） */
+  const persistSessions = () => {
+    const s = get();
+    const active: StoredSession | null =
+      s.messages.length > 0
+        ? { id: s.activeSessionId, title: sessionTitle(s.messages), updatedAt: Date.now(), messages: s.messages }
+        : null;
+    const write = (sessions: StoredSession[]) =>
+      localStorage.setItem(SESSIONS_KEY, JSON.stringify({ activeId: s.activeSessionId, sessions, active }));
+    try {
+      write(s.sessions);
+    } catch {
+      // 配额溢出：丢一半最老的归档重试一次，仍失败则放弃（不影响使用）
+      try {
+        write(s.sessions.slice(0, Math.floor(MAX_SESSIONS / 2)));
+      } catch (e) {
+        logger.warn("ai sessions persist failed", e);
+      }
+    }
+  };
+
   /** 当前配置的最大上下文字符数 */
   const maxChars = () => {
     const configured = get().config?.max_chars;
@@ -116,13 +236,29 @@ export const useAiStore = create<AiState>()((set, get) => {
   };
 
   /** 组装发给服务端的消息：system + 参考文档 + 历史对话（排除空的助手占位） */
-  const requestMessages = (assistantId: string, referenceContext = ""): AiChatMessage[] => [
-    systemMessage(),
-    ...(referenceContext ? [{ role: "system" as const, content: referenceContext }] : []),
-    ...get()
+  const requestMessages = (assistantId: string, referenceContext = ""): AiChatMessage[] => {
+    const history = get()
       .messages.filter((m) => m.id !== assistantId && m.content.trim().length > 0)
-      .map((m) => ({ role: m.role, content: m.content })),
-  ];
+      .map((m) => ({ role: m.role, content: m.content }));
+    // 长对话防超限：从最新往前收进字符预算，放不下的早期轮次丢弃
+    const kept: AiChatMessage[] = [];
+    let budget = HISTORY_CHAR_BUDGET;
+    for (let i = history.length - 1; i >= 0 && kept.length < HISTORY_MAX_MESSAGES; i--) {
+      const m = history[i];
+      if (m.content.length > budget) {
+        // 一条都放不下（如首轮就粘贴长文）：保最新一条的尾部
+        if (kept.length === 0) kept.push({ role: m.role, content: m.content.slice(-HISTORY_CHAR_BUDGET) });
+        break;
+      }
+      budget -= m.content.length;
+      kept.unshift(m);
+    }
+    return [
+      systemMessage(),
+      ...(referenceContext ? [{ role: "system" as const, content: referenceContext }] : []),
+      ...kept,
+    ];
+  };
 
   /**
    * 用户消息里 `@文件名` 引用的文档 → 参考上下文：读磁盘快照、转 Markdown、按 max_chars 截断。
@@ -216,13 +352,17 @@ export const useAiStore = create<AiState>()((set, get) => {
       dropEmptyAssistant(assistantId);
     } finally {
       set({ streaming: false });
+      // 一轮结束（含失败/取消）后落盘，流式增量期间不写
+      persistSessions();
     }
   };
 
   return {
     open: false,
     width: loadWidth(),
-    messages: [],
+    messages: restored.active?.messages ?? [],
+    sessions: restored.sessions,
+    activeSessionId: restored.active?.id ?? restored.activeId,
     reasoning: "",
     streaming: false,
     error: null,
@@ -263,6 +403,8 @@ export const useAiStore = create<AiState>()((set, get) => {
         streaming: true,
         messages: [...s.messages, { id: newId(), role: "user", content }, assistant],
       }));
+      // 用户消息先落盘，流式中途崩溃也不丢提问
+      persistSessions();
       await runStream(assistant.id);
     },
 
@@ -271,7 +413,44 @@ export const useAiStore = create<AiState>()((set, get) => {
       set({ streaming: false });
     },
 
-    clear: () => set({ messages: [], reasoning: "", error: null }),
+    clear: () => {
+      set({ messages: [], reasoning: "", error: null });
+      persistSessions();
+    },
+
+    /** 归档当前对话并开始新会话 */
+    newChat: () => {
+      set((s) => ({
+        sessions: archiveCurrent(s),
+        messages: [],
+        reasoning: "",
+        error: null,
+        activeSessionId: newId(),
+      }));
+      persistSessions();
+    },
+
+    /** 切换到历史会话（当前对话有内容时先归档；流式进行中不允许切） */
+    switchSession: (id) => {
+      const s = get();
+      if (s.streaming) return;
+      const target = s.sessions.find((x) => x.id === id);
+      if (!target) return;
+      const rest = s.sessions.filter((x) => x.id !== id);
+      set({
+        sessions: archiveCurrent({ ...s, sessions: rest }),
+        messages: target.messages,
+        activeSessionId: target.id,
+        reasoning: "",
+        error: null,
+      });
+      persistSessions();
+    },
+
+    deleteSession: (id) => {
+      set((s) => ({ sessions: s.sessions.filter((x) => x.id !== id) }));
+      persistSessions();
+    },
 
     retry: async () => {
       if (get().streaming) return;
@@ -319,6 +498,7 @@ export const useAiStore = create<AiState>()((set, get) => {
           m.id === messageId && m.edit ? { ...m, edit: { ...m.edit, undone: true } } : m,
         ),
       }));
+      persistSessions();
     },
   };
 });

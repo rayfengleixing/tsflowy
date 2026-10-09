@@ -729,6 +729,12 @@ export const en: Record<MessageKey, string> = {
   "ai.prompt.rewrite":
     "Rewrite the following to be clearer and smoother while keeping the meaning. Output only the rewritten text:\n\n{content}",
   "ai.prompt.explain": "Explain the meaning and context of the following:\n\n{content}",
+  "ai.newChat": "New chat",
+  "ai.history": "Session history",
+  "ai.historyEmpty": "No past sessions",
+  "ai.deleteSession": "Delete session",
+  "ai.closeHistory": "Close session list",
+  "ai.fallbackTitle": "AI chat",
   "palette.action.openAi": "Open AI Assistant",
   "palette.action.summarizePage": "Summarize current page",
   "settings.ai": "AI Assistant",
