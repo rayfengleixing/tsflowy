@@ -27,6 +27,13 @@ pub fn default_options_json(field_type: &str) -> String {
             "kind": "number", "format": "decimal", "precision": 2, "currency": "CNY"
         })
         .to_string(),
+        // 货币：与 number 同一 options 形态，前端展示时强制 format=currency
+        "currency" => serde_json::json!({
+            "kind": "number", "format": "currency", "precision": 2, "currency": "CNY"
+        })
+        .to_string(),
+        // 评分：满星数可配（默认 5）
+        "rating" => serde_json::json!({ "kind": "rating", "max": 5 }).to_string(),
         "date" => serde_json::json!({ "kind": "date", "include_time": false }).to_string(),
         // 关联：目标库（宿主数据库视图 id）由前端在字段设置里选择，先给空占位
         "relation" => serde_json::json!({ "kind": "relation", "target_view_id": "" }).to_string(),

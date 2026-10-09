@@ -43,6 +43,9 @@ export function validateCellValue(type: FieldType, value: CellValue): boolean {
     case "last_edited_at":
       return typeof value === "string";
     case "number":
+    case "progress":
+    case "rating":
+    case "currency":
       return typeof value === "number" && Number.isFinite(value);
     case "formula":
       // 公式字段无存储值（展示时实时计算），此处仅防御性放行
@@ -80,6 +83,14 @@ export function attachmentRefs(value: CellValue): AttachmentRef[] {
   );
 }
 
+/** rating 字段的满星数（options 缺省或非法时回落 5） */
+export function ratingMax(options?: FieldOptions): number {
+  if (options?.kind === "rating" && Number.isFinite(options.max) && options.max >= 1) {
+    return Math.min(10, Math.round(options.max));
+  }
+  return 5;
+}
+
 /** 数字按格式展示（说明书 5.1：整数/小数/百分比/货币） */
 export function formatNumber(value: number, opts: Extract<FieldOptions, { kind: "number" }>): string {
   const { format, precision, currency } = opts;
@@ -110,6 +121,30 @@ export function formatCellValue(type: FieldType, value: CellValue, options?: Fie
         value,
         options?.kind === "number" ? options : { kind: "number", format: "decimal", precision: 2, currency: "CNY" },
       );
+    case "progress": {
+      // 0-100 进度：静态展示（导出/看板卡片等无进度条组件时）给整数百分比
+      if (typeof value !== "number") return "";
+      return Math.round(Math.min(100, Math.max(0, value))) + "%";
+    }
+    case "rating": {
+      // 星级：静态展示用实心/空心星；四舍五入（与 RatingCell 一致）
+      if (typeof value !== "number") return "";
+      const max = ratingMax(options);
+      const filled = Math.min(max, Math.max(0, Math.round(value)));
+      return "★".repeat(filled) + "☆".repeat(max - filled);
+    }
+    case "currency": {
+      // 货币：固定 currency 格式，币种/精度沿用 number options（缺省 CNY 两位小数）
+      if (typeof value !== "number") return "";
+      const numOpts = options?.kind === "number" ? options : undefined;
+      const cur = numOpts?.currency.trim();
+      return formatNumber(value, {
+        kind: "number",
+        format: "currency",
+        precision: numOpts?.precision ?? 2,
+        currency: cur === undefined || cur === "" ? "CNY" : cur,
+      });
+    }
     case "formula": {
       // 公式值由 computeFormula 算好传入，可能是数值/文本/布尔（IF/CONCAT/比较等）
       if (typeof value === "number") {

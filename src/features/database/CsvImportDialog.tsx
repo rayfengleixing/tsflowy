@@ -25,7 +25,18 @@ import { logger } from "@/lib/logger";
  *  不再把选项名当 id 存；
  *  公式 / 关联 / 反向关系 / 汇总 / 创建时间 / 最后编辑时间这类派生或系统字段无法从文本反推，
  *  在类型下拉里以禁用项呈现，说明原因。 */
-const IMPORT_TYPES: FieldType[] = ["text", "number", "date", "single_select", "multi_select", "checkbox", "attachment"];
+const IMPORT_TYPES: FieldType[] = [
+  "text",
+  "number",
+  "progress",
+  "rating",
+  "currency",
+  "date",
+  "single_select",
+  "multi_select",
+  "checkbox",
+  "attachment",
+];
 
 /** 禁用项 → 不可导入的原因 i18n key */
 const DISABLED_IMPORT_TYPES: Partial<Record<FieldType, MessageKey>> = {

@@ -141,9 +141,18 @@ export function csvValueToCell(type: FieldType, raw: string): CellValue {
   const v = raw.trim();
   if (v === "") return null;
   switch (type) {
-    case "number": {
+    case "number":
+    case "currency": {
       const n = Number(v);
       return Number.isFinite(n) ? n : null;
+    }
+    case "progress": {
+      const n = Number(v.replace(/%$/, ""));
+      return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : null;
+    }
+    case "rating": {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.max(0, n) : null;
     }
     case "checkbox":
       return /^(true|是|✓|1)$/i.test(v);

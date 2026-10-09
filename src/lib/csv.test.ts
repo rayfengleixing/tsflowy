@@ -65,6 +65,13 @@ describe("csvValueToCell", () => {
     expect(csvValueToCell("date", "2026-08-31")).toBe("2026-08-31");
     expect(csvValueToCell("multi_select", "a; b| c")).toEqual(["a", "b", "c"]);
     expect(csvValueToCell("text", "x")).toBe("x");
+    // 轻量数字类型：progress 去 % 并夹到 0-100，rating 非负，currency 同 number
+    expect(csvValueToCell("progress", "65%")).toBe(65);
+    expect(csvValueToCell("progress", "120")).toBe(100);
+    expect(csvValueToCell("progress", "abc")).toBeNull();
+    expect(csvValueToCell("rating", "4")).toBe(4);
+    expect(csvValueToCell("rating", "-1")).toBe(0);
+    expect(csvValueToCell("currency", "12.5")).toBe(12.5);
   });
 });
 

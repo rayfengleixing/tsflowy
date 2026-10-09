@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
 import type { CellValue, DatabaseField } from "@/types/database";
 import { defaultOperand, opsForType, type FilterMode, type FilterOp, type FilterSpec } from "@/lib/database-query";
-import { parseFieldOptions } from "@/lib/database-values";
+import { parseFieldOptions, ratingMax } from "@/lib/database-values";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
@@ -30,7 +30,7 @@ function FilterValueInput(props: { field: DatabaseField; value: CellValue; onCha
       </select>
     );
   }
-  if (field.field_type === "number") {
+  if (field.field_type === "number" || field.field_type === "currency" || field.field_type === "progress") {
     return (
       <input
         type="number"
@@ -43,6 +43,23 @@ function FilterValueInput(props: { field: DatabaseField; value: CellValue; onCha
           onChange(Number.isFinite(n) ? n : null);
         }}
       />
+    );
+  }
+  if (field.field_type === "rating") {
+    const max = ratingMax(opts);
+    return (
+      <select
+        className="h-7 rounded-md border border-neutral-300 bg-white px-2 text-[12px] outline-none focus:border-brand-500"
+        value={typeof value === "number" ? String(value) : ""}
+        onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
+      >
+        <option value="">—</option>
+        {Array.from({ length: max }, (_, i) => i + 1).map((n) => (
+          <option key={n} value={n}>
+            {"★".repeat(n)}
+          </option>
+        ))}
+      </select>
     );
   }
   if (field.field_type === "date" || field.field_type === "created_at" || field.field_type === "last_edited_at") {

@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
 import {
   ArrowRightLeft,
+  Banknote,
   Calendar,
   CheckSquare,
   CircleDot,
   Clock,
   Combine,
+  Gauge,
   Hash,
   History,
   Link2,
@@ -13,6 +15,7 @@ import {
   Mail,
   Paperclip,
   Phone,
+  Star,
   Type as TypeIcon,
   Sigma,
   Link as LinkIcon,
@@ -27,6 +30,12 @@ export function fieldIcon(type: FieldType): ReactNode {
       return <TypeIcon className={cls} />;
     case "number":
       return <Hash className={cls} />;
+    case "progress":
+      return <Gauge className={cls} />;
+    case "rating":
+      return <Star className={cls} />;
+    case "currency":
+      return <Banknote className={cls} />;
     case "formula":
       return <Sigma className={cls} />;
     case "date":

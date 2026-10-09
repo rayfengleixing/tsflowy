@@ -4,12 +4,12 @@ import { toast } from "sonner";
 import type { CellValue, DatabaseField } from "@/types/database";
 import { isReadonlyType, type FieldType } from "@/types/database";
 import { useDbStore } from "@/stores/database-context";
-import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
+import { formatCellValue, parseFieldOptions, ratingMax } from "@/lib/database-values";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { NewFieldDialog } from "./NewFieldDialog";
-import { AttachmentChips, RelationChips, ReverseRelationChips, SelectChips } from "./editors";
+import { AttachmentChips, ProgressCell, RatingCell, RelationChips, ReverseRelationChips, SelectChips } from "./editors";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -122,6 +122,22 @@ export function CellDisplay({
     return (
       <div className="flex h-full items-center justify-center text-[13px] text-brand-600">
         {value === true ? "✓" : ""}
+      </div>
+    );
+  }
+  // 进度列：整格进度条 + 百分比
+  if (field.field_type === "progress") {
+    return (
+      <div className="flex h-full w-full items-center px-2">
+        <ProgressCell value={value} />
+      </div>
+    );
+  }
+  // 评分列：星级
+  if (field.field_type === "rating") {
+    return (
+      <div className="flex h-full w-full items-center px-2">
+        <RatingCell value={value} max={ratingMax(opts)} />
       </div>
     );
   }

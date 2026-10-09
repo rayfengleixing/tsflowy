@@ -78,6 +78,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "views_layout_timeline",
         sql: include_str!("../../../migrations/014_views_layout_timeline.sql"),
     },
+    Migration {
+        version: 15,
+        description: "database_fields_check_lightweight",
+        sql: include_str!("../../../migrations/015_database_fields_check_lightweight.sql"),
+    },
 ];
 
 /// 自带事务的迁移：重建表改 CHECK 约束需要两个连接级 PRAGMA，而它们在事务内是 no-op，
@@ -86,7 +91,7 @@ pub const MIGRATIONS: &[Migration] = &[
 ///     把子表数据一并清空；
 ///   - legacy_alter_table=ON：RENAME 默认会重解析整个 schema 以改写其它对象里的引用，
 ///     而此刻旧表已删、其它触发器仍引用它，重解析会报 "no such table"。
-const OWN_TRANSACTION_VERSIONS: &[i64] = &[12, 13, 14];
+const OWN_TRANSACTION_VERSIONS: &[i64] = &[12, 13, 14, 15];
 
 pub fn ensure_migrated(conn: &rusqlite::Connection) -> Result<(), String> {
     ensure_migrated_with(conn, MIGRATIONS)
@@ -1034,6 +1039,77 @@ mod tests {
             )
             .unwrap();
         assert_eq!(snaps, 0, "重建后 trg_snapshots_purge 仍清理快照");
+
+        let fk: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk, 1, "迁移后必须恢复 foreign_keys=ON");
+        let legacy: i64 = conn
+            .query_row("PRAGMA legacy_alter_table", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(legacy, 0, "迁移后必须恢复 legacy_alter_table=OFF");
+    }
+
+    /// 存量库（1–14 已应用）升到 015：重建 database_fields 把 progress / rating / currency
+    /// 纳入 CHECK 白名单，同样不得级联清空单元格。
+    #[test]
+    fn migration_015_extends_field_check_lightweight() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_older_than(&conn, 15);
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute(
+            "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ('w1','W',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at)
+             VALUES ('v1','w1','任务表','grid','{}',0,1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO database_fields(id, database_view_id, name, field_type, options, width, is_hidden, position)
+             VALUES ('f1','v1','标题','text','{}',180,0,0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO database_rows(id, database_view_id, position, created_at, updated_at) VALUES ('r1','v1',0,1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO database_cells(row_id, field_id, value) VALUES ('r1','f1','"甲"')"#,
+            [],
+        )
+        .unwrap();
+
+        ensure_migrated(&conn).unwrap();
+
+        let cells: i64 = conn
+            .query_row("SELECT COUNT(*) FROM database_cells", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cells, 1, "重建字段表不能级联删除单元格");
+
+        // 新类型（progress / rating / currency）现在可以写入
+        for (id, ft) in [("f2", "progress"), ("f3", "rating"), ("f4", "currency")] {
+            conn.execute(
+                "INSERT INTO database_fields(id, database_view_id, name, field_type, options, width, is_hidden, position)
+                 VALUES (?1,'v1',?1,?2,'{}',180,0,1)",
+                rusqlite::params![id, ft],
+            )
+            .unwrap_or_else(|e| panic!("{ft} 应被 CHECK 接受: {e}"));
+        }
+        // 未知类型仍被拒绝
+        let err = conn
+            .execute(
+                "INSERT INTO database_fields(id, database_view_id, name, field_type, options, width, is_hidden, position)
+                 VALUES ('f9','v1','x','ghost_type','{}',180,0,2)",
+                [],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("CHECK"), "{err}");
 
         let fk: i64 = conn
             .query_row("PRAGMA foreign_keys", [], |r| r.get(0))

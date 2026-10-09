@@ -309,3 +309,42 @@ export function AttachmentChips({ value, compact = false }: { value: CellValue; 
     </span>
   );
 }
+
+/** 进度单元格展示：0-100 进度条 + 右侧百分比数字。空值给 0% 灰条。 */
+export function ProgressCell({ value, compact = false }: { value: CellValue; compact?: boolean }) {
+  const raw = typeof value === "number" ? value : null;
+  const pct = raw === null ? 0 : Math.min(100, Math.max(0, raw));
+  const done = raw !== null && pct >= 100;
+  return (
+    <span className={cn("flex items-center gap-1.5", compact ? "w-full" : "w-full pr-1")}>
+      <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
+        <span
+          className={cn("block h-full rounded-full transition-all", done ? "bg-green-500" : "bg-brand-500")}
+          style={{ width: `${pct}%` }}
+        />
+      </span>
+      <span className="w-8 shrink-0 text-right tabular-nums text-[11px] text-neutral-500">
+        {raw === null ? "" : Math.round(pct) + "%"}
+      </span>
+    </span>
+  );
+}
+
+/** 星级展示：实心星数量 = 四舍五入(value)；空值给全空心星（compact 时给更小字号）。 */
+export function RatingCell({ value, max, compact = false }: { value: CellValue; max: number; compact?: boolean }) {
+  const raw = typeof value === "number" ? value : null;
+  const filled = raw === null ? 0 : Math.min(max, Math.max(0, Math.round(raw)));
+  const size = compact ? "text-[10px]" : "text-[13px]";
+  return (
+    <span
+      className={cn("inline-flex items-center gap-0.5 leading-none", size)}
+      title={raw === null ? undefined : String(raw)}
+    >
+      {Array.from({ length: max }, (_, i) => (
+        <span key={i} className={i < filled ? "text-amber-400" : "text-neutral-300 dark:text-neutral-600"}>
+          {i < filled ? "★" : "☆"}
+        </span>
+      ))}
+    </span>
+  );
+}

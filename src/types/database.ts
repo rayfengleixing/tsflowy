@@ -5,6 +5,9 @@ import type { AggregateFn } from "@/lib/database-aggregate";
 export type FieldType =
   | "text"
   | "number"
+  | "progress"
+  | "rating"
+  | "currency"
   | "date"
   | "single_select"
   | "multi_select"
@@ -26,9 +29,14 @@ export type FieldType =
 // 与 formula 一样无存储值、实时计算。
 // reverse_relation 是 relation 的镜像：只读展示「其它表里指向本行的关联行」，同样无存储值。
 // attachment 存放若干附件引用（单元格存 [{name,path}] 数组，文件落 assets/）。
+// progress/rating/currency 是轻量数字类型：存储与汇总复用 number 链路（值恒为 number），
+// 只在展示与编辑上差异化（进度条 / 星级 / 货币格式）。
 export const FIELD_TYPES: FieldType[] = [
   "text",
   "number",
+  "progress",
+  "rating",
+  "currency",
   "date",
   "single_select",
   "multi_select",
@@ -102,6 +110,7 @@ export interface SelectOption {
 export type FieldOptions =
   | { kind: "select"; options: SelectOption[] } // single_select / multi_select
   | { kind: "number"; format: "integer" | "decimal" | "percent" | "currency"; precision: number; currency: string }
+  | { kind: "rating"; max: number } // rating 字段：满星数（默认 5）
   | { kind: "date"; include_time: boolean }
   | { kind: "formula"; formula: string } // 公式表达式，字段引用用 {字段名}
   | { kind: "relation"; target_view_id: string } // 引用的目标视图（宿主 view id）

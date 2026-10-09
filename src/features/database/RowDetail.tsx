@@ -3,14 +3,22 @@ import { Maximize2, Minimize2, Plus, X } from "lucide-react";
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { FIELD_TYPES, isReadonlyType, type FieldType } from "@/types/database";
 import { useDbStore } from "@/stores/database-context";
-import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
+import { formatCellValue, parseFieldOptions, ratingMax } from "@/lib/database-values";
 import { computeFormula } from "@/lib/database-formula";
 import { computeReverseRelation, computeRollup } from "@/lib/relation";
 import { useRelationStore } from "@/stores/relation";
 import { cn } from "@/lib/utils";
 import type { View } from "@/types/models";
 import { EditorPage } from "@/features/editor/EditorPage";
-import { AttachmentChips, CellEditorSlot, RelationChips, ReverseRelationChips, SelectChips } from "./editors";
+import {
+  AttachmentChips,
+  CellEditorSlot,
+  ProgressCell,
+  RatingCell,
+  RelationChips,
+  ReverseRelationChips,
+  SelectChips,
+} from "./editors";
 import { fieldIcon } from "./field-icon";
 import { FieldTypeMenu } from "./FieldTypeMenu";
 import { t } from "@/lib/i18n";
@@ -74,6 +82,12 @@ function RowPropertyField({
   };
 
   const display = (() => {
+    if (field.field_type === "progress") {
+      return <ProgressCell value={value} />;
+    }
+    if (field.field_type === "rating") {
+      return <RatingCell value={value} max={ratingMax(parseFieldOptions(field.options))} />;
+    }
     if (field.field_type === "single_select" || field.field_type === "multi_select") {
       return <SelectChips field={field} value={value} />;
     }

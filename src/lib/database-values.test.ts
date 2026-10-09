@@ -8,6 +8,7 @@ import {
   formatNumber,
   newSelectOption,
   parseFieldOptions,
+  ratingMax,
   serializeValue,
   validateCellValue,
 } from "./database-values";
@@ -49,6 +50,13 @@ describe("validateCellValue", () => {
     expect(validateCellValue("multi_select", [1] as never)).toBe(false);
     expect(validateCellValue("single_select", "opt_1")).toBe(true);
     expect(validateCellValue("date", "2026-08-31")).toBe(true);
+    // 轻量数字类型：存储值恒为有限数字
+    expect(validateCellValue("progress", 65)).toBe(true);
+    expect(validateCellValue("progress", "65")).toBe(false);
+    expect(validateCellValue("rating", 4)).toBe(true);
+    expect(validateCellValue("rating", Number.NaN)).toBe(false);
+    expect(validateCellValue("currency", 12.5)).toBe(true);
+    expect(validateCellValue("currency", "12.5")).toBe(false);
   });
 
   it("accepts null for every type", () => {
@@ -117,6 +125,27 @@ describe("formatCellValue", () => {
   it("handles empty values", () => {
     expect(formatCellValue("text", null)).toBe("");
     expect(formatCellValue("text", "")).toBe("");
+  });
+
+  it("formats progress / rating / currency", () => {
+    expect(formatCellValue("progress", 65)).toBe("65%");
+    expect(formatCellValue("progress", 120)).toBe("100%");
+    expect(formatCellValue("progress", null)).toBe("");
+    expect(formatCellValue("rating", 3, { kind: "rating", max: 5 })).toBe("★★★☆☆");
+    expect(formatCellValue("rating", 2.6, { kind: "rating", max: 5 })).toBe("★★★☆☆");
+    expect(formatCellValue("rating", 4)).toBe("★★★★☆"); // 无 options 回落满星 5
+    expect(
+      formatCellValue("currency", 1234.5, { kind: "number", format: "currency", precision: 2, currency: "CNY" }),
+    ).toMatch(/¥|CNY/);
+    expect(formatCellValue("currency", 10)).toMatch(/¥|CNY/); // 缺省 CNY
+  });
+
+  it("ratingMax clamps and falls back", () => {
+    expect(ratingMax({ kind: "rating", max: 10 })).toBe(10);
+    expect(ratingMax({ kind: "rating", max: 99 })).toBe(10);
+    expect(ratingMax({ kind: "rating", max: 0 })).toBe(5);
+    expect(ratingMax({ kind: "none" })).toBe(5);
+    expect(ratingMax()).toBe(5);
   });
 
   it("renders attachment names and ignores malformed entries", () => {

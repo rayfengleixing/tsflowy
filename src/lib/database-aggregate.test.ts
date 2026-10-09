@@ -41,6 +41,10 @@ describe("aggregatesForType", () => {
     expect(aggregatesForType("checkbox")).toEqual(["count", "checked", "unchecked"]);
     expect(aggregatesForType("date")).toEqual(["count", "filled", "empty", "unique", "min", "max"]);
     expect(aggregatesForType("text")).toEqual(["count", "filled", "empty", "unique"]);
+    // 轻量数字类型：候选与数字列一致
+    for (const t of ["progress", "rating", "currency"] as const) {
+      expect(aggregatesForType(t)).toEqual(["count", "filled", "empty", "unique", "sum", "average", "min", "max"]);
+    }
   });
 
   it("every advertised function is parseable from extra", () => {

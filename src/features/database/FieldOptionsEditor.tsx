@@ -165,13 +165,16 @@ export function FieldOptionsEditor(props: {
               </Button>
             </div>
           </div>
-        ) : field.field_type === "number" ? (
+        ) : field.field_type === "number" || field.field_type === "currency" ? (
           <div className="flex flex-col gap-3">
             <label className="flex flex-col gap-1 text-[12px] text-neutral-500">
               {t("field.numberFormat")}
               <select
                 className="h-8 rounded-md border border-neutral-300 bg-white px-2 text-[13px] outline-none focus:border-brand-500"
-                value={options.kind === "number" ? options.format : "decimal"}
+                value={
+                  field.field_type === "currency" ? "currency" : options.kind === "number" ? options.format : "decimal"
+                }
+                disabled={field.field_type === "currency"}
                 onChange={(e) =>
                   setOptions({
                     ...(options.kind === "number"
@@ -187,13 +190,20 @@ export function FieldOptionsEditor(props: {
                 <option value="currency">{t("field.numCurrency")}</option>
               </select>
             </label>
-            {options.kind === "number" && options.format === "currency" && (
+            {((options.kind === "number" && options.format === "currency") || field.field_type === "currency") && (
               <label className="flex flex-col gap-1 text-[12px] text-neutral-500">
                 {t("field.currency")}
                 <input
                   className="h-8 rounded-md border border-neutral-300 px-2 text-[13px] outline-none focus:border-brand-500"
-                  value={options.currency}
-                  onChange={(e) => setOptions({ ...options, currency: e.target.value.toUpperCase() })}
+                  value={options.kind === "number" ? options.currency : "CNY"}
+                  onChange={(e) =>
+                    setOptions({
+                      ...(options.kind === "number"
+                        ? options
+                        : { kind: "number", format: "decimal", precision: 2, currency: "CNY" }),
+                      currency: e.target.value.toUpperCase(),
+                    })
+                  }
                 />
               </label>
             )}
@@ -213,6 +223,26 @@ export function FieldOptionsEditor(props: {
                 </select>
               </label>
             )}
+          </div>
+        ) : field.field_type === "progress" ? (
+          <p className="text-[13px] leading-6 text-neutral-400">{t("field.progressHint")}</p>
+        ) : field.field_type === "rating" ? (
+          <div className="flex flex-col gap-3">
+            <label className="flex flex-col gap-1 text-[12px] text-neutral-500">
+              {t("field.ratingMax")}
+              <select
+                className="h-8 rounded-md border border-neutral-300 bg-white px-2 text-[13px] outline-none focus:border-brand-500"
+                value={options.kind === "rating" ? options.max : 5}
+                onChange={(e) => setOptions({ kind: "rating", max: Number(e.target.value) })}
+              >
+                {[3, 5, 10].map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="text-[15px] text-amber-400">{"★".repeat(options.kind === "rating" ? options.max : 5)}</div>
           </div>
         ) : field.field_type === "date" ? (
           <label className="flex items-center gap-2 text-[13px]">

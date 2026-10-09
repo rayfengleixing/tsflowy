@@ -158,7 +158,8 @@ export function applyFilters(
 export function opsForType(type: FieldType): FilterOp[] {
   if (type === "checkbox") return ["checked", "unchecked"];
   if (type === "multi_select" || type === "relation") return ["is_empty", "is_not_empty", "contains", "not_contains"];
-  if (type === "number") return ["is_empty", "is_not_empty", "equals", "not_equals", "gt", "gte", "lt", "lte"];
+  if (type === "number" || type === "progress" || type === "rating" || type === "currency")
+    return ["is_empty", "is_not_empty", "equals", "not_equals", "gt", "gte", "lt", "lte"];
   if (type === "date" || type === "created_at" || type === "last_edited_at")
     return ["is_empty", "is_not_empty", "equals", "not_equals", "gt", "gte", "lt", "lte"];
   if (type === "single_select") return ["is_empty", "is_not_empty", "equals", "not_equals"];
@@ -194,9 +195,20 @@ export interface GridGroup {
 /** 复选框只有两个桶没有分组价值，last_edited_at 每行都在变是噪音 —— 都不给分组 */
 export function canGroupBy(field: DatabaseField): boolean {
   if (field.field_type === "checkbox" || isReadonlyType(field.field_type)) return false;
-  return ["text", "number", "date", "single_select", "multi_select", "url", "phone", "email", "created_at"].includes(
-    field.field_type,
-  );
+  return [
+    "text",
+    "number",
+    "progress",
+    "rating",
+    "currency",
+    "date",
+    "single_select",
+    "multi_select",
+    "url",
+    "phone",
+    "email",
+    "created_at",
+  ].includes(field.field_type);
 }
 
 interface Bucket extends GridGroup {

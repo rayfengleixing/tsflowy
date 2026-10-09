@@ -3,7 +3,7 @@ import { Check, ChevronDown, Plus, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import type { AttachmentRef, CellValue, DatabaseField, SelectOption } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
-import { attachmentRefs, parseFieldOptions } from "@/lib/database-values";
+import { attachmentRefs, parseFieldOptions, ratingMax } from "@/lib/database-values";
 import { filesFromDataTransfer, openAttachment, pickAttachment, saveAttachmentFile } from "@/lib/assets";
 import { relationRowIds, relationRowLabel, relationTarget, searchRelationRows } from "@/lib/relation";
 import { useRelationStore } from "@/stores/relation";
@@ -18,6 +18,8 @@ export {
   AttachmentChip,
   AttachmentChips,
   OptionDot,
+  ProgressCell,
+  RatingCell,
   RelationChip,
   RelationChips,
   ReverseRelationChips,
@@ -160,6 +162,85 @@ export function NumberCellEditor({ field: _field, value, onCommit, onCancel }: C
         onCommit(n !== null && Number.isFinite(n) ? n : null);
       }}
     />
+  );
+}
+
+/** 进度（progress）：滑条 + 数字输入，值域 0-100；留空提交 null */
+export function ProgressCellEditor({ value, onCommit, onCancel }: CellEditorProps) {
+  const current = typeof value === "number" ? Math.min(100, Math.max(0, Math.round(value))) : 0;
+  const [draft, setDraft] = useState(String(current));
+  const commitNum = (n: number | null) => onCommit(n === null ? null : Math.min(100, Math.max(0, n)));
+  return (
+    <div className="flex h-full items-center gap-2 px-2" onKeyDown={(e) => e.key === "Escape" && onCancel()}>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={current}
+        className="h-1.5 min-w-0 flex-1 accent-brand-500"
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          setDraft(String(n));
+          commitNum(n);
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+      />
+      <input
+        type="number"
+        min={0}
+        max={100}
+        className="h-6 w-14 shrink-0 rounded border border-neutral-300 px-1 text-right text-[12px] outline-none focus:border-brand-500"
+        value={draft}
+        autoFocus
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commitNum(draft.trim() === "" ? null : Number(draft));
+        }}
+        onBlur={() => commitNum(draft.trim() === "" ? null : Number(draft))}
+      />
+      <span className="shrink-0 text-[11px] text-neutral-400">%</span>
+    </div>
+  );
+}
+
+/** 星级（rating）：点第 N 颗星 = 提交 N；再点当前那颗 = 减一星 */
+export function RatingCellEditor({ field, value, onCommit, onCancel }: CellEditorProps) {
+  const max = ratingMax(parseFieldOptions(field.options));
+  const current = typeof value === "number" ? Math.round(value) : 0;
+  return (
+    <div className="flex h-full items-center gap-1 px-2" onKeyDown={(e) => e.key === "Escape" && onCancel()}>
+      {Array.from({ length: max }, (_, i) => {
+        const n = i + 1;
+        return (
+          <button
+            key={n}
+            type="button"
+            className="text-[15px] leading-none"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => onCommit(n === current ? n - 1 : n)}
+            title={String(n)}
+          >
+            <span
+              className={
+                n <= current ? "text-amber-400" : "text-neutral-300 hover:text-amber-300 dark:text-neutral-600"
+              }
+            >
+              {n <= current ? "★" : "☆"}
+            </span>
+          </button>
+        );
+      })}
+      {current > 0 && (
+        <button
+          type="button"
+          className="ml-auto text-[11px] text-neutral-400 hover:text-red-500"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => onCommit(null)}
+        >
+          {t("common.clear")}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -654,7 +735,12 @@ export function CellEditorSlot(props: CellEditorProps) {
   const { field, value, onCommit, onCancel, onAddOption, onDeleteOption } = props;
   switch (field.field_type) {
     case "number":
+    case "currency":
       return <NumberCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
+    case "progress":
+      return <ProgressCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
+    case "rating":
+      return <RatingCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
     case "date":
     case "created_at":
     case "last_edited_at":
