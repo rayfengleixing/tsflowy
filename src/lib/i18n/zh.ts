@@ -725,6 +725,11 @@ export const zh = {
   // — CSV 导入选项对话框 —
   "csv.importOptionsTitle": "确认导入字段类型",
   "csv.importOptionsDesc": "为每列选择字段类型；附件列需选择存放文件的文件夹，按文件名匹配。",
+  "csv.typeDisabled.formula": "无法从文本反推",
+  "csv.typeDisabled.relation": "需要目标表",
+  "csv.typeDisabled.rollup": "需要关联字段",
+  "csv.typeDisabled.reverse": "来源表镜像",
+  "csv.typeDisabled.system": "系统自动维护",
   "csv.attachment.chooseFolder": "选择文件夹",
   "csv.attachment.noFolder": "未选择文件夹",
   "csv.attachment.stats": "已匹配 {matched} / 未匹配 {missing}",

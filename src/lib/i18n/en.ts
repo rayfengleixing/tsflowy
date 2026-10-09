@@ -741,6 +741,11 @@ export const en: Record<MessageKey, string> = {
   // — CSV import options dialog —
   "csv.importOptionsTitle": "Confirm field types",
   "csv.importOptionsDesc": "Choose a type for each column. Attachment columns need a folder, matched by file name.",
+  "csv.typeDisabled.formula": "can't be derived from text",
+  "csv.typeDisabled.relation": "needs a target table",
+  "csv.typeDisabled.rollup": "needs a relation field",
+  "csv.typeDisabled.reverse": "mirror of source table",
+  "csv.typeDisabled.system": "maintained automatically",
   "csv.attachment.chooseFolder": "Choose folder",
   "csv.attachment.noFolder": "No folder selected",
   "csv.attachment.stats": "Matched {matched} / missing {missing}",

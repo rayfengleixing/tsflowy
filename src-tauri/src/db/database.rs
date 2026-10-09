@@ -499,10 +499,14 @@ pub fn csv_import(
     let view_id = host.as_str();
     let tx = conn.unchecked_transaction().map_err(dberr("csv import"))?;
     for (i, f) in fields.iter().enumerate() {
+        let options = f
+            .options
+            .clone()
+            .unwrap_or_else(|| default_options_json(&f.field_type));
         tx.execute(
             "INSERT INTO database_fields(id, database_view_id, name, field_type, options, width, is_hidden, position)
              VALUES (?1, ?2, ?3, ?4, ?5, 180, 0, ?6)",
-            params![f.id, view_id, f.name, f.field_type, default_options_json(&f.field_type), i as i64],
+            params![f.id, view_id, f.name, f.field_type, options, i as i64],
         )
         .map_err(dberr("csv import"))?;
     }
@@ -963,11 +967,13 @@ mod tests {
                 id: "f1".into(),
                 name: "名称".into(),
                 field_type: "text".into(),
+                options: None,
             },
             CsvFieldIn {
                 id: "f2".into(),
                 name: "数量".into(),
                 field_type: "number".into(),
+                options: None,
             },
         ];
         let rows = vec![
@@ -1017,11 +1023,13 @@ mod tests {
                 id: "f1".into(),
                 name: "ok".into(),
                 field_type: "text".into(),
+                options: None,
             },
             CsvFieldIn {
                 id: "f2".into(),
                 name: "bad".into(),
                 field_type: "ghost_type".into(),
+                options: None,
             }, // CHECK 约束拒绝
         ];
         let rows = vec![CsvRowIn {
@@ -1033,6 +1041,33 @@ mod tests {
         // 整体回滚：合法的 f1 也不存在
         assert!(list_fields(&conn, "v1").unwrap().is_empty());
         assert!(list_rows(&conn, "v1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn csv_import_lands_provided_options_for_select_fields() {
+        let conn = setup();
+        let fields = vec![CsvFieldIn {
+            id: "f1".into(),
+            name: "状态".into(),
+            field_type: "single_select".into(),
+            options: Some(
+                r#"{"kind":"select","options":[{"id":"o1","name":"进行中","color":"blue"}]}"#
+                    .into(),
+            ),
+        }];
+        let rows = vec![CsvRowIn {
+            id: "r1".into(),
+            cells: vec![CsvCellIn {
+                field_id: "f1".into(),
+                value: r#""o1""#.into(),
+            }],
+        }];
+        csv_import(&conn, "v1", &fields, &rows).unwrap();
+        let fs = list_fields(&conn, "v1").unwrap();
+        assert_eq!(
+            fs[0].options,
+            r#"{"kind":"select","options":[{"id":"o1","name":"进行中","color":"blue"}]}"#
+        );
     }
 
     // ---------- 多视图：派生视图 id 折算到宿主 ----------
@@ -1093,6 +1128,7 @@ mod tests {
             id: "f3".into(),
             name: "导入".into(),
             field_type: "text".into(),
+            options: None,
         }];
         let rows = vec![CsvRowIn {
             id: "r3".into(),

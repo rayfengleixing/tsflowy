@@ -1,5 +1,5 @@
 import type { AttachmentRef, CellValue, DatabaseField, DatabaseRow, FieldType, SelectOption } from "@/types/database";
-import { parseFieldOptions } from "./database-values";
+import { newSelectOption, parseFieldOptions } from "./database-values";
 import { t } from "./i18n";
 
 // CSV 导入导出（项目说明书 10-M4）。解析/生成/类型推断为纯函数，便于单测。
@@ -213,6 +213,57 @@ export function resolveSelectRefs(
     }
   }
   return { ids, missing };
+}
+
+/** 选择类列：从整列原始文本收集去重后的选项名（单选取整串、多选按 ; | 拆分），供预置 options */
+export function collectSelectNames(type: FieldType, rawColumn: string[]): string[] {
+  const out: string[] = [];
+  for (const raw of rawColumn) {
+    const { names } = splitSelectNames(type, raw);
+    for (const n of names) if (!out.includes(n)) out.push(n);
+  }
+  return out;
+}
+
+/** 拆分选择类单元格文本为选项名数组（单选整串、多选 ; | 分列；trim 去空） */
+function splitSelectNames(type: FieldType, raw: string): { names: string[] } {
+  if (type === "multi_select") {
+    return {
+      names: raw
+        .split(/[;|]/)
+        .map((x) => x.trim())
+        .filter(Boolean),
+    };
+  }
+  const v = raw.trim();
+  return { names: v === "" ? [] : [v] };
+}
+
+/** 为选择类列生成 options（按名去重，复用 newSelectOption 的随机配色），并返回「名 → id」表 */
+export function buildSelectOptions(names: string[]): { options: SelectOption[]; idByName: Map<string, string> } {
+  const options: SelectOption[] = [];
+  const idByName = new Map<string, string>();
+  for (const name of names) {
+    if (idByName.has(name)) continue;
+    const opt = newSelectOption(name);
+    options.push(opt);
+    idByName.set(name, opt.id);
+  }
+  return { options, idByName };
+}
+
+/** 选择类单元格文本 → 存库值（单选 = 选项 id 字符串；多选 = id 数组）。空返回 null。
+ *  调用方须先用 buildSelectOptions 保证所有名字都已建选项（idByName 覆盖列内全部名）。 */
+export function selectCellToIds(type: FieldType, raw: string, idByName: Map<string, string>): CellValue {
+  const { names } = splitSelectNames(type, raw);
+  if (names.length === 0) return null;
+  const ids: string[] = [];
+  for (const n of names) {
+    const id = idByName.get(n);
+    if (id !== undefined && !ids.includes(id)) ids.push(id);
+  }
+  if (type === "multi_select") return ids.length > 0 ? ids : null;
+  return ids[0] ?? null;
 }
 
 /** CSV 附件列原始值 → 候选文件名（`[;|]` 分隔、trim、去空、按小写去重）。

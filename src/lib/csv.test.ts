@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCsvExport,
+  buildSelectOptions,
   cellToCsv,
+  collectSelectNames,
   csvValueToCell,
   inferFieldType,
   parseCsv,
   planImport,
   resolveAttachmentNames,
   resolveSelectRefs,
+  selectCellToIds,
   toCsv,
 } from "./csv";
 import type { DatabaseField, DatabaseRow, SelectOption } from "@/types/database";
@@ -186,6 +189,39 @@ describe("resolveSelectRefs / 选择类导出", () => {
     );
     // 失效 id（x9）原样保留，避免静默丢数据；空单元格导出为空串而不是 "null"
     expect(out).toBe("类别,标签\r\n蔬菜,水果; x9\r\n,\r\n");
+  });
+});
+
+describe("CSV 导入选择列（收集名 → 建选项 → 名转 id）", () => {
+  it("collectSelectNames 单选整串去重、多选按 ; | 拆分去重", () => {
+    expect(collectSelectNames("single_select", ["A", " B ", "A", "", "C"])).toEqual(["A", "B", "C"]);
+    expect(collectSelectNames("multi_select", ["a;b", "b|c", "", "a"])).toEqual(["a", "b", "c"]);
+  });
+
+  it("buildSelectOptions 每个名生成唯一 id 且顺序稳定", () => {
+    const { options, idByName } = buildSelectOptions(["红", "绿", "红"]);
+    expect(options).toHaveLength(2);
+    expect(options.map((o) => o.name)).toEqual(["红", "绿"]);
+    expect(idByName.get("红")).toBe(options[0].id);
+    expect(idByName.get("绿")).toBe(options[1].id);
+    expect(options[0].id).not.toBe(options[1].id);
+  });
+
+  it("selectCellToIds 单选返回 id 串、多选返回 id 数组、空返回 null", () => {
+    const { idByName } = buildSelectOptions(["水果", "蔬菜"]);
+    expect(selectCellToIds("single_select", "蔬菜", idByName)).toBe(idByName.get("蔬菜"));
+    expect(selectCellToIds("multi_select", "水果; 蔬菜|水果", idByName)).toEqual([
+      idByName.get("水果"),
+      idByName.get("蔬菜"),
+    ]);
+    expect(selectCellToIds("single_select", "   ", idByName)).toBeNull();
+    expect(selectCellToIds("multi_select", "不存在", idByName)).toBeNull();
+  });
+
+  it("导入往返：收集 + 建选项 + 转 id 后，值与 buildCsvExport 的按名导出闭环", () => {
+    const column = ["水果", "蔬菜; 水果", ""];
+    const { idByName } = buildSelectOptions(collectSelectNames("multi_select", column));
+    expect(selectCellToIds("multi_select", column[1], idByName)).toEqual([idByName.get("蔬菜"), idByName.get("水果")]);
   });
 });
 

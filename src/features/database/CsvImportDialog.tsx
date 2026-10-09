@@ -20,11 +20,32 @@ import { logger } from "@/lib/logger";
 // CSV 导入前的字段类型确认对话框（说明书 10-M4）：列出每列，用户可改类型；
 // 附件列需额外选一个文件夹，按文件名把 CSV 里的候选名映射到磁盘文件。
 
-/** 导入时可选的字段类型：只开放"能从文本直接还原"的类型。
- *  选项类（single_select / multi_select）需要预置 options，而 csv_import 的字段入参只有
- *  id/name/field_type（options 在 Rust 侧取默认值），选它会把选项名当成 id 存进去，故不开放；
- *  公式 / 关联 / 反向关系这类派生类型同样无法从文本反推。 */
-const IMPORT_TYPES: FieldType[] = ["text", "number", "date", "checkbox", "attachment"];
+/** 导入时可选的字段类型：能从文本直接还原的类型。
+ *  选项类（single_select / multi_select）由调用方按列值收集去重后预置 options（见 runImportCsv），
+ *  不再把选项名当 id 存；
+ *  公式 / 关联 / 反向关系 / 汇总 / 创建时间 / 最后编辑时间这类派生或系统字段无法从文本反推，
+ *  在类型下拉里以禁用项呈现，说明原因。 */
+const IMPORT_TYPES: FieldType[] = ["text", "number", "date", "single_select", "multi_select", "checkbox", "attachment"];
+
+/** 禁用项 → 不可导入的原因 i18n key */
+const DISABLED_IMPORT_TYPES: Partial<Record<FieldType, MessageKey>> = {
+  formula: "csv.typeDisabled.formula",
+  relation: "csv.typeDisabled.relation",
+  rollup: "csv.typeDisabled.rollup",
+  reverse_relation: "csv.typeDisabled.reverse",
+  created_at: "csv.typeDisabled.system",
+  last_edited_at: "csv.typeDisabled.system",
+};
+
+const ALL_TYPE_ORDER: FieldType[] = [
+  ...IMPORT_TYPES,
+  "formula",
+  "relation",
+  "rollup",
+  "reverse_relation",
+  "created_at",
+  "last_edited_at",
+];
 
 /** 递归收集目录下所有文件的小写文件名 → 绝对路径（同名取先遇到的；只收文件；子目录读取失败跳过不抛错） */
 async function scanFilesRecursive(dir: string, out: Map<string, string>): Promise<void> {
@@ -133,11 +154,20 @@ export function CsvImportDialog({ headers, initialTypes, dataRows, onCancel, onC
                   value={types[col]}
                   onChange={(e) => setType(col, e.target.value as FieldType)}
                 >
-                  {IMPORT_TYPES.map((ft) => (
-                    <option key={ft} value={ft}>
-                      {t(`field.type.${ft}` as MessageKey)}
-                    </option>
-                  ))}
+                  {ALL_TYPE_ORDER.map((ft) => {
+                    const reason = DISABLED_IMPORT_TYPES[ft];
+                    return (
+                      <option
+                        key={ft}
+                        value={ft}
+                        disabled={reason !== undefined}
+                        title={reason ? t(reason) : undefined}
+                      >
+                        {t(`field.type.${ft}` as MessageKey)}
+                        {reason ? ` — ${t(reason)}` : ""}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
               {types[col] === "attachment" && (

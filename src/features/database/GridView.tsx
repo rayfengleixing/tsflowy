@@ -24,12 +24,15 @@ import { UNGROUPED, applyFilters, canGroupBy, groupRowsForGrid, sortRows, type S
 import { normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
 import {
   buildCsvExport,
+  buildSelectOptions,
+  collectSelectNames,
   csvValueToCell,
   parseCsv,
   planImport,
   parseTsv,
   resolveAttachmentNames,
   resolveSelectRefs,
+  selectCellToIds,
 } from "@/lib/csv";
 import { CsvImportDialog } from "./CsvImportDialog";
 import { computeFormula } from "@/lib/database-formula";
@@ -685,12 +688,23 @@ export function GridView({
         layout: "grid",
       });
       // 建字段（重名则加序号）—— 解析/类型推断/消歧/id 生成在 JS，落库由 csv_import 单命令完成
+      // 选择列：按列值收集去重选项名 → 生成 options（名 → id），单元格按名转 id 存
       const used = new Set<string>();
+      const selectIdMaps: Record<number, Map<string, string>> = {};
       const fields = plan.headers.map((header, i) => {
         let name = header;
         while (used.has(name)) name = name + " 2";
         used.add(name);
-        return { id: newId(), name, field_type: types[i] };
+        if (types[i] === "single_select" || types[i] === "multi_select") {
+          const names = collectSelectNames(
+            types[i],
+            plan.dataRows.map((r) => r[i] ?? ""),
+          );
+          const { options, idByName } = buildSelectOptions(names);
+          selectIdMaps[i] = idByName;
+          return { id: newId(), name, field_type: types[i], options: JSON.stringify({ kind: "select", options }) };
+        }
+        return { id: newId(), name, field_type: types[i], options: null };
       });
 
       // 附件列：逐行解析候选名（纯函数），收集待复制文件（按源路径去重）
@@ -736,6 +750,11 @@ export function GridView({
             for (const name of resolved[i][ri].missing) missingNames.add(name);
             if (refs.length === 0) continue;
             cells.push({ field_id: fields[i].id, value: JSON.stringify(refs) });
+            continue;
+          }
+          if (fields[i].field_type === "single_select" || fields[i].field_type === "multi_select") {
+            const cell = selectCellToIds(fields[i].field_type, raw, selectIdMaps[i]);
+            if (cell !== null) cells.push({ field_id: fields[i].id, value: JSON.stringify(cell) });
             continue;
           }
           const cell = csvValueToCell(fields[i].field_type, raw);

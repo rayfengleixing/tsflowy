@@ -216,6 +216,9 @@ pub struct CsvFieldIn {
     pub id: String,
     pub name: String,
     pub field_type: String,
+    /// 选项类字段的 options JSON（JS 侧从列值收集去重后预置）；None = 按类型取默认 JSON
+    #[serde(default)]
+    pub options: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
