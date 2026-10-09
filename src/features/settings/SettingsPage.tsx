@@ -208,14 +208,15 @@ export function SettingsPage() {
     },
     {
       titleKey: t("settings.shortcuts.editor"),
+      customizable: true,
       items: [
         { label: t("settings.shortcuts.slash"), key: "/" },
-        { label: t("settings.shortcuts.bold"), key: "Ctrl / ⌘ + B" },
-        { label: t("settings.shortcuts.italic"), key: "Ctrl / ⌘ + I" },
-        { label: t("settings.shortcuts.underline"), key: "Ctrl / ⌘ + U" },
-        { label: t("settings.shortcuts.strike"), key: "Ctrl / ⌘ + Shift + X" },
-        { label: t("settings.shortcuts.undo"), key: "Ctrl / ⌘ + Z" },
-        { label: t("settings.shortcuts.redo"), key: "Ctrl / ⌘ + Shift + Z" },
+        { label: t("settings.shortcuts.bold"), id: "bold" },
+        { label: t("settings.shortcuts.italic"), id: "italic" },
+        { label: t("settings.shortcuts.underline"), id: "underline" },
+        { label: t("settings.shortcuts.strike"), id: "strike" },
+        { label: t("settings.shortcuts.undo"), id: "undo" },
+        { label: t("settings.shortcuts.redo"), id: "redo" },
       ],
     },
   ];
@@ -1224,7 +1225,6 @@ export function SettingsPage() {
                 </ul>
               </div>
             ))}
-            <p className="text-[11px] text-neutral-400">{t("settings.shortcutEditorFixed")}</p>
           </div>
         </Section>
       </div>

@@ -139,4 +139,21 @@ describe("shortcuts store", () => {
     expect(mod.findConflict("search", { ctrl: true, shift: false, alt: false, key: "k" })).toBe("commandPalette");
     expect(mod.findConflict("search", { ctrl: true, shift: false, alt: true, key: "g" })).toBeNull();
   });
+
+  it("编辑器命令纳入自定义：默认值齐全，跨组冲突被拒绝", async () => {
+    const mod = await loadStore();
+    const { useShortcutsStore, DEFAULT_SHORTCUTS, EDITOR_SHORTCUT_IDS } = mod;
+    for (const id of EDITOR_SHORTCUT_IDS) {
+      expect(useShortcutsStore.getState().combos[id]).toEqual(DEFAULT_SHORTCUTS[id]);
+    }
+    // Ctrl+B 是「加粗」默认键：全局命令改绑到它应冲突
+    expect(
+      useShortcutsStore.getState().setShortcut("newPage", { ctrl: true, shift: false, alt: false, key: "b" }),
+    ).toBe(false);
+    // 改绑「加粗」到 Ctrl+Shift+B 成功，且 Ctrl+B 不再命中任何绑定
+    expect(useShortcutsStore.getState().setShortcut("bold", { ctrl: true, shift: true, alt: false, key: "b" })).toBe(
+      true,
+    );
+    expect(mod.findConflict("newPage", { ctrl: true, shift: false, alt: false, key: "b" })).toBeNull();
+  });
 });

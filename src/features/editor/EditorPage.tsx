@@ -27,6 +27,15 @@ import { registerCloseFlush } from "@/lib/close-flush";
 import { registerAiEditor } from "@/lib/ai-editor";
 import { onEscapeClose } from "@/lib/escape-close";
 import { t } from "@/lib/i18n";
+import {
+  useShortcutsStore,
+  comboEquals,
+  eventToCombo,
+  BUILTIN_EDITOR_KEYS,
+  EDITOR_SHORTCUT_IDS,
+  DEFAULT_SHORTCUTS,
+  type ShortcutId,
+} from "@/lib/shortcuts";
 import { flattenTree } from "@/lib/tree";
 import { logger } from "@/lib/logger";
 import type { View } from "@/types/models";
@@ -264,6 +273,33 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     [hideSlash, view.id],
   );
 
+  // 可自定义编辑器命令的实际执行（B9）。与 Ctrl+T/Ctrl+L 一致走 editorRef，
+  // 避免在 useEditor 参数里引用尚未创建的 editor 实例。
+  const runEditorShortcut = (id: ShortcutId) => {
+    const ed = editorRef.current;
+    if (!ed || ed.isDestroyed) return;
+    switch (id) {
+      case "bold":
+        ed.chain().focus().toggleBold().run();
+        break;
+      case "italic":
+        ed.chain().focus().toggleItalic().run();
+        break;
+      case "underline":
+        ed.chain().focus().toggleUnderline().run();
+        break;
+      case "strike":
+        ed.chain().focus().toggleStrike().run();
+        break;
+      case "undo":
+        ed.chain().focus().undo().run();
+        break;
+      case "redo":
+        ed.chain().focus().redo().run();
+        break;
+    }
+  };
+
   const editor = useEditor({
     extensions,
     content: { type: "doc", content: [] },
@@ -288,8 +324,8 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
           setFindOpen(true);
           return true;
         }
-        // — 快捷键 1：Ctrl+S 手动保存 —
-        if (metaOrCtrl && event.key.toLowerCase() === "s") {
+        // — 快捷键 1：Ctrl+S 手动保存（Ctrl+Shift+S 留给「删除线」） —
+        if (metaOrCtrl && !event.shiftKey && event.key.toLowerCase() === "s") {
           event.preventDefault();
           flush()
             .then(() => toast.success(t("editor.saved")))
@@ -311,6 +347,27 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
             editorRef.current.chain().focus().toggleTaskList().run();
           }
           return true;
+        }
+        // — 可自定义编辑器命令（B9）：加粗/斜体/下划线/删除线/撤销/重做 —
+        // handleKeyDown 先于各扩展内置 keymap 执行：命中当前绑定就执行命令；
+        // 命中扩展内置默认键但已被用户改绑到别处，则吞掉（返回 true 不执行），
+        // 保证"改绑后旧默认键失效"。
+        const edCombo = eventToCombo(event);
+        if (edCombo) {
+          const { combos } = useShortcutsStore.getState();
+          const hit = EDITOR_SHORTCUT_IDS.find((id) => comboEquals(combos[id], edCombo));
+          if (hit) {
+            event.preventDefault();
+            runEditorShortcut(hit);
+            return true;
+          }
+          // 内置默认键：仅当用户把该命令改绑到别处时才吞掉（返回 true 不执行），
+          // 未改绑时放行给 TipTap 内置 keymap（保留 Ctrl+Y 重做等别名）。
+          const builtin = BUILTIN_EDITOR_KEYS.find((b) => comboEquals(b.combo, edCombo));
+          if (builtin && !comboEquals(combos[builtin.id], DEFAULT_SHORTCUTS[builtin.id])) {
+            event.preventDefault();
+            return true;
+          }
         }
         return false;
       },

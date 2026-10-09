@@ -647,14 +647,12 @@ export const en: Record<MessageKey, string> = {
   "settings.shortcuts.redo": "Redo",
   "settings.shortcuts.slash": "Open block menu",
   "settings.shortcutHint":
-    'Combos with "Ctrl / ⌘" are clickable: press a new combo to apply, Esc to cancel. Esc, Save and in-editor shortcuts are fixed.',
+    'Combos with "Ctrl / ⌘" are clickable: press a new combo to apply, Esc to cancel. Esc, Save and the "/" block menu stay fixed.',
   "settings.shortcutRecording": "Press new combo…",
   "settings.shortcutReset": "Reset",
   "settings.shortcutResetAll": "Reset all",
   "settings.shortcutConflict": 'Conflicts with "{name}", choose another combo',
   "settings.shortcutNeedModifier": "Combo must include Ctrl or Alt",
-  "settings.shortcutEditorFixed":
-    "In-editor shortcuts come from the editor and system; customization is not supported yet",
   // — B-2/B-3 en labels —
   "sidebar.pageTree": "Tree",
   // — P2-17 i18n 硬编码清理 —

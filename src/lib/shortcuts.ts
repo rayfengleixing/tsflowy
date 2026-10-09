@@ -1,6 +1,8 @@
-// 可自定义的全局快捷键。覆盖 App 全局键盘处理里明确隔离的命令
-// （命令面板 / 快速打开 / 全局搜索 / 切换标签页 / 新建页面 / 打开设置 / 切换主题）；
-// 编辑器内快捷键由 TipTap 与浏览器原生行为提供，保持只读展示，不做自定义。
+// 可自定义的快捷键。全局命令（命令面板 / 快速打开 / 全局搜索 / 切换标签页 / 新建页面 /
+// 打开设置 / 切换主题）由 App 的 window keydown 处理；编辑器内命令（加粗 / 斜体 / 下划线 /
+// 删除线 / 撤销 / 重做）由 EditorPage 的 editorProps.handleKeyDown 处理——该回调先于
+// TipTap 各扩展的内置 keymap 执行，命中即短路，因此改绑后旧默认键同样失效。
+// 两组共用同一个 store 与冲突检测，跨组也互斥。
 //
 // 组合键统一用 Ctrl 表示（Windows/Linux 的 Ctrl 与 macOS 的 ⌘ 等价），
 // 与既有快捷键表文案「Ctrl / ⌘」一致。
@@ -8,7 +10,19 @@
 import { create } from "zustand";
 
 export type ShortcutId =
-  "commandPalette" | "quickOpen" | "search" | "switchTab" | "newPage" | "openSettings" | "toggleTheme";
+  | "commandPalette"
+  | "quickOpen"
+  | "search"
+  | "switchTab"
+  | "newPage"
+  | "openSettings"
+  | "toggleTheme"
+  | "bold"
+  | "italic"
+  | "underline"
+  | "strike"
+  | "undo"
+  | "redo";
 
 export interface Combo {
   /** Ctrl 或 ⌘（跨平台统一为一个开关） */
@@ -32,9 +46,45 @@ export const DEFAULT_SHORTCUTS: Record<ShortcutId, Combo> = {
   newPage: c("n"),
   openSettings: c(","),
   toggleTheme: c("d", { shift: true }),
+  // 编辑器命令：与 TipTap 内置默认一致（strike 实为 Mod-Shift-s，非 Ctrl+Shift+X）
+  bold: c("b"),
+  italic: c("i"),
+  underline: c("u"),
+  strike: c("s", { shift: true }),
+  undo: c("z"),
+  redo: c("z", { shift: true }),
 };
 
-/** 可自定义的全局快捷键（顺序即设置页展示顺序） */
+/** 全局组（顺序即设置页展示顺序） */
+export const GLOBAL_SHORTCUT_IDS: ShortcutId[] = [
+  "commandPalette",
+  "quickOpen",
+  "search",
+  "switchTab",
+  "newPage",
+  "openSettings",
+  "toggleTheme",
+];
+
+/** 编辑器组 */
+export const EDITOR_SHORTCUT_IDS: ShortcutId[] = ["bold", "italic", "underline", "strike", "undo", "redo"];
+
+/**
+ * TipTap 各扩展内置的编辑器命令默认绑定。用户把对应命令改绑到其它组合后，
+ * EditorPage 用这张表把旧默认键"吞掉"（handleKeyDown 先于扩展 keymap 执行），
+ * 否则旧键仍会触发内置命令，造成"改绑了但旧键还能用"。
+ */
+export const BUILTIN_EDITOR_KEYS: { combo: Combo; id: ShortcutId }[] = [
+  { combo: c("b"), id: "bold" },
+  { combo: c("i"), id: "italic" },
+  { combo: c("u"), id: "underline" },
+  { combo: c("s", { shift: true }), id: "strike" },
+  { combo: c("z"), id: "undo" },
+  { combo: c("z", { shift: true }), id: "redo" },
+  { combo: c("y"), id: "redo" },
+];
+
+/** 可自定义的快捷键（顺序即设置页展示顺序） */
 export const CUSTOMIZABLE_SHORTCUTS: { id: ShortcutId; labelKey: string }[] = [
   { id: "commandPalette", labelKey: "settings.shortcuts.commandPalette" },
   { id: "quickOpen", labelKey: "settings.shortcuts.quickOpen" },
@@ -43,6 +93,12 @@ export const CUSTOMIZABLE_SHORTCUTS: { id: ShortcutId; labelKey: string }[] = [
   { id: "newPage", labelKey: "settings.shortcuts.newPage" },
   { id: "openSettings", labelKey: "settings.shortcuts.openSettings" },
   { id: "toggleTheme", labelKey: "settings.shortcuts.toggleTheme" },
+  { id: "bold", labelKey: "settings.shortcuts.bold" },
+  { id: "italic", labelKey: "settings.shortcuts.italic" },
+  { id: "underline", labelKey: "settings.shortcuts.underline" },
+  { id: "strike", labelKey: "settings.shortcuts.strike" },
+  { id: "undo", labelKey: "settings.shortcuts.undo" },
+  { id: "redo", labelKey: "settings.shortcuts.redo" },
 ];
 
 const STORAGE_KEY = "tsflowy-shortcuts";
