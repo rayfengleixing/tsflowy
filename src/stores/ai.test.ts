@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AiConfig, AiChatEvent, AiChatMessage } from "@/lib/ai";
 import type { StoredSession } from "@/stores/ai";
 
-// AI store 单测：IPC / 编辑器桥 / 工作区全部打桩，只验证 store 自身的编排逻辑
-// （落库时机、token 预算截断、停止后编辑竞态、会话归档/裁剪）。
+// AI store 单测：IPC / 编辑器桥 / 工具执行层 / 工作区全部打桩，只验证 store 自身的编排逻辑
+// （落库时机、token 预算截断、停止后动作竞态、agent 多步循环、会话归档/裁剪）。
 
 const M = vi.hoisted(() => ({
   aiChat: vi.fn((_msgs: unknown, _onEvent: unknown) => Promise.resolve()),
@@ -15,9 +15,14 @@ const M = vi.hoisted(() => ({
   aiSessionDelete: vi.fn((_id: string) => Promise.resolve()),
   docSearchSnippets: vi.fn(() => Promise.resolve([] as string[])),
   getAiEditor: vi.fn((): unknown => null),
-  applyEdit: vi.fn((_op: string, _content: string) => ({ applied: true, revert: {} })),
+  applyEdit: vi.fn((_op: string, _content: string, _anchor?: unknown) => ({ applied: true, revert: {} })),
   undoAiEdit: vi.fn((_revert: unknown) => true),
   documentGet: vi.fn((): Promise<string | null> => Promise.resolve(null)),
+  documentSave: vi.fn(() => Promise.resolve()),
+  runRetrievalCall: vi.fn(() => Promise.resolve("检索桩结果")),
+  runWriteAction: vi.fn((): Promise<unknown> => Promise.resolve({ ok: true, detail: "已执行" })),
+  resolvePage: vi.fn((): unknown => null),
+  applyEditToDocJson: vi.fn((): unknown => ({ ok: false, reason: "bad_structure" })),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
   newId: vi.fn(() => "id-1"),
@@ -27,7 +32,7 @@ const M = vi.hoisted(() => ({
     getSelectionText: () => "选中",
     getPageText: () => "整页文本",
     getEditTargetText: (_op: string) => "原文",
-    applyEdit: (op: string, content: string) => M.applyEdit(op, content),
+    applyEdit: (op: string, content: string, anchor?: unknown) => M.applyEdit(op, content, anchor),
     undoAiEdit: (revert: unknown) => M.undoAiEdit(revert),
   },
 }));
@@ -45,7 +50,18 @@ vi.mock("@/lib/ai", () => ({
 }));
 vi.mock("@/lib/ai-editor", () => ({ getAiEditor: M.getAiEditor }));
 vi.mock("@/lib/db", () => ({ newId: M.newId }));
-vi.mock("@/lib/documents", () => ({ documentApi: { get: M.documentGet } }));
+vi.mock("@/lib/documents", () => ({ documentApi: { get: M.documentGet, save: M.documentSave } }));
+// 工具执行层自带一堆库访问依赖，单测里只关心 store 怎么调度它
+vi.mock("@/lib/ai-tools", () => ({
+  aiToolSpecs: () => [],
+  runRetrievalCall: M.runRetrievalCall,
+  runWriteAction: M.runWriteAction,
+  resolvePage: M.resolvePage,
+}));
+vi.mock("@/lib/ai-locate", () => ({
+  asDoc: (raw: unknown) => (Array.isArray(raw) ? { type: "doc", content: raw } : raw),
+  applyEditToDocJson: M.applyEditToDocJson,
+}));
 vi.mock("@/stores/workspace", () => ({
   useWorkspaceStore: { getState: () => M.workspaceState, subscribe: () => () => undefined },
 }));
@@ -101,7 +117,12 @@ async function loadStore(opts: LoadOptions = {}) {
   M.aiSessionSave.mockImplementation(() => Promise.resolve());
   M.aiSessionDelete.mockImplementation(() => Promise.resolve());
   M.documentGet.mockImplementation(() => Promise.resolve(null));
+  M.documentSave.mockImplementation(() => Promise.resolve());
   M.docSearchSnippets.mockImplementation(() => Promise.resolve([] as string[]));
+  M.runRetrievalCall.mockImplementation(() => Promise.resolve("检索桩结果"));
+  M.runWriteAction.mockImplementation(() => Promise.resolve({ ok: true, detail: "已执行" }));
+  M.resolvePage.mockImplementation(() => null);
+  M.applyEditToDocJson.mockImplementation(() => ({ ok: false, reason: "bad_structure" }));
   streamHandlers = [];
   M.getAiEditor.mockImplementation(() => (opts.bridgeNull ? null : M.bridge));
   M.applyEdit.mockImplementation(() => ({ applied: true, revert: {} }));
@@ -203,7 +224,7 @@ describe("ai store：一轮问答", () => {
     feed({ type: "done", full: EDIT_FULL });
     await p;
     const msg = store.getState().messages[1];
-    expect(msg.edit?.state).toBe("pending");
+    expect(msg.actions?.[0].state).toBe("pending");
     expect(M.applyEdit).not.toHaveBeenCalled();
   });
 
@@ -213,8 +234,8 @@ describe("ai store：一轮问答", () => {
     feed({ type: "done", full: EDIT_FULL });
     await p;
     const msg = store.getState().messages[1];
-    expect(msg.edit?.state).toBe("applied");
-    expect(M.applyEdit).toHaveBeenCalledWith("append_to_document", "新内容");
+    expect(msg.actions?.[0].state).toBe("applied");
+    expect(M.applyEdit).toHaveBeenCalledWith("append_to_document", "新内容", undefined);
     expect(msg.content).toBe("回答");
   });
 
@@ -223,7 +244,7 @@ describe("ai store：一轮问答", () => {
     const { p, feed } = await startTurn(store, "改一下");
     feed({ type: "done", full: EDIT_FULL });
     await p;
-    expect(store.getState().messages[1].edit?.state).toBe("unavailable");
+    expect(store.getState().messages[1].actions?.[0].state).toBe("unavailable");
   });
 
   it("编辑指令块格式不对：正文剥掉坏块，卡片标记 malformed", async () => {
@@ -233,7 +254,7 @@ describe("ai store：一轮问答", () => {
     await p;
     const msg = store.getState().messages[1];
     expect(msg.content).toBe("回答");
-    expect(msg.edit?.state).toBe("malformed");
+    expect(msg.actions?.[0].state).toBe("malformed");
     expect(M.applyEdit).not.toHaveBeenCalled();
   });
 
@@ -267,6 +288,115 @@ describe("ai store：一轮问答", () => {
     expect(s.messages).toHaveLength(1);
     expect(s.error).toBe("boom");
     expect(s.errorCode).toBeNull();
+  });
+});
+
+describe("ai store：agent 多步循环", () => {
+  const callBlock = (json: string) => `\`\`\`tsflowy-call\n${json}\n\`\`\``;
+
+  it("文本协议检索块：本机执行后把结果喂回下一轮，答案取最后一轮", async () => {
+    const store = await loadConfiguredStore();
+    const p = store.getState().send("我上周记的评审结论是什么？");
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(1));
+    const ask = `先查一下。\n\n${callBlock('{"tool":"search_workspace","args":{"query":"评审"}}')}`;
+    streamHandlers[0]({ type: "done", full: ask });
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(2));
+    expect(M.runRetrievalCall).toHaveBeenCalledWith("search_workspace", { query: "评审" }, 8000);
+    const second = M.aiChat.mock.calls[1][0] as AiChatMessage[];
+    // 文本协议模式没有 tool 消息通道：结果作为一条 system 回灌，且带上模型上一轮的原文
+    expect(second[second.length - 2]).toMatchObject({ role: "assistant", content: ask });
+    expect(second[second.length - 1]?.content).toContain("【检索结果】");
+    streamHandlers[1]({ type: "done", full: "评审结论是通过" });
+    await p;
+    const msg = store.getState().messages[1];
+    // 第一轮那句「先查一下」不算答案，不该和最终回答叠在一起
+    expect(msg.content).toBe("评审结论是通过");
+    expect(msg.actions).toBeUndefined();
+  });
+
+  it("use_tools 打开时：检索结果按 assistant.tool_calls + role=tool 回灌", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ use_tools: true }) });
+    const p = store.getState().send("列一下页面");
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(1));
+    streamHandlers[0]({
+      type: "done",
+      full: "",
+      tool_calls: [{ id: "c1", name: "list_pages", arguments: "{}" }],
+    });
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(2));
+    const second = M.aiChat.mock.calls[1][0] as AiChatMessage[];
+    expect(second[second.length - 2]).toMatchObject({
+      role: "assistant",
+      tool_calls: [{ id: "c1", function: { name: "list_pages" } }],
+    });
+    expect(second[second.length - 1]).toMatchObject({ role: "tool", tool_call_id: "c1", content: "检索桩结果" });
+    streamHandlers[1]({ type: "done", full: "一共三页" });
+    await p;
+    expect(store.getState().messages[1].content).toBe("一共三页");
+  });
+
+  it("检索轮次到达上限：剩下的请求不执行，正文后写明", async () => {
+    const store = await loadConfiguredStore();
+    const p = store.getState().send("一直查");
+    for (let round = 0; round < 4; round++) {
+      await vi.waitFor(() => expect(streamHandlers.length).toBe(round + 1));
+      streamHandlers[round]({ type: "done", full: `第${round}轮\n\n${callBlock('{"tool":"list_pages","args":{}}')}` });
+    }
+    await p;
+    // 前 3 轮的结果还能进下一轮提问，第 4 轮再要求检索已经没有下一次了
+    expect(M.runRetrievalCall).toHaveBeenCalledTimes(3);
+    const msg = store.getState().messages[1];
+    expect(msg.content).toContain("第3轮");
+    expect(msg.content).toContain("ai.searchRoundLimit");
+  });
+
+  it("多个写动作各一张卡片：确认其中一个不影响其它", async () => {
+    const store = await loadConfiguredStore();
+    const full = [
+      "已安排。",
+      '```tsflowy-edit\n{"tool":"apply_edit","args":{"op":"append_to_document","summary":"补一段","content":"新内容"}}\n```',
+      '```tsflowy-edit\n{"tool":"create_page","args":{"title":"会议纪要"}}\n```',
+    ].join("\n\n");
+    const { p, feed } = await startTurn(store, "补一段并新建纪要页");
+    feed({ type: "done", full });
+    await p;
+    const msg = store.getState().messages[1];
+    expect(msg.actions?.map((a) => a.tool)).toEqual(["apply_edit", "create_page"]);
+    expect(msg.actions?.every((a) => a.state === "pending")).toBe(true);
+    await store.getState().applyAction(msg.id, 1);
+    expect(M.runWriteAction).toHaveBeenCalledWith({ tool: "create_page", args: { title: "会议纪要" } });
+    const after = store.getState().messages[1].actions!;
+    expect(after[0].state).toBe("pending");
+    expect(after[1].state).toBe("applied");
+  });
+
+  it("apply_edit 带 view_id：走 JSON 路径写库，不碰当前编辑器", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ confirm_edit: false }) });
+    M.workspaceState.currentViewId = "here";
+    M.resolvePage.mockImplementation(() => ({ id: "other", name: "另一页", layout: "document" }));
+    M.applyEditToDocJson.mockImplementation(() => ({ ok: true, content: [], before: "旧内容" }));
+    const full =
+      '改好了\n\n```tsflowy-edit\n{"tool":"apply_edit","args":{"op":"replace_under_heading","summary":"重写背景","content":"新内容","anchor":{"heading":"背景"},"view_id":"other"}}\n```';
+    const { p, feed } = await startTurn(store, "把另一页的背景重写");
+    feed({ type: "done", full });
+    await p;
+    const rec = store.getState().messages[1].actions![0];
+    expect(rec.state).toBe("applied");
+    expect(rec.pageName).toBe("另一页");
+    expect(rec.before).toBe("旧内容");
+    expect(M.applyEdit).not.toHaveBeenCalled();
+    expect(M.documentSave).toHaveBeenCalledWith("other", expect.any(String));
+  });
+
+  it("撤销按动作下标生效", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ confirm_edit: false }) });
+    const { p, feed } = await startTurn(store, "改一下");
+    feed({ type: "done", full: EDIT_FULL });
+    await p;
+    const msg = store.getState().messages[1];
+    store.getState().undoAction(msg.id, 0);
+    expect(M.undoAiEdit).toHaveBeenCalled();
+    expect(store.getState().messages[1].actions![0].undone).toBe(true);
   });
 });
 

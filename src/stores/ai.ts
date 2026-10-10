@@ -16,16 +16,28 @@ import {
   type AiChatMessage,
   type AiConfig,
   type AiQuickActionDef,
+  type AiToolCallRaw,
+  type AiToolCallRef,
   type AiUsage,
 } from "@/lib/ai";
 import { getAiEditor, type AiEditRevert } from "@/lib/ai-editor";
 import {
   buildEditSystemPrompt,
   CHAT_ONLY_SYSTEM_PROMPT,
-  extractEdit,
+  extractCalls,
   hideEditBlock,
+  retrievalResultMessage,
+  RETRIEVAL_TOOLS,
+  validateCall,
+  type AiCall,
+  type AiEditAnchor,
   type AiEditOp,
+  type AiWriteCall,
+  type RetrievalCall,
+  type RetrievalKind,
 } from "@/lib/ai-edit";
+import { aiToolSpecs, resolvePage, runRetrievalCall, runWriteAction } from "@/lib/ai-tools";
+import { applyEditToDocJson, asDoc, type LocateFailure } from "@/lib/ai-locate";
 import { parseMentions } from "@/lib/ai-mention";
 import { estimateTokens, tailTokens } from "@/lib/ai-tokens";
 import { documentApi } from "@/lib/documents";
@@ -34,29 +46,37 @@ import { flattenTree } from "@/lib/tree";
 import { logger } from "@/lib/logger";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { JSONContent } from "@tiptap/core";
+import type { ViewNode } from "@/types/models";
 import { t, type MessageKey } from "@/lib/i18n";
 
 // AI 助手面板状态：开关/宽度（localStorage 偏好）、消息列表、流式状态、
-// 配置缓存与 send / stop / clear / retry / quickAction / undoEdit 动作。
+// 配置缓存与 send / stop / clear / retry / quickAction / undoAction 动作。
 
 /**
- * 编辑指令的落地状态：
+ * 动作的落地状态：
  * pending 待用户确认 / applied 已写入 / rejected 已忽略 /
- * unavailable 没有可编辑文档或事务被结构锁定拦下 / malformed 指令块解析失败
+ * unavailable 没有可编辑文档、定位失败或执行报错 / malformed 指令块解析失败
  */
 export type AiEditState = "pending" | "applied" | "rejected" | "unavailable" | "malformed";
 
-/** 一条回复附带的文档编辑指令及其落地情况 */
-export interface AiEditRecord {
-  /** op 为 null 表示指令块解析失败（malformed） */
+/** 一条回复附带的动作（改文档 / 建页 / 改标题 / 加表行）及其落地情况 */
+export interface AiActionRecord {
+  tool: AiWriteCall["tool"] | "invalid";
+  /** 动作本体；invalid 卡片为 null（格式有误，没有可执行的东西） */
+  call: AiWriteCall | null;
+  /** apply_edit 的作用范围；其余动作与解析失败时为 null */
   op: AiEditOp | null;
   summary: string;
-  /** 建议写入的 Markdown 内容 */
+  /** 建议写入的 Markdown 内容（建页时为页面正文） */
   content: string;
-  /** 将被替换的原文（插入/追加类为空），用于落地前的 diff 预览 */
+  /** 将被替换的原文（插入/新增类为空），用于落地前的 diff 预览 */
   before: string;
   state: AiEditState;
   undone?: boolean;
+  /** 动作落点页名（跨页面编辑时界面要说明改了哪一页） */
+  pageName?: string;
+  /** 执行结果说明或失败原因 */
+  detail?: string;
   /** 撤销句柄（含改前快照），仅当前编辑器实例内有效，不参与持久化 */
   revert?: AiEditRevert;
 }
@@ -65,18 +85,100 @@ export interface AiMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  /** 本条回复下发的文档编辑指令及其落地结果（用于展示、确认与撤销） */
-  edit?: AiEditRecord;
+  /** 本条回复下发的动作及其落地结果（用于展示、确认与撤销） */
+  actions?: AiActionRecord[];
+}
+
+/** 指令块解析失败的占位卡片：没有可执行的动作，也就没有确认与撤销 */
+function invalidActionRecord(): AiActionRecord {
+  return { tool: "invalid", call: null, op: null, summary: "", content: "", before: "", state: "malformed" };
+}
+
+/** 一次提问可能跑多轮（每次检索往返都是一个请求），用量合并成本轮合计 */
+function addUsage(turn: AiUsage | null, u: AiUsage): AiUsage {
+  return {
+    prompt_tokens: (turn?.prompt_tokens ?? 0) + (u.prompt_tokens ?? 0),
+    completion_tokens: (turn?.completion_tokens ?? 0) + (u.completion_tokens ?? 0),
+    total_tokens: (turn?.total_tokens ?? 0) + (u.total_tokens ?? 0),
+  };
 }
 
 /** 快捷动作：前四个基于选中文本，continue 基于整页上下文（不需要选中） */
 export type AiQuickAction = "summarize" | "translate" | "rewrite" | "explain" | "continue";
+
+function isRetrievalCall(call: AiCall): call is RetrievalCall {
+  return RETRIEVAL_TOOLS.includes(call.tool as RetrievalKind);
+}
+
+function isWriteCall(call: AiCall): call is AiWriteCall {
+  return !isRetrievalCall(call);
+}
+
+/** 动作的正文内容（diff 预览右侧展示；建页用正文，其余写动作没有整段文本） */
+function contentOf(call: AiWriteCall): string {
+  if (call.tool === "apply_edit") return call.args.content;
+  if (call.tool === "create_page") return call.args.content ?? "";
+  return "";
+}
+
+/** 卡片标题：apply_edit 用模型给的 summary，其余动作按参数自动生成一句说明 */
+function summaryOf(call: AiWriteCall): string {
+  switch (call.tool) {
+    case "apply_edit":
+      return call.args.summary ?? "";
+    case "create_page":
+      return t("ai.actionSummaryCreate", { title: call.args.title });
+    case "set_page_title":
+      return t("ai.actionSummaryRename", { page: call.args.page, title: call.args.title });
+    case "add_database_row":
+      return t("ai.actionSummaryAddRow", { database: call.args.database });
+  }
+}
+
+/** 本轮模型下发的动作：函数调用与文本协议块合并去重（两条路收敛为同一种形态） */
+function collectCalls(
+  refs: AiToolCallRaw[],
+  text: string,
+): { items: { call: AiCall; id: string }[]; malformed: boolean } {
+  const items: { call: AiCall; id: string }[] = [];
+  const seen = new Set<string>();
+  let malformed = false;
+  const push = (call: AiCall, id: string) => {
+    const key = JSON.stringify(call);
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push({ call, id });
+  };
+  for (const r of refs) {
+    let value: unknown;
+    try {
+      value = JSON.parse(r.arguments || "{}");
+    } catch {
+      malformed = true;
+      continue;
+    }
+    const obj = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
+    // 函数调用的工具名在 name 字段里，参数体是裸 args；个别模型会把 {tool,args} 整个塞进 arguments，
+    // 那种形态直接交给 validateCall（它与文本协议共用同一种 JSON）
+    const call = validateCall("tool" in obj || "op" in obj ? obj : { tool: r.name, args: obj });
+    if (!call) malformed = true;
+    else push(call, r.id);
+  }
+  const extracted = extractCalls(text);
+  for (const c of extracted.calls) push(c, "");
+  return { items, malformed: malformed || extracted.malformed };
+}
 
 const PANEL_WIDTH_KEY = "tsflowy-ai-panel-width";
 const DEFAULT_WIDTH = 360;
 const MIN_WIDTH = 280;
 const MAX_WIDTH = 640;
 const DEFAULT_MAX_CHARS = 8000;
+/**
+ * 一次提问内允许的最大模型往返次数：每轮模型可以要求若干次只读检索，
+ * 前端执行后把结果喂回模型继续。上限用来兜住「模型反复要求检索却收敛不了」的情况。
+ */
+const MAX_AGENT_ROUNDS = 4;
 
 export const AI_WIDTH_LIMITS = { min: MIN_WIDTH, max: MAX_WIDTH };
 
@@ -229,6 +331,8 @@ interface AiState {
   /** 推理型模型的思考过程（仅展示，不参与回填/复制） */
   reasoning: string;
   streaming: boolean;
+  /** agent 循环里正在本机执行只读检索（模型已回答完上一轮，下一轮请求还没发出） */
+  retrieving: boolean;
   error: string | null;
   /** 上一条错误的归类码（auth / rate_limit / quota / timeout / network / server / cancelled） */
   errorCode: string | null;
@@ -271,12 +375,12 @@ interface AiState {
   /** 切换到历史会话（当前对话有内容时先归档） */
   switchSession: (id: string) => void;
   deleteSession: (id: string) => void;
-  /** 撤销某条回复造成的文档改动 */
-  undoEdit: (messageId: string) => void;
-  /** 应用待确认的编辑指令（设置开启「改前确认」后由用户触发） */
-  applyPendingEdit: (messageId: string) => void;
-  /** 忽略待确认的编辑指令 */
-  rejectPendingEdit: (messageId: string) => void;
+  /** 撤销某条回复里某个动作造成的文档改动（仅编辑器内落地过的可撤销） */
+  undoAction: (messageId: string, index: number) => void;
+  /** 执行待确认的动作（设置开启「改前确认」后由用户触发） */
+  applyAction: (messageId: string, index: number) => Promise<void>;
+  /** 忽略待确认的动作 */
+  rejectAction: (messageId: string, index: number) => void;
   /** 切换模型档位（会持久化到配置） */
   switchProfile: (id: string) => Promise<void>;
   /** 执行用户在设置里自定义的快捷指令 */
@@ -495,75 +599,179 @@ export const useAiStore = create<AiState>()((set, get) => {
   const dropEmptyAssistant = (assistantId: string) =>
     set((s) => ({ messages: s.messages.filter((m) => m.id !== assistantId || m.content.trim().length > 0) }));
 
-  /** 一轮结束：提取编辑指令；默认（confirm_edit 开启）待用户确认后写入，关闭确认时直接落地 */
-  const finishAssistant = (assistantId: string, full: string) => {
-    const { edit, display, malformed } = extractEdit(full);
-    if (!edit) {
-      const text = display.trim() || full;
+  /** 定位失败原因 → 界面文案 */
+  const LOCATE_REASON: Record<LocateFailure["reason"], MessageKey> = {
+    no_doc: "ai.noPage",
+    heading_not_found: "ai.locateHeadingNotFound",
+    text_not_found: "ai.locateTextNotFound",
+    protected_heading: "ai.locateProtectedHeading",
+    bad_structure: "ai.locateBlockedByLock",
+  };
+
+  /** 当前编辑器桥接与正在打开的页面（apply_edit 不带 view_id 时的落点） */
+  const editorTarget = () => ({
+    bridge: getAiEditor(),
+    currentId: useWorkspaceStore.getState().currentViewId,
+  });
+
+  /**
+   * 对非当前页做定位编辑：save=false 只演练一遍（取 diff 用的改前原文、判断能不能定位到）。
+   * JSON 路径没有编辑器事务栈，这样落地的改动无法在界面上「撤销」。
+   */
+  const editOnPage = async (
+    node: ViewNode,
+    op: AiEditOp,
+    markdown: string,
+    anchor: AiEditAnchor | undefined,
+    save: boolean,
+  ): Promise<{ ok: boolean; before: string; reason?: string }> => {
+    try {
+      const raw = await documentApi.get(node.id);
+      const doc: JSONContent = raw
+        ? asDoc(JSON.parse(raw) as JSONContent | JSONContent[])
+        : { type: "doc", content: [] };
+      const result = applyEditToDocJson(doc, op, markdown, anchor);
+      if (!result.ok) return { ok: false, before: "", reason: t(LOCATE_REASON[result.reason]) };
+      if (save) await documentApi.save(node.id, JSON.stringify({ ...doc, content: result.content }));
+      return { ok: true, before: result.before };
+    } catch (e) {
+      logger.error("ai cross-page edit failed", node.id, e);
+      return { ok: false, before: "", reason: e instanceof Error ? e.message : String(e) };
+    }
+  };
+
+  /** 动作落点与可行性预览：blocked 非空表示这条动作根本执行不了 */
+  const previewAction = async (call: AiWriteCall): Promise<{ before: string; pageName: string; blocked?: string }> => {
+    if (call.tool !== "apply_edit") {
+      const ref =
+        call.tool === "create_page"
+          ? call.args.parent_page
+          : call.tool === "set_page_title"
+            ? call.args.page
+            : call.args.database;
+      if (!ref) return { before: "", pageName: "" };
+      const node = resolvePage(ref);
+      if (!node) return { before: "", pageName: "", blocked: t("ai.toolPageNotFound", { ref }) };
+      return { before: "", pageName: node.name };
+    }
+    const { op, content, anchor, view_id } = call.args;
+    const { bridge, currentId } = editorTarget();
+    if (!view_id || (bridge && view_id === currentId)) {
+      if (!bridge) return { before: "", pageName: "", blocked: t("ai.noEditor") };
+      return { before: bridge.getEditTargetText(op, anchor), pageName: bridge.getPageTitle() };
+    }
+    const node = resolvePage(view_id);
+    if (!node) return { before: "", pageName: "", blocked: t("ai.toolPageNotFound", { ref: view_id }) };
+    const dry = await editOnPage(node, op, content, anchor, false);
+    return { before: dry.before, pageName: node.name, ...(dry.reason ? { blocked: dry.reason } : {}) };
+  };
+
+  /** 真正执行一个动作：当前页走编辑器事务（可撤销），其它页面与库写入走各自路径 */
+  const landAction = async (rec: AiActionRecord): Promise<AiActionRecord> => {
+    const call = rec.call;
+    if (!call) return { ...rec, state: "unavailable" };
+    if (call.tool === "apply_edit") {
+      const { op, content, anchor, view_id } = call.args;
+      const { bridge, currentId } = editorTarget();
+      if (!view_id || (bridge && view_id === currentId)) {
+        if (!bridge) return { ...rec, state: "unavailable", detail: t("ai.noEditor") };
+        const result = bridge.applyEdit(op, content, anchor);
+        return result.applied
+          ? { ...rec, state: "applied", revert: result.revert }
+          : { ...rec, state: "unavailable", detail: result.reason ?? t("ai.editNotApplied") };
+      }
+      const node = resolvePage(view_id);
+      if (!node) return { ...rec, state: "unavailable", detail: t("ai.toolPageNotFound", { ref: view_id }) };
+      const done = await editOnPage(node, op, content, anchor, true);
+      if (done.ok) return { ...rec, state: "applied", pageName: node.name };
+      return { ...rec, state: "unavailable", pageName: node.name, detail: done.reason };
+    }
+    const outcome = await runWriteAction(call);
+    if (outcome.ok) return { ...rec, state: "applied", detail: outcome.detail };
+    return { ...rec, state: "unavailable", detail: outcome.detail };
+  };
+
+  /** 一条动作先预览、再按设置决定停在待确认还是立即落地（confirm_edit 开启时永不自动写） */
+  const planAction = async (call: AiWriteCall): Promise<AiActionRecord> => {
+    const preview = await previewAction(call);
+    const record: AiActionRecord = {
+      tool: call.tool,
+      call,
+      op: call.tool === "apply_edit" ? call.args.op : null,
+      summary: summaryOf(call),
+      content: contentOf(call),
+      // 改前原文：即便直接落地也留一份，之后随时可以「查看改动」
+      before: preview.before,
+      pageName: preview.pageName,
+      state: "unavailable",
+      ...(preview.blocked ? { detail: preview.blocked } : {}),
+    };
+    if (preview.blocked) return record;
+    // 用户按「停止」后迟到的 done 帧不能替用户写数据；与开启确认一样停在待确认
+    if (cancelledTurn || get().config?.confirm_edit) return { ...record, state: "pending" };
+    return await landAction(record);
+  };
+
+  /** 收尾：正文剥掉指令块，写动作逐条预览落地；检索达到轮次上限时在正文后说明 */
+  const finalizeAssistant = async (
+    assistantId: string,
+    full: string,
+    writes: AiWriteCall[],
+    malformed: boolean,
+    droppedRetrievals: number,
+  ) => {
+    const display = extractCalls(full).display;
+    const note = droppedRetrievals > 0 ? `\n\n${t("ai.searchRoundLimit", { max: MAX_AGENT_ROUNDS })}` : "";
+    if (writes.length === 0) {
       set((s) => ({
         messages: s.messages.map((m) =>
           m.id === assistantId
             ? {
                 ...m,
-                content: text,
+                content: (display.trim() || full) + note,
                 // 指令块有问题：正文已剥掉坏块，这里只留一张提示卡片（没有落地动作，也就没有撤销）
-                ...(malformed
-                  ? {
-                      edit: {
-                        op: null,
-                        summary: "",
-                        content: "",
-                        before: "",
-                        state: "malformed" as AiEditState,
-                      },
-                    }
-                  : {}),
+                ...(malformed ? { actions: [invalidActionRecord()] } : {}),
               }
             : m,
         ),
       }));
       return;
     }
-    const bridge = getAiEditor();
-    // 没有打开中的文档时无处落地；据实标记，界面会给「未写入」提示
-    const record: AiEditRecord = {
-      op: edit.op,
-      summary: edit.summary,
-      content: edit.content,
-      // 改前原文：即便直接落地也留一份，之后随时可以「查看改动」
-      before: bridge ? bridge.getEditTargetText(edit.op) : "",
-      state: "unavailable",
-    };
-    if (bridge) {
-      // 用户按「停止」后迟到的 done 帧不能替用户写文档；与开启确认一样停在待确认
-      if (cancelledTurn || get().config?.confirm_edit) {
-        // 设置里要求先确认：只给出 diff，等用户点「应用」再写
-        record.state = "pending";
-      } else {
-        const result = bridge.applyEdit(edit.op, edit.content);
-        record.state = result.applied ? "applied" : "unavailable";
-        record.revert = result.revert;
-      }
-    }
+    const records: AiActionRecord[] = [];
+    if (malformed) records.push(invalidActionRecord());
+    for (const call of writes) records.push(await planAction(call));
     set((s) => ({
       messages: s.messages.map((m) =>
         m.id === assistantId
           ? {
               ...m,
-              // 正文为空时用 summary 兜底，保证这条消息留在后续对话上下文里
-              content: display.trim() || edit.summary,
-              edit: record,
+              // 正文为空时用第一条动作的说明兜底，保证这条消息留在后续对话上下文里
+              content: (display.trim() || records[0].summary) + note,
+              actions: records,
             }
           : m,
       ),
     }));
   };
 
-  /** 流式跑一轮：raw 累积模型原始输出，state 里只放「去掉编辑指令块」的展示文本 */
-  const runStream = async (assistantId: string) => {
-    streamingAssistantId = assistantId;
-    cancelledTurn = false;
+  /**
+   * 跑一轮模型请求：raw 累积模型原始输出，state 里只放「去掉指令块」的展示文本。
+   * 返回全量文本、函数调用与本轮结局，供 runStream 编排 agent 循环。
+   */
+  const streamRound = async (
+    assistantId: string,
+    outgoing: AiChatMessage[],
+  ): Promise<{
+    full: string;
+    refs: AiToolCallRaw[];
+    cancelled: boolean;
+    failed: { message: string; code: string | null } | null;
+  }> => {
     let raw = "";
+    let full = "";
+    let refs: AiToolCallRaw[] = [];
+    let cancelled = false;
+    let failed: { message: string; code: string | null } | null = null;
     // 流式节流：每个增量都 set 会重建整条消息数组并重解析 Markdown，长回答会掉帧。
     // 把约 60ms 内的增量合并成一帧提交（约 16 次/秒，肉眼仍是连贯的打字效果）。
     let pendingDelta = "";
@@ -589,13 +797,11 @@ export const useAiStore = create<AiState>()((set, get) => {
       }
       flush();
     };
-    try {
-      // @ 引用的文档要先读盘转文本，再随 system 一起下发
-      const referenceContext = await buildReferenceContext();
-      const outgoing = requestMessages(assistantId, referenceContext);
-      // 选中内容只随本轮生效：消息组装完就清掉，下一轮不再重复带
-      if (get().pendingContext) set({ pendingContext: null });
-      await aiChat(outgoing, (ev: AiChatEvent) => {
+    // 工具定义只在服务商支持函数调用时下发；不支持时模型走文本协议块，能力等价
+    const tools = get().config?.use_tools ? aiToolSpecs() : undefined;
+    await aiChat(
+      outgoing,
+      (ev: AiChatEvent) => {
         if (ev.type === "chunk") {
           raw += ev.delta;
           pendingDelta += ev.delta;
@@ -605,13 +811,14 @@ export const useAiStore = create<AiState>()((set, get) => {
           pendingReasoning += ev.delta;
           flushTimer ??= setTimeout(flush, 60);
         } else if (ev.type === "done") {
-          // 收尾前先把没来得及提交的增量补上，否则会被 finishAssistant 的结果覆盖
+          // 收尾前先把没来得及提交的增量补上，否则会被 finalize 的结果覆盖
           flushNow();
-          finishAssistant(assistantId, ev.full || raw);
+          full = ev.full || raw;
+          refs = ev.tool_calls ?? [];
           const u = ev.usage;
           if (u) {
             set((s) => ({
-              usage: u,
+              usage: addUsage(s.usage, u),
               usageTotal: {
                 prompt: s.usageTotal.prompt + (u.prompt_tokens ?? 0),
                 completion: s.usageTotal.completion + (u.completion_tokens ?? 0),
@@ -619,23 +826,93 @@ export const useAiStore = create<AiState>()((set, get) => {
               },
             }));
           }
-        } else {
+        } else if (ev.message === "cancelled") {
           // 用户主动「停止」时 Rust 会回 cancelled：不算错误，保留已生成的部分内容
-          if (ev.message === "cancelled") {
-            flushNow();
-            return;
-          }
           flushNow();
-          set({ error: ev.message, errorCode: ev.code ?? null });
-          dropEmptyAssistant(assistantId);
+          cancelled = true;
+        } else {
+          flushNow();
+          failed = { message: ev.message, code: ev.code ?? null };
         }
-      });
+      },
+      tools,
+    );
+    return { full: full || raw, refs, cancelled, failed };
+  };
+
+  /**
+   * agent 循环：模型请求 → 若它要求只读检索则本机执行、把结果喂回去再来一轮 →
+   * 收敛后统一落地写动作（改文档 / 建页 / 改标题 / 加表行）。
+   * 循环放在前端而不是 Rust：页面树、文档、数据库与编辑器的权威状态都在前端。
+   */
+  const runStream = async (assistantId: string) => {
+    streamingAssistantId = assistantId;
+    cancelledTurn = false;
+    // usage 是「本轮合计」：先清零，多轮往返才不会被上一轮的用量掺进来
+    set({ usage: null });
+    // @ 引用的文档要先读盘转文本，再随 system 一起下发
+    let outgoing = requestMessages(assistantId, await buildReferenceContext());
+    // 选中内容只随本轮生效：消息组装完就清掉，下一轮不再重复带
+    if (get().pendingContext) set({ pendingContext: null });
+    const writes: AiWriteCall[] = [];
+    let lastFull = "";
+    let malformed = false;
+    let droppedRetrievals = 0;
+    let cancelled = false;
+    let failed: { message: string; code: string | null } | null = null;
+    try {
+      for (let round = 0; round < MAX_AGENT_ROUNDS; round++) {
+        const result = await streamRound(assistantId, outgoing);
+        lastFull = result.full;
+        cancelled = result.cancelled;
+        failed = result.failed;
+        if (cancelled || failed) break;
+        const { items, malformed: bad } = collectCalls(result.refs, result.full);
+        malformed = malformed || bad;
+        for (const x of items) if (isWriteCall(x.call)) writes.push(x.call);
+        const retrievals = items.filter((x) => isRetrievalCall(x.call));
+        if (retrievals.length === 0) break;
+        // 往返已到上限：不再执行检索（结果没机会进答案），只在正文后说明一句
+        if (round + 1 >= MAX_AGENT_ROUNDS) {
+          droppedRetrievals = retrievals.length;
+          break;
+        }
+        set({ retrieving: true });
+        const toolMode = !!get().config?.use_tools;
+        const limit = maxChars();
+        const toolRefs: AiToolCallRef[] = [];
+        const toolMsgs: AiChatMessage[] = [];
+        const plain: { tool: string; result: string }[] = [];
+        for (const [i, x] of retrievals.entries()) {
+          const call = x.call as RetrievalCall;
+          // 函数调用回灌要带原 id；文本协议块没有 id，按序号造一个配套的（assistant 消息里一并声明）
+          const id = x.id || `tcall_${round}_${i}`;
+          const output = await runRetrievalCall(call.tool, call.args, limit);
+          toolRefs.push({ id, type: "function", function: { name: call.tool, arguments: JSON.stringify(call.args) } });
+          if (toolMode) toolMsgs.push({ role: "tool", content: output, tool_call_id: id });
+          else plain.push({ tool: call.tool, result: output });
+        }
+        set({ retrieving: false });
+        outgoing = [
+          ...outgoing,
+          { role: "assistant", content: result.full, ...(toolMode ? { tool_calls: toolRefs } : {}) },
+          ...(toolMode ? toolMsgs : [{ role: "system" as const, content: retrievalResultMessage(plain) }]),
+        ];
+        // 下一轮的答案才是给用户看的：本轮文本（多半只是「我先查一下」）清掉，免得两轮内容叠在一起
+        set((s) => ({ messages: s.messages.map((m) => (m.id === assistantId ? { ...m, content: "" } : m)) }));
+      }
+      if (failed) {
+        set({ error: failed.message, errorCode: failed.code });
+        dropEmptyAssistant(assistantId);
+      } else if (!cancelled) {
+        await finalizeAssistant(assistantId, lastFull, writes, malformed, droppedRetrievals);
+      }
     } catch (e) {
       // 起手就失败（未配置 / 命令报错）：没有归类码，界面按通用错误处理
       set({ error: aiErrorText(e), errorCode: null });
       dropEmptyAssistant(assistantId);
     } finally {
-      set({ streaming: false });
+      set({ streaming: false, retrieving: false });
       streamingAssistantId = null;
       // 一轮结束（含失败/取消）后落盘，流式增量期间不写
       persistSessions();
@@ -650,6 +927,7 @@ export const useAiStore = create<AiState>()((set, get) => {
     activeSessionId: restored.active?.id ?? restored.activeId,
     reasoning: "",
     streaming: false,
+    retrieving: false,
     error: null,
     errorCode: null,
     sessionPageId: null,
@@ -868,55 +1146,51 @@ export const useAiStore = create<AiState>()((set, get) => {
     },
 
     // 撤销 AI 的自动改写：按改前快照精确回滚，撤不动时明确告知而不是静默撤掉用户的编辑
-    undoEdit: (messageId) => {
+    undoAction: (messageId, index) => {
       const bridge = getAiEditor();
-      const target = get().messages.find((m) => m.id === messageId);
-      if (!bridge || !target?.edit) return;
-      if (!bridge.undoAiEdit(target.edit.revert)) {
+      const rec = get().messages.find((m) => m.id === messageId)?.actions?.[index];
+      if (!bridge || !rec?.revert) return;
+      if (!bridge.undoAiEdit(rec.revert)) {
         toast.error(t("ai.undoFailed"));
         return;
       }
       set((s) => ({
         messages: s.messages.map((m) =>
-          m.id === messageId && m.edit ? { ...m, edit: { ...m.edit, undone: true } } : m,
-        ),
-      }));
-      persistSessions();
-    },
-
-    // 用户在 diff 预览后点「应用」：这才真正写文档
-    applyPendingEdit: (messageId) => {
-      const bridge = getAiEditor();
-      const edit = get().messages.find((m) => m.id === messageId)?.edit;
-      if (!edit) return;
-      if (edit.state !== "pending" || !edit.op) return;
-      if (!bridge) {
-        toast.error(t("ai.noEditor"));
-        return;
-      }
-      const result = bridge.applyEdit(edit.op, edit.content);
-      set((s) => ({
-        messages: s.messages.map((m) =>
-          m.id === messageId && m.edit
-            ? {
-                ...m,
-                edit: {
-                  ...m.edit,
-                  state: result.applied ? "applied" : "unavailable",
-                  revert: result.revert,
-                },
-              }
+          m.id === messageId && m.actions
+            ? { ...m, actions: m.actions.map((a, i) => (i === index ? { ...a, undone: true } : a)) }
             : m,
         ),
       }));
-      if (result.applied) toast.success(t("ai.editApplied"));
       persistSessions();
     },
 
-    rejectPendingEdit: (messageId) => {
+    // 用户在 diff 预览后点「应用」：这才真正写数据（文档 / 页面 / 表格）
+    applyAction: async (messageId, index) => {
+      const s = get();
+      const msg = s.messages.find((m) => m.id === messageId);
+      const rec = msg?.actions?.[index];
+      if (!msg || rec?.state !== "pending") return;
+      const landed = await landAction(rec);
+      set((state) => ({
+        messages: state.messages.map((m) =>
+          m.id === messageId && m.actions ? { ...m, actions: m.actions.map((a, i) => (i === index ? landed : a)) } : m,
+        ),
+      }));
+      if (landed.state === "applied") toast.success(t("ai.actionAppliedToast"));
+      persistSessions();
+    },
+
+    rejectAction: (messageId, index) => {
       set((s) => ({
         messages: s.messages.map((m) =>
-          m.id === messageId && m.edit?.state === "pending" ? { ...m, edit: { ...m.edit, state: "rejected" } } : m,
+          m.id === messageId && m.actions
+            ? {
+                ...m,
+                actions: m.actions.map((a, i) =>
+                  i === index && a.state === "pending" ? { ...a, state: "rejected" } : a,
+                ),
+              }
+            : m,
         ),
       }));
       persistSessions();

@@ -26,9 +26,6 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 const PRE_STREAM_RETRIES: u32 = 2;
 /// 重试退避时长（第 1、2 次重试各用一档）
 const RETRY_BACKOFFS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
-/// 文本协议里编辑指令块的标记（与前端 lib/ai-edit.ts 的 EDIT_BLOCK_TAG 保持一致）。
-/// 开启工具调用时，会把函数参数原样包成这个块，好让前端的解析逻辑完全复用。
-const EDIT_BLOCK_TAG: &str = "tsflowy-edit";
 
 /// 未配置 AI 时的统一错误文案（前后端约定）
 const NOT_CONFIGURED: &str = "尚未配置 AI：请在设置中填写服务商与 API Key";
@@ -37,11 +34,30 @@ const NOT_CONFIGURED: &str = "尚未配置 AI：请在设置中填写服务商�
 pub struct AiMessage {
     pub role: String,
     pub content: String,
+    /// 助手消息携带的工具调用（agent 循环回灌历史时原样带回服务端）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<AiToolCall>>,
+    /// role=tool 时对应的调用 id
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+/// 服务端回传的一次函数调用（function calling 形态的完整参数）
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AiToolCall {
+    pub id: String,
+    pub name: String,
+    /// JSON 字符串形式的参数（原样转交前端解析）
+    pub arguments: String,
 }
 
 #[derive(Deserialize)]
 pub struct AiChatRequest {
     pub messages: Vec<AiMessage>,
+    /// 前端下发的工具定义（OpenAI tools 数组，原样透传给服务端）。
+    /// agent 多步循环由前端编排，Rust 侧只做单次流式传输。
+    #[serde(default)]
+    pub tools: Option<serde_json::Value>,
 }
 
 /// 单次请求的 token 用量（来自响应尾帧的 usage；服务商不返回时整块为 null）
@@ -74,6 +90,8 @@ pub enum AiEvent {
         full: String,
         /// 服务商未返回用量时为 null（前端据此决定要不要显示）
         usage: Option<AiUsage>,
+        /// 流式中累积的函数调用（未开启工具或模型未调用时为空）
+        tool_calls: Vec<AiToolCall>,
     },
     Error {
         message: String,
@@ -313,8 +331,21 @@ pub fn ai_cancel() -> Result<(), String> {
     Ok(())
 }
 
+/// 流式对话结果：控制流走 Rust 返回值，内容仍逐块推给前端 channel。
+/// 载荷字段当前仅供单测断言，线上链路由 Done 事件送达前端。
+#[derive(Debug, PartialEq, Eq)]
+pub enum StreamOutcome {
+    /// 正常结束：full 为正式回答，tool_calls 为累积出的函数调用
+    Done { full: String, tool_calls: Vec<AiToolCall> },
+    /// 用户取消（世代过期）
+    Cancelled,
+    /// 已把错误发给前端
+    Failed,
+}
+
 /// 流式对话：逐块通过 channel 推给前端。
 /// 配置错误直接返回 Err；一旦进入流式阶段，任何失败都以 AiEvent::Error 通知前端。
+/// agent 多步循环在前端编排：本命令一次请求一进一出，把 tool_calls 完整回传供前端执行工具。
 #[tauri::command]
 pub async fn ai_chat(
     app: tauri::AppHandle,
@@ -331,8 +362,25 @@ pub async fn ai_chat(
         messages.push(AiMessage {
             role: "system".to_string(),
             content: custom.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
         });
     }
+    match stream_once(&client, &ai, messages, req.tools, generation, &on_event).await {
+        StreamOutcome::Done { .. } | StreamOutcome::Cancelled | StreamOutcome::Failed => Ok(()),
+    }
+}
+
+/// 单次流式请求：构造 body → 流前重试 → 逐帧解析推送。
+/// 结束（[DONE] 或断流）时经 channel 发出 Done 事件并携带累积的 tool_calls。
+async fn stream_once(
+    client: &reqwest::Client,
+    ai: &AiConfig,
+    messages: Vec<AiMessage>,
+    tools: Option<serde_json::Value>,
+    generation: u64,
+    on_event: &Channel<AiEvent>,
+) -> StreamOutcome {
     let mut body = serde_json::json!({
         "model": ai.model,
         "messages": messages,
@@ -346,32 +394,12 @@ pub async fn ai_chat(
         if ai.max_tokens > 0 {
             obj.insert("max_tokens".into(), serde_json::json!(ai.max_tokens));
         }
-        // 开启后改用 function calling 让模型下发编辑指令：结构化输出比自由文本更不容易写坏
-        if ai.use_tools {
-            obj.insert(
-                "tools".into(),
-                serde_json::json!([{
-                    "type": "function",
-                    "function": {
-                        "name": "apply_edit",
-                        "description": "把改动写进用户当前打开的文档。需要改动文档时调用；只是回答问题时不要调用。",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "op": {
-                                    "type": "string",
-                                    "enum": ["replace_selection", "insert_at_cursor", "append_to_document"],
-                                    "description": "replace_selection 替换选中文字（无选中时退化成光标处插入）；insert_at_cursor 光标处插入；append_to_document 追加到文档末尾"
-                                },
-                                "summary": { "type": "string", "description": "一句话中文说明改了什么" },
-                                "content": { "type": "string", "description": "改动后的 Markdown 内容" }
-                            },
-                            "required": ["op", "summary", "content"]
-                        }
-                    }
-                }]),
-            );
-            obj.insert("tool_choice".into(), serde_json::json!("auto"));
+        // 工具定义由前端下发（agent 工具集在前端定义与执行），原样透传
+        if let Some(tools) = tools {
+            if !tools.is_null() {
+                obj.insert("tools".into(), tools);
+                obj.insert("tool_choice".into(), serde_json::json!("auto"));
+            }
         }
     }
     // 流开始前允许重试：建连失败 / 429 / 5xx 各退避再试，最多 PRE_STREAM_RETRIES 次。
@@ -380,11 +408,8 @@ pub async fn ai_chat(
         let mut attempt: u32 = 0;
         loop {
             if cancelled(generation) {
-                let _ = on_event.send(AiEvent::Error {
-                    message: "cancelled".to_string(),
-                    code: Some("cancelled".to_string()),
-                });
-                return Ok(());
+                send_cancelled(on_event);
+                return StreamOutcome::Cancelled;
             }
             let sent = client
                 .post(chat_url(&ai.base_url))
@@ -403,7 +428,7 @@ pub async fn ai_chat(
                         message: format!("连接失败：{e}"),
                         code: Some("network".to_string()),
                     });
-                    return Ok(());
+                    return StreamOutcome::Failed;
                 }
                 Ok(r) => {
                     let status = r.status();
@@ -427,7 +452,7 @@ pub async fn ai_chat(
                         message: readable_http_error(status.as_u16(), &text),
                         code: Some(code.to_string()),
                     });
-                    return Ok(());
+                    return StreamOutcome::Failed;
                 }
             }
         }
@@ -439,8 +464,8 @@ pub async fn ai_chat(
     // 累积字节而非字符串，避免多字节 UTF-8（中文）被拆到两个块时解码成乱码。
     let mut buf: Vec<u8> = Vec::new();
     let mut full = String::new();
-    // 工具调用的函数参数增量（开启 use_tools 时才有），最后整体拼成指令块
-    let mut tool_args = String::new();
+    // 函数调用增量按 index 归并（多工具并行调用时每个调用各有 index）：(id, name, arguments)
+    let mut tool_deltas: std::collections::BTreeMap<u32, (String, String, String)> = Default::default();
     let mut usage: Option<AiUsage> = None;
     // 首帧用较短的等待上限，之后放宽：推理型模型会先长时间吐 reasoning，期间帧是连续的。
     let mut awaiting_first = true;
@@ -466,15 +491,12 @@ pub async fn ai_chat(
                     message: message.to_string(),
                     code: Some("timeout".to_string()),
                 });
-                return Ok(());
+                return StreamOutcome::Failed;
             }
         };
         if cancelled(generation) {
-            let _ = on_event.send(AiEvent::Error {
-                message: "cancelled".to_string(),
-                code: Some("cancelled".to_string()),
-            });
-            return Ok(());
+            send_cancelled(on_event);
+            return StreamOutcome::Cancelled;
         }
         match item {
             Ok(bytes) => {
@@ -486,7 +508,7 @@ pub async fn ai_chat(
                     message: format!("读取流失败：{e}"),
                     code: Some("network".to_string()),
                 });
-                return Ok(());
+                return StreamOutcome::Failed;
             }
         }
         while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
@@ -496,28 +518,22 @@ pub async fn ai_chat(
             match parse_sse_line(&line) {
                 SseParse::Delta(delta) => {
                     if cancelled(generation) {
-                        let _ = on_event.send(AiEvent::Error {
-                            message: "cancelled".to_string(),
-                            code: Some("cancelled".to_string()),
-                        });
-                        return Ok(());
+                        send_cancelled(on_event);
+                        return StreamOutcome::Cancelled;
                     }
                     full.push_str(&delta);
                     if on_event.send(AiEvent::Chunk { delta }).is_err() {
-                        return Ok(());
+                        return StreamOutcome::Failed;
                     }
                 }
                 SseParse::Reasoning(delta) => {
                     if cancelled(generation) {
-                        let _ = on_event.send(AiEvent::Error {
-                            message: "cancelled".to_string(),
-                            code: Some("cancelled".to_string()),
-                        });
-                        return Ok(());
+                        send_cancelled(on_event);
+                        return StreamOutcome::Cancelled;
                     }
                     // 思考内容不计入 full：Done 回传的仍只是正式回答
                     if on_event.send(AiEvent::Reasoning { delta }).is_err() {
-                        return Ok(());
+                        return StreamOutcome::Failed;
                     }
                 }
                 SseParse::Error(message) => {
@@ -527,27 +543,71 @@ pub async fn ai_chat(
                         message,
                         code: Some(code.to_string()),
                     });
-                    return Ok(());
+                    return StreamOutcome::Failed;
                 }
                 SseParse::Usage(u) => {
                     usage = Some(u);
                 }
-                SseParse::ToolArgs(args) => {
-                    tool_args.push_str(&args);
+                SseParse::ToolCallDelta { index, id, name, args } => {
+                    let entry = tool_deltas
+                        .entry(index)
+                        .or_insert_with(|| (String::new(), String::new(), String::new()));
+                    if let Some(v) = id {
+                        if !v.is_empty() {
+                            entry.0 = v;
+                        }
+                    }
+                    if let Some(v) = name {
+                        if !v.is_empty() {
+                            entry.1 = v;
+                        }
+                    }
+                    entry.2.push_str(&args);
                 }
                 SseParse::Done => {
-                    append_tool_block(&mut full, &tool_args);
-                    let _ = on_event.send(AiEvent::Done { full, usage });
-                    return Ok(());
+                    let tool_calls = collect_tool_calls(tool_deltas);
+                    let _ = on_event.send(AiEvent::Done {
+                        full: full.clone(),
+                        usage,
+                        tool_calls: tool_calls.clone(),
+                    });
+                    return StreamOutcome::Done { full, tool_calls };
                 }
                 SseParse::Ignore => {}
             }
         }
     }
     // 服务端未发 [DONE] 就断流：按正常结束处理，把已收到的内容交给前端
-    append_tool_block(&mut full, &tool_args);
-    let _ = on_event.send(AiEvent::Done { full, usage });
-    Ok(())
+    let tool_calls = collect_tool_calls(tool_deltas);
+    let _ = on_event.send(AiEvent::Done {
+        full: full.clone(),
+        usage,
+        tool_calls: tool_calls.clone(),
+    });
+    StreamOutcome::Done { full, tool_calls }
+}
+
+fn send_cancelled(on_event: &Channel<AiEvent>) {
+    let _ = on_event.send(AiEvent::Error {
+        message: "cancelled".to_string(),
+        code: Some("cancelled".to_string()),
+    });
+}
+
+/// 把按 index 归并的 (id, name, arguments) 增量转成完整的函数调用列表。
+/// 无名无参的帧（纯 index 占位）丢弃；缺 id 时补一个占位，保证前端回灌时能配对 tool 消息。
+fn collect_tool_calls(
+    deltas: std::collections::BTreeMap<u32, (String, String, String)>,
+) -> Vec<AiToolCall> {
+    deltas
+        .into_values()
+        .filter(|(_, name, args)| !name.is_empty() || !args.trim().is_empty())
+        .map(|(id, name, args)| AiToolCall {
+            id: if id.is_empty() { format!("call_{name}") } else { id },
+            name,
+            arguments: args,
+        })
+        .collect()
 }
 
 // ---------- 纯函数（便于离线单测） ----------
@@ -622,16 +682,6 @@ fn models_url(base_url: &str) -> String {
     format!("{}/models", base_url.trim_end_matches('/'))
 }
 
-/// 把工具调用的函数参数包成文本协议的指令块，追加到回答末尾。
-/// 这样「结构化输出」和「文本协议」两条路最终交给前端的是同一种形态，解析逻辑不必分叉。
-fn append_tool_block(full: &mut String, tool_args: &str) {
-    let args = tool_args.trim();
-    if args.is_empty() {
-        return;
-    }
-    full.push_str(&format!("\n```{EDIT_BLOCK_TAG}\n{}\n```", args));
-}
-
 /// 从 `{"error": ...}` 里提取可读信息（error 可能是对象或字符串）
 fn extract_error_message(v: &serde_json::Value) -> Option<String> {
     let err = v.get("error")?;
@@ -655,8 +705,13 @@ enum SseParse {
     Error(String),
     /// 尾帧携带的 token 用量
     Usage(AiUsage),
-    /// 工具调用的函数参数增量（开启 use_tools 时）
-    ToolArgs(String),
+    /// 函数调用增量帧：按 index 归并 id/name/arguments
+    ToolCallDelta {
+        index: u32,
+        id: Option<String>,
+        name: Option<String>,
+        args: String,
+    },
     /// 非 data 行，或空 delta
     Ignore,
 }
@@ -700,17 +755,29 @@ fn parse_sse_line(line: &str) -> SseParse {
     if !reasoning.is_empty() {
         return SseParse::Reasoning(reasoning.to_string());
     }
-    // 工具调用：函数名不关心（只有一个 apply_edit），只要参数的增量
-    let tool_args = delta
-        .and_then(|d| d.get("tool_calls"))
-        .and_then(|c| c.as_array())
-        .and_then(|a| a.first())
-        .and_then(|c| c.get("function"))
-        .and_then(|f| f.get("arguments"))
-        .and_then(|a| a.as_str())
-        .unwrap_or("");
-    if !tool_args.is_empty() {
-        return SseParse::ToolArgs(tool_args.to_string());
+    // 函数调用增量：首个调用带 name，后续调用各自带 index；参数分多帧到达
+    if let Some(calls) = delta.and_then(|d| d.get("tool_calls")).and_then(|c| c.as_array()) {
+        if let Some(first) = calls.first() {
+            let index = first.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+            let id = first
+                .get("id")
+                .and_then(|i| i.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let function = first.get("function");
+            let name = function
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let args = function
+                .and_then(|f| f.get("arguments"))
+                .and_then(|a| a.as_str())
+                .unwrap_or("");
+            if id.is_some() || name.is_some() || !args.is_empty() {
+                return SseParse::ToolCallDelta { index, id, name, args: args.to_string() };
+            }
+        }
     }
     // 内容帧走完了才看用量：部分服务商（含带 null usage 的流式实现）会在每一帧都带上 usage 字段，
     // 先判用量会把正常内容帧当成空帧丢掉。只有拿到了完整用量才算一条 Usage 事件。
@@ -976,22 +1043,63 @@ data: [DONE]
     }
 
     #[test]
-    fn parse_sse_tool_call_arguments() {
-        let line = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"op\":"}}]}}]}"#;
-        assert_eq!(parse_sse_line(line), SseParse::ToolArgs("{\"op\":".to_string()));
+    fn parse_sse_tool_call_deltas() {
+        // 首帧：带 id 与 name
+        let line = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search_workspace","arguments":""}}]}}]}"#;
+        assert_eq!(
+            parse_sse_line(line),
+            SseParse::ToolCallDelta {
+                index: 0,
+                id: Some("call_1".to_string()),
+                name: Some("search_workspace".to_string()),
+                args: String::new(),
+            }
+        );
+        // 后续帧：只有参数增量
+        let line = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"query\":"}}]}}]}"#;
+        assert_eq!(
+            parse_sse_line(line),
+            SseParse::ToolCallDelta {
+                index: 0,
+                id: None,
+                name: None,
+                args: "{\"query\":".to_string(),
+            }
+        );
+        // 空壳帧（只有 index）忽略
+        let line = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0}]}}]}"#;
+        assert_eq!(parse_sse_line(line), SseParse::Ignore);
     }
 
     #[test]
-    fn append_tool_block_wraps_arguments() {
-        let mut full = "正文".to_string();
-        append_tool_block(&mut full, r#"{"op":"insert_at_cursor","summary":"加一句","content":"新内容"}"#);
-        assert!(full.starts_with("正文"));
-        assert!(full.contains(&format!("```{EDIT_BLOCK_TAG}")));
-        assert!(full.ends_with("```"));
-        // 空参数不追加任何内容
-        let mut unchanged = "只有正文".to_string();
-        append_tool_block(&mut unchanged, "   ");
-        assert_eq!(unchanged, "只有正文");
+    fn collect_tool_calls_merges_by_index() {
+        let mut deltas = std::collections::BTreeMap::new();
+        deltas.insert(0u32, ("call_a".to_string(), "search_workspace".to_string(), String::new()));
+        deltas
+            .get_mut(&0)
+            .unwrap()
+            .2
+            .push_str(r#"{"query":"x"}"#);
+        // 第二个调用：只有参数与 name，没有 id → 补占位 id
+        deltas.insert(1u32, (String::new(), "list_pages".to_string(), "{}".to_string()));
+        // 无名无参的占位条目丢弃
+        deltas.insert(2u32, (String::new(), String::new(), "  ".to_string()));
+        let calls = collect_tool_calls(deltas);
+        assert_eq!(
+            calls,
+            vec![
+                AiToolCall {
+                    id: "call_a".to_string(),
+                    name: "search_workspace".to_string(),
+                    arguments: r#"{"query":"x"}"#.to_string(),
+                },
+                AiToolCall {
+                    id: "call_list_pages".to_string(),
+                    name: "list_pages".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            ]
+        );
     }
 
     #[test]

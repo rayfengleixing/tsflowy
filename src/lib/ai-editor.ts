@@ -1,17 +1,19 @@
 // AI 助手 ↔ 编辑器桥接：面板需要「取当前页纯文本 / 取选中文本 / 用文本替换选区 /
-// 在光标处插入」，但 AI 面板与 EditorPage 是兄弟节点，无法用 props 传递 editor 实例。
+// 在光标处插入 / 按标题或原文定位改写」，但 AI 面板与 EditorPage 是兄弟节点，无法用 props 传递 editor 实例。
 // 参照 lib/close-flush.ts 的注册/桥接范式：EditorPage 挂载时注册实现，AI 面板按需读取。
 // 分栏时只注册主栏（与 useEditorStore 推送 editor 的约定一致），避免副栏抢占回填目标。
 
-import type { AiEditOp } from "./ai-edit";
+import type { AiEditAnchor, AiEditOp } from "./ai-edit";
 
 /**
- * AI 编辑的落地结果。
- * applied 为假表示没写成（没有目标 / 结构锁定拦掉了事务）；
+ * 编辑指令的落地结果。
+ * applied 为假表示没写成（没有目标 / 结构锁定拦掉了事务 / 锚点没找到）；
+ * reason 是失败原因（i18n key 或直接文案），供界面展示；
  * revert 是撤销句柄，里面存着改之前的文档快照。
  */
 export interface AiEditApplyResult {
   applied: boolean;
+  reason?: string;
   revert?: AiEditRevert;
 }
 
@@ -32,18 +34,18 @@ export interface AiEditorBridge {
   getSelectionText: () => string;
   /**
    * 某类编辑指令即将改动的原文（用于落地前的 diff 预览）。
-   * replace_selection 返回选区文本；插入/追加类没有原文，返回空串。
+   * replace_selection 返回选区文本；replace_text 返回命中的原文；其余插入/追加类返回空串。
    */
-  getEditTargetText: (op: AiEditOp) => string;
+  getEditTargetText: (op: AiEditOp, anchor?: AiEditAnchor) => string;
   /** 用文本替换当前选区（无选区时等价于在光标处插入） */
   replaceSelection: (text: string) => void;
   /** 在光标处插入文本 */
   insertAtCursor: (text: string) => void;
   /**
-   * 应用 AI 下发的编辑指令（依据 op 决定作用范围）。
+   * 应用 AI 下发的编辑指令（依据 op 决定作用范围，定位类 op 用 anchor 找目标）。
    * 返回落地结果：applied 表示真的改了文档，revert 供 undoAiEdit 精确回滚。
    */
-  applyEdit: (op: AiEditOp, markdown: string) => AiEditApplyResult;
+  applyEdit: (op: AiEditOp, markdown: string, anchor?: AiEditAnchor) => AiEditApplyResult;
   /**
    * 精确回滚一次 AI 编辑。
    * 直接 editor.undo() 会撤销「最后一次改动」——若 AI 改完之后用户自己又编辑过，

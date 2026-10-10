@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { EDIT_BLOCK_TAG, buildEditSystemPrompt, extractEdit, hideEditBlock } from "./ai-edit";
+import {
+  CALL_BLOCK_TAG,
+  EDIT_BLOCK_TAG,
+  buildEditSystemPrompt,
+  extractCalls,
+  extractEdit,
+  hideEditBlock,
+} from "./ai-edit";
 
 /** 拼一个编辑指令代码块 */
 const block = (json: string) => "```" + EDIT_BLOCK_TAG + "\n" + json + "\n```";
+/** 拼一个只读检索请求块 */
+const call = (json: string) => "```" + CALL_BLOCK_TAG + "\n" + json + "\n```";
 
 describe("extractEdit", () => {
   it("没有指令块时原样返回", () => {
@@ -16,13 +25,16 @@ describe("extractEdit", () => {
       '{"op":"replace_selection","summary":"改写了第二段","content":"## 新标题"}',
     )}`;
     const r = extractEdit(text);
-    expect(r.edit).toEqual({ op: "replace_selection", summary: "改写了第二段", content: "## 新标题" });
+    expect(r.edit).toEqual({
+      tool: "apply_edit",
+      args: { op: "replace_selection", summary: "改写了第二段", content: "## 新标题" },
+    });
     expect(r.display).toBe("已按要求改写。");
   });
 
   it("summary 缺失时回落为空串，由界面兜底文案", () => {
     const r = extractEdit(block('{"op":"append_to_document","content":"结尾"}'));
-    expect(r.edit).toEqual({ op: "append_to_document", summary: "", content: "结尾" });
+    expect(r.edit).toEqual({ tool: "apply_edit", args: { op: "append_to_document", summary: "", content: "结尾" } });
   });
 
   it("JSON 不合法时剥掉坏块并报告 malformed，正文仍保留", () => {
@@ -33,11 +45,14 @@ describe("extractEdit", () => {
     expect(r.display).toBe("正文说明。");
   });
 
-  it("正文里出现多个指令块时取最后一个（模型可能先复述协议）", () => {
+  it("正文里出现多个指令块时，extractEdit 取最后一个 apply_edit", () => {
     const first = block('{"op":"insert_at_cursor","summary":"错的位置","content":"不该用这个"}');
     const last = block('{"op":"append_to_document","summary":"对的位置","content":"用这个"}');
     const r = extractEdit(`开头\n${first}\n中间说明\n${last}\n`);
-    expect(r.edit).toEqual({ op: "append_to_document", summary: "对的位置", content: "用这个" });
+    expect(r.edit).toEqual({
+      tool: "apply_edit",
+      args: { op: "append_to_document", summary: "对的位置", content: "用这个" },
+    });
     expect(r.display).toContain("开头");
     expect(r.display).toContain("中间说明");
     expect(r.display).not.toContain("不该用这个");
@@ -59,9 +74,67 @@ describe("extractEdit", () => {
   it("围栏未闭合也能提取（流式被截断）", () => {
     const text = `开头\n${"```" + EDIT_BLOCK_TAG}\n{"op":"insert_at_cursor","content":"插入"}`;
     const r = extractEdit(text);
-    expect(r.edit?.op).toBe("insert_at_cursor");
-    expect(r.edit?.content).toBe("插入");
+    expect(r.edit).toEqual({ tool: "apply_edit", args: { op: "insert_at_cursor", summary: "", content: "插入" } });
     expect(r.display).toBe("开头");
+  });
+});
+
+describe("extractCalls", () => {
+  it("多个动作块各成一个动作，顺序保留", () => {
+    const text = [
+      "已处理。",
+      block('{"tool":"apply_edit","args":{"op":"append_to_document","summary":"补一段","content":"追加"}}'),
+      block('{"tool":"set_page_title","args":{"page":"周报","title":"第 41 周周报"}}'),
+    ].join("\n\n");
+    const r = extractCalls(text);
+    expect(r.calls).toHaveLength(2);
+    expect(r.calls[0]).toEqual({
+      tool: "apply_edit",
+      args: { op: "append_to_document", summary: "补一段", content: "追加" },
+    });
+    expect(r.calls[1]).toEqual({ tool: "set_page_title", args: { page: "周报", title: "第 41 周周报" } });
+    expect(r.display).toBe("已处理。");
+    expect(r.malformed).toBe(false);
+  });
+
+  it("检索请求块解析为只读动作", () => {
+    const r = extractCalls(`先查一下。\n\n${call('{"tool":"search_workspace","args":{"query":"需求评审"}}')}`);
+    expect(r.calls).toEqual([{ tool: "search_workspace", args: { query: "需求评审" } }]);
+    expect(r.display).toBe("先查一下。");
+  });
+
+  it("未知 tool 与缺必填参数的动作都算 malformed", () => {
+    expect(extractCalls(block('{"tool":"drop_table","args":{}}')).malformed).toBe(true);
+    expect(extractCalls(block('{"tool":"create_page","args":{}}')).malformed).toBe(true);
+    expect(extractCalls(block('{"tool":"set_page_title","args":{"page":"a"}}')).calls).toHaveLength(0);
+  });
+
+  it("apply_edit 的 anchor 与 view_id 原样带出，空白锚点丢弃", () => {
+    const r = extractCalls(
+      block(
+        '{"tool":"apply_edit","args":{"op":"replace_text","content":"新词","anchor":{"heading":"  ","text":"旧词"},"view_id":"v1"}}',
+      ),
+    );
+    expect(r.calls[0]).toEqual({
+      tool: "apply_edit",
+      args: { op: "replace_text", summary: "", content: "新词", anchor: { text: "旧词" }, view_id: "v1" },
+    });
+  });
+
+  it("混合正文与多个块时只留下块之间的文字", () => {
+    const text = `第一段\n\n${call('{"tool":"list_pages","args":{}}')}\n\n第二段\n\n${block(
+      '{"op":"append_to_document","content":"x"}',
+    )}\n\n第三段`;
+    const r = extractCalls(text);
+    expect(r.display).toBe("第一段\n\n第二段\n\n第三段");
+    expect(r.calls).toHaveLength(2);
+  });
+
+  it("空块（流式只写到标记）报告 malformed 且不吞正文", () => {
+    const r = extractCalls(`答案\n\n${"```" + EDIT_BLOCK_TAG}`);
+    expect(r.malformed).toBe(true);
+    expect(r.calls).toHaveLength(0);
+    expect(r.display).toBe("答案");
   });
 });
 
@@ -74,6 +147,11 @@ describe("hideEditBlock", () => {
     const soFar = `说明文字\n${"```" + EDIT_BLOCK_TAG}\n{"op":"repl`;
     expect(hideEditBlock(soFar)).toBe("说明文字\n");
   });
+
+  it("检索请求块同样藏起来", () => {
+    const soFar = `说明文字\n${"```" + CALL_BLOCK_TAG}\n{"tool":"search_`;
+    expect(hideEditBlock(soFar)).toBe("说明文字\n");
+  });
 });
 
 describe("buildEditSystemPrompt", () => {
@@ -83,6 +161,7 @@ describe("buildEditSystemPrompt", () => {
     expect(p).toContain("选中内容");
     expect(p).toContain("全文内容");
     expect(p).toContain(EDIT_BLOCK_TAG);
+    expect(p).toContain(CALL_BLOCK_TAG);
   });
 
   it("没有选区时提示改动目标，空标题有兜底", () => {

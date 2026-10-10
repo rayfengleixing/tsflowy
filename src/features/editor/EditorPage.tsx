@@ -515,6 +515,65 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         return null;
       }
     };
+    // 顶层块带位置快照：两类定位都要按绝对位置切范围，逐个 forEach 累加容易错位
+    const topBlocks = () => {
+      const doc = editor.state.doc;
+      const out: { node: PMNode; from: number; to: number }[] = [];
+      let pos = 0;
+      doc.forEach((node) => {
+        out.push({ node, from: pos, to: pos + node.nodeSize });
+        pos += node.nodeSize;
+      });
+      return out;
+    };
+    // 定位工具：按标题文本找小节（标题之后、下一个同级或更高标题之前的范围）
+    const locateHeadingSection = (heading: string): { start: number; end: number; index: number } | null => {
+      const doc = editor.state.doc;
+      const norm = (s: string) =>
+        s
+          .replace(/^[#*\s]+/, "")
+          .replace(/[*\s]+$/, "")
+          .trim();
+      const wanted = norm(heading);
+      if (!wanted) return null;
+      const blocks = topBlocks();
+      const i = blocks.findIndex((b) => b.node.type.name === "heading" && norm(b.node.textContent) === wanted);
+      if (i === -1) return null;
+      const level = Number((blocks[i].node.attrs as { level?: number }).level ?? 1);
+      const next = blocks.slice(i + 1).find((b) => {
+        if (b.node.type.name !== "heading") return false;
+        return Number((b.node.attrs as { level?: number }).level ?? 1) <= level;
+      });
+      return { start: blocks[i].to, end: next ? next.from : doc.content.size, index: i };
+    };
+    // 定位工具：找一段文字在文档中的精确范围。只在单个顶层块内匹配（跨块语义不清宁可失败），
+    // 命中位置按 text 节点累加得出，避免带标记/内联节点的段落字符偏移错位。
+    const locateTextRange = (text: string): { from: number; to: number; index: number } | null => {
+      if (!text) return null;
+      const blocks = topBlocks();
+      for (let i = 0; i < blocks.length; i++) {
+        const { node, from } = blocks[i];
+        // 空分隔符：纯文本拼接，与下面的 text 节点游走口径一致
+        const joined = node.textBetween(0, node.content.size, "", "");
+        const rel = joined.indexOf(text);
+        if (rel === -1) continue;
+        let acc = 0;
+        let hit = -1;
+        node.descendants((child, innerPos) => {
+          if (hit !== -1) return false;
+          if (!child.isText || !child.text) return true;
+          const len = child.text.length;
+          if (acc + len > rel) {
+            hit = from + 1 + innerPos + (rel - acc);
+            return false;
+          }
+          acc += len;
+          return false;
+        });
+        if (hit !== -1) return { from: hit, to: hit + text.length, index: i };
+      }
+      return null;
+    };
     return registerAiEditor({
       getPageText: () =>
         editor.isDestroyed ? "" : editor.state.doc.textBetween(0, editor.state.doc.content.size, "\n"),
@@ -524,9 +583,18 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         const { from, to } = editor.state.selection;
         return from === to ? "" : editor.state.doc.textBetween(from, to, "\n");
       },
-      // diff 预览的「原文」：只有替换选区类指令有被覆盖的原文，插入/追加类没有
-      getEditTargetText: (op) => {
-        if (editor.isDestroyed || op !== "replace_selection") return "";
+      // diff 预览的「原文」：替换类指令有被覆盖的原文，插入/追加类没有
+      getEditTargetText: (op, anchor) => {
+        if (editor.isDestroyed) return "";
+        if (op === "replace_text") {
+          const hit = anchor?.text ? locateTextRange(anchor.text) : null;
+          return hit ? editor.state.doc.textBetween(hit.from, hit.to, "\n") : "";
+        }
+        if (op === "replace_under_heading") {
+          const sec = locateHeadingSection(anchor?.heading ?? "");
+          return sec && sec.end > sec.start ? editor.state.doc.textBetween(sec.start, sec.end, "\n") : "";
+        }
+        if (op !== "replace_selection") return "";
         const { from, to } = editor.state.selection;
         return from === to ? "" : editor.state.doc.textBetween(from, to, "\n");
       },
@@ -546,24 +614,37 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         editor.view.dispatch(tr.scrollIntoView());
         editor.view.focus();
       },
-      // AI 自主修改：按 op 决定改写范围，直接落到文档上
-      applyEdit: (op, markdown) => {
+      // AI 自主修改：按 op 决定改写范围，定位类 op 先按锚点找目标，直接落到文档上
+      applyEdit: (op, markdown, anchor) => {
         if (editor.isDestroyed) return { applied: false };
         const slice = toSlice(markdown);
         if (!slice) return { applied: false };
         const { doc, selection } = editor.state;
-        const range =
-          op === "append_to_document"
-            ? { from: doc.content.size, to: doc.content.size }
-            : op === "insert_at_cursor"
-              ? { from: selection.from, to: selection.from }
-              : // replace_selection：无选区时退化为在光标处插入，与「替换选中」按钮一致
-                { from: selection.from, to: selection.to };
+        let range: { from: number; to: number } | null = null;
+        if (op === "insert_under_heading" || op === "replace_under_heading") {
+          const sec = locateHeadingSection(anchor?.heading ?? "");
+          if (!sec) return { applied: false, reason: "ai.locateHeadingNotFound" };
+          if (sec.index === 0) return { applied: false, reason: "ai.locateProtectedHeading" };
+          range = op === "insert_under_heading" ? { from: sec.end, to: sec.end } : { from: sec.start, to: sec.end };
+        } else if (op === "replace_text") {
+          const hit = anchor?.text ? locateTextRange(anchor.text) : null;
+          if (!hit) return { applied: false, reason: "ai.locateTextNotFound" };
+          if (hit.index === 0) return { applied: false, reason: "ai.locateProtectedHeading" };
+          range = { from: hit.from, to: hit.to };
+        } else {
+          range =
+            op === "append_to_document"
+              ? { from: doc.content.size, to: doc.content.size }
+              : op === "insert_at_cursor"
+                ? { from: selection.from, to: selection.from }
+                : // replace_selection：无选区时退化为在光标处插入，与「替换选中」按钮一致
+                  { from: selection.from, to: selection.to };
+        }
         const before = editor.state.doc;
         editor.view.dispatch(editor.state.tr.replaceRange(range.from, range.to, slice).scrollIntoView());
         editor.view.focus();
         // 结构锁定（首行标题/第二行分割线）会拦掉落在保护区里的事务：据实回报是否真的改了
-        if (editor.state.doc.eq(before)) return { applied: false };
+        if (editor.state.doc.eq(before)) return { applied: false, reason: "ai.locateBlockedByLock" };
         // 留下改前快照作为撤销凭据：撤销时据此判断「撤掉的到底是不是这次改动」
         return { applied: true, revert: { before: before.toJSON() } };
       },

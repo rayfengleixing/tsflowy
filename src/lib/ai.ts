@@ -31,8 +31,25 @@ export interface AiConfig {
 }
 
 export interface AiChatMessage {
-  role: "user" | "assistant" | "system";
+  role: "user" | "assistant" | "system" | "tool";
   content: string;
+  /** assistant 携带的工具调用（agent 循环回灌时原样带回服务端） */
+  tool_calls?: AiToolCallRef[];
+  /** role=tool 时对应的调用 id */
+  tool_call_id?: string;
+}
+
+/** OpenAI 协议下的一个函数调用回传 */
+export interface AiToolCallRef {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+/** `ai_chat` 下发的工具定义（OpenAI tools 数组元素） */
+export interface AiToolSpec {
+  type: "function";
+  function: { name: string; description: string; parameters: Record<string, unknown> };
 }
 
 /** 一个模型档位：同一套 Key 下切换不同服务商 / 模型 / 温度 */
@@ -64,9 +81,17 @@ export interface AiUsage {
 export type AiChatEvent =
   | { type: "chunk"; delta: string }
   | { type: "reasoning"; delta: string }
-  | { type: "done"; full: string; usage?: AiUsage | null }
+  | { type: "done"; full: string; usage?: AiUsage | null; tool_calls?: AiToolCallRaw[] }
   /** code 为错误归类码（auth / rate_limit / quota / timeout / network / server …），可能为 null */
   | { type: "error"; message: string; code?: string | null };
+
+/** Rust 侧回传的完整函数调用（Done.tool_calls / 事件流内累积） */
+export interface AiToolCallRaw {
+  id: string;
+  name: string;
+  /** JSON 字符串形式的参数 */
+  arguments: string;
+}
 
 /** 服务商预设：选中后自动填充 Base URL 与模型（用户仍可手改） */
 export interface AiProviderPreset {
@@ -167,12 +192,16 @@ export async function aiSessionDelete(id: string): Promise<void> {
   await invoke("ai_session_delete", { id });
 }
 
-/** 流式对话：用 Channel 接收事件，逐段回调给上层 */
-export async function aiChat(messages: AiChatMessage[], onEvent: (ev: AiChatEvent) => void): Promise<void> {
+/** 流式对话：用 Channel 接收事件，逐段回调给上层。tools 为 agent 工具定义（前端编排多步循环） */
+export async function aiChat(
+  messages: AiChatMessage[],
+  onEvent: (ev: AiChatEvent) => void,
+  tools?: AiToolSpec[],
+): Promise<void> {
   const channel = new Channel<AiChatEvent>();
   channel.onmessage = onEvent;
   // Rust 侧签名为 ai_chat(req, on_event)：参数名要一一对应（req / onEvent）
-  await invoke("ai_chat", { req: { messages }, onEvent: channel });
+  await invoke("ai_chat", { req: { messages, tools: tools ?? null }, onEvent: channel });
 }
 
 export async function aiCancel(): Promise<void> {

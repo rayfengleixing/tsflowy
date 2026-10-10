@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { t } from "@/lib/i18n";
-import type { AiEditRecord } from "@/stores/ai";
+import type { AiActionRecord } from "@/stores/ai";
 
 /**
  * AI 建议的文档改动对比。
@@ -14,7 +14,7 @@ export function EditDiffDialog({
   onOpenChange,
   onApply,
 }: {
-  record: AiEditRecord | null;
+  record: AiActionRecord | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onApply?: () => void;
@@ -26,6 +26,10 @@ export function EditDiffDialog({
         <DialogHeader>
           <DialogTitle>{t("ai.diffTitle")}</DialogTitle>
           {record?.summary && <p className="text-[12px] text-neutral-500">{record.summary}</p>}
+          {/* 跨页面动作要说清改的是哪一页，否则用户会以为改的是当前页 */}
+          {record?.pageName && (
+            <p className="text-[12px] text-neutral-500">{t("ai.actionPage", { name: record.pageName })}</p>
+          )}
         </DialogHeader>
         <div className="grid max-h-[60vh] gap-3 overflow-y-auto sm:grid-cols-2">
           <div>
