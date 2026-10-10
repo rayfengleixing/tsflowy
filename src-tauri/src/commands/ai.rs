@@ -22,6 +22,10 @@ const FIRST_CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
 const IDLE_CHUNK_TIMEOUT: Duration = Duration::from_secs(120);
 /// 连通性测试的整体上限：只要服务端 30 秒内没给出完整响应就判定不可用。
 const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// 流开始前的重试次数：建连失败与 429 / 5xx 各最多再试 2 次。
+const PRE_STREAM_RETRIES: u32 = 2;
+/// 重试退避时长（第 1、2 次重试各用一档）
+const RETRY_BACKOFFS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
 /// 文本协议里编辑指令块的标记（与前端 lib/ai-edit.ts 的 EDIT_BLOCK_TAG 保持一致）。
 /// 开启工具调用时，会把函数参数原样包成这个块，好让前端的解析逻辑完全复用。
 const EDIT_BLOCK_TAG: &str = "tsflowy-edit";
@@ -370,32 +374,64 @@ pub async fn ai_chat(
             obj.insert("tool_choice".into(), serde_json::json!("auto"));
         }
     }
-    let resp = match client
-        .post(chat_url(&ai.base_url))
-        .bearer_auth(&ai.api_key)
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = on_event.send(AiEvent::Error {
-                message: format!("连接失败：{e}"),
-                code: Some("network".to_string()),
-            });
-            return Ok(());
+    // 流开始前允许重试：建连失败 / 429 / 5xx 各退避再试，最多 PRE_STREAM_RETRIES 次。
+    // 进入流式阶段后绝不重试——内容可能已经吐给前端，重试会造成重复输出。
+    let resp = {
+        let mut attempt: u32 = 0;
+        loop {
+            if cancelled(generation) {
+                let _ = on_event.send(AiEvent::Error {
+                    message: "cancelled".to_string(),
+                    code: Some("cancelled".to_string()),
+                });
+                return Ok(());
+            }
+            let sent = client
+                .post(chat_url(&ai.base_url))
+                .bearer_auth(&ai.api_key)
+                .json(&body)
+                .send()
+                .await;
+            match sent {
+                Err(e) => {
+                    if attempt < PRE_STREAM_RETRIES && !cancelled(generation) {
+                        tokio::time::sleep(RETRY_BACKOFFS[attempt as usize]).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    let _ = on_event.send(AiEvent::Error {
+                        message: format!("连接失败：{e}"),
+                        code: Some("network".to_string()),
+                    });
+                    return Ok(());
+                }
+                Ok(r) => {
+                    let status = r.status();
+                    if status.is_success() {
+                        break r;
+                    }
+                    // 429 优先尊重服务端的 Retry-After，其余按固定退避；读正文前取头
+                    let wait = if retryable_status(status) {
+                        retry_after(&r, RETRY_BACKOFFS[attempt.min(1) as usize])
+                    } else {
+                        Duration::ZERO
+                    };
+                    if attempt < PRE_STREAM_RETRIES && retryable_status(status) && !cancelled(generation) {
+                        tokio::time::sleep(wait).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    let text = r.text().await.unwrap_or_default();
+                    let code = error_code(status.as_u16(), &text);
+                    let _ = on_event.send(AiEvent::Error {
+                        message: readable_http_error(status.as_u16(), &text),
+                        code: Some(code.to_string()),
+                    });
+                    return Ok(());
+                }
+            }
         }
     };
-    let status = resp.status();
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        let code = error_code(status.as_u16(), &text);
-        let _ = on_event.send(AiEvent::Error {
-            message: readable_http_error(status.as_u16(), &text),
-            code: Some(code.to_string()),
-        });
-        return Ok(());
-    }
 
     use futures_util::StreamExt;
     let mut stream = resp.bytes_stream();
@@ -689,6 +725,28 @@ fn parse_sse_line(line: &str) -> SseParse {
         }
     }
     SseParse::Ignore
+}
+
+/// 值得在流开始前重试的状态码：限流与服务商侧故障通常是瞬时的
+fn retryable_status(status: reqwest::StatusCode) -> bool {
+    status.as_u16() == 429 || status.is_server_error()
+}
+
+/// 429 优先尊重服务端的 Retry-After（秒），夹在 0.2–10 秒之间；解析不出来用固定退避
+fn parse_retry_after(value: Option<&str>, fallback: Duration) -> Duration {
+    value
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(|secs| Duration::from_secs(secs).clamp(Duration::from_millis(200), Duration::from_secs(10)))
+        .unwrap_or(fallback)
+}
+
+fn retry_after(resp: &reqwest::Response, fallback: Duration) -> Duration {
+    parse_retry_after(
+        resp.headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok()),
+        fallback,
+    )
 }
 
 /// 依据状态码给出错误归类码，前端据此提示不同的处理办法。
@@ -1021,5 +1079,25 @@ data: [DONE]
         );
         // 没有 choices → 视为异常响应
         assert!(parse_completion_text(r#"{"foo":1}"#).is_err());
+    }
+
+    #[test]
+    fn retryable_status_covers_rate_limit_and_server_errors() {
+        assert!(retryable_status(reqwest::StatusCode::TOO_MANY_REQUESTS));
+        assert!(retryable_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(retryable_status(reqwest::StatusCode::BAD_GATEWAY));
+        assert!(!retryable_status(reqwest::StatusCode::UNAUTHORIZED));
+        assert!(!retryable_status(reqwest::StatusCode::BAD_REQUEST));
+    }
+
+    #[test]
+    fn parse_retry_after_clamps_seconds_and_falls_back() {
+        let fb = Duration::from_secs(1);
+        assert_eq!(parse_retry_after(Some("5"), fb), Duration::from_secs(5));
+        // 上限 10 秒、下限 0.2 秒，避免恶意/异常头把界面卡死
+        assert_eq!(parse_retry_after(Some("600"), fb), Duration::from_secs(10));
+        assert_eq!(parse_retry_after(Some("0"), fb), Duration::from_millis(200));
+        assert_eq!(parse_retry_after(Some("not-a-number"), fb), fb);
+        assert_eq!(parse_retry_after(None, fb), fb);
     }
 }

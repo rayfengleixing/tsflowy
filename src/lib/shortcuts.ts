@@ -1,5 +1,5 @@
 // 可自定义的快捷键。全局命令（命令面板 / 快速打开 / 全局搜索 / 切换标签页 / 新建页面 /
-// 打开设置 / 切换主题）由 App 的 window keydown 处理；编辑器内命令（加粗 / 斜体 / 下划线 /
+// 打开设置 / 切换主题 / 开关 AI 助手）由 App 的 window keydown 处理；编辑器内命令（加粗 / 斜体 / 下划线 /
 // 删除线 / 撤销 / 重做）由 EditorPage 的 editorProps.handleKeyDown 处理——该回调先于
 // TipTap 各扩展的内置 keymap 执行，命中即短路，因此改绑后旧默认键同样失效。
 // 两组共用同一个 store 与冲突检测，跨组也互斥。
@@ -17,6 +17,7 @@ export type ShortcutId =
   | "newPage"
   | "openSettings"
   | "toggleTheme"
+  | "aiPanel"
   | "bold"
   | "italic"
   | "underline"
@@ -46,6 +47,7 @@ export const DEFAULT_SHORTCUTS: Record<ShortcutId, Combo> = {
   newPage: c("n"),
   openSettings: c(","),
   toggleTheme: c("d", { shift: true }),
+  aiPanel: c("a", { shift: true }),
   // 编辑器命令：与 TipTap 内置默认一致（strike 实为 Mod-Shift-s，非 Ctrl+Shift+X）
   bold: c("b"),
   italic: c("i"),
@@ -64,6 +66,7 @@ export const GLOBAL_SHORTCUT_IDS: ShortcutId[] = [
   "newPage",
   "openSettings",
   "toggleTheme",
+  "aiPanel",
 ];
 
 /** 编辑器组 */
@@ -93,6 +96,7 @@ export const CUSTOMIZABLE_SHORTCUTS: { id: ShortcutId; labelKey: string }[] = [
   { id: "newPage", labelKey: "settings.shortcuts.newPage" },
   { id: "openSettings", labelKey: "settings.shortcuts.openSettings" },
   { id: "toggleTheme", labelKey: "settings.shortcuts.toggleTheme" },
+  { id: "aiPanel", labelKey: "settings.shortcuts.aiPanel" },
   { id: "bold", labelKey: "settings.shortcuts.bold" },
   { id: "italic", labelKey: "settings.shortcuts.italic" },
   { id: "underline", labelKey: "settings.shortcuts.underline" },

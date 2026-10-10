@@ -13,6 +13,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { viewIcon } from "@/components/view-icon";
 import { ArrowLeftRight, X } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useAiStore } from "@/stores/ai";
 import { bootstrapVisualSettings, useSettingsStore } from "@/stores/settings";
 import { loadDailyNotesConfig } from "@/lib/daily-notes";
 import { findNode } from "@/lib/tree";
@@ -254,6 +255,11 @@ function App() {
         e.preventDefault();
         const s = useSettingsStore.getState();
         s.setTheme(s.theme === "dark" ? "light" : "dark");
+        return;
+      }
+      if (comboEquals(combo, combos.aiPanel)) {
+        e.preventDefault();
+        useAiStore.getState().toggle();
         return;
       }
     };

@@ -42,8 +42,9 @@ pub struct AiConfig {
     pub api_key: String,
     /// 请求上下文允许的最大字符数，默认 8000
     pub max_chars: u32,
-    /// AI 自主修改文档前是否先弹 diff 让用户确认。默认 false：直接落地，靠「撤销」兜底。
-    #[serde(default)]
+    /// AI 自主修改文档前是否先弹 diff 让用户确认。默认 true：文档内容不应未经同意被改写；
+    /// 追求顺手可在设置里关掉，靠「撤销」兜底。
+    #[serde(default = "default_confirm_edit")]
     pub confirm_edit: bool,
     /// 采样温度（0–2）：写代码偏确定性用 0.2，写作可到 0.8
     #[serde(default = "default_temperature")]
@@ -73,6 +74,10 @@ fn default_temperature() -> f64 {
     0.7
 }
 
+fn default_confirm_edit() -> bool {
+    true
+}
+
 impl Default for AiConfig {
     fn default() -> Self {
         Self {
@@ -82,7 +87,7 @@ impl Default for AiConfig {
             model: String::new(),
             api_key: String::new(),
             max_chars: 8000,
-            confirm_edit: false,
+            confirm_edit: true,
             temperature: default_temperature(),
             max_tokens: 0,
             system_prompt: String::new(),

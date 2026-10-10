@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectMentionQuery, parseMentions } from "./ai-mention";
+import { detectMentionQuery, mentionScore, parseMentions } from "./ai-mention";
 
 const CANDIDATES = [
   { id: "a", name: "周报" },
@@ -59,5 +59,38 @@ describe("detectMentionQuery", () => {
 
   it("@ 前是普通字符（如邮箱）不触发", () => {
     expect(detectMentionQuery("a@b", 3)).toBeNull();
+  });
+});
+
+describe("mentionScore", () => {
+  it("空查询全部匹配（返回 0 分为基准）", () => {
+    expect(mentionScore("周报", "")).toBe(0);
+    expect(mentionScore("周报", "  ")).toBe(0);
+  });
+
+  it("前缀命中分数最高，连续包含次之且越靠前越好", () => {
+    const prefix = mentionScore("周报归档", "周报")!;
+    const containsEarly = mentionScore("本周报归档", "周报")!;
+    const containsLate = mentionScore("今日本周报", "周报")!;
+    expect(prefix).toBeGreaterThan(containsEarly);
+    expect(containsEarly).toBeGreaterThan(containsLate);
+  });
+
+  it("跳字子序列可匹配，乱序不匹配", () => {
+    expect(mentionScore("会议记录", "会录")).not.toBeNull();
+    expect(mentionScore("会议记录", "录会")).toBeNull();
+  });
+
+  it("英文大小写不敏感", () => {
+    expect(mentionScore("Meeting Notes", "mn")).not.toBeNull();
+    expect(mentionScore("Meeting Notes", "MN")).toEqual(mentionScore("Meeting Notes", "mn"));
+  });
+
+  it("连续命中片段比分散命中得分高", () => {
+    expect(mentionScore("周报和周会记录", "周报")!).toBeGreaterThan(mentionScore("周记与报道计划", "周报")!);
+  });
+
+  it("完全不含查询字符则不匹配", () => {
+    expect(mentionScore("周报", "月报")).toBeNull();
   });
 });

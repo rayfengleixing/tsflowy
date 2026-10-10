@@ -146,7 +146,7 @@ export function SettingsPage() {
     baseUrl: "",
     model: "",
     maxChars: 8000,
-    confirmEdit: false,
+    confirmEdit: true,
     temperature: 0.7,
     maxTokens: 0,
     systemPrompt: "",

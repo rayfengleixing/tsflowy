@@ -60,3 +60,32 @@ export function detectMentionQuery(text: string, caret: number): { start: number
   if (/\s/.test(query)) return null;
   return { start: at, query };
 }
+
+/**
+ * @ 引用下拉的模糊匹配打分：分数越高越靠前，null 表示不匹配。
+ * · 前缀 / 连续包含优先；
+ * · 否则按「字符依次出现（子序列）」匹配，连续命中的片段加分——
+ *   让「周报」能匹配「本周 报 告」这类跳字输入，也支持英文 zbj→「周报编」式拼音首字母之外的乱序容错。
+ * 中文名按码点遍历，逐字匹配对 CJK 友好。
+ */
+export function mentionScore(name: string, query: string): number | null {
+  const n = name.toLowerCase();
+  const q = query.trim().toLowerCase();
+  if (!q) return 0;
+  const idx = n.indexOf(q);
+  if (idx === 0) return 1_000_000;
+  if (idx > 0) return 900_000 - idx;
+  let score = 0;
+  let from = 0;
+  let prev = -1;
+  for (const ch of q) {
+    const found = n.indexOf(ch, from);
+    if (found === -1) return null;
+    // 与上一个命中字符紧邻 → 连续片段，额外加权
+    score += found === prev + 1 ? 200 : 50;
+    prev = found;
+    from = found + 1;
+  }
+  // 名称越短越聚焦（同名命中时优先展示更贴切的）
+  return 100_000 + score - n.length;
+}

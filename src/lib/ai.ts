@@ -157,9 +157,14 @@ export async function aiSessionList(): Promise<AiSessionRow[]> {
   return invoke<AiSessionRow[]>("ai_session_list");
 }
 
-/** 整份覆盖保存 AI 会话 */
-export async function aiSessionSaveAll(sessions: AiSessionRow[]): Promise<void> {
-  await invoke("ai_session_save_all", { sessions });
+/** 保存单个会话（存在则整行覆盖） */
+export async function aiSessionSave(session: AiSessionRow): Promise<void> {
+  await invoke("ai_session_save", { session });
+}
+
+/** 删除单个会话（幂等） */
+export async function aiSessionDelete(id: string): Promise<void> {
+  await invoke("ai_session_delete", { id });
 }
 
 /** 流式对话：用 Channel 接收事件，逐段回调给上层 */

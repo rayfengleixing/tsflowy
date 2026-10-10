@@ -8,7 +8,8 @@ import {
   aiGetConfig,
   aiSaveConfig,
   aiSessionList,
-  aiSessionSaveAll,
+  aiSessionSave,
+  aiSessionDelete,
   docSearchSnippets,
   type AiSessionRow,
   type AiChatEvent,
@@ -26,6 +27,7 @@ import {
   type AiEditOp,
 } from "@/lib/ai-edit";
 import { parseMentions } from "@/lib/ai-mention";
+import { estimateTokens, tailTokens } from "@/lib/ai-tokens";
 import { documentApi } from "@/lib/documents";
 import { jsonToMarkdown } from "@/lib/markdown";
 import { flattenTree } from "@/lib/tree";
@@ -82,9 +84,10 @@ const SESSIONS_KEY = "tsflowy-ai-sessions-v1";
 const MAX_SESSIONS = 20;
 const MAX_SESSION_MESSAGES = 200;
 const MAX_MESSAGE_CHARS = 100_000;
-// 长对话防超限：历史消息从最新往前收进字符预算，放不下的早期轮次直接丢弃
-// （system prompt 与 @ 引用上下文不占预算，不受影响）
-const HISTORY_CHAR_BUDGET = 8000;
+// 长对话防超限：历史消息按估算 token 从最新往前收进预算，放不下的早期轮次直接丢弃
+// （system prompt 与 @ 引用上下文不占预算，不受影响）。
+// 按 token 而非字符计：中文 1 字 ≈ 1 token、拉丁 4 字符 ≈ 1 token，字符预算对两种文本失真严重。
+const HISTORY_TOKEN_BUDGET = 3000;
 const HISTORY_MAX_MESSAGES = 40;
 
 /** 归档的历史会话（不含进行中的当前对话） */
@@ -285,15 +288,23 @@ interface AiState {
 export const useAiStore = create<AiState>()((set, get) => {
   const restored = loadSessionsFromStorage();
 
-  /** 当前对话有内容时归档进 sessions（超出上限丢最老），供 newChat / 切换会话复用 */
+  /** 当前流式中的助手消息 id：stop() 据此标记「用户主动中止的这一轮」 */
+  let streamingAssistantId: string | null = null;
+  /** 本轮是否被用户停止：停止后迟到的 done 帧不得再自动落地编辑 */
+  let cancelledTurn = false;
+
+  /**
+   * 当前对话有内容时归档进 sessions（超出上限丢最老），供 newChat / 切换会话复用。
+   * archived 为刚落档的会话；pruned 为被挤出上限、需要从库里删除的 id。
+   */
   const archiveCurrent = (s: {
     messages: AiMessage[];
     sessions: StoredSession[];
     activeSessionId: string;
     sessionPageId: string | null;
     sessionPageTitle: string | null;
-  }): StoredSession[] => {
-    if (s.messages.length === 0) return s.sessions;
+  }): { sessions: StoredSession[]; archived: StoredSession | null; pruned: string[] } => {
+    if (s.messages.length === 0) return { sessions: s.sessions, archived: null, pruned: [] };
     const entry: StoredSession = {
       id: s.activeSessionId,
       title: sessionTitle(s.messages),
@@ -302,7 +313,12 @@ export const useAiStore = create<AiState>()((set, get) => {
       pageId: s.sessionPageId,
       pageTitle: s.sessionPageTitle,
     };
-    return [entry, ...s.sessions].slice(0, MAX_SESSIONS);
+    const list = [entry, ...s.sessions];
+    return {
+      sessions: list.slice(0, MAX_SESSIONS),
+      archived: entry,
+      pruned: list.slice(MAX_SESSIONS).map((x) => x.id),
+    };
   };
 
   /** 会话快照落盘（流式增量不触发，只在轮次结束 / 显式操作时调用） */
@@ -327,26 +343,38 @@ export const useAiStore = create<AiState>()((set, get) => {
     }
   };
 
-  const persistSessions = () => {
+  /** 当前进行中的对话快照；没有消息时为 null（库里不存在空会话行） */
+  const activeSnapshot = (): StoredSession | null => {
     const s = get();
-    const active: StoredSession | null =
-      s.messages.length > 0
-        ? {
-            id: s.activeSessionId,
-            title: sessionTitle(s.messages),
-            updatedAt: Date.now(),
-            messages: s.messages,
-            pageId: s.sessionPageId,
-            pageTitle: s.sessionPageTitle,
-          }
-        : null;
-    const rows = (active ? [active, ...s.sessions] : s.sessions).map(toSessionRow);
-    // 默认落库：localStorage 只有约 5MB 配额，长对话写满后会被迫丢弃历史；落库则没有这个上限。
-    // 落库失败（比如数据库还没迁移）时退回本地，保证会话不至于丢失。
-    void aiSessionSaveAll(rows).catch((e: unknown) => {
-      logger.warn("ai sessions save to db failed, fallback to localStorage", e);
-      writeLocal(active, s.sessions);
+    if (s.messages.length === 0) return null;
+    return {
+      id: s.activeSessionId,
+      title: sessionTitle(s.messages),
+      updatedAt: Date.now(),
+      messages: s.messages,
+      pageId: s.sessionPageId,
+      pageTitle: s.sessionPageTitle,
+    };
+  };
+
+  // 默认落库：localStorage 只有约 5MB 配额，长对话写满后会被迫丢弃历史；落库则没有这个上限。
+  // 按条 upsert 而非整表覆盖：单条写失败不至于把其它会话一起清掉。
+  const saveSession = (session: StoredSession) => {
+    void aiSessionSave(toSessionRow(session)).catch((e: unknown) => {
+      logger.warn("ai session save to db failed, fallback to localStorage", e);
+      writeLocal(activeSnapshot(), get().sessions);
     });
+  };
+
+  const dropSessions = (ids: string[]) => {
+    for (const id of ids) {
+      void aiSessionDelete(id).catch((e: unknown) => logger.warn("ai session delete failed", e));
+    }
+  };
+
+  const persistSessions = () => {
+    const active = activeSnapshot();
+    if (active) saveSession(active);
   };
 
   /** 当前配置的最大上下文字符数 */
@@ -378,25 +406,36 @@ export const useAiStore = create<AiState>()((set, get) => {
     const history = get()
       .messages.filter((m) => m.id !== assistantId && m.content.trim().length > 0)
       .map((m) => ({ role: m.role, content: m.content }));
-    // 长对话防超限：从最新往前收进字符预算，放不下的早期轮次丢弃
+    // 长对话防超限：按估算 token 从最新往前收进预算，放不下的早期轮次丢弃
     const kept: AiChatMessage[] = [];
-    let budget = HISTORY_CHAR_BUDGET;
+    let budget = HISTORY_TOKEN_BUDGET;
     for (let i = history.length - 1; i >= 0 && kept.length < HISTORY_MAX_MESSAGES; i--) {
       const m = history[i];
-      if (m.content.length > budget) {
+      const cost = estimateTokens(m.content);
+      if (cost > budget) {
         // 一条都放不下（如首轮就粘贴长文）：保最新一条的尾部
-        if (kept.length === 0) kept.push({ role: m.role, content: m.content.slice(-HISTORY_CHAR_BUDGET) });
+        if (kept.length === 0) kept.push({ role: m.role, content: tailTokens(m.content, HISTORY_TOKEN_BUDGET) });
         break;
       }
-      budget -= m.content.length;
+      budget -= cost;
       kept.unshift(m);
     }
+    const dropped = history.length - kept.length;
     // 编辑器带入的选中内容：单独一条 system 下发，不塞进用户消息正文（气泡里不必重复一大段原文）
     const pending = get().pendingContext?.trim();
     return [
       systemMessage(),
       ...(referenceContext ? [{ role: "system" as const, content: referenceContext }] : []),
       ...(pending ? [{ role: "system" as const, content: `【用户在文档中选中的内容】\n${pending}` }] : []),
+      // 发生截断时显式告知模型，免得它把「从这里开始」误当成整段对话的开头
+      ...(dropped > 0
+        ? [
+            {
+              role: "system" as const,
+              content: `【注意】受上下文预算限制，本对话最早的 ${dropped} 条消息已被截断、未随本次请求发送；需要更早的信息时请让用户补充。`,
+            },
+          ]
+        : []),
       ...kept,
     ];
   };
@@ -456,7 +495,7 @@ export const useAiStore = create<AiState>()((set, get) => {
   const dropEmptyAssistant = (assistantId: string) =>
     set((s) => ({ messages: s.messages.filter((m) => m.id !== assistantId || m.content.trim().length > 0) }));
 
-  /** 一轮结束：提取编辑指令并直接应用到文档（AI 自主修改），同时留下结果卡片供撤销 */
+  /** 一轮结束：提取编辑指令；默认（confirm_edit 开启）待用户确认后写入，关闭确认时直接落地 */
   const finishAssistant = (assistantId: string, full: string) => {
     const { edit, display, malformed } = extractEdit(full);
     if (!edit) {
@@ -496,7 +535,8 @@ export const useAiStore = create<AiState>()((set, get) => {
       state: "unavailable",
     };
     if (bridge) {
-      if (get().config?.confirm_edit) {
+      // 用户按「停止」后迟到的 done 帧不能替用户写文档；与开启确认一样停在待确认
+      if (cancelledTurn || get().config?.confirm_edit) {
         // 设置里要求先确认：只给出 diff，等用户点「应用」再写
         record.state = "pending";
       } else {
@@ -521,6 +561,8 @@ export const useAiStore = create<AiState>()((set, get) => {
 
   /** 流式跑一轮：raw 累积模型原始输出，state 里只放「去掉编辑指令块」的展示文本 */
   const runStream = async (assistantId: string) => {
+    streamingAssistantId = assistantId;
+    cancelledTurn = false;
     let raw = "";
     // 流式节流：每个增量都 set 会重建整条消息数组并重解析 Markdown，长回答会掉帧。
     // 把约 60ms 内的增量合并成一帧提交（约 16 次/秒，肉眼仍是连贯的打字效果）。
@@ -594,6 +636,7 @@ export const useAiStore = create<AiState>()((set, get) => {
       dropEmptyAssistant(assistantId);
     } finally {
       set({ streaming: false });
+      streamingAssistantId = null;
       // 一轮结束（含失败/取消）后落盘，流式增量期间不写
       persistSessions();
     }
@@ -701,11 +744,15 @@ export const useAiStore = create<AiState>()((set, get) => {
     },
 
     stop: () => {
+      // 标记本轮被用户停止：之后即便 Rust 尾帧（done）晚一步到达，也不会自动落地编辑
+      if (streamingAssistantId) cancelledTurn = true;
       aiCancel().catch(() => undefined);
       set({ streaming: false });
     },
 
     clear: () => {
+      const hadContent = get().messages.length > 0;
+      const oldId = get().activeSessionId;
       set({
         messages: [],
         reasoning: "",
@@ -714,13 +761,15 @@ export const useAiStore = create<AiState>()((set, get) => {
         usage: null,
         usageTotal: { prompt: 0, completion: 0, total: 0 },
       });
-      persistSessions();
+      // 清空即销毁这一会话：按 id 删除它的库行，而不是留下空壳
+      if (hadContent) dropSessions([oldId]);
     },
 
     /** 归档当前对话并开始新会话 */
     newChat: () => {
-      set((s) => ({
-        sessions: archiveCurrent(s),
+      const { sessions, archived, pruned } = archiveCurrent(get());
+      set({
+        sessions,
         messages: [],
         reasoning: "",
         error: null,
@@ -731,8 +780,9 @@ export const useAiStore = create<AiState>()((set, get) => {
         usage: null,
         usageTotal: { prompt: 0, completion: 0, total: 0 },
         activeSessionId: newId(),
-      }));
-      persistSessions();
+      });
+      if (archived) saveSession(archived);
+      dropSessions(pruned);
     },
 
     /** 切换到历史会话（当前对话有内容时先归档；流式进行中不允许切） */
@@ -742,8 +792,9 @@ export const useAiStore = create<AiState>()((set, get) => {
       const target = s.sessions.find((x) => x.id === id);
       if (!target) return;
       const rest = s.sessions.filter((x) => x.id !== id);
+      const archived = archiveCurrent({ ...s, sessions: rest });
       set({
-        sessions: archiveCurrent({ ...s, sessions: rest }),
+        sessions: archived.sessions,
         messages: target.messages,
         activeSessionId: target.id,
         sessionPageId: target.pageId ?? null,
@@ -755,12 +806,14 @@ export const useAiStore = create<AiState>()((set, get) => {
         usage: null,
         usageTotal: { prompt: 0, completion: 0, total: 0 },
       });
-      persistSessions();
+      if (archived.archived) saveSession(archived.archived);
+      dropSessions(archived.pruned);
     },
 
     deleteSession: (id) => {
+      if (get().streaming) return;
       set((s) => ({ sessions: s.sessions.filter((x) => x.id !== id) }));
-      persistSessions();
+      dropSessions([id]);
     },
 
     retry: async () => {

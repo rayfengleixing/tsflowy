@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowDown,
   Check,
   Copy,
   CornerDownLeft,
@@ -26,7 +27,7 @@ import { useAiStore, type AiEditRecord, type AiMessage } from "@/stores/ai";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { aiErrorText } from "@/lib/ai";
 import { getAiEditor } from "@/lib/ai-editor";
-import { detectMentionQuery } from "@/lib/ai-mention";
+import { detectMentionQuery, mentionScore } from "@/lib/ai-mention";
 import { flattenTree } from "@/lib/tree";
 import { t, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -72,6 +73,7 @@ export function AiPanel() {
   const undoEdit = useAiStore((s) => s.undoEdit);
   const newChat = useAiStore((s) => s.newChat);
   const switchSession = useAiStore((s) => s.switchSession);
+  const activeSessionId = useAiStore((s) => s.activeSessionId);
   const deleteSession = useAiStore((s) => s.deleteSession);
   const applyPendingEdit = useAiStore((s) => s.applyPendingEdit);
   const rejectPendingEdit = useAiStore((s) => s.rejectPendingEdit);
@@ -83,24 +85,28 @@ export function AiPanel() {
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [mentionActive, setMentionActive] = useState(0);
   const [showHistory, setShowHistory] = useState(false);
+  // 是否停留在列表底部：流式增量只在此时自动跟随，用户上滑看历史不被拽回
+  const [pinned, setPinned] = useState(true);
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const tree = useWorkspaceStore((s) => s.tree);
 
-  // @ 引用的候选文档：当前工作区树（排除行详情），按查询词过滤
+  // @ 引用的候选文档：当前工作区树（排除行详情），按查询词模糊匹配打分取前 8
   const mentionItems = useMemo(() => {
     if (!mention) return [];
-    const q = mention.query.trim().toLowerCase();
     return flattenTree(tree)
-      .filter((v) => {
+      .flatMap((v) => {
         try {
-          return !(JSON.parse(v.extra) as { row_detail?: unknown }).row_detail;
+          if ((JSON.parse(v.extra) as { row_detail?: unknown }).row_detail) return [];
         } catch {
-          return true;
+          /* extra 解析失败当作普通文档 */
         }
+        const score = mentionScore(v.name, mention.query);
+        return score === null ? [] : [{ v, score }];
       })
-      .filter((v) => !q || v.name.toLowerCase().includes(q))
-      .slice(0, 8);
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8)
+      .map((x) => x.v);
   }, [mention, tree]);
 
   useEffect(() => {
@@ -112,11 +118,20 @@ export function AiPanel() {
     if (open && !sessionsLoaded) void loadSessions();
   }, [open, sessionsLoaded, loadSessions]);
 
-  // 新消息/流式增量时滚到底部
-  useEffect(() => {
+  const scrollToBottom = () => {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, reasoning, streaming]);
+  };
+
+  // 新消息/流式增量时滚到底部——仅当用户停在底部附近；上滑阅读历史时不打断
+  useEffect(() => {
+    if (pinned) scrollToBottom();
+  }, [messages, reasoning, streaming, pinned]);
+
+  // 切换/新建会话后回到底部并恢复跟随
+  useEffect(() => {
+    setPinned(true);
+  }, [activeSessionId]);
 
   // 从编辑器（浮动工具栏 / 斜杠菜单 / 命令面板）唤起时把光标交给输入框
   useEffect(() => {
@@ -131,11 +146,19 @@ export function AiPanel() {
   const configured = !!config && config.enabled && config.has_api_key && !!config.base_url && !!config.model;
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content.trim().length > 0);
 
+  // 用户滚动时重新判断是否停在底部（48px 容差）
+  const onListScroll = () => {
+    const el = listRef.current;
+    if (!el) return;
+    setPinned(el.scrollHeight - el.scrollTop - el.clientHeight < 48);
+  };
+
   const submit = () => {
     const text = input.trim();
     if (!text || streaming) return;
     setInput("");
     setMention(null);
+    setPinned(true);
     void send(text);
   };
 
@@ -252,6 +275,7 @@ export function AiPanel() {
           <button
             className="flex h-6 w-6 items-center justify-center rounded text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-700"
             title={t("ai.newChat")}
+            aria-label={t("ai.newChat")}
             onClick={newChat}
           >
             <MessageSquarePlus className="h-3.5 w-3.5" />
@@ -259,6 +283,8 @@ export function AiPanel() {
           <button
             className="flex h-6 w-6 items-center justify-center rounded text-neutral-500 hover:bg-neutral-200 disabled:opacity-40 dark:hover:bg-neutral-700"
             title={t("ai.history")}
+            aria-label={t("ai.history")}
+            aria-expanded={showHistory}
             disabled={sessions.length === 0}
             onClick={() => setShowHistory((v) => !v)}
           >
@@ -267,6 +293,7 @@ export function AiPanel() {
           <button
             className="flex h-6 w-6 items-center justify-center rounded text-neutral-500 hover:bg-neutral-200 disabled:opacity-40 dark:hover:bg-neutral-700"
             title={t("ai.clear")}
+            aria-label={t("ai.clear")}
             disabled={messages.length === 0}
             onClick={clear}
           >
@@ -275,6 +302,7 @@ export function AiPanel() {
           <button
             className="flex h-6 w-6 items-center justify-center rounded text-neutral-500 hover:bg-neutral-200 disabled:opacity-40 dark:hover:bg-neutral-700"
             title={t("ai.copy")}
+            aria-label={t("ai.copy")}
             disabled={!lastAssistant}
             onClick={copyLast}
           >
@@ -283,6 +311,7 @@ export function AiPanel() {
           <button
             className="flex h-6 w-6 items-center justify-center rounded text-neutral-500 hover:bg-neutral-200 dark:hover:bg-neutral-700"
             title={t("ai.close")}
+            aria-label={t("ai.close")}
             onClick={closePanel}
           >
             <X className="h-3.5 w-3.5" />
@@ -316,6 +345,7 @@ export function AiPanel() {
                   <button
                     className="shrink-0 rounded p-1 text-neutral-400 opacity-0 hover:text-red-500 group-hover:opacity-100"
                     title={t("ai.deleteSession")}
+                    aria-label={t("ai.deleteSession")}
                     onClick={() => deleteSession(sess.id)}
                   >
                     <Trash2 className="h-3 w-3" />
@@ -343,58 +373,82 @@ export function AiPanel() {
         </div>
       ) : (
         <>
-          <div ref={listRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
-            {messages.length === 0 && <p className="mt-6 text-center text-[12px] text-neutral-400">{t("ai.empty")}</p>}
-            {/* 隐私提示：本地优先的应用，明确告知这一轮会发到哪个服务商 */}
-            <p className="px-2 pb-1 text-[11px] text-neutral-400">
-              {t("ai.sendHint", { host: safeHost(config.base_url) })}
-            </p>
-            {messages.map((m) => {
-              const rec = m.edit;
-              return (
-                <MessageBubble
-                  key={m.id}
-                  message={m}
-                  onReplace={m.role === "assistant" ? () => writeBack(m.content, "replace") : undefined}
-                  onInsert={m.role === "assistant" ? () => writeBack(m.content, "insert") : undefined}
-                  onUndo={rec ? () => undoEdit(m.id) : undefined}
-                  onApply={rec?.state === "pending" ? () => applyPendingEdit(m.id) : undefined}
-                  onReject={rec?.state === "pending" ? () => rejectPendingEdit(m.id) : undefined}
-                  onViewDiff={rec && rec.state !== "malformed" ? () => setDiff({ id: m.id, record: rec }) : undefined}
-                />
-              );
-            })}
-            {/* 推理型模型的思考过程：流式时展开，结束后折叠保留，方便回看模型是怎么想的 */}
-            {reasoning && (
-              <details
-                open={streaming}
-                className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-[11px] text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800/50 dark:text-neutral-400"
-              >
-                <summary className="cursor-pointer font-medium">{t("ai.reasoning")}</summary>
-                <div className="mt-1 max-h-32 overflow-y-auto break-words whitespace-pre-wrap">{reasoning}</div>
-              </details>
-            )}
-            {streaming && !reasoning && <p className="text-[11px] text-neutral-400">{t("ai.thinking")}</p>}
-            {/* 被中断/超时的回答可以接着往下写：把半截内容留在上下文里再问一次 */}
-            {!streaming && canContinue && (
-              <div className="px-2 pb-1">
-                <button
-                  className="rounded-md border border-neutral-200 px-2 py-0.5 text-[11px] text-neutral-600 hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-                  onClick={() => void continueGenerate()}
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <div
+              ref={listRef}
+              onScroll={onListScroll}
+              role="log"
+              aria-live="polite"
+              aria-label={t("ai.title")}
+              className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3"
+            >
+              {messages.length === 0 && (
+                <p className="mt-6 text-center text-[12px] text-neutral-400">{t("ai.empty")}</p>
+              )}
+              {/* 隐私提示：本地优先的应用，明确告知这一轮会发到哪个服务商 */}
+              <p className="px-2 pb-1 text-[11px] text-neutral-400">
+                {t("ai.sendHint", { host: safeHost(config.base_url) })}
+              </p>
+              {messages.map((m) => {
+                const rec = m.edit;
+                return (
+                  <MessageBubble
+                    key={m.id}
+                    message={m}
+                    onReplace={m.role === "assistant" ? () => writeBack(m.content, "replace") : undefined}
+                    onInsert={m.role === "assistant" ? () => writeBack(m.content, "insert") : undefined}
+                    onUndo={rec ? () => undoEdit(m.id) : undefined}
+                    onApply={rec?.state === "pending" ? () => applyPendingEdit(m.id) : undefined}
+                    onReject={rec?.state === "pending" ? () => rejectPendingEdit(m.id) : undefined}
+                    onViewDiff={rec && rec.state !== "malformed" ? () => setDiff({ id: m.id, record: rec }) : undefined}
+                  />
+                );
+              })}
+              {/* 推理型模型的思考过程：流式时展开，结束后折叠保留，方便回看模型是怎么想的 */}
+              {reasoning && (
+                <details
+                  open={streaming}
+                  className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-[11px] text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800/50 dark:text-neutral-400"
                 >
-                  {t("ai.continueGenerate")}
-                </button>
-              </div>
-            )}
-            {error && (
-              <div className="rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-[11px] text-red-600">
-                {t("ai.errorPrefix", { message: error })}
-                {/* 按错误归类给出对应的处理办法，而不是让所有失败都停在「请求失败」 */}
-                {errorHint && <p className="mt-0.5">{t(errorHint)}</p>}
-                <button className="ml-2 underline hover:no-underline" onClick={() => void retry()}>
-                  {t("ai.retry")}
-                </button>
-              </div>
+                  <summary className="cursor-pointer font-medium">{t("ai.reasoning")}</summary>
+                  <div className="mt-1 max-h-32 overflow-y-auto break-words whitespace-pre-wrap">{reasoning}</div>
+                </details>
+              )}
+              {streaming && !reasoning && <p className="text-[11px] text-neutral-400">{t("ai.thinking")}</p>}
+              {/* 被中断/超时的回答可以接着往下写：把半截内容留在上下文里再问一次 */}
+              {!streaming && canContinue && (
+                <div className="px-2 pb-1">
+                  <button
+                    className="rounded-md border border-neutral-200 px-2 py-0.5 text-[11px] text-neutral-600 hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                    onClick={() => void continueGenerate()}
+                  >
+                    {t("ai.continueGenerate")}
+                  </button>
+                </div>
+              )}
+              {error && (
+                <div className="rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-[11px] text-red-600">
+                  {t("ai.errorPrefix", { message: error })}
+                  {/* 按错误归类给出对应的处理办法，而不是让所有失败都停在「请求失败」 */}
+                  {errorHint && <p className="mt-0.5">{t(errorHint)}</p>}
+                  <button className="ml-2 underline hover:no-underline" onClick={() => void retry()}>
+                    {t("ai.retry")}
+                  </button>
+                </div>
+              )}
+            </div>
+            {/* 上滑离开底部后流式不再强拉；一键回到最新消息 */}
+            {!pinned && (
+              <button
+                className="absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-[11px] text-neutral-600 shadow-md hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                onClick={() => {
+                  setPinned(true);
+                  scrollToBottom();
+                }}
+              >
+                <ArrowDown className="h-3 w-3" />
+                {t("ai.scrollToBottom")}
+              </button>
             )}
           </div>
 
@@ -488,11 +542,13 @@ export function AiPanel() {
                 {mentionItems.length === 0 ? (
                   <div className="px-3 py-2 text-[12px] text-neutral-400">{t("mention.empty")}</div>
                 ) : (
-                  <div className="max-h-56 overflow-y-auto py-1">
+                  <div role="listbox" aria-label={t("ai.inputPlaceholder")} className="max-h-56 overflow-y-auto py-1">
                     {mentionItems.map((v, i) => (
                       <button
                         key={v.id}
                         type="button"
+                        role="option"
+                        aria-selected={i === mentionActive}
                         data-active={i === mentionActive}
                         className={cn(
                           "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px]",
@@ -517,6 +573,7 @@ export function AiPanel() {
               onChange={onInputChange}
               onKeyDown={onKeyDown}
               rows={3}
+              aria-label={t("ai.inputPlaceholder")}
               placeholder={t("ai.inputPlaceholder")}
               className="w-full resize-none rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-[12px] text-neutral-800 outline-none focus:border-brand-500 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
             />

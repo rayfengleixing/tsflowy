@@ -238,7 +238,8 @@ pub fn search_in_view(
     if words.is_empty() {
         return Ok(Vec::new());
     }
-    let sql = "SELECT snippet(documents_fts, 2, '', '', '…', 24) AS snippet
+    // 片段取 ±48 个索引 token 的窗口：24 个太碎，模型常拿到半句话猜不到上下文
+    let sql = "SELECT snippet(documents_fts, 2, '', '', '…', 48) AS snippet
                FROM documents_fts
                WHERE documents_fts.view_id = ?1 AND documents_fts MATCH ?2
                ORDER BY bm25(documents_fts) LIMIT ?3";

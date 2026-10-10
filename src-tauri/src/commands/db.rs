@@ -376,22 +376,26 @@ pub async fn ai_session_list(db: State<'_, Db>) -> Result<Vec<AiSessionRow>, Str
     Ok(rows)
 }
 
-/// 整份覆盖保存：会话条数有上限、总量不大，一个事务删旧写新最简单可靠。
+/// 保存单个会话（存在则整行覆盖）。会话条数有上限、单条体量不大，
+/// 按条 upsert 比「整表删了重写」可靠：并发/失败时不会把其它会话一起清掉。
 #[tauri::command]
-pub async fn ai_session_save_all(db: State<'_, Db>, sessions: Vec<AiSessionRow>) -> Result<(), String> {
-    let mut conn = db.write_conn()?;
-    let tx = conn.transaction().map_err(|e| format!("保存 AI 会话失败：{e}"))?;
-    tx.execute_batch("DELETE FROM ai_sessions")
-        .map_err(|e| format!("保存 AI 会话失败：{e}"))?;
-    for s in &sessions {
-        tx.execute(
-            "INSERT OR REPLACE INTO ai_sessions (id, title, page_id, page_title, updated_at, messages)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![s.id, s.title, s.page_id, s.page_title, s.updated_at, s.messages],
-        )
-        .map_err(|e| format!("保存 AI 会话失败：{e}"))?;
-    }
-    tx.commit().map_err(|e| format!("保存 AI 会话失败：{e}"))?;
+pub async fn ai_session_save(db: State<'_, Db>, session: AiSessionRow) -> Result<(), String> {
+    let conn = db.write_conn()?;
+    conn.execute(
+        "INSERT OR REPLACE INTO ai_sessions (id, title, page_id, page_title, updated_at, messages)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![session.id, session.title, session.page_id, session.page_title, session.updated_at, session.messages],
+    )
+    .map_err(|e| format!("保存 AI 会话失败：{e}"))?;
+    Ok(())
+}
+
+/// 删除单个会话（幂等：id 不存在也返回成功）
+#[tauri::command]
+pub async fn ai_session_delete(db: State<'_, Db>, id: String) -> Result<(), String> {
+    let conn = db.write_conn()?;
+    conn.execute("DELETE FROM ai_sessions WHERE id = ?1", rusqlite::params![id])
+        .map_err(|e| format!("删除 AI 会话失败：{e}"))?;
     Ok(())
 }
 
