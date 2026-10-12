@@ -154,6 +154,12 @@ fn read_asset_bytes_inner(data_dir: &Path, relative: &str) -> Result<Vec<u8>, St
     fs::read(&target).map_err(|e| format!("failed to read asset: {e}"))
 }
 
+/// 读取 assets/ 下的字节供 AI 图片附件内联使用。
+/// 与 read_asset_bytes 命令同一套越权校验：只认 assets/ 之内的相对路径。
+pub(crate) fn load_asset_bytes(app: &tauri::AppHandle, relative: &str) -> Result<Vec<u8>, String> {
+    read_asset_bytes_inner(&app_data_dir(app)?, relative)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -113,6 +113,8 @@ export const SYNC_ACTION_KEY: Record<string, MessageKey> = {
 export interface AiFormState {
   enabled: boolean;
   provider: string;
+  /** 接口协议族："" = 按 base_url 自动识别 */
+  protocol: string;
   baseUrl: string;
   model: string;
   maxChars: number;
@@ -132,6 +134,10 @@ export interface AiFormState {
   quickActions: AiQuickActionDef[];
   /** 编辑指令改用 function calling 下发 */
   useTools: boolean;
+  /** 输入 token 单价（每 100 万 token），0 = 未填价 */
+  priceInput: number;
+  /** 输出 token 单价（每 100 万 token） */
+  priceOutput: number;
 }
 
 /** AI 服务商预设 → i18n 文案 */
@@ -141,6 +147,16 @@ export const AI_PROVIDER_LABEL_KEY: Record<string, MessageKey> = {
   qwen: "settings.aiProviderQwen",
   kimi: "settings.aiProviderKimi",
   ollama: "settings.aiProviderOllama",
+  anthropic: "settings.aiProviderAnthropic",
+  gemini: "settings.aiProviderGemini",
+};
+
+/** 接口协议族 → i18n 文案（"" = 自动识别） */
+export const AI_PROTOCOL_LABEL_KEY: Record<string, MessageKey> = {
+  "": "settings.aiProtocolAuto",
+  openai: "settings.aiProtocolOpenai",
+  anthropic: "settings.aiProtocolAnthropic",
+  gemini: "settings.aiProtocolGemini",
 };
 
 /**

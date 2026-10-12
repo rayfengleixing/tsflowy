@@ -12,11 +12,14 @@ import {
   aiSessionList,
   aiSessionSave,
   aiSessionDelete,
+  aiUsageSummary,
   docSearchSnippets,
   type AiSessionRow,
+  type AiUsageSummary,
   type AiChatEvent,
   type AiChatMessage,
   type AiConfig,
+  type AiImageAttachment,
   type AiQuickActionDef,
   type AiToolCallRaw,
   type AiToolCallRef,
@@ -89,6 +92,10 @@ export interface AiMessage {
   content: string;
   /** 本条回复下发的动作及其落地结果（用于展示、确认与撤销） */
   actions?: AiActionRecord[];
+  /** 用户消息附带的图片（assets/ 相对路径，发送时才内联成 base64） */
+  images?: AiImageAttachment[];
+  /** 回答评分：点赞 / 点踩，未评过为 undefined */
+  rating?: "up" | "down";
 }
 
 /** 指令块解析失败的占位卡片：没有可执行的动作，也就没有确认与撤销 */
@@ -194,6 +201,12 @@ const MAX_MESSAGE_CHARS = 100_000;
 const HISTORY_TOKEN_BUDGET = 3000;
 const HISTORY_MAX_MESSAGES = 40;
 
+/** 会话累计 token 用量（服务商不回 usage 时整份为 0） */
+export interface SessionUsage {
+  prompt: number;
+  completion: number;
+}
+
 /** 归档的历史会话（不含进行中的当前对话） */
 export interface StoredSession {
   id: string;
@@ -203,6 +216,20 @@ export interface StoredSession {
   /** 会话发起时所在的页面：历史会话的上下文是那一页，切换页面后不应混淆 */
   pageId?: string | null;
   pageTitle?: string | null;
+  /** 会话累计 token 用量：切回历史会话时据此恢复底部的用量条 */
+  usage?: SessionUsage;
+  /** 归档位：归档后不进日常历史列表，但仍可检索、可还原，且不受会话条数上限裁剪 */
+  archived?: boolean;
+}
+
+/** 只认非负有限数：库行/本地 JSON 里的脏值一律按 0 处理，别让 NaN 流进费用估算 */
+function sanitizeUsage(raw: unknown): SessionUsage | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const rec = raw as Record<string, unknown>;
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
+  const prompt = num(rec.prompt);
+  const completion = num(rec.completion);
+  return prompt > 0 || completion > 0 ? { prompt, completion } : undefined;
 }
 
 function toSessionRow(s: StoredSession): AiSessionRow {
@@ -213,6 +240,9 @@ function toSessionRow(s: StoredSession): AiSessionRow {
     page_title: s.pageTitle ?? null,
     updated_at: String(s.updatedAt),
     messages: JSON.stringify(s.messages),
+    prompt_tokens: s.usage?.prompt ?? 0,
+    completion_tokens: s.usage?.completion ?? 0,
+    archived: s.archived ?? false,
   };
 }
 
@@ -233,6 +263,8 @@ function fromSessionRow(row: AiSessionRow): StoredSession | null {
     messages,
     pageId: row.page_id,
     pageTitle: row.page_title,
+    usage: sanitizeUsage({ prompt: row.prompt_tokens, completion: row.completion_tokens }),
+    archived: row.archived === true,
   };
 }
 
@@ -288,6 +320,18 @@ function sanitizeAction(raw: unknown, pageId: string | null): AiActionRecord | n
   return record;
 }
 
+/** 图片附件恢复：只认 assets/ 之内的相对路径，与会话里存的形态一致（base64 从不入库） */
+function sanitizeImages(raw: unknown): AiImageAttachment[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = raw.flatMap((x) => {
+    if (typeof x !== "object" || x === null) return [];
+    const img = x as Record<string, unknown>;
+    if (typeof img.path !== "string" || !img.path.startsWith("assets/")) return [];
+    return [{ name: typeof img.name === "string" ? img.name : "图片", path: img.path }];
+  });
+  return out.length > 0 ? out : undefined;
+}
+
 /** 恢复时逐条校验消息；动作卡片一并恢复，切回历史会话仍能看到并处理待确认的改动 */
 function sanitizeMessage(raw: unknown, pageId: string | null = null): AiMessage | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -296,11 +340,16 @@ function sanitizeMessage(raw: unknown, pageId: string | null = null): AiMessage 
   const actions = Array.isArray(m.actions)
     ? m.actions.map((x) => sanitizeAction(x, pageId)).filter((x): x is AiActionRecord => x !== null)
     : [];
+  const images = sanitizeImages(m.images);
+  // 评分不白名单化就会被恢复流程丢掉，重开面板就看不到自己标过的好/坏
+  const rating = m.rating === "up" || m.rating === "down" ? m.rating : undefined;
   return {
     id: typeof m.id === "string" && m.id ? m.id : newId(),
     role: m.role,
     content: m.content.slice(0, MAX_MESSAGE_CHARS),
     ...(actions.length > 0 ? { actions } : {}),
+    ...(images ? { images } : {}),
+    ...(rating ? { rating } : {}),
   };
 }
 
@@ -320,6 +369,8 @@ function restoreSession(raw: unknown): StoredSession | null {
     messages,
     pageId: typeof rec.pageId === "string" ? rec.pageId : null,
     pageTitle: typeof rec.pageTitle === "string" ? rec.pageTitle : null,
+    usage: sanitizeUsage(rec.usage),
+    archived: rec.archived === true,
   };
 }
 
@@ -346,6 +397,9 @@ function loadSessionsFromStorage(): {
     return empty;
   }
 }
+
+/** localStorage 里那份会话快照的形状 */
+type LocalSessions = ReturnType<typeof loadSessionsFromStorage>;
 
 function loadWidth(): number {
   try {
@@ -420,6 +474,8 @@ interface AiState {
   usage: AiUsage | null;
   /** 本会话累计用量，只在服务商返回用量时累加 */
   usageTotal: { prompt: number; completion: number; total: number };
+  /** 库中全部会话的 token 累计（库不可用时为 null，界面隐藏用量条） */
+  usageSummary: AiUsageSummary | null;
   config: AiConfig | null;
   configLoaded: boolean;
   /**
@@ -446,7 +502,7 @@ interface AiState {
   setConfig: (c: AiConfig) => void;
   /** 设置/清除下一条提问要附带的选中内容 */
   setPendingContext: (text: string | null) => void;
-  send: (text: string) => Promise<void>;
+  send: (text: string, images?: AiImageAttachment[]) => Promise<void>;
   stop: () => void;
   clear: () => void;
   retry: () => Promise<void>;
@@ -456,6 +512,12 @@ interface AiState {
   /** 切换到历史会话（当前对话有内容时先归档） */
   switchSession: (id: string) => void;
   deleteSession: (id: string) => void;
+  /** 重命名历史会话（当前对话的标题由首条提问决定，不参与） */
+  renameSession: (id: string, title: string) => void;
+  /** 归档 / 取消归档历史会话 */
+  setSessionArchived: (id: string, archived: boolean) => void;
+  /** 给一条回答打分，再点同向取消 */
+  rateMessage: (messageId: string, rating: "up" | "down") => void;
   /** 撤销某条回复里某个动作造成的文档改动（仅编辑器内落地过的可撤销） */
   undoAction: (messageId: string, index: number) => void;
   /** 执行待确认的动作（设置开启「改前确认」后由用户触发） */
@@ -471,7 +533,7 @@ interface AiState {
   /** 从某条回答重新生成：丢掉它与它之后的消息，用同一个问题再问一次 */
   regenerate: (messageId: string) => Promise<void>;
   /** 改后重发：替换某条提问、丢掉它之后的消息并重新生成 */
-  resend: (messageId: string, text: string) => Promise<void>;
+  resend: (messageId: string, text: string, images?: AiImageAttachment[]) => Promise<void>;
   /** 把某条提问标记为待修改（面板据此把它填回输入框） */
   startEdit: (messageId: string) => void;
   cancelEdit: () => void;
@@ -504,6 +566,7 @@ export const useAiStore = create<AiState>()((set, get) => {
     activeSessionId: string;
     sessionPageId: string | null;
     sessionPageTitle: string | null;
+    usageTotal: { prompt: number; completion: number; total: number };
   }): { sessions: StoredSession[]; archived: StoredSession | null; pruned: string[] } => {
     if (s.messages.length === 0) return { sessions: s.sessions, archived: null, pruned: [] };
     const entry: StoredSession = {
@@ -513,16 +576,26 @@ export const useAiStore = create<AiState>()((set, get) => {
       messages: s.messages,
       pageId: s.sessionPageId,
       pageTitle: s.sessionPageTitle,
+      usage: { prompt: s.usageTotal.prompt, completion: s.usageTotal.completion },
     };
     const list = [entry, ...s.sessions];
+    const overflow = list.slice(MAX_SESSIONS);
     return {
-      sessions: list.slice(0, MAX_SESSIONS),
+      // 用户主动归档的会话代表「要留档」，超出条数上限时先裁普通会话
+      sessions: list.filter((x, i) => i < MAX_SESSIONS || x.archived === true),
       archived: entry,
-      pruned: list.slice(MAX_SESSIONS).map((x) => x.id),
+      pruned: overflow.filter((x) => x.archived !== true).map((x) => x.id),
     };
   };
 
   /** 会话快照落盘（流式增量不触发，只在轮次结束 / 显式操作时调用） */
+  /** 跨会话 token 累计：库不可用时清掉即可，用量条是锦上添花，不该弹错打扰 */
+  const fetchUsage = () => {
+    void aiUsageSummary()
+      .then((v) => set({ usageSummary: v }))
+      .catch(() => set({ usageSummary: null }));
+  };
+
   /** localStorage 兜底：只在落库失败时用；配额溢出则丢一半最老的归档重试一次 */
   const writeLocal = (active: StoredSession | null, sessions: StoredSession[]) => {
     const activeId = get().activeSessionId;
@@ -555,27 +628,71 @@ export const useAiStore = create<AiState>()((set, get) => {
       messages: s.messages,
       pageId: s.sessionPageId,
       pageTitle: s.sessionPageTitle,
+      usage: { prompt: s.usageTotal.prompt, completion: s.usageTotal.completion },
     };
   };
 
   // 默认落库：localStorage 只有约 5MB 配额，长对话写满后会被迫丢弃历史；落库则没有这个上限。
   // 按条 upsert 而非整表覆盖：单条写失败不至于把其它会话一起清掉。
   const saveSession = (session: StoredSession) => {
-    void aiSessionSave(toSessionRow(session)).catch((e: unknown) => {
-      logger.warn("ai session save to db failed, fallback to localStorage", e);
-      writeLocal(activeSnapshot(), get().sessions);
-    });
+    void aiSessionSave(toSessionRow(session))
+      .then(fetchUsage)
+      .catch((e: unknown) => {
+        logger.warn("ai session save to db failed, fallback to localStorage", e);
+        writeLocal(activeSnapshot(), get().sessions);
+      });
   };
 
   const dropSessions = (ids: string[]) => {
-    for (const id of ids) {
-      void aiSessionDelete(id).catch((e: unknown) => logger.warn("ai session delete failed", e));
-    }
+    if (ids.length === 0) return;
+    const ops = ids.map((id) => aiSessionDelete(id).catch((e: unknown) => logger.warn("ai session delete failed", e)));
+    // 删除影响累计用量：等写请求落地再重取，否则拿到的还是删之前的数
+    void Promise.allSettled(ops).then(fetchUsage);
   };
 
   const persistSessions = () => {
     const active = activeSnapshot();
     if (active) saveSession(active);
+  };
+
+  /** 本地（localStorage）那份老数据直接充当当前状态：库不可用、或库与本地都空时走这里 */
+  const applyLocal = (local: LocalSessions) =>
+    set({
+      sessions: local.sessions,
+      activeSessionId: local.activeId,
+      messages: local.active?.messages ?? [],
+      sessionPageId: local.active?.pageId ?? null,
+      sessionPageTitle: local.active?.pageTitle ?? null,
+      usageTotal: sessionUsageTotal(local.active?.usage),
+      sessionsLoaded: true,
+    });
+
+  /**
+   * 一次性导入老会话：ai_sessions 的建表迁移在 0.8.24 之前从未生效，历史只存在 localStorage。
+   * 库空而本地有货时先写进库，全部成功才清掉本地副本 —— 否则下一次启动库里已经有当前会话的行，
+   * 本地那份归档就再也读不到了（看起来像用户的历史会话凭空消失）。
+   * 返回 false 表示没导成功，调用方继续沿用本地那份，下次启动还会重试。
+   */
+  const importLocalSessions = async (pending: StoredSession[]): Promise<boolean> => {
+    const unique: StoredSession[] = [];
+    const seen = new Set<string>();
+    for (const s of pending) {
+      if (seen.has(s.id)) continue;
+      seen.add(s.id);
+      unique.push(s);
+    }
+    try {
+      for (const s of unique) await aiSessionSave(toSessionRow(s));
+    } catch (e) {
+      logger.warn("ai sessions import from localStorage failed", e);
+      return false;
+    }
+    try {
+      localStorage.removeItem(SESSIONS_KEY);
+    } catch {
+      /* 清不掉只是下次重复导入，按 id upsert 没有副作用 */
+    }
+    return true;
   };
 
   /** 当前配置的最大上下文字符数 */
@@ -605,8 +722,13 @@ export const useAiStore = create<AiState>()((set, get) => {
   /** 组装发给服务端的消息：system + 参考文档 + 历史对话（排除空的助手占位） */
   const requestMessages = (assistantId: string, referenceContext = ""): AiChatMessage[] => {
     const history = get()
-      .messages.filter((m) => m.id !== assistantId && m.content.trim().length > 0)
-      .map((m) => ({ role: m.role, content: m.content }));
+      .messages.filter((m) => m.id !== assistantId && (m.content.trim().length > 0 || m.images?.length))
+      .map((m) => ({
+        role: m.role,
+        content: m.content,
+        // 只给路径：图片字节由 Rust 在发请求前按 assets 相对路径读出内联
+        ...(m.images?.length ? { images: m.images.map((i) => ({ path: i.path })) } : {}),
+      }));
     // 长对话防超限：按估算 token 从最新往前收进预算，放不下的早期轮次丢弃
     const kept: AiChatMessage[] = [];
     let budget = HISTORY_TOKEN_BUDGET;
@@ -1016,6 +1138,13 @@ export const useAiStore = create<AiState>()((set, get) => {
     }
   };
 
+  /** 库里存的用量 → 面板用的累计三元组（老会话没单独记 total，用输入+输出兜底） */
+  const sessionUsageTotal = (u?: SessionUsage) => ({
+    prompt: u?.prompt ?? 0,
+    completion: u?.completion ?? 0,
+    total: (u?.prompt ?? 0) + (u?.completion ?? 0),
+  });
+
   return {
     open: false,
     width: loadWidth(),
@@ -1031,7 +1160,8 @@ export const useAiStore = create<AiState>()((set, get) => {
     sessionPageTitle: null,
     sessionsLoaded: false,
     usage: null,
-    usageTotal: { prompt: 0, completion: 0, total: 0 },
+    usageTotal: sessionUsageTotal(restored.active?.usage),
+    usageSummary: null,
     config: null,
     configLoaded: false,
     pendingContext: null,
@@ -1066,44 +1196,56 @@ export const useAiStore = create<AiState>()((set, get) => {
     // 历史会话优先从库里读（localStorage 只有约 5MB 配额）；库为空或不可用时再用本地老数据
     loadSessions: async () => {
       if (get().sessionsLoaded) return;
+      const local = loadSessionsFromStorage();
+      let rows: AiSessionRow[];
       try {
-        const rows = await aiSessionList();
-        const all = rows
-          .slice(0, MAX_SESSIONS + 1)
-          .map(fromSessionRow)
-          .filter((s): s is StoredSession => s !== null);
-        if (all.length > 0) {
-          // 库按 updated_at 降序返回，第一条即最近会话
-          const active = all[0];
-          set({
-            messages: active.messages,
-            activeSessionId: active.id,
-            sessions: all.slice(1),
-            sessionPageId: active.pageId ?? null,
-            sessionPageTitle: active.pageTitle ?? null,
-            sessionsLoaded: true,
-          });
-          return;
-        }
+        rows = await aiSessionList();
       } catch (e) {
         logger.warn("ai sessions load from db failed, fallback to localStorage", e);
+        applyLocal(local);
+        return;
       }
-      const local = loadSessionsFromStorage();
+      // 库按 updated_at 降序返回。普通会话取到条数上限即止，归档的不受上限裁剪——
+      // 那是用户明确要留档的，历史搜索正是为它们准备的。
+      const all: StoredSession[] = [];
+      let normal = 0;
+      for (const r of rows) {
+        const s = fromSessionRow(r);
+        if (!s) continue;
+        if (s.archived) all.push(s);
+        else if (normal++ < MAX_SESSIONS + 1) all.push(s);
+      }
+      if (all.length === 0) {
+        const pending = [local.active, ...local.sessions].filter((s): s is StoredSession => s !== null);
+        // 导入失败（或本地本来就没会话）就沿用本地那份，下次启动还会重试
+        if (pending.length === 0 || !(await importLocalSessions(pending))) {
+          applyLocal(local);
+          return;
+        }
+        // 保持本地那份的当前会话在第一位，切过来还是用户正在看的那段对话
+        all.push(...pending.slice(0, MAX_SESSIONS + 1));
+      }
+      // 当前对话取最近一条未归档的；全被归档了就退回最近那条
+      const fresh = all.findIndex((x) => !x.archived);
+      const active = all[fresh < 0 ? 0 : fresh];
       set({
-        sessions: local.sessions,
-        activeSessionId: local.activeId,
-        messages: local.active?.messages ?? [],
-        sessionPageId: local.active?.pageId ?? null,
-        sessionPageTitle: local.active?.pageTitle ?? null,
+        messages: active.messages,
+        activeSessionId: active.id,
+        sessions: all.filter((x) => x.id !== active.id),
+        sessionPageId: active.pageId ?? null,
+        sessionPageTitle: active.pageTitle ?? null,
+        usageTotal: sessionUsageTotal(active.usage),
         sessionsLoaded: true,
       });
+      fetchUsage();
     },
     setConfig: (config) => set({ config, configLoaded: true }),
     setPendingContext: (text) => set({ pendingContext: text }),
 
-    send: async (text) => {
+    send: async (text, images) => {
       const content = text.trim();
-      if (!content || get().streaming) return;
+      // 只带图、不打字也算一次提问；两者皆空才忽略
+      if ((!content && !images?.length) || get().streaming) return;
       const assistant: AiMessage = { id: newId(), role: "assistant", content: "" };
       // 会话首条消息：记下发起时所在的页面，之后历史会话列表能标注它的上下文来源
       const pageRef = get().messages.length === 0 ? currentPageRef() : null;
@@ -1116,7 +1258,11 @@ export const useAiStore = create<AiState>()((set, get) => {
         promptIdeas: [],
         // 普通提问（含快捷动作）会往列表追加内容，此前「改后重发」的目标不再有效
         editingId: null,
-        messages: [...s.messages, { id: newId(), role: "user", content }, assistant],
+        messages: [
+          ...s.messages,
+          { id: newId(), role: "user", content, ...(images?.length ? { images } : {}) },
+          assistant,
+        ],
         ...(pageRef ? { sessionPageId: pageRef.id, sessionPageTitle: pageRef.name } : {}),
       }));
       // 用户消息先落盘，流式中途崩溃也不丢提问
@@ -1190,9 +1336,9 @@ export const useAiStore = create<AiState>()((set, get) => {
         // 换会话后消息列表整个换掉，待修改的提问 id 不再指向任何消息
         editingId: null,
         promptIdeas: [],
-        // 累计用量按会话统计，切过去无从得知历史用量，重置为 0
+        // 累计用量按会话统计：切过去先接上它自己那份历史用量，本轮再往上累加
         usage: null,
-        usageTotal: { prompt: 0, completion: 0, total: 0 },
+        usageTotal: sessionUsageTotal(target.usage),
       });
       if (archived.archived) saveSession(archived.archived);
       dropSessions(archived.pruned);
@@ -1202,6 +1348,35 @@ export const useAiStore = create<AiState>()((set, get) => {
       if (get().streaming) return;
       set((s) => ({ sessions: s.sessions.filter((x) => x.id !== id) }));
       dropSessions([id]);
+    },
+
+    // 改名与归档都只动历史列表里的那一行：整行 upsert，不需要额外的命令
+    renameSession: (id, rawTitle) => {
+      const title = rawTitle.trim().slice(0, 60);
+      const target = get().sessions.find((x) => x.id === id);
+      if (!title || !target || target.title === title) return;
+      const next = { ...target, title };
+      set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? next : x)) }));
+      saveSession(next);
+    },
+
+    setSessionArchived: (id, archived) => {
+      const target = get().sessions.find((x) => x.id === id);
+      if (!target || target.archived === archived) return;
+      const next = { ...target, archived };
+      set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? next : x)) }));
+      saveSession(next);
+    },
+
+    // 评分写在消息上，随会话整条落库；点同一次即取消（rating 置 undefined，序列化时自然消失）
+    rateMessage: (messageId, rating) => {
+      set((s) => ({
+        messages: s.messages.map((m) => {
+          if (m.id !== messageId) return m;
+          return m.rating === rating ? { ...m, rating: undefined } : { ...m, rating };
+        }),
+      }));
+      persistSessions();
     },
 
     retry: async () => {
@@ -1314,6 +1489,7 @@ export const useAiStore = create<AiState>()((set, get) => {
         await aiSaveConfig({
           enabled: c.enabled,
           provider: c.provider,
+          protocol: c.protocol,
           baseUrl: c.base_url,
           model: c.model,
           maxChars: c.max_chars,
@@ -1325,6 +1501,8 @@ export const useAiStore = create<AiState>()((set, get) => {
           activeProfile: id,
           quickActions: c.quick_actions,
           useTools: c.use_tools,
+          priceInput: c.price_input,
+          priceOutput: c.price_output,
           apiKey: null,
         });
         set({ config: await aiGetConfig() });
@@ -1387,17 +1565,17 @@ export const useAiStore = create<AiState>()((set, get) => {
       await runStream(assistant.id);
     },
 
-    resend: async (messageId, text) => {
+    resend: async (messageId, text, images) => {
       const content = text.trim();
       const s = get();
-      if (!content || s.streaming) return;
+      if ((!content && !images?.length) || s.streaming) return;
       const i = s.messages.findIndex((m) => m.id === messageId);
       if (i < 0 || s.messages[i].role !== "user") return;
       const assistant: AiMessage = { id: newId(), role: "assistant", content: "" };
       set({
         editingId: null,
         promptIdeas: [],
-        messages: [...s.messages.slice(0, i), { ...s.messages[i], content }, assistant],
+        messages: [...s.messages.slice(0, i), { ...s.messages[i], content, ...(images ? { images } : {}) }, assistant],
         reasoning: "",
         error: null,
         errorCode: null,

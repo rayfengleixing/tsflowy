@@ -1,16 +1,19 @@
-//! AI 助手：读取/保存 AI 配置、连通性测试，以及走 OpenAI 兼容协议的流式对话。
+//! AI 助手：读取/保存 AI 配置、连通性测试，以及流式对话的传输层。
 //!
-//! openai / deepseek / qwen / kimi / ollama 等都暴露同一套接口：
-//! `POST {base_url}/chat/completions`，鉴权 `Authorization: Bearer <key>`，响应为 SSE。
-//! base_url 由用户填写（可能已含 /v1），这里只去掉结尾 `/` 后原样拼 `/chat/completions`。
+//! 本文件只管「一次流式请求的生命周期」：重试、超时、取消、把帧推给前端。
+//! 各家协议的地址 / 鉴权 / 请求体 / SSE 帧形态差异都在 `ai_protocol` 里翻译，
+//! 前端与 agent 循环看到的始终是同一套事件。
 
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tokio::time::timeout;
 
+use super::ai_protocol;
 use super::files::{self, secret, AiConfig};
 
 /// 流式请求的「世代」计数：ai_cancel 自增后，正在跑的 ai_chat 会发现自己记录的世代已过期而中断。
@@ -30,6 +33,11 @@ const RETRY_BACKOFFS: [Duration; 2] = [Duration::from_secs(1), Duration::from_se
 /// 未配置 AI 时的统一错误文案（前后端约定）
 const NOT_CONFIGURED: &str = "尚未配置 AI：请在设置中填写服务商与 API Key";
 
+/// 一条消息最多附几张图
+const MAX_IMAGES_PER_MESSAGE: usize = 4;
+/// 单张图片的字节上限：各家 API 的请求体都在 5–10MB 量级，base64 还要再涨约 1/3
+const MAX_IMAGE_BYTES: usize = 6 * 1024 * 1024;
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AiMessage {
     pub role: String,
@@ -40,6 +48,21 @@ pub struct AiMessage {
     /// role=tool 时对应的调用 id
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// 图片附件；只有 user 消息会用。各家协议的多模态块形态不同，见 ai_protocol
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<AiImage>,
+}
+
+/// 一条消息附带的图片。前端只填 `path`（assets/ 相对路径），会话存档因此很小；
+/// `media_type` / `data` 由 Rust 在发请求前按 path 读出并内联。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct AiImage {
+    pub path: String,
+    #[serde(default)]
+    pub media_type: String,
+    /// base64（不带 data: 前缀）
+    #[serde(default)]
+    pub data: String,
 }
 
 /// 服务端回传的一次函数调用（function calling 形态的完整参数）
@@ -70,8 +93,30 @@ pub struct AiUsage {
 
 impl AiUsage {
     /// 服务商可能在每一帧都带上 usage 字段但值为 null，只有真正有数字时才算拿到用量
-    fn is_meaningful(&self) -> bool {
-        self.prompt_tokens.is_some() || self.completion_tokens.is_some() || self.total_tokens.is_some()
+    pub(crate) fn is_meaningful(&self) -> bool {
+        self.prompt_tokens.is_some()
+            || self.completion_tokens.is_some()
+            || self.total_tokens.is_some()
+    }
+
+    /// 多家协议把用量拆在两帧里给（Anthropic：input 在 message_start、output 在 message_delta），
+    /// 合并时新读到的数字优先，缺的那一项保留旧值。
+    fn merged_with(self, newer: AiUsage) -> AiUsage {
+        let merged = AiUsage {
+            prompt_tokens: newer.prompt_tokens.or(self.prompt_tokens),
+            completion_tokens: newer.completion_tokens.or(self.completion_tokens),
+            total_tokens: newer.total_tokens.or(self.total_tokens),
+        };
+        // 两家都只分报 input/output 时 total 拿不到，按两项之和补
+        if merged.total_tokens.is_none() {
+            if let (Some(p), Some(c)) = (merged.prompt_tokens, merged.completion_tokens) {
+                return AiUsage {
+                    total_tokens: Some(p + c),
+                    ..merged
+                };
+            }
+        }
+        merged
     }
 }
 
@@ -105,6 +150,8 @@ pub enum AiEvent {
 pub struct AiConfigPublic {
     pub enabled: bool,
     pub provider: String,
+    /// 接口协议族：空串表示按 base_url 自动识别
+    pub protocol: String,
     pub base_url: String,
     pub model: String,
     pub max_chars: u32,
@@ -124,6 +171,10 @@ pub struct AiConfigPublic {
     pub quick_actions: Vec<AiQuickActionPublic>,
     /// 是否用 function calling 下发编辑指令
     pub use_tools: bool,
+    /// 输入 token 单价（每 100 万 token），0 = 未填价
+    pub price_input: f64,
+    /// 输出 token 单价（每 100 万 token）
+    pub price_output: f64,
     pub has_api_key: bool,
     pub api_key_masked: String,
 }
@@ -152,6 +203,8 @@ pub struct AiQuickActionPublic {
 pub struct AiConfigInput {
     pub enabled: bool,
     pub provider: String,
+    /// 接口协议族（空串=按 base_url 自动识别）
+    pub protocol: String,
     pub base_url: String,
     pub model: String,
     pub max_chars: u32,
@@ -164,6 +217,11 @@ pub struct AiConfigInput {
     pub active_profile: String,
     pub quick_actions: Vec<AiQuickActionInput>,
     pub use_tools: bool,
+    /// token 单价（每 100 万 token），前端未传时按 0（不做估算）
+    #[serde(default)]
+    pub price_input: f64,
+    #[serde(default)]
+    pub price_output: f64,
     pub api_key: Option<String>,
 }
 
@@ -201,6 +259,8 @@ pub fn ai_save_config(app: tauri::AppHandle, cfg: AiConfigInput) -> Result<(), S
     let mut ai = app_cfg.ai.take().unwrap_or_default();
     ai.enabled = cfg.enabled;
     ai.provider = cfg.provider;
+    // 归一小写存着，识别时少一次比较；空串就是「自动」
+    ai.protocol = cfg.protocol.trim().to_ascii_lowercase();
     ai.base_url = cfg.base_url;
     ai.model = cfg.model;
     ai.max_chars = cfg.max_chars;
@@ -236,6 +296,9 @@ pub fn ai_save_config(app: tauri::AppHandle, cfg: AiConfigInput) -> Result<(), S
         })
         .collect();
     ai.use_tools = cfg.use_tools;
+    // 单价不接受负数：前端输入框可能被填成负值，估算口径统一在这里夹一次
+    ai.price_input = cfg.price_input.max(0.0);
+    ai.price_output = cfg.price_output.max(0.0);
     // None 保持原值不变；Some("") 清空；Some(s) 覆盖。
     // 非空 key 优先写入系统凭据库：成功则 config.json 不留明文；失败则回退明文，保证可用。
     match cfg.api_key {
@@ -261,17 +324,26 @@ pub fn ai_save_config(app: tauri::AppHandle, cfg: AiConfigInput) -> Result<(), S
 pub async fn ai_test_connection(app: tauri::AppHandle) -> Result<String, String> {
     let ai = effective_ai(&app)?;
     let client = build_client()?;
-    let body = serde_json::json!({
-        "model": ai.model,
-        "messages": [{ "role": "user", "content": "ping" }],
-        "max_tokens": 8,
-        "stream": false,
-    });
+    let protocol = ai_protocol::Protocol::resolve(&ai.protocol, &ai.base_url);
+    // 探活只要「服务端受理了请求」，给一个足够小的 token 上限，别让它真写一段话
+    let mut probe = ai.clone();
+    probe.max_tokens = if probe.max_tokens > 0 {
+        probe.max_tokens.min(64)
+    } else {
+        64
+    };
+    let ping = vec![AiMessage {
+        role: "user".to_string(),
+        content: "ping".to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+        images: Vec::new(),
+    }];
+    let (endpoint, body) = ai_protocol::chat(&probe, protocol, ping, None, false);
     // connect_timeout 只管建连，服务端接受连接后迟迟不响应（队列排队、鉴权卡住）仍会永久挂住，
     // 因此再套一层整体超时：30 秒内拿不到响应就判定不可用。
-    let pending = client
-        .post(chat_url(&ai.base_url))
-        .bearer_auth(&ai.api_key)
+    let pending = endpoint
+        .apply(client.post(&endpoint.url))
         .json(&body)
         .send();
     let resp = match timeout(TEST_TIMEOUT, pending).await {
@@ -286,7 +358,7 @@ pub async fn ai_test_connection(app: tauri::AppHandle) -> Result<String, String>
     if !status.is_success() {
         return Err(readable_http_error(status.as_u16(), &text));
     }
-    parse_completion_text(&text)
+    ai_protocol::completion_text(protocol, &text)
 }
 
 /// 拉取当前 base_url 下的可用模型列表（GET /models），供设置页下拉选择。
@@ -295,9 +367,11 @@ pub async fn ai_test_connection(app: tauri::AppHandle) -> Result<String, String>
 pub async fn ai_list_models(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     let ai = effective_ai(&app)?;
     let client = build_client()?;
+    let protocol = ai_protocol::Protocol::resolve(&ai.protocol, &ai.base_url);
+    let endpoint = ai_protocol::models(&ai, protocol);
     let resp = timeout(
         TEST_TIMEOUT,
-        client.get(models_url(&ai.base_url)).bearer_auth(&ai.api_key).send(),
+        endpoint.apply(client.get(&endpoint.url)).send(),
     )
     .await
     .map_err(|_| "拉取模型列表超时（30 秒）".to_string())?
@@ -307,17 +381,7 @@ pub async fn ai_list_models(app: tauri::AppHandle) -> Result<Vec<String>, String
     if !status.is_success() {
         return Err(readable_http_error(status.as_u16(), &text));
     }
-    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("响应解析失败：{e}"))?;
-    let mut out: Vec<String> = v
-        .get("data")
-        .and_then(|d| d.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-    out.sort();
+    let out = ai_protocol::model_ids(protocol, &text);
     if out.is_empty() {
         return Err("服务端没有返回可用模型".to_string());
     }
@@ -336,7 +400,10 @@ pub fn ai_cancel() -> Result<(), String> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum StreamOutcome {
     /// 正常结束：full 为正式回答，tool_calls 为累积出的函数调用
-    Done { full: String, tool_calls: Vec<AiToolCall> },
+    Done {
+        full: String,
+        tool_calls: Vec<AiToolCall>,
+    },
     /// 用户取消（世代过期）
     Cancelled,
     /// 已把错误发给前端
@@ -357,6 +424,7 @@ pub async fn ai_chat(
     let client = build_client()?;
     // 自定义系统提示放在消息序列最后：离用户问题越近，模型越容易遵守
     let mut messages = req.messages;
+    inline_images(&app, &mut messages)?;
     let custom = ai.system_prompt.trim();
     if !custom.is_empty() {
         messages.push(AiMessage {
@@ -364,6 +432,7 @@ pub async fn ai_chat(
             content: custom.to_string(),
             tool_calls: None,
             tool_call_id: None,
+            images: Vec::new(),
         });
     }
     match stream_once(&client, &ai, messages, req.tools, generation, &on_event).await {
@@ -381,27 +450,9 @@ async fn stream_once(
     generation: u64,
     on_event: &Channel<AiEvent>,
 ) -> StreamOutcome {
-    let mut body = serde_json::json!({
-        "model": ai.model,
-        "messages": messages,
-        "stream": true,
-        // 让支持的服务商在尾帧回传 token 用量；不支持的会忽略这个字段
-        "stream_options": { "include_usage": true },
-    });
-    // 温度夹到合法区间，避免用户填出界让服务端直接 400；max_tokens 为 0 时不下发（用服务端默认）
-    if let Some(obj) = body.as_object_mut() {
-        obj.insert("temperature".into(), serde_json::json!(ai.temperature.clamp(0.0, 2.0)));
-        if ai.max_tokens > 0 {
-            obj.insert("max_tokens".into(), serde_json::json!(ai.max_tokens));
-        }
-        // 工具定义由前端下发（agent 工具集在前端定义与执行），原样透传
-        if let Some(tools) = tools {
-            if !tools.is_null() {
-                obj.insert("tools".into(), tools);
-                obj.insert("tool_choice".into(), serde_json::json!("auto"));
-            }
-        }
-    }
+    // 协议差异（地址、鉴权头、请求体形态）全部收在 ai_protocol，这里只负责传输与取消
+    let protocol = ai_protocol::Protocol::resolve(&ai.protocol, &ai.base_url);
+    let (endpoint, body) = ai_protocol::chat(ai, protocol, messages, tools, true);
     // 流开始前允许重试：建连失败 / 429 / 5xx 各退避再试，最多 PRE_STREAM_RETRIES 次。
     // 进入流式阶段后绝不重试——内容可能已经吐给前端，重试会造成重复输出。
     let resp = {
@@ -411,9 +462,8 @@ async fn stream_once(
                 send_cancelled(on_event);
                 return StreamOutcome::Cancelled;
             }
-            let sent = client
-                .post(chat_url(&ai.base_url))
-                .bearer_auth(&ai.api_key)
+            let sent = endpoint
+                .apply(client.post(&endpoint.url))
                 .json(&body)
                 .send()
                 .await;
@@ -441,7 +491,10 @@ async fn stream_once(
                     } else {
                         Duration::ZERO
                     };
-                    if attempt < PRE_STREAM_RETRIES && retryable_status(status) && !cancelled(generation) {
+                    if attempt < PRE_STREAM_RETRIES
+                        && retryable_status(status)
+                        && !cancelled(generation)
+                    {
                         tokio::time::sleep(wait).await;
                         attempt += 1;
                         continue;
@@ -465,8 +518,10 @@ async fn stream_once(
     let mut buf: Vec<u8> = Vec::new();
     let mut full = String::new();
     // 函数调用增量按 index 归并（多工具并行调用时每个调用各有 index）：(id, name, arguments)
-    let mut tool_deltas: std::collections::BTreeMap<u32, (String, String, String)> = Default::default();
+    let mut tool_deltas: std::collections::BTreeMap<u32, (String, String, String)> =
+        Default::default();
     let mut usage: Option<AiUsage> = None;
+    let mut decoder = ai_protocol::SseDecoder::new(protocol);
     // 首帧用较短的等待上限，之后放宽：推理型模型会先长时间吐 reasoning，期间帧是连续的。
     let mut awaiting_first = true;
 
@@ -515,65 +570,77 @@ async fn stream_once(
             let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
             // 去掉行尾的 '\n'
             let line = String::from_utf8_lossy(&line_bytes[..line_bytes.len() - 1]);
-            match parse_sse_line(&line) {
-                SseParse::Delta(delta) => {
-                    if cancelled(generation) {
-                        send_cancelled(on_event);
-                        return StreamOutcome::Cancelled;
-                    }
-                    full.push_str(&delta);
-                    if on_event.send(AiEvent::Chunk { delta }).is_err() {
-                        return StreamOutcome::Failed;
-                    }
-                }
-                SseParse::Reasoning(delta) => {
-                    if cancelled(generation) {
-                        send_cancelled(on_event);
-                        return StreamOutcome::Cancelled;
-                    }
-                    // 思考内容不计入 full：Done 回传的仍只是正式回答
-                    if on_event.send(AiEvent::Reasoning { delta }).is_err() {
-                        return StreamOutcome::Failed;
-                    }
-                }
-                SseParse::Error(message) => {
-                    // 流里报的错拿不到状态码，按关键字猜一个归类
-                    let code = guess_error_code(&message);
-                    let _ = on_event.send(AiEvent::Error {
-                        message,
-                        code: Some(code.to_string()),
-                    });
-                    return StreamOutcome::Failed;
-                }
-                SseParse::Usage(u) => {
-                    usage = Some(u);
-                }
-                SseParse::ToolCallDelta { index, id, name, args } => {
-                    let entry = tool_deltas
-                        .entry(index)
-                        .or_insert_with(|| (String::new(), String::new(), String::new()));
-                    if let Some(v) = id {
-                        if !v.is_empty() {
-                            entry.0 = v;
+            // 一帧里可能同时给出正文增量与函数调用（Gemini 尤其如此），逐个事件处理
+            for event in decoder.decode(&line) {
+                match event {
+                    SseParse::Delta(delta) => {
+                        if cancelled(generation) {
+                            send_cancelled(on_event);
+                            return StreamOutcome::Cancelled;
+                        }
+                        full.push_str(&delta);
+                        if on_event.send(AiEvent::Chunk { delta }).is_err() {
+                            return StreamOutcome::Failed;
                         }
                     }
-                    if let Some(v) = name {
-                        if !v.is_empty() {
-                            entry.1 = v;
+                    SseParse::Reasoning(delta) => {
+                        if cancelled(generation) {
+                            send_cancelled(on_event);
+                            return StreamOutcome::Cancelled;
+                        }
+                        // 思考内容不计入 full：Done 回传的仍只是正式回答
+                        if on_event.send(AiEvent::Reasoning { delta }).is_err() {
+                            return StreamOutcome::Failed;
                         }
                     }
-                    entry.2.push_str(&args);
+                    SseParse::Error(message) => {
+                        // 流里报的错拿不到状态码，按关键字猜一个归类
+                        let code = guess_error_code(&message);
+                        let _ = on_event.send(AiEvent::Error {
+                            message,
+                            code: Some(code.to_string()),
+                        });
+                        return StreamOutcome::Failed;
+                    }
+                    SseParse::Usage(u) => {
+                        usage = Some(match usage.take() {
+                            Some(old) => old.merged_with(u),
+                            None => u,
+                        });
+                    }
+                    SseParse::ToolCallDelta {
+                        index,
+                        id,
+                        name,
+                        args,
+                    } => {
+                        let entry = tool_deltas
+                            .entry(index)
+                            .or_insert_with(|| (String::new(), String::new(), String::new()));
+                        if let Some(v) = id {
+                            if !v.is_empty() {
+                                entry.0 = v;
+                            }
+                        }
+                        if let Some(v) = name {
+                            if !v.is_empty() {
+                                entry.1 = v;
+                            }
+                        }
+                        entry.2.push_str(&args);
+                    }
+                    SseParse::Done => {
+                        let tool_calls = collect_tool_calls(tool_deltas);
+                        let _ = on_event.send(AiEvent::Done {
+                            full: full.clone(),
+                            usage,
+                            tool_calls: tool_calls.clone(),
+                        });
+                        return StreamOutcome::Done { full, tool_calls };
+                    }
+                    // 解码器已过滤掉与内容无关的帧
+                    _ => {}
                 }
-                SseParse::Done => {
-                    let tool_calls = collect_tool_calls(tool_deltas);
-                    let _ = on_event.send(AiEvent::Done {
-                        full: full.clone(),
-                        usage,
-                        tool_calls: tool_calls.clone(),
-                    });
-                    return StreamOutcome::Done { full, tool_calls };
-                }
-                SseParse::Ignore => {}
             }
         }
     }
@@ -603,7 +670,11 @@ fn collect_tool_calls(
         .into_values()
         .filter(|(_, name, args)| !name.is_empty() || !args.trim().is_empty())
         .map(|(id, name, args)| AiToolCall {
-            id: if id.is_empty() { format!("call_{name}") } else { id },
+            id: if id.is_empty() {
+                format!("call_{name}")
+            } else {
+                id
+            },
             name,
             arguments: args,
         })
@@ -623,6 +694,7 @@ fn public_of(cfg: &files::AppConfig, effective_key: &str) -> AiConfigPublic {
     AiConfigPublic {
         enabled: ai.enabled,
         provider: ai.provider,
+        protocol: ai.protocol,
         base_url: ai.base_url,
         model: ai.model,
         max_chars: ai.max_chars,
@@ -653,6 +725,8 @@ fn public_of(cfg: &files::AppConfig, effective_key: &str) -> AiConfigPublic {
             })
             .collect(),
         use_tools: ai.use_tools,
+        price_input: ai.price_input,
+        price_output: ai.price_output,
         has_api_key: !effective_key.is_empty(),
         api_key_masked: mask_api_key(effective_key),
     }
@@ -672,18 +746,8 @@ fn mask_api_key(key: &str) -> String {
     format!("{head}****{tail}")
 }
 
-/// 拼请求地址：去掉 base_url 结尾的 `/`，直接拼 `/chat/completions`（不再补 `/v1`）
-fn chat_url(base_url: &str) -> String {
-    format!("{}/chat/completions", base_url.trim_end_matches('/'))
-}
-
-/// 拼模型列表地址：`GET {base_url}/models`
-fn models_url(base_url: &str) -> String {
-    format!("{}/models", base_url.trim_end_matches('/'))
-}
-
 /// 从 `{"error": ...}` 里提取可读信息（error 可能是对象或字符串）
-fn extract_error_message(v: &serde_json::Value) -> Option<String> {
+pub(crate) fn extract_error_message(v: &serde_json::Value) -> Option<String> {
     let err = v.get("error")?;
     if let Some(s) = err.as_str() {
         return Some(s.to_string());
@@ -694,7 +758,7 @@ fn extract_error_message(v: &serde_json::Value) -> Option<String> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum SseParse {
+pub(crate) enum SseParse {
     /// 一条 data 行中提取出的非空增量文本
     Delta(String),
     /// 推理型模型的思考增量（`delta.reasoning_content`）
@@ -718,7 +782,7 @@ enum SseParse {
 
 /// 解析单行 SSE：按 `data:` 前缀取值，`[DONE]` 结束，取 `choices[0].delta.content`；
 /// content 为空时回退到 `choices[0].delta.reasoning_content`（推理型模型）。
-fn parse_sse_line(line: &str) -> SseParse {
+pub(crate) fn parse_sse_line(line: &str) -> SseParse {
     let line = line.strip_suffix('\r').unwrap_or(line);
     let Some(rest) = line.strip_prefix("data:") else {
         return SseParse::Ignore;
@@ -756,7 +820,10 @@ fn parse_sse_line(line: &str) -> SseParse {
         return SseParse::Reasoning(reasoning.to_string());
     }
     // 函数调用增量：首个调用带 name，后续调用各自带 index；参数分多帧到达
-    if let Some(calls) = delta.and_then(|d| d.get("tool_calls")).and_then(|c| c.as_array()) {
+    if let Some(calls) = delta
+        .and_then(|d| d.get("tool_calls"))
+        .and_then(|c| c.as_array())
+    {
         if let Some(first) = calls.first() {
             let index = first.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
             let id = first
@@ -775,7 +842,12 @@ fn parse_sse_line(line: &str) -> SseParse {
                 .and_then(|a| a.as_str())
                 .unwrap_or("");
             if id.is_some() || name.is_some() || !args.is_empty() {
-                return SseParse::ToolCallDelta { index, id, name, args: args.to_string() };
+                return SseParse::ToolCallDelta {
+                    index,
+                    id,
+                    name,
+                    args: args.to_string(),
+                };
             }
         }
     }
@@ -783,9 +855,18 @@ fn parse_sse_line(line: &str) -> SseParse {
     // 先判用量会把正常内容帧当成空帧丢掉。只有拿到了完整用量才算一条 Usage 事件。
     if let Some(u) = v.get("usage") {
         let usage = AiUsage {
-            prompt_tokens: u.get("prompt_tokens").and_then(|x| x.as_u64()).map(|x| x as u32),
-            completion_tokens: u.get("completion_tokens").and_then(|x| x.as_u64()).map(|x| x as u32),
-            total_tokens: u.get("total_tokens").and_then(|x| x.as_u64()).map(|x| x as u32),
+            prompt_tokens: u
+                .get("prompt_tokens")
+                .and_then(|x| x.as_u64())
+                .map(|x| x as u32),
+            completion_tokens: u
+                .get("completion_tokens")
+                .and_then(|x| x.as_u64())
+                .map(|x| x as u32),
+            total_tokens: u
+                .get("total_tokens")
+                .and_then(|x| x.as_u64())
+                .map(|x| x as u32),
         };
         if usage.is_meaningful() {
             return SseParse::Usage(usage);
@@ -803,7 +884,9 @@ fn retryable_status(status: reqwest::StatusCode) -> bool {
 fn parse_retry_after(value: Option<&str>, fallback: Duration) -> Duration {
     value
         .and_then(|s| s.trim().parse::<u64>().ok())
-        .map(|secs| Duration::from_secs(secs).clamp(Duration::from_millis(200), Duration::from_secs(10)))
+        .map(|secs| {
+            Duration::from_secs(secs).clamp(Duration::from_millis(200), Duration::from_secs(10))
+        })
         .unwrap_or(fallback)
 }
 
@@ -849,7 +932,8 @@ fn guess_error_code(message: &str) -> &'static str {
         || lower.contains("invalid api key")
     {
         "auth"
-    } else if lower.contains("429") || lower.contains("rate limit") || lower.contains("rate_limit") {
+    } else if lower.contains("429") || lower.contains("rate limit") || lower.contains("rate_limit")
+    {
         "rate_limit"
     } else if lower.contains("insufficient")
         || lower.contains("balance")
@@ -880,7 +964,7 @@ fn readable_http_error(status: u16, body: &str) -> String {
 /// 解析非流式补全响应：取 `choices[0].message.content`。
 /// content 为空（推理型模型把 tokens 全用在思考上）时仍算连通——HTTP 200 且有 choices，
 /// 说明地址、鉴权、模型三者都已被服务端接受。
-fn parse_completion_text(body: &str) -> Result<String, String> {
+pub(crate) fn parse_completion_text(body: &str) -> Result<String, String> {
     let v: serde_json::Value =
         serde_json::from_str(body).map_err(|e| format!("响应解析失败：{e}"))?;
     if let Some(m) = extract_error_message(&v) {
@@ -945,7 +1029,12 @@ fn effective_ai(app: &tauri::AppHandle) -> Result<AiConfig, String> {
     ai.api_key = effective_api_key(app);
     // 档位覆盖：选中某个档位时，用它的地址 / 模型 / 温度（字段为空的档位项保持原值）
     if !ai.active_profile.trim().is_empty() {
-        if let Some(p) = ai.profiles.iter().find(|p| p.id == ai.active_profile).cloned() {
+        if let Some(p) = ai
+            .profiles
+            .iter()
+            .find(|p| p.id == ai.active_profile)
+            .cloned()
+        {
             if !p.base_url.trim().is_empty() {
                 ai.base_url = p.base_url;
             }
@@ -961,6 +1050,49 @@ fn effective_ai(app: &tauri::AppHandle) -> Result<AiConfig, String> {
     Ok(ai)
 }
 
+/// 把消息里的图片附件（assets/ 相对路径）读成 base64，供各家协议内联下发。
+/// 读不出来的图一律报错而不是静默跳过：用户明确附了图，「模型没看到图」比请求失败更难解释。
+pub(crate) fn inline_images(
+    app: &tauri::AppHandle,
+    messages: &mut [AiMessage],
+) -> Result<(), String> {
+    for m in messages.iter_mut().filter(|m| !m.images.is_empty()) {
+        if m.images.len() > MAX_IMAGES_PER_MESSAGE {
+            return Err(format!("一条消息最多附 {MAX_IMAGES_PER_MESSAGE} 张图片"));
+        }
+        for img in &mut m.images {
+            let media_type = image_media_type(&img.path)
+                .ok_or_else(|| format!("不支持的图片格式：{}", img.path))?;
+            let bytes = super::files::asset::load_asset_bytes(app, &img.path)?;
+            if bytes.len() > MAX_IMAGE_BYTES {
+                return Err(format!(
+                    "图片太大（{} MB），单张上限 {} MB",
+                    bytes.len() / 1024 / 1024,
+                    MAX_IMAGE_BYTES / 1024 / 1024
+                ));
+            }
+            img.media_type = media_type.to_string();
+            img.data = BASE64.encode(&bytes);
+        }
+    }
+    Ok(())
+}
+
+/// 按扩展名给出 MIME；只认各家视觉模型都支持的四种格式
+fn image_media_type(path: &str) -> Option<&'static str> {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())?;
+    match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
 /// 只设 connect_timeout（约 15s），不设全局总超时：流式响应可能持续很久
 fn build_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
@@ -972,6 +1104,31 @@ fn build_client() -> Result<reqwest::Client, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_media_type_recognizes_supported_extensions() {
+        assert_eq!(image_media_type("assets/1.PNG"), Some("image/png"));
+        assert_eq!(image_media_type("assets/1.jpeg"), Some("image/jpeg"));
+        assert_eq!(image_media_type("assets/1.webp"), Some("image/webp"));
+        // bmp / svg 各家视觉模型支持参差，一律不收
+        assert_eq!(image_media_type("assets/1.bmp"), None);
+        assert_eq!(image_media_type("assets/no-extension"), None);
+    }
+
+    #[test]
+    fn message_deserializes_with_image_paths_only() {
+        // 前端只给 assets/ 相对路径；media_type 与 data 由发请求前内联时补上
+        let m: AiMessage = serde_json::from_str(
+            r#"{"role":"user","content":"看图","images":[{"path":"assets/1.png"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(m.images.len(), 1);
+        assert_eq!(m.images[0].path, "assets/1.png");
+        assert!(m.images[0].data.is_empty());
+        // 老版本前端不带 images 字段同样能解析
+        let old: AiMessage = serde_json::from_str(r#"{"role":"user","content":"你好"}"#).unwrap();
+        assert!(old.images.is_empty());
+    }
 
     #[test]
     fn parse_sse_single_delta_line() {
@@ -1074,14 +1231,20 @@ data: [DONE]
     #[test]
     fn collect_tool_calls_merges_by_index() {
         let mut deltas = std::collections::BTreeMap::new();
-        deltas.insert(0u32, ("call_a".to_string(), "search_workspace".to_string(), String::new()));
-        deltas
-            .get_mut(&0)
-            .unwrap()
-            .2
-            .push_str(r#"{"query":"x"}"#);
+        deltas.insert(
+            0u32,
+            (
+                "call_a".to_string(),
+                "search_workspace".to_string(),
+                String::new(),
+            ),
+        );
+        deltas.get_mut(&0).unwrap().2.push_str(r#"{"query":"x"}"#);
         // 第二个调用：只有参数与 name，没有 id → 补占位 id
-        deltas.insert(1u32, (String::new(), "list_pages".to_string(), "{}".to_string()));
+        deltas.insert(
+            1u32,
+            (String::new(), "list_pages".to_string(), "{}".to_string()),
+        );
         // 无名无参的占位条目丢弃
         deltas.insert(2u32, (String::new(), String::new(), "  ".to_string()));
         let calls = collect_tool_calls(deltas);
@@ -1107,7 +1270,10 @@ data: [DONE]
         // 每帧都带 usage:null 的服务商：不能把内容帧吞掉，也不产生用量事件
         let line = r#"data: {"choices":[{"delta":{"content":"好"}}],"usage":null}"#;
         assert_eq!(parse_sse_line(line), SseParse::Delta("好".to_string()));
-        assert_eq!(parse_sse_line(r#"data: {"choices":[],"usage":null}"#), SseParse::Ignore);
+        assert_eq!(
+            parse_sse_line(r#"data: {"choices":[],"usage":null}"#),
+            SseParse::Ignore
+        );
     }
 
     #[test]
@@ -1152,24 +1318,6 @@ data: [DONE]
         assert!(!ai.enabled);
         assert_eq!(ai.max_chars, 8000);
         assert!(ai.api_key.is_empty());
-    }
-
-    #[test]
-    fn models_url_trims_trailing_slash_only() {
-        assert_eq!(models_url("https://api.deepseek.com"), "https://api.deepseek.com/models");
-        assert_eq!(models_url("https://api.openai.com/v1/"), "https://api.openai.com/v1/models");
-    }
-
-    #[test]
-    fn chat_url_trims_trailing_slash_only() {
-        assert_eq!(
-            chat_url("https://api.deepseek.com"),
-            "https://api.deepseek.com/chat/completions"
-        );
-        assert_eq!(
-            chat_url("https://api.openai.com/v1/"),
-            "https://api.openai.com/v1/chat/completions"
-        );
     }
 
     #[test]

@@ -34,6 +34,10 @@ pub struct AiConfig {
     pub enabled: bool,
     /// 服务商标识：openai / deepseek / qwen / kimi / ollama ...
     pub provider: String,
+    /// 接口协议族：空串=按 base_url 自动识别，或 openai / anthropic / gemini 显式指定。
+    /// 与 provider 分开存：同一个服务商可能同时暴露兼容端点与原生端点。
+    #[serde(default)]
+    pub protocol: String,
     /// OpenAI 兼容接口的 base_url，例如 https://api.deepseek.com（可能已含 /v1）
     pub base_url: String,
     /// 模型名，例如 deepseek-chat
@@ -68,6 +72,13 @@ pub struct AiConfig {
     /// 默认 false：走文本协议，兼容 Ollama 这类工具调用支持不全的服务商。
     #[serde(default)]
     pub use_tools: bool,
+    /// 输入 token 单价（每 100 万 token，货币单位由用户自定）。0 = 未填价，界面不做费用估算。
+    /// 记在顶层而非档位上：档位间常是同价不同模型，逐档存价只会让用户重复填。
+    #[serde(default)]
+    pub price_input: f64,
+    /// 输出 token 单价（每 100 万 token）
+    #[serde(default)]
+    pub price_output: f64,
 }
 
 fn default_temperature() -> f64 {
@@ -83,6 +94,7 @@ impl Default for AiConfig {
         Self {
             enabled: false,
             provider: String::new(),
+            protocol: String::new(),
             base_url: String::new(),
             model: String::new(),
             api_key: String::new(),
@@ -95,6 +107,8 @@ impl Default for AiConfig {
             active_profile: String::new(),
             quick_actions: Vec::new(),
             use_tools: false,
+            price_input: 0.0,
+            price_output: 0.0,
         }
     }
 }

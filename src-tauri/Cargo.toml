@@ -28,6 +28,8 @@ tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# AI 图片附件：assets/ 里的字节要内联成 base64 才能发给各家协议
+base64 = "0.22"
 # AI 助手：OpenAI 兼容协议 + SSE 流式。
 # 用 native-tls（Windows 走 Schannel），避免 rustls/openssl 带来的 cmake/nasm 构建依赖。
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "native-tls"] }

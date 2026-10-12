@@ -1,5 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Archive,
+  ArchiveRestore,
   ArrowDown,
   Check,
   Copy,
@@ -9,16 +11,20 @@ import {
   FileText,
   GitBranch,
   History,
+  ImagePlus,
   Languages,
   Lightbulb,
   MessageSquarePlus,
   PenLine,
   RefreshCw,
   Replace,
+  Search,
   Send,
   Settings,
   Sparkles,
   Square,
+  ThumbsDown,
+  ThumbsUp,
   Trash2,
   TriangleAlert,
   X,
@@ -26,9 +32,17 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { viewIcon } from "@/components/view-icon";
-import { useAiStore, type AiActionRecord, type AiMessage } from "@/stores/ai";
+import { useAiStore, type AiActionRecord, type AiMessage, type StoredSession } from "@/stores/ai";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { aiErrorText } from "@/lib/ai";
+import {
+  aiErrorText,
+  estimateAiCost,
+  formatAiCost,
+  MAX_AI_IMAGES,
+  saveAiImageFile,
+  type AiImageAttachment,
+} from "@/lib/ai";
+import { filesFromDataTransfer, resolveAssetUrl } from "@/lib/assets";
 import { getAiEditor } from "@/lib/ai-editor";
 import { detectMentionQuery, mentionScore } from "@/lib/ai-mention";
 import { flattenTree } from "@/lib/tree";
@@ -43,6 +57,66 @@ import { Markdown } from "./Markdown";
  */
 const MarkdownMemo = memo(Markdown);
 
+/** 选择框只放行 Rust 侧认得的那几种图片（与 AI_IMAGE_MIME_BY_EXT 一致） */
+const AI_IMAGE_ACCEPT = "image/png,image/jpeg,image/gif,image/webp";
+
+/**
+ * 图片附件缩略图：会话里存的是 assets/ 相对路径，URL 需异步解析，
+ * 因此组件内部自持状态；path 变化或卸载后不再 setState。
+ */
+function ImageThumb({ path, name, onRemove }: { path: string; name: string; onRemove?: () => void }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    resolveAssetUrl(path).then(
+      (u) => {
+        if (alive) setUrl(u);
+      },
+      () => {
+        if (alive) setUrl(null);
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [path]);
+  return (
+    <div className="relative">
+      {/* 缩略图靠 asset 协议加载本地文件；解析失败时留一块占位灰底 */}
+      {url ? (
+        <img
+          src={url}
+          alt={name}
+          title={name}
+          className="h-14 w-14 rounded-md border border-neutral-200 object-cover dark:border-neutral-700"
+        />
+      ) : (
+        <div className="h-14 w-14 rounded-md border border-neutral-200 bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-800" />
+      )}
+      {onRemove && (
+        <button
+          type="button"
+          aria-label={t("ai.removeImage")}
+          onClick={onRemove}
+          className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-neutral-700 text-white hover:bg-neutral-900"
+        >
+          <X className="h-2.5 w-2.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** 历史会话筛选：归档区分区 + 关键词（命中标题或任一消息正文，大小写不敏感） */
+function filterHistorySessions(list: StoredSession[], archived: boolean, query: string): StoredSession[] {
+  const q = query.trim().toLowerCase();
+  return list.filter((x) => {
+    if (!!x.archived !== archived) return false;
+    if (!q) return true;
+    return x.title.toLowerCase().includes(q) || x.messages.some((m) => m.content.toLowerCase().includes(q));
+  });
+}
+
 /** AI 助手右侧面板（约 360px、可折叠、可拖拽调宽） */
 export function AiPanel() {
   const open = useAiStore((s) => s.open);
@@ -56,6 +130,7 @@ export function AiPanel() {
   const errorCode = useAiStore((s) => s.errorCode);
   const usage = useAiStore((s) => s.usage);
   const usageTotal = useAiStore((s) => s.usageTotal);
+  const usageSummary = useAiStore((s) => s.usageSummary);
   const pendingContext = useAiStore((s) => s.pendingContext);
   const setPendingContext = useAiStore((s) => s.setPendingContext);
   const focusTick = useAiStore((s) => s.focusTick);
@@ -79,6 +154,9 @@ export function AiPanel() {
   const switchSession = useAiStore((s) => s.switchSession);
   const activeSessionId = useAiStore((s) => s.activeSessionId);
   const deleteSession = useAiStore((s) => s.deleteSession);
+  const renameSession = useAiStore((s) => s.renameSession);
+  const setSessionArchived = useAiStore((s) => s.setSessionArchived);
+  const rateMessage = useAiStore((s) => s.rateMessage);
   const applyAction = useAiStore((s) => s.applyAction);
   const rejectAction = useAiStore((s) => s.rejectAction);
   const editingId = useAiStore((s) => s.editingId);
@@ -96,15 +174,23 @@ export function AiPanel() {
   const setRoute = useWorkspaceStore((s) => s.setRoute);
 
   const [input, setInput] = useState("");
+  // 待发送的图片附件（assets/ 相对路径）；发送后随消息留在对话里
+  const [attachments, setAttachments] = useState<AiImageAttachment[]>([]);
   // 正在查看的改动对比（AI 下发的某个动作 + 所属消息与下标，便于弹窗内直接「应用」）
   const [diff, setDiff] = useState<{ id: string; index: number; record: AiActionRecord } | null>(null);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [mentionActive, setMentionActive] = useState(0);
   const [showHistory, setShowHistory] = useState(false);
+  // 历史会话面板：搜索词 + 是否在看归档区 + 正在改名的那一行
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyArchived, setHistoryArchived] = useState(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   // 是否停留在列表底部：流式增量只在此时自动跟随，用户上滑看历史不被拽回
   const [pinned, setPinned] = useState(true);
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const tree = useWorkspaceStore((s) => s.tree);
 
   // @ 引用的候选文档：当前工作区树（排除行详情），按查询词模糊匹配打分取前 8
@@ -162,6 +248,33 @@ export function AiPanel() {
   const configured = !!config && config.enabled && config.has_api_key && !!config.base_url && !!config.model;
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content.trim().length > 0);
 
+  // 费用估算：按设置里的「每 100 万 token 单价」算，未填价时 estimateAiCost 返回 null（不显示金额）
+  const priceIn = config?.price_input ?? 0;
+  const priceOut = config?.price_output ?? 0;
+  const sessionCost = estimateAiCost(usageTotal, priceIn, priceOut);
+  const allCost = usageSummary
+    ? estimateAiCost(
+        { prompt: usageSummary.prompt_tokens, completion: usageSummary.completion_tokens },
+        priceIn,
+        priceOut,
+      )
+    : null;
+  const showUsage = !!usage || usageTotal.total > 0 || !!usageSummary;
+
+  // 历史列表只在面板展开时算：正文逐条比对不便宜，没必要跟着流式增量每帧跑一遍
+  const archivedCount = showHistory ? sessions.filter((x) => x.archived).length : 0;
+  const historyList = showHistory ? filterHistorySessions(sessions, historyArchived, historyQuery) : [];
+
+  const closeHistory = () => {
+    setShowHistory(false);
+    setRenamingId(null);
+  };
+
+  const commitRename = (id: string) => {
+    renameSession(id, renameDraft);
+    setRenamingId(null);
+  };
+
   // 用户滚动时重新判断是否停在底部（48px 容差）
   const onListScroll = () => {
     const el = listRef.current;
@@ -171,14 +284,45 @@ export function AiPanel() {
 
   const submit = () => {
     const text = input.trim();
-    if (!text || streaming) return;
+    if ((!text && attachments.length === 0) || streaming) return;
     setInput("");
+    setAttachments([]);
     setMention(null);
     setPinned(true);
     // 正在修改某条提问时，发送表示「改后重发」：替换那条提问并重跑它之后的回答
-    if (editingId) void resend(editingId, text);
-    else void send(text);
+    // 没重新附图就沿用原提问的图片（传 undefined 表示不改）
+    const images = attachments.length > 0 ? attachments : undefined;
+    if (editingId) void resend(editingId, text, images);
+    else void send(text, images);
   };
+
+  // 图片附件：粘贴与选择框拿到的都是 File，先落进 assets/，会话与请求里只带相对路径
+  const addImageFiles = async (files: File[]) => {
+    const room = MAX_AI_IMAGES - attachments.length;
+    if (room <= 0) {
+      toast.error(t("ai.attachFull", { count: MAX_AI_IMAGES }));
+      return;
+    }
+    const saved: AiImageAttachment[] = [];
+    for (const file of files.slice(0, room)) {
+      try {
+        saved.push(await saveAiImageFile(file));
+      } catch (e) {
+        toast.error(aiErrorText(e));
+      }
+    }
+    if (saved.length > 0) setAttachments((cur) => [...cur, ...saved].slice(0, MAX_AI_IMAGES));
+  };
+
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = filesFromDataTransfer(e.clipboardData);
+    // 纯文本粘贴不拦截，交回输入框默认行为
+    if (files.length === 0) return;
+    e.preventDefault();
+    void addImageFiles(files);
+  };
+
+  const removeAttachment = (path: string) => setAttachments((cur) => cur.filter((i) => i.path !== path));
 
   const copyMessage = (text: string) => {
     if (!text.trim()) return;
@@ -363,39 +507,102 @@ export function AiPanel() {
         </div>
       </div>
 
-      {/* 历史会话下拉：点击切换（当前对话自动归档），悬浮可删除 */}
+      {/* 历史会话下拉：可搜索、可改名/归档；切换时当前对话自动归档 */}
       {showHistory && (
         <>
           <button
             className="fixed inset-0 z-20 cursor-default"
             aria-label={t("ai.closeHistory")}
-            onClick={() => setShowHistory(false)}
+            onClick={closeHistory}
           />
-          <div className="absolute top-9 right-2 z-30 w-64 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800">
-            <div className="max-h-72 overflow-y-auto py-1">
-              {sessions.map((sess) => (
-                <div key={sess.id} className="group flex items-center pr-1">
-                  <button
-                    className="min-w-0 flex-1 truncate rounded px-2.5 py-1.5 text-left text-[12px] text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                    onClick={() => {
-                      switchSession(sess.id);
-                      setShowHistory(false);
-                    }}
-                  >
-                    {sess.title}
-                    {/* 标注这个会话是基于哪一页问的，避免切页后张冠李戴 */}
-                    {sess.pageTitle && <span className="ml-1 text-[10px] text-neutral-400">· {sess.pageTitle}</span>}
-                  </button>
-                  <button
-                    className="shrink-0 rounded p-1 text-neutral-400 opacity-0 hover:text-red-500 group-hover:opacity-100"
-                    title={t("ai.deleteSession")}
-                    aria-label={t("ai.deleteSession")}
-                    onClick={() => deleteSession(sess.id)}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                </div>
+          <div className="absolute top-9 right-2 z-30 w-72 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800">
+            <div className="flex items-center gap-1.5 border-b border-neutral-200 px-2.5 py-1.5 dark:border-neutral-700">
+              <Search className="h-3 w-3 shrink-0 text-neutral-400" />
+              <input
+                autoFocus
+                value={historyQuery}
+                onChange={(e) => setHistoryQuery(e.target.value)}
+                placeholder={t("ai.searchSessions")}
+                className="min-w-0 flex-1 bg-transparent text-[12px] text-neutral-700 outline-none placeholder:text-neutral-400 dark:text-neutral-200"
+              />
+            </div>
+            <div className="flex gap-1 px-2 pt-1.5">
+              {[false, true].map((flag) => (
+                <button
+                  key={String(flag)}
+                  className={cn(
+                    "rounded px-1.5 py-0.5 text-[11px] text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-700",
+                    historyArchived === flag &&
+                      "bg-neutral-100 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200",
+                  )}
+                  onClick={() => setHistoryArchived(flag)}
+                >
+                  {flag ? t("ai.historyArchivedTab") : t("ai.historyRecentTab")}
+                  {flag && archivedCount > 0 ? ` · ${archivedCount}` : ""}
+                </button>
               ))}
+            </div>
+            <div className="max-h-64 overflow-y-auto py-1">
+              {historyList.length === 0 ? (
+                <p className="px-3 py-2 text-[11px] text-neutral-400">{t("ai.noSessionMatch")}</p>
+              ) : (
+                historyList.map((sess) => (
+                  <div key={sess.id} className="group flex items-center pr-1">
+                    {renamingId === sess.id ? (
+                      <input
+                        autoFocus
+                        value={renameDraft}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onBlur={() => commitRename(sess.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") commitRename(sess.id);
+                          else if (e.key === "Escape") setRenamingId(null);
+                        }}
+                        className="mx-1.5 my-0.5 min-w-0 flex-1 rounded border border-brand-500 bg-white px-1.5 py-1 text-[12px] text-neutral-700 outline-none dark:bg-neutral-900 dark:text-neutral-200"
+                      />
+                    ) : (
+                      <button
+                        className="min-w-0 flex-1 truncate rounded px-2.5 py-1.5 text-left text-[12px] text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                        onClick={() => {
+                          switchSession(sess.id);
+                          closeHistory();
+                        }}
+                      >
+                        {sess.title}
+                        {/* 标注这个会话是基于哪一页问的，避免切页后张冠李戴 */}
+                        {sess.pageTitle && (
+                          <span className="ml-1 text-[10px] text-neutral-400">· {sess.pageTitle}</span>
+                        )}
+                      </button>
+                    )}
+                    {renamingId !== sess.id && (
+                      <>
+                        <RowAction
+                          icon={<PenLine className="h-3 w-3" />}
+                          label={t("ai.renameSession")}
+                          onClick={() => {
+                            setRenamingId(sess.id);
+                            setRenameDraft(sess.title);
+                          }}
+                        />
+                        <RowAction
+                          icon={
+                            sess.archived ? <ArchiveRestore className="h-3 w-3" /> : <Archive className="h-3 w-3" />
+                          }
+                          label={sess.archived ? t("ai.unarchiveSession") : t("ai.archiveSession")}
+                          onClick={() => setSessionArchived(sess.id, !sess.archived)}
+                        />
+                        <RowAction
+                          icon={<Trash2 className="h-3 w-3" />}
+                          label={t("ai.deleteSession")}
+                          danger
+                          onClick={() => deleteSession(sess.id)}
+                        />
+                      </>
+                    )}
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </>
@@ -444,6 +651,7 @@ export function AiPanel() {
                   onSavePage={m.role === "assistant" ? () => void saveMessageAsPage(m.id) : undefined}
                   onExport={m.role === "assistant" ? () => void exportMessage(m.id) : undefined}
                   onBranch={() => branchFrom(m.id)}
+                  onRate={m.role === "assistant" ? (rating) => rateMessage(m.id, rating) : undefined}
                   onReplace={m.role === "assistant" ? () => writeBack(m.content, "replace") : undefined}
                   onInsert={m.role === "assistant" ? () => writeBack(m.content, "insert") : undefined}
                   onUndo={(i) => undoAction(m.id, i)}
@@ -503,14 +711,32 @@ export function AiPanel() {
             )}
           </div>
 
-          {/* token 用量：服务商返回 usage 时才显示 */}
-          {usage && (
-            <div className="border-t border-neutral-200 px-2 py-1 text-[11px] text-neutral-400 dark:border-neutral-700">
-              {t("ai.usageLast", {
-                prompt: (usage.prompt_tokens ?? 0).toLocaleString(),
-                completion: (usage.completion_tokens ?? 0).toLocaleString(),
-              })}
-              {usageTotal.total > 0 ? ` · ${t("ai.usageTotal", { total: usageTotal.total.toLocaleString() })}` : ""}
+          {/* token 用量：本轮/本会话要服务商返回 usage 才有，跨会话累计与费用估算随时可见 */}
+          {showUsage && (
+            <div className="flex flex-wrap gap-x-2 border-t border-neutral-200 px-2 py-1 text-[11px] text-neutral-400 dark:border-neutral-700">
+              {usage && (
+                <span>
+                  {t("ai.usageLast", {
+                    prompt: (usage.prompt_tokens ?? 0).toLocaleString(),
+                    completion: (usage.completion_tokens ?? 0).toLocaleString(),
+                  })}
+                </span>
+              )}
+              {usageTotal.total > 0 && (
+                <span>
+                  {t("ai.usageTotal", { total: usageTotal.total.toLocaleString() })}
+                  {sessionCost !== null && ` · ${t("ai.usageCost", { amount: formatAiCost(sessionCost) })}`}
+                </span>
+              )}
+              {usageSummary && usageSummary.prompt_tokens + usageSummary.completion_tokens > 0 && (
+                <span title={t("ai.usageAllTitle")}>
+                  {t("ai.usageAll", {
+                    sessions: usageSummary.sessions,
+                    total: (usageSummary.prompt_tokens + usageSummary.completion_tokens).toLocaleString(),
+                  })}
+                  {allCost !== null && ` · ${t("ai.usageCost", { amount: formatAiCost(allCost) })}`}
+                </span>
+              )}
             </div>
           )}
 
@@ -624,6 +850,19 @@ export function AiPanel() {
                 </button>
               </div>
             )}
+            {/* 待发送的图片：缩略图 + 移除；发送后原样留在用户消息里 */}
+            {attachments.length > 0 && (
+              <div className="mb-1 flex flex-wrap gap-1.5">
+                {attachments.map((img) => (
+                  <ImageThumb
+                    key={img.path}
+                    path={img.path}
+                    name={img.name}
+                    onRemove={() => removeAttachment(img.path)}
+                  />
+                ))}
+              </div>
+            )}
             {mention && (
               <div className="absolute inset-x-2 bottom-full mb-1 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800">
                 {mentionItems.length === 0 ? (
@@ -658,6 +897,7 @@ export function AiPanel() {
               ref={textareaRef}
               value={input}
               onChange={onInputChange}
+              onPaste={onPaste}
               onKeyDown={onKeyDown}
               rows={3}
               aria-label={t("ai.inputPlaceholder")}
@@ -665,6 +905,25 @@ export function AiPanel() {
               className="w-full resize-none rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-[12px] text-neutral-800 outline-none focus:border-brand-500 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
             />
             <div className="mt-1.5 flex items-center justify-end gap-1.5">
+              {/* 图片附件走隐藏的原生选择框：能拿到 File，体积/类型可在校验后再入库 */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={AI_IMAGE_ACCEPT}
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  e.target.value = "";
+                  if (files.length > 0) void addImageFiles(files);
+                }}
+              />
+              <QuickButton
+                icon={<ImagePlus className="h-3 w-3" />}
+                label={t("ai.attachImage")}
+                disabled={streaming || attachments.length >= MAX_AI_IMAGES}
+                onClick={() => fileInputRef.current?.click()}
+              />
               {/* 优化提问：让模型把输入框里这句改写成几条候选，不进对话 */}
               {!streaming && (
                 <QuickButton
@@ -680,7 +939,7 @@ export function AiPanel() {
                   {t("ai.stop")}
                 </Button>
               ) : (
-                <Button size="sm" onClick={submit} disabled={!input.trim()}>
+                <Button size="sm" onClick={submit} disabled={!input.trim() && attachments.length === 0}>
                   <Send className="mr-1 h-3.5 w-3.5" />
                   {t("ai.send")}
                 </Button>
@@ -744,6 +1003,7 @@ function MessageBubble({
   onSavePage,
   onExport,
   onBranch,
+  onRate,
   onReplace,
   onInsert,
   onUndo,
@@ -763,6 +1023,8 @@ function MessageBubble({
   onExport?: () => void;
   /** 从这条消息处分支出一个新会话（当前会话原样归档） */
   onBranch?: () => void;
+  /** 助手回答打分（赞/踩），再点同向即取消 */
+  onRate?: (rating: "up" | "down") => void;
   onReplace?: () => void;
   onInsert?: () => void;
   onUndo: (index: number) => void;
@@ -776,7 +1038,15 @@ function MessageBubble({
   const bubbleText = message.content === actions[0]?.summary ? "" : message.content;
   return (
     <div className={cn("flex flex-col", isUser ? "items-end" : "items-start")}>
-      {(bubbleText.trim() || actions.length === 0) &&
+      {/* 提问附带的图片：正文之上，右对齐贴着气泡 */}
+      {isUser && message.images && message.images.length > 0 && (
+        <div className="mb-1 flex max-w-[85%] flex-wrap justify-end gap-1.5">
+          {message.images.map((img) => (
+            <ImageThumb key={img.path} path={img.path} name={img.name} />
+          ))}
+        </div>
+      )}
+      {(bubbleText.trim() || (actions.length === 0 && !message.images?.length)) &&
         (isUser ? (
           <div className="max-w-[85%] rounded-lg bg-brand-500 px-2.5 py-1.5 text-[12px] leading-relaxed whitespace-pre-wrap break-words text-white">
             {bubbleText || "…"}
@@ -866,9 +1136,53 @@ function MessageBubble({
           {onBranch && (
             <IconAction icon={<GitBranch className="h-3 w-3" />} label={t("ai.msgBranch")} onClick={onBranch} />
           )}
+          {onRate && (
+            <>
+              <IconAction
+                icon={<ThumbsUp className="h-3 w-3" />}
+                label={t("ai.msgRateUp")}
+                active={message.rating === "up"}
+                onClick={() => onRate("up")}
+              />
+              <IconAction
+                icon={<ThumbsDown className="h-3 w-3" />}
+                label={t("ai.msgRateDown")}
+                active={message.rating === "down"}
+                onClick={() => onRate("down")}
+              />
+            </>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+/** 历史会话行右侧的悬浮操作（改名 / 归档 / 删除） */
+function RowAction({
+  icon,
+  label,
+  onClick,
+  danger = false,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      className={cn(
+        "shrink-0 rounded p-1 text-neutral-400 opacity-0 hover:text-neutral-600 group-hover:opacity-100 dark:hover:text-neutral-200",
+        danger && "hover:text-red-500",
+      )}
+      onClick={onClick}
+    >
+      {icon}
+    </button>
   );
 }
 
@@ -895,13 +1209,28 @@ function safeHost(baseUrl: string): string {
 }
 
 /** 气泡下方的一排图标操作（重新生成 / 改提问 / 复制 / 存为页面 / 导出 / 分支） */
-function IconAction({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+function IconAction({
+  icon,
+  label,
+  onClick,
+  active = false,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  /** 已处于该状态（如已点赞过）：常驻高亮，不再只在 hover 时显色 */
+  active?: boolean;
+}) {
   return (
     <button
       type="button"
       title={label}
       aria-label={label}
-      className="flex h-5 w-5 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-neutral-600 dark:hover:bg-neutral-700 dark:hover:text-neutral-300"
+      aria-pressed={active}
+      className={cn(
+        "flex h-5 w-5 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-neutral-600 dark:hover:bg-neutral-700 dark:hover:text-neutral-300",
+        active && "text-brand-600 dark:text-brand-400",
+      )}
       onClick={onClick}
     >
       {icon}

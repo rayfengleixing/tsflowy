@@ -50,6 +50,7 @@ import {
   aiSaveConfig,
   aiTestConnection,
   AI_PROVIDER_PRESETS,
+  AI_PROTOCOL_OPTIONS,
   type AiConfig,
   type AiProfile,
   type AiQuickActionDef,
@@ -61,6 +62,7 @@ import {
   ACCENT_HEX,
   SYNC_ACTION_KEY,
   AI_PROVIDER_LABEL_KEY,
+  AI_PROTOCOL_LABEL_KEY,
   updateErrorMessage,
   formatBytes,
   isPreviewDark,
@@ -143,6 +145,7 @@ export function SettingsPage() {
   const [aiForm, setAiForm] = useState<AiFormState>({
     enabled: false,
     provider: "custom",
+    protocol: "",
     baseUrl: "",
     model: "",
     maxChars: 8000,
@@ -154,6 +157,8 @@ export function SettingsPage() {
     activeProfile: "",
     quickActions: [],
     useTools: false,
+    priceInput: 0,
+    priceOutput: 0,
   });
   const [aiApiKey, setAiApiKey] = useState("");
   const [busyAiTest, setBusyAiTest] = useState(false);
@@ -500,6 +505,7 @@ export function SettingsPage() {
     setAiForm({
       enabled: c.enabled,
       provider: AI_PROVIDER_PRESETS.some((p) => p.id === c.provider) ? c.provider : "custom",
+      protocol: c.protocol,
       baseUrl: c.base_url,
       model: c.model,
       maxChars: c.max_chars,
@@ -511,6 +517,8 @@ export function SettingsPage() {
       activeProfile: c.active_profile,
       quickActions: c.quick_actions,
       useTools: c.use_tools,
+      priceInput: c.price_input,
+      priceOutput: c.price_output,
     });
   };
 
@@ -521,6 +529,7 @@ export function SettingsPage() {
     await aiSaveConfig({
       enabled: next.enabled,
       provider: next.provider,
+      protocol: next.protocol,
       baseUrl: next.baseUrl,
       model: next.model,
       maxChars: next.maxChars,
@@ -532,6 +541,8 @@ export function SettingsPage() {
       activeProfile: next.activeProfile,
       quickActions: next.quickActions,
       useTools: next.useTools,
+      priceInput: next.priceInput,
+      priceOutput: next.priceOutput,
       apiKey: apiKey.trim() === "" ? null : apiKey,
     });
     const c = await aiGetConfig();
@@ -1224,7 +1235,14 @@ export function SettingsPage() {
               value={aiForm.provider}
               onChange={(e) => {
                 const preset = AI_PROVIDER_PRESETS.find((p) => p.id === e.target.value);
-                if (preset) saveAi({ provider: preset.id, baseUrl: preset.baseUrl, model: preset.model });
+                if (preset)
+                  saveAi({
+                    provider: preset.id,
+                    baseUrl: preset.baseUrl,
+                    model: preset.model,
+                    // 预设里标了原生协议就一并切过去；OpenAI 兼容的预设回到自动识别
+                    protocol: preset.protocol ?? "",
+                  });
               }}
               className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs outline-none focus:border-brand-500"
             >
@@ -1243,6 +1261,22 @@ export function SettingsPage() {
               placeholder={t("settings.aiBaseUrlPlaceholder")}
               className="h-7 w-80 rounded-md border border-neutral-300 bg-white px-2 font-mono text-[12px] text-neutral-800 outline-none focus:border-brand-500"
             />
+          </Row>
+          <Row label={t("settings.aiProtocol")}>
+            <div className="flex flex-col gap-1">
+              <select
+                value={aiForm.protocol}
+                onChange={(e) => saveAi({ protocol: e.target.value })}
+                className="w-fit rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs outline-none focus:border-brand-500"
+              >
+                {AI_PROTOCOL_OPTIONS.map((p) => (
+                  <option key={p} value={p}>
+                    {t(AI_PROTOCOL_LABEL_KEY[p])}
+                  </option>
+                ))}
+              </select>
+              <p className="max-w-80 text-[11px] text-neutral-500">{t("settings.aiProtocolDesc")}</p>
+            </div>
           </Row>
           <Row label={t("settings.aiModel")}>
             <div className="flex items-center gap-1.5">
@@ -1345,7 +1379,32 @@ export function SettingsPage() {
                 className={AI_NUM_INPUT}
               />
             </Row>
+            <Row label={t("settings.aiPriceIn")}>
+              <input
+                type="number"
+                min={0}
+                max={100000}
+                step={0.1}
+                value={aiForm.priceInput}
+                onChange={(e) => setAiForm((f) => ({ ...f, priceInput: Math.max(0, Number(e.target.value)) }))}
+                onBlur={() => saveAiQuietly()}
+                className={AI_NUM_INPUT}
+              />
+            </Row>
+            <Row label={t("settings.aiPriceOut")}>
+              <input
+                type="number"
+                min={0}
+                max={100000}
+                step={0.1}
+                value={aiForm.priceOutput}
+                onChange={(e) => setAiForm((f) => ({ ...f, priceOutput: Math.max(0, Number(e.target.value)) }))}
+                onBlur={() => saveAiQuietly()}
+                className={AI_NUM_INPUT}
+              />
+            </Row>
           </div>
+          <p className="-mt-2 text-[11px] text-neutral-400">{t("settings.aiPriceDesc")}</p>
 
           {/* 自定义系统提示 */}
           <div>

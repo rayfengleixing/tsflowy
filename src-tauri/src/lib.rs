@@ -315,6 +315,7 @@ pub fn run() {
             commands::db::ai_session_list,
             commands::db::ai_session_save,
             commands::db::ai_session_delete,
+            commands::db::ai_usage_summary,
             commands::db::pp_list,
             commands::db::pp_set,
             commands::db::pp_remove,

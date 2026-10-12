@@ -83,6 +83,16 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "database_fields_check_lightweight",
         sql: include_str!("../../../migrations/015_database_fields_check_lightweight.sql"),
     },
+    Migration {
+        version: 16,
+        description: "ai_sessions",
+        sql: include_str!("../../../migrations/016_ai_sessions.sql"),
+    },
+    Migration {
+        version: 17,
+        description: "ai_sessions_usage",
+        sql: include_str!("../../../migrations/017_ai_sessions_usage.sql"),
+    },
 ];
 
 /// 自带事务的迁移：重建表改 CHECK 约束需要两个连接级 PRAGMA，而它们在事务内是 no-op，
@@ -1119,6 +1129,112 @@ mod tests {
             .query_row("PRAGMA legacy_alter_table", [], |r| r.get(0))
             .unwrap();
         assert_eq!(legacy, 0, "迁移后必须恢复 legacy_alter_table=OFF");
+    }
+
+    /// 016 曾因未注册而从未执行：全新安装必须真的有 ai_sessions 表，
+    /// 否则 ai_session_list 每次都报错、会话只能退回 localStorage（约 5MB 配额）。
+    #[test]
+    fn migration_016_creates_ai_sessions_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_migrated(&conn).unwrap();
+
+        let created: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ai_sessions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(created, 1, "ai_sessions 表必须由迁移建立");
+
+        // 与 ai_session_save / list / delete 的语句口径一致，确认列名和可空性对得上
+        conn.execute(
+            "INSERT OR REPLACE INTO ai_sessions (id, title, page_id, page_title, updated_at, messages)
+             VALUES ('s1','问答',NULL,NULL,'1700000000000','[]')",
+            [],
+        )
+        .unwrap();
+        let title: String = conn
+            .query_row("SELECT title FROM ai_sessions WHERE id = 's1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(title, "问答");
+
+        // 重复启动不该重建或丢数据
+        ensure_migrated(&conn).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ai_sessions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    /// 存量库（1–16 已应用）升到 017：加用量与归档列，老会话行按默认值视为「零用量、未归档」。
+    #[test]
+    fn migration_017_adds_usage_and_archive_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_older_than(&conn, 17);
+        conn.execute(
+            "INSERT INTO ai_sessions (id, title, page_id, page_title, updated_at, messages)
+             VALUES ('s1','旧会话',NULL,NULL,'1700000000000','[]')",
+            [],
+        )
+        .unwrap();
+
+        ensure_migrated(&conn).unwrap();
+
+        let (prompt, completion, archived): (i64, i64, i64) = conn
+            .query_row(
+                "SELECT prompt_tokens, completion_tokens, archived FROM ai_sessions WHERE id = 's1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (prompt, completion, archived),
+            (0, 0, 0),
+            "存量行应回填默认值"
+        );
+
+        // NULL 不允许：统计侧 SUM/COUNT 无需再判空
+        let err = conn
+            .execute("UPDATE ai_sessions SET archived = NULL WHERE id = 's1'", [])
+            .unwrap_err();
+        assert!(err.to_string().contains("NOT NULL"), "{err}");
+
+        conn.execute(
+            "UPDATE ai_sessions SET prompt_tokens = 12, completion_tokens = 3, archived = 1 WHERE id = 's1'",
+            [],
+        )
+        .unwrap();
+
+        // 与 ai_session_save / ai_usage_summary 的语句口径一致：用量列可写、可 SUM
+        conn.execute(
+            "INSERT OR REPLACE INTO ai_sessions (id, title, page_id, page_title, updated_at, messages, prompt_tokens, completion_tokens, archived)
+             VALUES ('s2','新会话',NULL,NULL,'1700000000001','[]',40,8,1)",
+            [],
+        )
+        .unwrap();
+        let archived: i64 = conn
+            .query_row(
+                "SELECT archived FROM ai_sessions WHERE id = 's2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(archived, 1, "归档位要能随整行写入");
+        let (sessions, prompt, completion): (i64, i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0) FROM ai_sessions",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (sessions, prompt, completion),
+            (2, 52, 11),
+            "累计应含存量那行的 12/3"
+        );
     }
 
     #[test]

@@ -13,6 +13,9 @@ const M = vi.hoisted(() => ({
   aiSessionList: vi.fn((): Promise<unknown[]> => Promise.resolve([])),
   aiSessionSave: vi.fn((_row: unknown) => Promise.resolve()),
   aiSessionDelete: vi.fn((_id: string) => Promise.resolve()),
+  aiUsageSummary: vi.fn((): Promise<unknown> =>
+    Promise.resolve({ sessions: 0, prompt_tokens: 0, completion_tokens: 0 }),
+  ),
   docSearchSnippets: vi.fn(() => Promise.resolve([] as string[])),
   getAiEditor: vi.fn((): unknown => null),
   applyEdit: vi.fn((_op: string, _content: string, _anchor?: unknown) => ({ applied: true, revert: {} })),
@@ -45,6 +48,7 @@ vi.mock("@/lib/ai", () => ({
   aiSessionList: M.aiSessionList,
   aiSessionSave: M.aiSessionSave,
   aiSessionDelete: M.aiSessionDelete,
+  aiUsageSummary: M.aiUsageSummary,
   docSearchSnippets: M.docSearchSnippets,
   aiErrorText: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
@@ -78,6 +82,7 @@ function defaultConfig(overrides: Partial<AiConfig> = {}): AiConfig {
   return {
     enabled: true,
     provider: "custom",
+    protocol: "",
     base_url: "https://api.example.com/v1",
     model: "some-model",
     max_chars: 8000,
@@ -89,6 +94,8 @@ function defaultConfig(overrides: Partial<AiConfig> = {}): AiConfig {
     active_profile: "",
     quick_actions: [],
     use_tools: false,
+    price_input: 0,
+    price_output: 0,
     has_api_key: true,
     api_key_masked: "sk-***",
     ...overrides,
@@ -114,8 +121,10 @@ async function loadStore(opts: LoadOptions = {}) {
   });
   M.newId.mockImplementation(() => `id-${++idTick}`);
   // clearAllMocks 只清调用记录、不清 mockImplementation，被测试改写过的桩要恢复默认
+  M.aiSessionList.mockImplementation(() => Promise.resolve([]));
   M.aiSessionSave.mockImplementation(() => Promise.resolve());
   M.aiSessionDelete.mockImplementation(() => Promise.resolve());
+  M.aiUsageSummary.mockImplementation(() => Promise.resolve({ sessions: 0, prompt_tokens: 0, completion_tokens: 0 }));
   M.documentGet.mockImplementation(() => Promise.resolve(null));
   M.documentSave.mockImplementation(() => Promise.resolve());
   M.docSearchSnippets.mockImplementation(() => Promise.resolve([] as string[]));
@@ -551,6 +560,62 @@ describe("ai store：会话生命周期", () => {
       expect(raw!.includes("你好")).toBe(true);
     });
   });
+
+  /** 老版本（建表迁移未生效时）留在 localStorage 里的会话：一条当前对话 + 一条归档 */
+  function seedLocalSessions() {
+    storage.set(
+      "tsflowy-ai-sessions-v1",
+      JSON.stringify({
+        active: { id: "a1", title: "当前", updatedAt: 9, messages: [{ id: "u1", role: "user", content: "老问题" }] },
+        sessions: [
+          { id: "b2", title: "归档", updatedAt: 8, messages: [{ id: "u2", role: "user", content: "更老的问题" }] },
+        ],
+      }),
+    );
+  }
+
+  it("loadSessions：库空但本地有老会话时一次性导入库，成功后清掉本地副本", async () => {
+    const store = await loadStore();
+    seedLocalSessions();
+    await store.getState().loadSessions();
+    const s = store.getState();
+    // 本地那份的当前会话保持在前，导入不会把用户正在看的对话换掉
+    expect(s.activeSessionId).toBe("a1");
+    expect(s.messages.map((m) => m.content)).toEqual(["老问题"]);
+    expect(s.sessions.map((x) => x.id)).toEqual(["b2"]);
+    expect(M.aiSessionSave.mock.calls.map((c) => (c[0] as { id: string }).id)).toEqual(["a1", "b2"]);
+    // 本地副本必须删掉：留着它，下次库读取失败时会拿这份过期数据覆盖库里的新内容
+    expect(storage.has("tsflowy-ai-sessions-v1")).toBe(false);
+  });
+
+  it("loadSessions：导入失败时保留本地副本，下次启动重试", async () => {
+    const store = await loadStore();
+    seedLocalSessions();
+    M.aiSessionSave.mockRejectedValue(new Error("db down"));
+    await store.getState().loadSessions();
+    const s = store.getState();
+    expect(s.messages.map((m) => m.content)).toEqual(["老问题"]);
+    expect(s.sessions).toHaveLength(1);
+    expect(storage.has("tsflowy-ai-sessions-v1")).toBe(true);
+  });
+
+  it("loadSessions：库里已有会话行就不再导入本地", async () => {
+    const store = await loadStore();
+    seedLocalSessions();
+    M.aiSessionList.mockResolvedValue([
+      {
+        id: "db1",
+        title: "库里会话",
+        page_id: null,
+        page_title: null,
+        updated_at: "5",
+        messages: JSON.stringify([{ id: "x", role: "user", content: "库里问题" }]),
+      },
+    ]);
+    await store.getState().loadSessions();
+    expect(store.getState().activeSessionId).toBe("db1");
+    expect(M.aiSessionSave).not.toHaveBeenCalled();
+  });
 });
 
 describe("ai store：动作卡片随会话恢复", () => {
@@ -897,5 +962,349 @@ describe("ai store：消息级操作", () => {
     store.getState().startEdit("any");
     store.getState().clear();
     expect(store.getState().editingId).toBeNull();
+  });
+});
+
+describe("ai store：图片附件", () => {
+  const IMG = { name: "截图.png", path: "assets/1.png" };
+
+  /** 走完整一轮（可只带图不带文字），返回该轮发给服务端的消息数组 */
+  async function completeImageTurn(store: Store, text: string, images?: (typeof IMG)[]) {
+    const before = streamHandlers.length;
+    const p = store.getState().send(text, images);
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(before + 1));
+    pump([
+      { type: "chunk", delta: "回答" },
+      { type: "done", full: "回答" },
+    ]);
+    await p;
+    return M.aiChat.mock.calls[M.aiChat.mock.calls.length - 1][0] as AiChatMessage[];
+  }
+
+  it("请求里只带 assets 路径，base64 由 Rust 侧内联", async () => {
+    const store = await loadConfiguredStore();
+    const outgoing = await completeImageTurn(store, "这张图讲什么", [IMG]);
+    expect(outgoing[outgoing.length - 1]).toEqual({
+      role: "user",
+      content: "这张图讲什么",
+      images: [{ path: "assets/1.png" }],
+    });
+    // 会话消息里保留名字，气泡才能显示alt与缩略图
+    expect(store.getState().messages[0].images).toEqual([IMG]);
+  });
+
+  it("只附图不打字也算一次提问", async () => {
+    const store = await loadConfiguredStore();
+    const outgoing = await completeImageTurn(store, "", [IMG]);
+    expect(outgoing[outgoing.length - 1].content).toBe("");
+    expect(outgoing[outgoing.length - 1].images).toEqual([{ path: "assets/1.png" }]);
+    expect(store.getState().messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("空正文且没有附件时不发消息", async () => {
+    const store = await loadConfiguredStore();
+    await store.getState().send("   ", []);
+    expect(M.aiChat).not.toHaveBeenCalled();
+    expect(store.getState().messages).toEqual([]);
+  });
+
+  it("改后重发：没重新附图就沿用原提问的附件", async () => {
+    const store = await loadConfiguredStore();
+    await completeImageTurn(store, "第一问", [IMG]);
+    const userId = store.getState().messages[0].id;
+    const before = streamHandlers.length;
+    const p = store.getState().resend(userId, "改过的问法");
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(before + 1));
+    pump([
+      { type: "chunk", delta: "再答" },
+      { type: "done", full: "再答" },
+    ]);
+    await p;
+    const outgoing = M.aiChat.mock.calls[M.aiChat.mock.calls.length - 1][0] as AiChatMessage[];
+    expect(outgoing[outgoing.length - 1]).toEqual({
+      role: "user",
+      content: "改过的问法",
+      images: [{ path: "assets/1.png" }],
+    });
+  });
+
+  it("重新生成沿用原提问的附件", async () => {
+    const store = await loadConfiguredStore();
+    await completeImageTurn(store, "看图", [IMG]);
+    const assistantId = store.getState().messages[1].id;
+    const before = streamHandlers.length;
+    const p = store.getState().regenerate(assistantId);
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(before + 1));
+    pump([
+      { type: "chunk", delta: "重答" },
+      { type: "done", full: "重答" },
+    ]);
+    await p;
+    const outgoing = M.aiChat.mock.calls[M.aiChat.mock.calls.length - 1][0] as AiChatMessage[];
+    expect(outgoing[outgoing.length - 1].images).toEqual([{ path: "assets/1.png" }]);
+  });
+
+  it("会话恢复：图片附件保留，非 assets 路径与畸形项丢弃", async () => {
+    const store = await loadStore();
+    M.aiSessionList.mockResolvedValue([
+      {
+        id: "db-img",
+        title: "带图会话",
+        page_id: null,
+        page_title: null,
+        updated_at: "9",
+        messages: JSON.stringify([
+          {
+            id: "u1",
+            role: "user",
+            content: "看图",
+            images: [
+              { name: "a.png", path: "assets/a.png" },
+              { name: "越权", path: "C:/Windows/notepad.exe" },
+              { path: 42 },
+              "不是对象",
+            ],
+          },
+        ]),
+      },
+    ]);
+    await store.getState().loadSessions();
+    expect(store.getState().messages[0].images).toEqual([{ name: "a.png", path: "assets/a.png" }]);
+  });
+
+  it("恢复的历史会话重新提问时仍会把图片带上", async () => {
+    const store = await loadStore();
+    M.aiSessionList.mockResolvedValue([
+      {
+        id: "db-img2",
+        title: "带图会话",
+        page_id: null,
+        page_title: null,
+        updated_at: "9",
+        messages: JSON.stringify([
+          { id: "u1", role: "user", content: "看图", images: [{ name: "a.png", path: "assets/a.png" }] },
+        ]),
+      },
+    ]);
+    await store.getState().loadSessions();
+    await store.getState().loadConfig();
+    const outgoing = await completeImageTurn(store, "再看一次", [{ name: "b.png", path: "assets/b.png" }]);
+    const withImages = outgoing.filter((m) => m.images);
+    expect(withImages.map((m) => m.images?.[0].path)).toEqual(["assets/a.png", "assets/b.png"]);
+  });
+});
+
+describe("ai store：token 用量累计", () => {
+  /** 库里的会话行（Rust 侧 AiSessionRow 的形状） */
+  function row(id: string, opts: { updatedAt: number; prompt?: number; completion?: number; content?: string }) {
+    return {
+      id,
+      title: `会话${id}`,
+      page_id: null,
+      page_title: null,
+      updated_at: String(opts.updatedAt),
+      messages: JSON.stringify([{ id: `m-${id}`, role: "user", content: opts.content ?? `问题${id}` }]),
+      prompt_tokens: opts.prompt ?? 0,
+      completion_tokens: opts.completion ?? 0,
+    };
+  }
+
+  /** 走完一轮带 usage 的问答 */
+  async function turnWithUsage(store: Store, text: string, prompt: number, completion: number) {
+    const before = streamHandlers.length;
+    const p = store.getState().send(text);
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(before + 1));
+    pump([
+      { type: "chunk", delta: "回答" },
+      {
+        type: "done",
+        full: "回答",
+        usage: { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion },
+      },
+    ]);
+    await p;
+  }
+
+  it("轮次收尾：会话行带上本会话累计的输入/输出 token", async () => {
+    const store = await loadConfiguredStore();
+    await turnWithUsage(store, "你好", 1200, 300);
+    const last = M.aiSessionSave.mock.calls[M.aiSessionSave.mock.calls.length - 1][0] as Record<string, unknown>;
+    expect(last).toMatchObject({ prompt_tokens: 1200, completion_tokens: 300 });
+    expect(store.getState().usageTotal).toEqual({ prompt: 1200, completion: 300, total: 1500 });
+  });
+
+  it("多轮问答在同一会话里累加，不互相覆盖", async () => {
+    const store = await loadConfiguredStore();
+    await turnWithUsage(store, "第一问", 1000, 200);
+    await turnWithUsage(store, "第二问", 500, 100);
+    expect(store.getState().usageTotal).toEqual({ prompt: 1500, completion: 300, total: 1800 });
+    const last = M.aiSessionSave.mock.calls[M.aiSessionSave.mock.calls.length - 1][0] as Record<string, unknown>;
+    expect(last).toMatchObject({ prompt_tokens: 1500, completion_tokens: 300 });
+  });
+
+  it("落库后重取跨会话累计", async () => {
+    const store = await loadConfiguredStore();
+    await turnWithUsage(store, "你好", 1200, 300);
+    await vi.waitFor(() => expect(M.aiUsageSummary.mock.calls.length).toBeGreaterThan(0));
+  });
+
+  it("首次载入：当前会话的用量从库行读回", async () => {
+    const store = await loadStore();
+    M.aiSessionList.mockResolvedValue([row("cur", { updatedAt: 9, prompt: 700, completion: 80 })]);
+    await store.getState().loadSessions();
+    expect(store.getState().usageTotal).toEqual({ prompt: 700, completion: 80, total: 780 });
+  });
+
+  it("切回历史会话：接上它自己那份用量继续累加", async () => {
+    const store = await loadStore();
+    M.aiSessionList.mockResolvedValue([
+      row("cur", { updatedAt: 9 }),
+      row("old", { updatedAt: 8, prompt: 4000, completion: 900 }),
+    ]);
+    await store.getState().loadSessions();
+    store.getState().switchSession("old");
+    expect(store.getState().usageTotal).toEqual({ prompt: 4000, completion: 900, total: 4900 });
+  });
+
+  it("开新会话：归档行带着已用量，当前累计清零", async () => {
+    const store = await loadConfiguredStore();
+    await turnWithUsage(store, "你好", 1200, 300);
+    store.getState().newChat();
+    const archived = M.aiSessionSave.mock.calls[M.aiSessionSave.mock.calls.length - 1][0] as Record<string, unknown>;
+    expect(archived).toMatchObject({ prompt_tokens: 1200, completion_tokens: 300 });
+    expect(store.getState().usageTotal).toEqual({ prompt: 0, completion: 0, total: 0 });
+  });
+
+  it("删除会话后重取累计：总数里不该还算着被删的那段", async () => {
+    const store = await loadStore();
+    M.aiSessionList.mockResolvedValue([row("cur", { updatedAt: 9 }), row("old", { updatedAt: 8, prompt: 10 })]);
+    await store.getState().loadSessions();
+    expect(M.aiUsageSummary).toHaveBeenCalledTimes(1);
+    store.getState().deleteSession("old");
+    await vi.waitFor(() => expect(M.aiUsageSummary).toHaveBeenCalledTimes(2));
+  });
+
+  it("累计拉取失败：静默隐藏用量条，不影响会话载入", async () => {
+    M.aiUsageSummary.mockImplementation(() => Promise.reject(new Error("db down")));
+    const store = await loadStore();
+    await store.getState().loadSessions();
+    expect(store.getState().usageSummary).toBeNull();
+    expect(store.getState().sessionsLoaded).toBe(true);
+  });
+});
+
+describe("ai store：会话归档、改名与回答评分", () => {
+  /** 直接造库行，跳过落库流程单独验证读取侧 */
+  function row(id: string, opts: { updatedAt: number; archived?: boolean; title?: string; content?: string }) {
+    return {
+      id,
+      title: opts.title ?? `会话${id}`,
+      page_id: null,
+      page_title: null,
+      updated_at: String(opts.updatedAt),
+      messages: JSON.stringify([{ id: `m-${id}`, role: "user", content: opts.content ?? `问题${id}` }]),
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      archived: opts.archived ?? false,
+    };
+  }
+
+  it("当前会话取最近一条未归档的，归档项留在历史列表里", async () => {
+    const store = await loadStore();
+    M.aiSessionList.mockResolvedValue([
+      row("a1", { updatedAt: 30, archived: true }),
+      row("n1", { updatedAt: 20 }),
+      row("n2", { updatedAt: 10 }),
+    ]);
+    await store.getState().loadSessions();
+    expect(store.getState().activeSessionId).toBe("n1");
+    expect(store.getState().sessions.map((x) => x.id)).toEqual(["a1", "n2"]);
+  });
+
+  it("归档写入整行覆盖：archived 位随会话行落库", async () => {
+    const store = await loadStore();
+    M.aiSessionList.mockResolvedValue([row("cur", { updatedAt: 9 }), row("old", { updatedAt: 8 })]);
+    await store.getState().loadSessions();
+    store.getState().setSessionArchived("old", true);
+    const saved = M.aiSessionSave.mock.calls[M.aiSessionSave.mock.calls.length - 1][0] as Record<string, unknown>;
+    expect(saved).toMatchObject({ id: "old", archived: true });
+    expect(store.getState().sessions.find((x) => x.id === "old")?.archived).toBe(true);
+  });
+
+  it("归档的会话不受条数上限裁剪，普通会话才被淘汰", async () => {
+    const store = await loadStore();
+    const many = Array.from({ length: 20 }, (_, i) => row(`p${i}`, { updatedAt: 100 - i }));
+    M.aiSessionList.mockResolvedValue([
+      row("cur", { updatedAt: 200 }),
+      ...many,
+      row("arch", { updatedAt: 1, archived: true }),
+    ]);
+    await store.getState().loadSessions();
+    await completeTurn(store, "新的一问");
+    store.getState().newChat();
+    const ids = store.getState().sessions.map((x) => x.id);
+    expect(ids).toContain("arch");
+    expect(M.aiSessionDelete.mock.calls.flat()).not.toContain("arch");
+    // 上限之外最老的普通会话被删掉
+    expect(M.aiSessionDelete.mock.calls.flat()).toContain("p19");
+  });
+
+  it("改名：整行重写新标题，空标题忽略", async () => {
+    const store = await loadStore();
+    M.aiSessionList.mockResolvedValue([row("cur", { updatedAt: 9 }), row("old", { updatedAt: 8 })]);
+    await store.getState().loadSessions();
+    store.getState().renameSession("old", "  改过的标题  ");
+    const saved = M.aiSessionSave.mock.calls[M.aiSessionSave.mock.calls.length - 1][0] as Record<string, unknown>;
+    expect(saved).toMatchObject({ id: "old", title: "改过的标题" });
+    const before = M.aiSessionSave.mock.calls.length;
+    store.getState().renameSession("old", "   ");
+    expect(M.aiSessionSave).toHaveBeenCalledTimes(before);
+  });
+
+  it("评分：点赞写入消息并落盘，再点同向取消", async () => {
+    const store = await loadConfiguredStore();
+    await completeTurn(store, "你好");
+    const assistantId = store.getState().messages[1].id;
+    store.getState().rateMessage(assistantId, "up");
+    expect(store.getState().messages[1].rating).toBe("up");
+    expect(M.aiSessionSave).toHaveBeenCalled();
+    store.getState().rateMessage(assistantId, "down");
+    expect(store.getState().messages[1].rating).toBe("down");
+    store.getState().rateMessage(assistantId, "down");
+    expect(store.getState().messages[1].rating).toBeUndefined();
+  });
+
+  it("恢复会话时保留评分，畸形值丢弃", async () => {
+    const store = await loadStore();
+    M.aiSessionList.mockResolvedValue([
+      {
+        id: "rated",
+        title: "评过分",
+        page_id: null,
+        page_title: null,
+        updated_at: "9",
+        archived: false,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        messages: JSON.stringify([
+          { id: "u1", role: "user", content: "问题" },
+          { id: "a1", role: "assistant", content: "回答", rating: "up" },
+          { id: "a2", role: "assistant", content: "回答二", rating: "不错" },
+        ]),
+      },
+    ]);
+    await store.getState().loadSessions();
+    const [a1, a2] = store.getState().messages.slice(1);
+    expect(a1.rating).toBe("up");
+    expect(a2.rating).toBeUndefined();
+  });
+
+  it("重新生成会产生新的助手消息：评分留在原那条上", async () => {
+    const store = await loadConfiguredStore();
+    await completeTurn(store, "你好");
+    const first = store.getState().messages[1];
+    store.getState().rateMessage(first.id, "up");
+    await completeTurn(store, "再答一次");
+    expect(store.getState().messages.some((m) => m.id === first.id && m.rating === "up")).toBe(true);
   });
 });
