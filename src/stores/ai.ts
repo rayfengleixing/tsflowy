@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import { toast } from "sonner";
+import { save } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@/lib/invoke";
 import { newId } from "@/lib/db";
 import {
   aiCancel,
@@ -222,7 +224,7 @@ function fromSessionRow(row: AiSessionRow): StoredSession | null {
     return null;
   }
   if (!Array.isArray(parsed)) return null;
-  const messages = parsed.map(sanitizeMessage).filter((m): m is AiMessage => m !== null);
+  const messages = parsed.map((x) => sanitizeMessage(x, row.page_id ?? null)).filter((m): m is AiMessage => m !== null);
   if (messages.length === 0) return null;
   return {
     id: row.id,
@@ -250,24 +252,65 @@ function sessionTitle(messages: AiMessage[]): string {
   return text.length > 30 ? `${text.slice(0, 30)}…` : text;
 }
 
-/** 恢复时逐条校验消息；edit 指令卡片不恢复（重启后编辑器 undo 栈已空，撤销会错伤无关内容） */
-function sanitizeMessage(raw: unknown): AiMessage | null {
+/** 恢复出来的动作状态必须是已知值；撤销句柄属于当时的编辑器实例，一律不恢复 */
+const RESTORABLE_STATES: readonly AiEditState[] = ["pending", "applied", "rejected", "unavailable", "malformed"];
+
+/**
+ * 恢复一张动作卡片。撤销按钮依赖 revert 句柄，这里刻意不恢复它：
+ * 重启后编辑器 undo 栈已空，撤销会错伤无关内容。
+ */
+function sanitizeAction(raw: unknown, pageId: string | null): AiActionRecord | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const a = raw as Record<string, unknown>;
+  if (!RESTORABLE_STATES.includes(a.state as AiEditState)) return null;
+  const text = (v: unknown) => (typeof v === "string" ? v : "");
+  if (a.tool === "invalid") return invalidActionRecord();
+  const call = validateCall(a.call);
+  // 只读检索不产生卡片，历史里出现这种脏数据直接丢掉
+  if (!call || isRetrievalCall(call)) return null;
+  const record: AiActionRecord = {
+    tool: call.tool,
+    call,
+    op: call.tool === "apply_edit" ? call.args.op : null,
+    summary: text(a.summary),
+    content: contentOf(call),
+    before: text(a.before),
+    state: a.state as AiEditState,
+    ...(a.undone === true ? { undone: true } : {}),
+    ...(text(a.pageName) ? { pageName: text(a.pageName) } : {}),
+    ...(text(a.detail) ? { detail: text(a.detail) } : {}),
+  };
+  // 恢复出的待确认改文档没写落点时，钉回会话发起的那一页：
+  // 否则用户切到别的页面点「应用」，改动会落到当前打开的文档上
+  if (record.state === "pending" && call.tool === "apply_edit" && !call.args.view_id && pageId) {
+    record.call = { ...call, args: { ...call.args, view_id: pageId } };
+  }
+  return record;
+}
+
+/** 恢复时逐条校验消息；动作卡片一并恢复，切回历史会话仍能看到并处理待确认的改动 */
+function sanitizeMessage(raw: unknown, pageId: string | null = null): AiMessage | null {
   if (typeof raw !== "object" || raw === null) return null;
   const m = raw as Record<string, unknown>;
   if ((m.role !== "user" && m.role !== "assistant") || typeof m.content !== "string") return null;
+  const actions = Array.isArray(m.actions)
+    ? m.actions.map((x) => sanitizeAction(x, pageId)).filter((x): x is AiActionRecord => x !== null)
+    : [];
   return {
     id: typeof m.id === "string" && m.id ? m.id : newId(),
     role: m.role,
     content: m.content.slice(0, MAX_MESSAGE_CHARS),
+    ...(actions.length > 0 ? { actions } : {}),
   };
 }
 
 function restoreSession(raw: unknown): StoredSession | null {
   if (typeof raw !== "object" || raw === null || !Array.isArray((raw as Record<string, unknown>).messages)) return null;
   const rec = raw as Record<string, unknown>;
+  const pageId = typeof rec.pageId === "string" ? rec.pageId : null;
   const messages = (rec.messages as unknown[])
     .slice(-MAX_SESSION_MESSAGES)
-    .map(sanitizeMessage)
+    .map((x) => sanitizeMessage(x, pageId))
     .filter((m): m is AiMessage => m !== null);
   if (messages.length === 0) return null;
   return {
@@ -321,6 +364,38 @@ const QUICK_PROMPT_KEY: Record<AiQuickAction, MessageKey> = {
   continue: "ai.prompt.continue",
 };
 
+/** 「优化提问」的系统提示：只改写提问本身，不进对话、不下发编辑协议 */
+const REFINE_SYSTEM_PROMPT =
+  "你是提问改写助手。用户会给你一句要发给笔记应用 AI 助手的提问，请把它改写成 3 个更清晰、更具体的版本。" +
+  "每行一条，不要编号、不要引号、不要解释，保持原意，不要回答这个问题本身。";
+
+/** 解析模型给出的改写候选：去掉编号与项目符号，最多 3 条互不重复 */
+function parsePromptIdeas(text: string): string[] {
+  const out: string[] = [];
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine
+      .replace(/^\s*(?:[-*·•]|\d+[.、)])\s+/, "")
+      .trim()
+      .replace(/^["「『'`]+|["」』'`]+$/g, "")
+      .trim();
+    if (!line || line.length > 300 || out.includes(line)) continue;
+    out.push(line);
+    if (out.length === 3) break;
+  }
+  return out;
+}
+
+/** 从回答正文取页面标题：第一条非空行去掉 Markdown 记号，最多 40 字 */
+function pageTitleFrom(content: string): string {
+  const line =
+    content
+      .split("\n")
+      .map((l) => l.replace(/^[#>\-*+\s]+/, "").trim())
+      .find((l) => l.length > 0) ?? "";
+  if (!line) return t("ai.fallbackTitle");
+  return line.length > 40 ? `${line.slice(0, 40)}…` : line;
+}
+
 interface AiState {
   open: boolean;
   width: number;
@@ -354,6 +429,12 @@ interface AiState {
   pendingContext: string | null;
   /** 输入框聚焦请求计数：从编辑器唤起面板时递增，面板据此把光标交给输入框 */
   focusTick: number;
+  /** 正在「改后重发」的那条用户消息 id；null 表示下一次发送是普通提问 */
+  editingId: string | null;
+  /** 「优化提问」给出的改写候选（点一条填入输入框） */
+  promptIdeas: string[];
+  /** 正在向模型请求提问改写 */
+  refining: boolean;
 
   toggle: () => void;
   openPanel: () => void;
@@ -387,6 +468,22 @@ interface AiState {
   runQuickAction: (action: AiQuickActionDef) => Promise<void>;
   /** 从上一条被中断的回答接着往下生成 */
   continueGenerate: () => Promise<void>;
+  /** 从某条回答重新生成：丢掉它与它之后的消息，用同一个问题再问一次 */
+  regenerate: (messageId: string) => Promise<void>;
+  /** 改后重发：替换某条提问、丢掉它之后的消息并重新生成 */
+  resend: (messageId: string, text: string) => Promise<void>;
+  /** 把某条提问标记为待修改（面板据此把它填回输入框） */
+  startEdit: (messageId: string) => void;
+  cancelEdit: () => void;
+  /** 从某条消息处分支：当前对话原样归档，之前的内容成为一个新会话 */
+  branchFrom: (messageId: string) => void;
+  /** 把一条回答另存为文档页面 */
+  saveMessageAsPage: (messageId: string) => Promise<void>;
+  /** 把一条回答导出成 Markdown 文件 */
+  exportMessage: (messageId: string) => Promise<void>;
+  /** 让模型把一句提问改写成几条候选 */
+  refinePrompt: (text: string) => Promise<void>;
+  clearPromptIdeas: () => void;
 }
 
 export const useAiStore = create<AiState>()((set, get) => {
@@ -939,6 +1036,9 @@ export const useAiStore = create<AiState>()((set, get) => {
     configLoaded: false,
     pendingContext: null,
     focusTick: 0,
+    editingId: null,
+    promptIdeas: [],
+    refining: false,
 
     toggle: () => set((s) => ({ open: !s.open })),
     // 打开面板的同时请求聚焦输入框：编辑器里点「问 AI」后可以立刻开始打字
@@ -1013,6 +1113,9 @@ export const useAiStore = create<AiState>()((set, get) => {
         errorCode: null,
         reasoning: "",
         streaming: true,
+        promptIdeas: [],
+        // 普通提问（含快捷动作）会往列表追加内容，此前「改后重发」的目标不再有效
+        editingId: null,
         messages: [...s.messages, { id: newId(), role: "user", content }, assistant],
         ...(pageRef ? { sessionPageId: pageRef.id, sessionPageTitle: pageRef.name } : {}),
       }));
@@ -1036,6 +1139,8 @@ export const useAiStore = create<AiState>()((set, get) => {
         reasoning: "",
         error: null,
         errorCode: null,
+        editingId: null,
+        promptIdeas: [],
         usage: null,
         usageTotal: { prompt: 0, completion: 0, total: 0 },
       });
@@ -1052,6 +1157,8 @@ export const useAiStore = create<AiState>()((set, get) => {
         reasoning: "",
         error: null,
         errorCode: null,
+        editingId: null,
+        promptIdeas: [],
         // 新会话的关联页面等第一条消息时再定
         sessionPageId: null,
         sessionPageTitle: null,
@@ -1080,6 +1187,9 @@ export const useAiStore = create<AiState>()((set, get) => {
         reasoning: "",
         error: null,
         errorCode: null,
+        // 换会话后消息列表整个换掉，待修改的提问 id 不再指向任何消息
+        editingId: null,
+        promptIdeas: [],
         // 累计用量按会话统计，切过去无从得知历史用量，重置为 0
         usage: null,
         usageTotal: { prompt: 0, completion: 0, total: 0 },
@@ -1257,5 +1367,154 @@ export const useAiStore = create<AiState>()((set, get) => {
       if (s.messages[total - 1].role !== "assistant") return;
       await s.send(t("ai.continueGeneratePrompt"));
     },
+
+    regenerate: async (messageId) => {
+      const s = get();
+      if (s.streaming) return;
+      const i = s.messages.findIndex((m) => m.id === messageId);
+      // 只重跑助手回答，且它前面得有可供重问的提问
+      if (i < 0 || s.messages[i].role !== "assistant" || !s.messages.slice(0, i).some((m) => m.role === "user")) return;
+      const assistant: AiMessage = { id: newId(), role: "assistant", content: "" };
+      set({
+        messages: [...s.messages.slice(0, i), assistant],
+        editingId: null,
+        promptIdeas: [],
+        reasoning: "",
+        error: null,
+        errorCode: null,
+        streaming: true,
+      });
+      await runStream(assistant.id);
+    },
+
+    resend: async (messageId, text) => {
+      const content = text.trim();
+      const s = get();
+      if (!content || s.streaming) return;
+      const i = s.messages.findIndex((m) => m.id === messageId);
+      if (i < 0 || s.messages[i].role !== "user") return;
+      const assistant: AiMessage = { id: newId(), role: "assistant", content: "" };
+      set({
+        editingId: null,
+        promptIdeas: [],
+        messages: [...s.messages.slice(0, i), { ...s.messages[i], content }, assistant],
+        reasoning: "",
+        error: null,
+        errorCode: null,
+        streaming: true,
+      });
+      persistSessions();
+      await runStream(assistant.id);
+    },
+
+    // 改后重发的入口：只标记目标提问，正文由面板填回输入框，用户改完再发送
+    startEdit: (messageId) => {
+      const s = get();
+      if (s.streaming) return;
+      const msg = s.messages.find((m) => m.id === messageId);
+      if (msg?.role === "user") set({ editingId: messageId, promptIdeas: [] });
+    },
+    cancelEdit: () => set({ editingId: null }),
+
+    branchFrom: (messageId) => {
+      const s = get();
+      if (s.streaming) return;
+      const i = s.messages.findIndex((m) => m.id === messageId);
+      if (i < 0) return;
+      const prefix = s.messages.slice(0, i + 1);
+      // 原对话整段归档保留，分支是一个新会话，两条线互不影响
+      const { sessions, archived, pruned } = archiveCurrent(s);
+      const branch: StoredSession = {
+        id: newId(),
+        title: sessionTitle(prefix),
+        updatedAt: Date.now(),
+        messages: prefix,
+        pageId: s.sessionPageId,
+        pageTitle: s.sessionPageTitle,
+      };
+      set({
+        sessions,
+        messages: prefix,
+        activeSessionId: branch.id,
+        editingId: null,
+        promptIdeas: [],
+        reasoning: "",
+        error: null,
+        errorCode: null,
+        usage: null,
+        usageTotal: { prompt: 0, completion: 0, total: 0 },
+      });
+      if (archived) saveSession(archived);
+      dropSessions(pruned);
+      saveSession(branch);
+    },
+
+    saveMessageAsPage: async (messageId) => {
+      const msg = get().messages.find((m) => m.id === messageId);
+      const content = msg?.content.trim();
+      if (!content) return;
+      try {
+        const outcome = await runWriteAction({
+          tool: "create_page",
+          args: { title: pageTitleFrom(content), content },
+        });
+        if (outcome.ok) toast.success(outcome.detail);
+        else toast.error(outcome.detail);
+      } catch (e) {
+        toast.error(aiErrorText(e));
+      }
+    },
+
+    exportMessage: async (messageId) => {
+      const msg = get().messages.find((m) => m.id === messageId);
+      const content = msg?.content.trim();
+      if (!content) return;
+      // 走 Rust 侧 write_text_file：路径由保存对话框授权，与页面/CSV 导出同一口径
+      const target = await save({
+        defaultPath: `${pageTitleFrom(content).replace(/[\\/:*?"<>|]/g, "-")}.md`,
+        filters: [{ name: "Markdown", extensions: ["md"] }],
+      });
+      if (!target) return;
+      try {
+        await invoke("write_text_file", { path: target, content });
+        toast.success(t("settings.exportedFile", { path: target }));
+      } catch (e) {
+        toast.error(aiErrorText(e));
+      }
+    },
+
+    refinePrompt: async (text) => {
+      const question = text.trim();
+      if (!question || get().streaming || get().refining) return;
+      set({ refining: true, promptIdeas: [] });
+      // 改写是一次性请求，不进对话：错误单独收集，别把面板的 error 状态污染成「这一轮失败」
+      const state: { full: string; failed: string | null } = { full: "", failed: null };
+      try {
+        await aiChat(
+          [
+            { role: "system", content: REFINE_SYSTEM_PROMPT },
+            { role: "user", content: question },
+          ],
+          (ev: AiChatEvent) => {
+            if (ev.type === "done") state.full = ev.full;
+            else if (ev.type === "error") state.failed = ev.message;
+          },
+        );
+      } catch (e) {
+        state.failed = aiErrorText(e);
+      }
+      set({ refining: false });
+      if (state.failed) {
+        toast.error(t("ai.errorPrefix", { message: state.failed }));
+        return;
+      }
+      const ideas = parsePromptIdeas(state.full).filter((x) => x !== question);
+      if (ideas.length === 0) {
+        toast.error(t("ai.refineNone"));
+        return;
+      }
+      set({ promptIdeas: ideas });
+    },
+    clearPromptIdeas: () => set({ promptIdeas: [] }),
   };
 });

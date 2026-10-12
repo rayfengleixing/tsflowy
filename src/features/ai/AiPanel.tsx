@@ -4,13 +4,16 @@ import {
   Check,
   Copy,
   CornerDownLeft,
+  Download,
   Eraser,
   FileText,
+  GitBranch,
   History,
   Languages,
   Lightbulb,
   MessageSquarePlus,
   PenLine,
+  RefreshCw,
   Replace,
   Send,
   Settings,
@@ -78,6 +81,18 @@ export function AiPanel() {
   const deleteSession = useAiStore((s) => s.deleteSession);
   const applyAction = useAiStore((s) => s.applyAction);
   const rejectAction = useAiStore((s) => s.rejectAction);
+  const editingId = useAiStore((s) => s.editingId);
+  const promptIdeas = useAiStore((s) => s.promptIdeas);
+  const refining = useAiStore((s) => s.refining);
+  const regenerate = useAiStore((s) => s.regenerate);
+  const resend = useAiStore((s) => s.resend);
+  const startEdit = useAiStore((s) => s.startEdit);
+  const cancelEdit = useAiStore((s) => s.cancelEdit);
+  const branchFrom = useAiStore((s) => s.branchFrom);
+  const saveMessageAsPage = useAiStore((s) => s.saveMessageAsPage);
+  const exportMessage = useAiStore((s) => s.exportMessage);
+  const refinePrompt = useAiStore((s) => s.refinePrompt);
+  const clearPromptIdeas = useAiStore((s) => s.clearPromptIdeas);
   const setRoute = useWorkspaceStore((s) => s.setRoute);
 
   const [input, setInput] = useState("");
@@ -160,7 +175,40 @@ export function AiPanel() {
     setInput("");
     setMention(null);
     setPinned(true);
-    void send(text);
+    // 正在修改某条提问时，发送表示「改后重发」：替换那条提问并重跑它之后的回答
+    if (editingId) void resend(editingId, text);
+    else void send(text);
+  };
+
+  const copyMessage = (text: string) => {
+    if (!text.trim()) return;
+    navigator.clipboard.writeText(text).then(
+      () => toast.success(t("ai.copied")),
+      (e: unknown) => toast.error(aiErrorText(e)),
+    );
+  };
+
+  // 把文本填回输入框并把光标移到末尾（改提问、采用改写候选都走这里）
+  const fillInput = (text: string) => {
+    setInput(text);
+    setMention(null);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  };
+
+  // 改后重发的入口：标记目标提问，同时把原文填回输入框等用户改完再发送
+  const editMessage = (message: AiMessage) => {
+    startEdit(message.id);
+    fillInput(message.content);
+  };
+
+  const stopEdit = () => {
+    cancelEdit();
+    setInput("");
   };
 
   // 选中 @ 引用：把 @查询词 替换为 @文件名 （带一个尾随空格），并把光标移到其后
@@ -218,12 +266,7 @@ export function AiPanel() {
   };
 
   const copyLast = () => {
-    const text = lastAssistant?.content;
-    if (!text) return;
-    navigator.clipboard.writeText(text).then(
-      () => toast.success(t("ai.copied")),
-      (e: unknown) => toast.error(aiErrorText(e)),
-    );
+    copyMessage(lastAssistant?.content ?? "");
   };
 
   // 回填：把助手回答写入文档（替换选区 / 光标处插入）
@@ -394,6 +437,13 @@ export function AiPanel() {
                 <MessageBubble
                   key={m.id}
                   message={m}
+                  busy={streaming}
+                  onCopy={() => copyMessage(m.content)}
+                  onRegenerate={m.role === "assistant" ? () => void regenerate(m.id) : undefined}
+                  onEdit={m.role === "user" ? () => editMessage(m) : undefined}
+                  onSavePage={m.role === "assistant" ? () => void saveMessageAsPage(m.id) : undefined}
+                  onExport={m.role === "assistant" ? () => void exportMessage(m.id) : undefined}
+                  onBranch={() => branchFrom(m.id)}
                   onReplace={m.role === "assistant" ? () => writeBack(m.content, "replace") : undefined}
                   onInsert={m.role === "assistant" ? () => writeBack(m.content, "insert") : undefined}
                   onUndo={(i) => undoAction(m.id, i)}
@@ -527,6 +577,42 @@ export function AiPanel() {
 
           {/* 输入区：Enter 发送、Shift+Enter 换行；输入 @ 引用工作区文件 */}
           <div className="relative shrink-0 border-t border-neutral-200 p-2 dark:border-neutral-700">
+            {/* 改后重发：输入框内容对应一条既有提问，发送会替换它并重跑其后的回答 */}
+            {editingId && (
+              <div className="mb-1 flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-700 dark:border-amber-600 dark:bg-neutral-800 dark:text-amber-300">
+                <span className="min-w-0 flex-1">{t("ai.editingBanner")}</span>
+                <button className="shrink-0 underline hover:no-underline" onClick={stopEdit}>
+                  {t("ai.cancelMsgEdit")}
+                </button>
+              </div>
+            )}
+            {/* 「优化提问」的候选：点一条填回输入框 */}
+            {promptIdeas.length > 0 && (
+              <div className="mb-1 rounded-md border border-neutral-200 px-2 py-1 dark:border-neutral-700">
+                <div className="flex items-center justify-between text-[11px] text-neutral-500">
+                  <span>{t("ai.refineCandidates")}</span>
+                  <button className="underline hover:no-underline" onClick={clearPromptIdeas}>
+                    {t("ai.clearPendingContext")}
+                  </button>
+                </div>
+                <div className="mt-1 space-y-1">
+                  {promptIdeas.map((idea, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      title={idea}
+                      className="block w-full truncate rounded border border-neutral-200 px-1.5 py-0.5 text-left text-[11px] text-neutral-600 hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                      onClick={() => {
+                        fillInput(idea);
+                        clearPromptIdeas();
+                      }}
+                    >
+                      {idea}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {/* 编辑器带入的选中内容：随本轮提问一起下发 */}
             {pendingContext && (
               <div className="mb-1 flex items-center gap-1.5 rounded-md border border-brand-300 bg-brand-50 px-2 py-1 text-[11px] text-brand-700 dark:border-brand-600 dark:bg-neutral-800 dark:text-neutral-200">
@@ -578,7 +664,16 @@ export function AiPanel() {
               placeholder={t("ai.inputPlaceholder")}
               className="w-full resize-none rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-[12px] text-neutral-800 outline-none focus:border-brand-500 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
             />
-            <div className="mt-1.5 flex items-center justify-end">
+            <div className="mt-1.5 flex items-center justify-end gap-1.5">
+              {/* 优化提问：让模型把输入框里这句改写成几条候选，不进对话 */}
+              {!streaming && (
+                <QuickButton
+                  icon={<Sparkles className="h-3 w-3" />}
+                  label={refining ? t("ai.refining") : t("ai.refine")}
+                  disabled={!input.trim() || refining}
+                  onClick={() => void refinePrompt(input)}
+                />
+              )}
               {streaming ? (
                 <Button size="sm" variant="outline" onClick={stop}>
                   <Square className="mr-1 h-3.5 w-3.5" />
@@ -642,6 +737,13 @@ function canShowDiff(a: AiActionRecord): boolean {
 
 function MessageBubble({
   message,
+  busy = false,
+  onCopy,
+  onRegenerate,
+  onEdit,
+  onSavePage,
+  onExport,
+  onBranch,
   onReplace,
   onInsert,
   onUndo,
@@ -650,6 +752,17 @@ function MessageBubble({
   onViewDiff,
 }: {
   message: AiMessage;
+  /** 流式进行中：消息级操作会改写消息列表，此时一律禁用 */
+  busy?: boolean;
+  onCopy?: () => void;
+  /** 助手回答：丢掉这条及之后的消息，用同一个问题重问一次 */
+  onRegenerate?: () => void;
+  /** 用户提问：填回输入框，改完发送即重发 */
+  onEdit?: () => void;
+  onSavePage?: () => void;
+  onExport?: () => void;
+  /** 从这条消息处分支出一个新会话（当前会话原样归档） */
+  onBranch?: () => void;
   onReplace?: () => void;
   onInsert?: () => void;
   onUndo: (index: number) => void;
@@ -736,6 +849,25 @@ function MessageBubble({
           )}
         </div>
       )}
+      {/* 消息级操作：重新生成 / 改这条提问 / 复制 / 存为页面 / 导出 / 分支 */}
+      {!busy && message.content.trim() && (
+        <div className="mt-1 flex gap-0.5">
+          {onRegenerate && (
+            <IconAction icon={<RefreshCw className="h-3 w-3" />} label={t("ai.msgRegenerate")} onClick={onRegenerate} />
+          )}
+          {onEdit && <IconAction icon={<PenLine className="h-3 w-3" />} label={t("ai.msgEdit")} onClick={onEdit} />}
+          {onCopy && <IconAction icon={<Copy className="h-3 w-3" />} label={t("ai.msgCopy")} onClick={onCopy} />}
+          {onSavePage && (
+            <IconAction icon={<FileText className="h-3 w-3" />} label={t("ai.msgSavePage")} onClick={onSavePage} />
+          )}
+          {onExport && (
+            <IconAction icon={<Download className="h-3 w-3" />} label={t("ai.msgExport")} onClick={onExport} />
+          )}
+          {onBranch && (
+            <IconAction icon={<GitBranch className="h-3 w-3" />} label={t("ai.msgBranch")} onClick={onBranch} />
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -760,6 +892,21 @@ function safeHost(baseUrl: string): string {
   } catch {
     return baseUrl;
   }
+}
+
+/** 气泡下方的一排图标操作（重新生成 / 改提问 / 复制 / 存为页面 / 导出 / 分支） */
+function IconAction({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      className="flex h-5 w-5 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-neutral-600 dark:hover:bg-neutral-700 dark:hover:text-neutral-300"
+      onClick={onClick}
+    >
+      {icon}
+    </button>
+  );
 }
 
 /** 消息卡片下方的小号操作按钮（查看改动 / 应用 / 忽略 / 撤销） */

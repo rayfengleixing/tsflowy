@@ -552,3 +552,350 @@ describe("ai store：会话生命周期", () => {
     });
   });
 });
+
+describe("ai store：动作卡片随会话恢复", () => {
+  /** 落库的会话行里带一张待确认的改文档卡片（revert 只活在内存，恢复时不该带回来） */
+  function actionRow(pageId: string | null) {
+    return {
+      id: "db1",
+      title: "会话",
+      page_id: pageId,
+      page_title: "页面",
+      updated_at: "5",
+      messages: JSON.stringify([
+        { id: "u1", role: "user", content: "改一下" },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "回答",
+          actions: [
+            {
+              tool: "apply_edit",
+              call: { tool: "apply_edit", args: { op: "append_to_document", summary: "补一段", content: "新内容" } },
+              op: "append_to_document",
+              summary: "补一段",
+              content: "新内容",
+              before: "旧内容",
+              state: "pending",
+              revert: { kind: "editor-transaction" },
+            },
+          ],
+        },
+      ]),
+    };
+  }
+
+  it("待确认卡片原样恢复，并钉回会话发起的那一页", async () => {
+    const store = await loadStore();
+    M.aiSessionList.mockResolvedValue([actionRow("p1")]);
+    await store.getState().loadSessions();
+    const rec = store.getState().messages[1].actions![0];
+    expect(rec).toMatchObject({
+      tool: "apply_edit",
+      op: "append_to_document",
+      state: "pending",
+      summary: "补一段",
+      content: "新内容",
+      before: "旧内容",
+      call: { tool: "apply_edit", args: { op: "append_to_document", view_id: "p1" } },
+    });
+    // 不恢复 revert：重启后编辑器 undo 栈已空，跨会话撤销会错伤无关内容
+    expect(rec).not.toHaveProperty("revert");
+    // 恢复只重建卡片，不会替用户把改动写进文档
+    expect(M.applyEdit).not.toHaveBeenCalled();
+    expect(M.runWriteAction).not.toHaveBeenCalled();
+  });
+
+  it("会话没有关联页面：不补 view_id，应用时仍按当前打开的文档处理", async () => {
+    const store = await loadStore();
+    M.aiSessionList.mockResolvedValue([actionRow(null)]);
+    await store.getState().loadSessions();
+    expect(store.getState().messages[1].actions![0].call).not.toHaveProperty("args.view_id");
+  });
+
+  it("已执行/已忽略/格式有误都能恢复；脏数据卡片被丢弃", async () => {
+    const store = await loadStore();
+    M.aiSessionList.mockResolvedValue([
+      {
+        id: "db2",
+        title: "混合",
+        page_id: null,
+        page_title: null,
+        updated_at: "6",
+        messages: JSON.stringify([
+          {
+            id: "a1",
+            role: "assistant",
+            content: "回答",
+            actions: [
+              {
+                tool: "create_page",
+                call: { tool: "create_page", args: { title: "新页", content: "正文" } },
+                op: null,
+                summary: "新建页面「新页」",
+                content: "正文",
+                before: "",
+                state: "applied",
+                undone: true,
+                detail: "已新建页面",
+              },
+              {
+                tool: "set_page_title",
+                call: { tool: "set_page_title", args: { page: "旧名", title: "新名" } },
+                op: null,
+                summary: "",
+                content: "",
+                before: "",
+                state: "rejected",
+              },
+              { tool: "invalid", call: null, op: null, summary: "", content: "", before: "", state: "malformed" },
+              // 检索调用不产生卡片、状态不在枚举里的一律丢弃
+              {
+                tool: "search_workspace",
+                call: { tool: "search_workspace", args: { query: "x" } },
+                op: null,
+                summary: "",
+                content: "",
+                before: "",
+                state: "pending",
+              },
+              {
+                tool: "create_page",
+                call: { tool: "create_page", args: { title: "T" } },
+                op: null,
+                summary: "",
+                content: "",
+                before: "",
+                state: "someday",
+              },
+            ],
+          },
+        ]),
+      },
+    ]);
+    await store.getState().loadSessions();
+    const actions = store.getState().messages[0].actions!;
+    expect(actions.map((a) => [a.tool, a.state])).toEqual([
+      ["create_page", "applied"],
+      ["set_page_title", "rejected"],
+      ["invalid", "malformed"],
+    ]);
+    expect(actions[0]).toMatchObject({ undone: true, detail: "已新建页面" });
+    expect(actions[1]).not.toHaveProperty("undone");
+  });
+
+  it("库为空时走本地兜底：兜底里的卡片同样恢复", async () => {
+    const store = await loadStore();
+    M.aiSessionList.mockResolvedValue([]);
+    storage.set(
+      "tsflowy-ai-sessions-v1",
+      JSON.stringify({
+        activeId: "l1",
+        sessions: [],
+        active: {
+          id: "l1",
+          title: "本地会话",
+          updatedAt: 1,
+          pageId: "lp",
+          messages: [
+            { id: "u1", role: "user", content: "改一下" },
+            {
+              id: "a1",
+              role: "assistant",
+              content: "回答",
+              actions: [
+                {
+                  tool: "create_page",
+                  call: { tool: "create_page", args: { title: "新页", content: "正文" } },
+                  op: null,
+                  summary: "新建页面「新页」",
+                  content: "正文",
+                  before: "",
+                  state: "pending",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    await store.getState().loadSessions();
+    const s = store.getState();
+    expect(s.activeSessionId).toBe("l1");
+    expect(s.messages[1].actions![0]).toMatchObject({ tool: "create_page", state: "pending" });
+  });
+});
+
+describe("ai store：消息级操作", () => {
+  it("regenerate：丢掉这条回答与其后的消息，用原问题再问一次", async () => {
+    const store = await loadConfiguredStore();
+    await completeTurn(store, "第一问", "第一答");
+    await completeTurn(store, "第二问", "第二答");
+    const firstAssistantId = store.getState().messages[1].id;
+    const before = streamHandlers.length;
+    const p = store.getState().regenerate(firstAssistantId);
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(before + 1));
+    pump([{ type: "done", full: "重写的答案" }]);
+    await p;
+    const s = store.getState();
+    expect(s.messages.map((m) => m.content)).toEqual(["第一问", "重写的答案"]);
+    // 第二问整轮不再进入请求，重问用的是第一条提问
+    const outgoing = M.aiChat.mock.calls[M.aiChat.mock.calls.length - 1][0] as AiChatMessage[];
+    expect(outgoing.filter((m) => m.role !== "system").map((m) => m.content)).toEqual(["第一问"]);
+  });
+
+  it("regenerate：只对助手回答生效，流式进行中不动作", async () => {
+    const store = await loadConfiguredStore();
+    await completeTurn(store, "第一问", "第一答");
+    const userId = store.getState().messages[0].id;
+    store.getState().regenerate(userId);
+    expect(streamHandlers).toHaveLength(1);
+    expect(store.getState().messages.map((m) => m.content)).toEqual(["第一问", "第一答"]);
+
+    const p = store.getState().send("进行中");
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(2));
+    store.getState().regenerate(store.getState().messages[1].id);
+    expect(store.getState().streaming).toBe(true);
+    pump([{ type: "done", full: "ok" }]);
+    await p;
+  });
+
+  it("resend：替换提问正文，丢掉它之后的消息并重新生成", async () => {
+    const store = await loadConfiguredStore();
+    await completeTurn(store, "原问题", "原回答");
+    await completeTurn(store, "另一个问题", "另一个回答");
+    const userId = store.getState().messages[0].id;
+    store.getState().startEdit(userId);
+    expect(store.getState().editingId).toBe(userId);
+    const p = store.getState().resend(userId, "改过的问题");
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(3));
+    pump([{ type: "done", full: "新回答" }]);
+    await p;
+    const s = store.getState();
+    expect(s.messages.map((m) => [m.role, m.content])).toEqual([
+      ["user", "改过的问题"],
+      ["assistant", "新回答"],
+    ]);
+    expect(s.editingId).toBeNull();
+    const outgoing = M.aiChat.mock.calls[M.aiChat.mock.calls.length - 1][0] as AiChatMessage[];
+    expect(outgoing.filter((m) => m.role !== "system").map((m) => m.content)).toEqual(["改过的问题"]);
+  });
+
+  it("resend：空白内容与流式进行中都不发送", async () => {
+    const store = await loadConfiguredStore();
+    await completeTurn(store, "第一问", "第一答");
+    const userId = store.getState().messages[0].id;
+    const before = streamHandlers.length;
+    await store.getState().resend(userId, "   ");
+    expect(streamHandlers).toHaveLength(before);
+    expect(store.getState().messages.map((m) => m.content)).toEqual(["第一问", "第一答"]);
+  });
+
+  it("startEdit：只标记用户消息，cancelEdit 复位", async () => {
+    const store = await loadConfiguredStore();
+    await completeTurn(store, "第一问", "第一答");
+    const [userId, assistantId] = store.getState().messages.map((m) => m.id);
+    store.getState().startEdit(assistantId);
+    expect(store.getState().editingId).toBeNull();
+    store.getState().startEdit(userId);
+    expect(store.getState().editingId).toBe(userId);
+    // 普通提问（快捷动作也走它）会作废待修改的标记
+    await completeTurn(store, "另一个问题", "另一个回答");
+    expect(store.getState().editingId).toBeNull();
+    store.getState().startEdit(userId);
+    store.getState().cancelEdit();
+    expect(store.getState().editingId).toBeNull();
+  });
+
+  it("branchFrom：当前对话整段归档，前缀成为一个新会话", async () => {
+    const store = await loadConfiguredStore();
+    await completeTurn(store, "第一问", "第一答");
+    await completeTurn(store, "第二问", "第二答");
+    const oldId = store.getState().activeSessionId;
+    store.getState().branchFrom(store.getState().messages[1].id);
+    const s = store.getState();
+    expect(s.activeSessionId).not.toBe(oldId);
+    expect(s.messages.map((m) => m.content)).toEqual(["第一问", "第一答"]);
+    expect(s.sessions.map((x) => x.id)).toContain(oldId);
+    expect(s.sessions.find((x) => x.id === oldId)!.messages.map((m) => m.content)).toEqual([
+      "第一问",
+      "第一答",
+      "第二问",
+      "第二答",
+    ]);
+    // 归档的旧会话与新建的分支会话都落库
+    expect(M.aiSessionSave).toHaveBeenCalledWith(expect.objectContaining({ id: oldId }));
+    expect(M.aiSessionSave).toHaveBeenCalledWith(expect.objectContaining({ id: s.activeSessionId }));
+  });
+
+  it("saveMessageAsPage：按回答首行取标题，正文整段落成新页", async () => {
+    const store = await loadConfiguredStore();
+    const content = "# 周会纪要\n决议 A\n决议 B";
+    await completeTurn(store, "写份纪要", content);
+    await store.getState().saveMessageAsPage(store.getState().messages[1].id);
+    expect(M.runWriteAction).toHaveBeenCalledWith({ tool: "create_page", args: { title: "周会纪要", content } });
+    expect(M.toastSuccess).toHaveBeenCalled();
+  });
+
+  it("refinePrompt：候选去掉编号引号并去重，与原提问相同的不列", async () => {
+    const store = await loadConfiguredStore();
+    const p = store.getState().refinePrompt("总结会议");
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(1));
+    pump([
+      {
+        type: "done",
+        full:
+          "1. 把最近三周的会议记录按待办汇总\n- 「列出每周会议记录里的风险点」\n- 总结会议\n\n\n超过三百字的那条：" +
+          "y".repeat(300),
+      },
+    ]);
+    await p;
+    const s = store.getState();
+    expect(s.promptIdeas).toEqual(["把最近三周的会议记录按待办汇总", "列出每周会议记录里的风险点"]);
+    expect(s.refining).toBe(false);
+    // 改写不进对话
+    expect(s.messages).toEqual([]);
+    const outgoing = M.aiChat.mock.calls[0][0] as AiChatMessage[];
+    expect(outgoing.map((m) => m.role)).toEqual(["system", "user"]);
+    // 新一轮提问会把候选清掉
+    await completeTurn(store, "换话题", "回答");
+    expect(store.getState().promptIdeas).toEqual([]);
+  });
+
+  it("refinePrompt：请求失败只弹提示，不污染对话错误态", async () => {
+    const store = await loadConfiguredStore({ chatThrows: true });
+    await store.getState().refinePrompt("总结会议");
+    expect(store.getState().promptIdeas).toEqual([]);
+    expect(store.getState().refining).toBe(false);
+    expect(store.getState().error).toBeNull();
+    expect(M.toastError).toHaveBeenCalled();
+  });
+
+  it("refinePrompt：模型没给出可用候选时提示用户", async () => {
+    const store = await loadConfiguredStore();
+    const p = store.getState().refinePrompt("总结会议");
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(1));
+    pump([{ type: "done", full: "总结会议" }]);
+    await p;
+    expect(store.getState().promptIdeas).toEqual([]);
+    expect(M.toastError).toHaveBeenCalledWith("ai.refineNone");
+  });
+
+  it("清空/新会话/切换会话都会复位「改后重发」与候选", async () => {
+    const store = await loadConfiguredStore();
+    await completeTurn(store, "第一问", "第一答");
+    const userId = store.getState().messages[0].id;
+    store.getState().startEdit(userId);
+    store.setState({ promptIdeas: ["候选"], sessions: [session(1)] });
+    store.getState().switchSession("s1");
+    expect(store.getState().editingId).toBeNull();
+    expect(store.getState().promptIdeas).toEqual([]);
+    await completeTurn(store, "第二问", "第二答");
+    store.getState().startEdit(store.getState().messages[0].id);
+    store.getState().newChat();
+    expect(store.getState().editingId).toBeNull();
+    store.getState().startEdit("any");
+    store.getState().clear();
+    expect(store.getState().editingId).toBeNull();
+  });
+});
