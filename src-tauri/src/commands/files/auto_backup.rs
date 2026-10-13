@@ -183,6 +183,11 @@ pub fn set_auto_backup_config(
 /// 立即备份一次（设置页按钮）：走与自动备份完全相同的链路
 #[tauri::command]
 pub async fn run_auto_backup_now(app: tauri::AppHandle) -> Result<String, String> {
-    let keep = load_app_config(&app).auto_backup.normalized().keep;
-    run_auto_backup(&app, keep).map(|p| p.to_string_lossy().to_string())
+    // VACUUM INTO + 全量 zip 是重阻塞 IO，放 blocking 线程池执行
+    tauri::async_runtime::spawn_blocking(move || {
+        let keep = load_app_config(&app).auto_backup.normalized().keep;
+        run_auto_backup(&app, keep).map(|p| p.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("backup task failed: {e}"))?
 }

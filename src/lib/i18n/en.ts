@@ -123,6 +123,8 @@ export const en: Record<MessageKey, string> = {
   "error.db": "Database error: {message}",
   "editor.placeholder": "Write something, or press '/' for commands",
   "editor.placeholderNoSlash": "Write something",
+  "editor.partialLoad":
+    "The document contains blocks this version cannot recognize: {kept}/{total} loaded (unrecognized blocks are hidden — avoid saving, or restore from history)",
   "editor.copy": "Copy",
   "editor.chars": "chars",
   "editor.imageUploadFailed": "Image upload failed",
@@ -232,6 +234,9 @@ export const en: Record<MessageKey, string> = {
   "field.includeTime": "Include time",
   "field.confirmDeleteTitle": "Delete field",
   "field.confirmDeleteDesc": "Column 「{name}」 and all its cell data will be deleted. This cannot be undone.",
+  "field.confirmChangeTypeTitle": "Change field type",
+  "field.confirmChangeTypeDesc":
+    "Changing 「{name}」 from 「{from}」 to 「{to}」 clears every cell in this column and cannot be undone. Continue?",
   "field.type.text": "Text",
   "field.type.number": "Number",
   "field.type.progress": "Progress",
@@ -562,6 +567,10 @@ export const en: Record<MessageKey, string> = {
   "settings.syncLast": "Last sync",
   "settings.syncNever": "Never synced",
   "settings.syncActionNone": "Already up to date — nothing to sync",
+  "sync.autoPulled": "Auto-sync: pulled newer data from another device, reloading",
+  "sync.autoConflict":
+    "Auto-sync conflict: kept {count} conflict copy(ies) (the older side was set aside) — see Settings → Sync",
+  "sync.autoFailed": "Auto-sync failed: {message}",
   "settings.syncActionUpload": "Uploaded this device's data to the sync folder",
   "settings.syncActionDownload": "Pulled the latest data from the sync folder",
   "settings.syncActionConflict":
@@ -777,6 +786,11 @@ export const en: Record<MessageKey, string> = {
   "ai.history": "Session history",
   "ai.historyEmpty": "No past sessions",
   "ai.deleteSession": "Delete session",
+  "ai.confirmClearTitle": "Clear current chat",
+  "ai.confirmClearDesc":
+    "The current conversation will be cleared and deleted from the session store. Start a new chat first if you want to keep it.",
+  "ai.confirmDeleteSessionTitle": "Delete session",
+  "ai.confirmDeleteSessionDesc": "Session 「{title}」 will be permanently deleted. This cannot be undone.",
   "ai.searchSessions": "Search titles and content",
   "ai.historyRecentTab": "Recent",
   "ai.historyArchivedTab": "Archived",

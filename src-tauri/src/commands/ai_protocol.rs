@@ -570,10 +570,10 @@ impl SseDecoder {
     /// 一行 → 0 或多个事件（同一行里既有正文增量又有函数调用时都给出去）
     pub fn decode(&mut self, line: &str) -> Vec<SseParse> {
         if self.protocol == Protocol::OpenAi {
-            return match parse_sse_line(line) {
-                SseParse::Ignore => Vec::new(),
-                ev => vec![ev],
-            };
+            return parse_sse_line(line)
+                .into_iter()
+                .filter(|e| *e != SseParse::Ignore)
+                .collect();
         }
         let line = line.strip_suffix('\r').unwrap_or(line);
         let Some(rest) = line.strip_prefix("data:") else {

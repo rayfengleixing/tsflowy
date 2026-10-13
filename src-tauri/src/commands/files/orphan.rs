@@ -18,6 +18,7 @@ use tauri::State;
 use super::auto_backup::{backup_dir, backup_stamp};
 use super::data_dir::app_data_dir;
 use super::ASSETS_DIR;
+use crate::commands::sync;
 use crate::db::{asset_refs, Db};
 
 #[derive(Serialize)]
@@ -73,11 +74,19 @@ fn orphan_names(assets_dir: &Path, blobs: &[String]) -> Result<Vec<(String, u64)
 }
 
 /// 扫描未被任何文档或视图配置引用的资源文件（只读，不动磁盘）。
+/// 全量读取所有文档/配置文本再遍历 assets 目录，是重阻塞 IO，放 blocking 线程池执行。
 #[tauri::command]
 pub async fn scan_orphan_assets(
     app: tauri::AppHandle,
     db: State<'_, Db>,
 ) -> Result<OrphanScan, String> {
+    let db = db.shared();
+    tauri::async_runtime::spawn_blocking(move || scan_orphan_assets_blocking(app, db))
+        .await
+        .map_err(|e| format!("orphan scan task failed: {e}"))?
+}
+
+fn scan_orphan_assets_blocking(app: tauri::AppHandle, db: crate::db::SharedDb) -> Result<OrphanScan, String> {
     let assets_dir = app_data_dir(&app)?.join(ASSETS_DIR);
     if !assets_dir.is_dir() {
         return Ok(OrphanScan {
@@ -102,10 +111,22 @@ pub async fn scan_orphan_assets(
 }
 
 /// 把指定文件挪到备份目录（传空 `names` = 清理本次扫描出的全部孤儿资源）。
+/// 同样含全库引用扫描与整文件移动，放 blocking 线程池执行。
 #[tauri::command]
 pub async fn purge_orphan_assets(
     app: tauri::AppHandle,
     db: State<'_, Db>,
+    names: Vec<String>,
+) -> Result<OrphanPurge, String> {
+    let db = db.shared();
+    tauri::async_runtime::spawn_blocking(move || purge_orphan_assets_blocking(app, db, names))
+        .await
+        .map_err(|e| format!("orphan purge task failed: {e}"))?
+}
+
+fn purge_orphan_assets_blocking(
+    app: tauri::AppHandle,
+    db: crate::db::SharedDb,
     names: Vec<String>,
 ) -> Result<OrphanPurge, String> {
     for name in &names {
@@ -133,6 +154,7 @@ pub async fn purge_orphan_assets(
     let dest: PathBuf = backup_dir(&app)?.join(format!("orphan-assets-{}", backup_stamp()));
     let mut moved = 0usize;
     let mut freed_bytes = 0u64;
+    let mut removed_names: Vec<String> = Vec::new();
     if !targets.is_empty() {
         fs::create_dir_all(&dest).map_err(|e| format!("failed to create backup dir: {e}"))?;
     }
@@ -147,6 +169,14 @@ pub async fn purge_orphan_assets(
         }
         moved += 1;
         freed_bytes += bytes;
+        removed_names.push(format!("{ASSETS_DIR}/{name}"));
+    }
+
+    // 记入删除墓碑：同步目录里的旧副本不能被下一轮双向补齐复制回来（附件"复活"）
+    if !removed_names.is_empty() {
+        if let Err(e) = sync::append_local_tombstones(&app, &removed_names) {
+            tracing::warn!(error = %e, "orphan purge: write tombstone manifest failed");
+        }
     }
 
     Ok(OrphanPurge {

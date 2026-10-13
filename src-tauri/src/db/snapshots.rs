@@ -5,8 +5,10 @@ use super::{dberr, now_ms};
 
 /// 同一页面两次快照的最小间隔：编辑保存高频触发，无节流会瞬间写满。
 pub const SNAPSHOT_INTERVAL_MS: i64 = 10 * 60 * 1000;
-/// 每页保留的自动快照份数上限（restore 前的 pre_restore 备份不占额度）。
+/// 每页保留的自动快照份数上限。
 pub const SNAPSHOT_KEEP: i64 = 50;
+/// restore 前的 pre_restore 备份不占自动快照额度，但也要有上限，否则反复恢复会无界增长。
+pub const PRE_RESTORE_KEEP: i64 = 5;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SnapshotRowOut {
@@ -25,19 +27,24 @@ fn insert(conn: &Connection, view_id: &str, content: &str, reason: &str) -> Resu
     Ok(conn.last_insert_rowid())
 }
 
-/// 裁剪该页最旧的自动快照，保留最近 SNAPSHOT_KEEP 份。
-fn trim(conn: &Connection, view_id: &str) -> Result<(), String> {
+/// 裁剪该页某一 reason 的最旧快照，保留最近 keep 份。
+fn trim_by_reason(conn: &Connection, view_id: &str, reason: &str, keep: i64) -> Result<(), String> {
     conn.execute(
         "DELETE FROM document_snapshots
-         WHERE view_id = ?1 AND reason = 'auto'
+         WHERE view_id = ?1 AND reason = ?2
            AND id NOT IN (
-             SELECT id FROM document_snapshots WHERE view_id = ?1 AND reason = 'auto'
-             ORDER BY id DESC LIMIT ?2
+             SELECT id FROM document_snapshots WHERE view_id = ?1 AND reason = ?2
+             ORDER BY id DESC LIMIT ?3
            )",
-        params![view_id, SNAPSHOT_KEEP],
+        params![view_id, reason, keep],
     )
     .map_err(dberr("trim snapshots"))?;
     Ok(())
+}
+
+/// 裁剪该页最旧的自动快照，保留最近 SNAPSHOT_KEEP 份。
+fn trim(conn: &Connection, view_id: &str) -> Result<(), String> {
+    trim_by_reason(conn, view_id, "auto", SNAPSHOT_KEEP)
 }
 
 /// 保存文档后调用：距该页最近一次快照（任意 reason）超过间隔才落新快照。
@@ -100,6 +107,7 @@ pub fn restore(conn: &Connection, id: i64) -> Result<String, String> {
         .map_err(dberr("restore snapshot"))?;
     if let Ok(Some(current)) = super::docs::get(&tx, &view_id) {
         insert(&tx, &view_id, &current, "pre_restore")?;
+        trim_by_reason(&tx, &view_id, "pre_restore", PRE_RESTORE_KEEP)?;
     }
     super::docs::save(&tx, &view_id, &content)?;
     tx.commit().map_err(dberr("restore snapshot (commit)"))?;
@@ -169,6 +177,27 @@ mod tests {
             rows.iter().any(|r| r.reason == "pre_restore"),
             "恢复前先备份当前版本"
         );
+    }
+
+    #[test]
+    fn pre_restore_backups_are_bounded() {
+        let conn = setup();
+        seed_doc(&conn);
+        super::super::docs::save(&conn, "v1", r#"{"v":"seed"}"#).unwrap();
+        maybe_snapshot(&conn, "v1", r#"{"v":"seed"}"#).unwrap();
+        let snap_id = list(&conn, "v1").unwrap()[0].id;
+        for i in 0..(PRE_RESTORE_KEEP + 4) {
+            super::super::docs::save(&conn, "v1", &format!(r#"{{"v":{i}}}"#)).unwrap();
+            restore(&conn, snap_id).unwrap();
+        }
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM document_snapshots WHERE view_id = 'v1' AND reason = 'pre_restore'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(n <= PRE_RESTORE_KEEP, "pre_restore 备份上限 {PRE_RESTORE_KEEP}，实际 {n}");
     }
 
     #[test]

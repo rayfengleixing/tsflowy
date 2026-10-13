@@ -49,6 +49,7 @@ import { flattenTree } from "@/lib/tree";
 import { t, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { EditDiffDialog } from "./EditDiffDialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Markdown } from "./Markdown";
 
 /**
@@ -181,6 +182,8 @@ export function AiPanel() {
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [mentionActive, setMentionActive] = useState(0);
   const [showHistory, setShowHistory] = useState(false);
+  // 破坏性操作（清空当前对话 / 删除会话）先确认：这些都会直接删库里的会话行
+  const [pendingDanger, setPendingDanger] = useState<{ kind: "clear" } | { kind: "session"; id: string } | null>(null);
   // 历史会话面板：搜索词 + 是否在看归档区 + 正在改名的那一行
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyArchived, setHistoryArchived] = useState(false);
@@ -483,7 +486,7 @@ export function AiPanel() {
             title={t("ai.clear")}
             aria-label={t("ai.clear")}
             disabled={messages.length === 0}
-            onClick={clear}
+            onClick={() => setPendingDanger({ kind: "clear" })}
           >
             <Eraser className="h-3.5 w-3.5" />
           </button>
@@ -596,7 +599,7 @@ export function AiPanel() {
                           icon={<Trash2 className="h-3 w-3" />}
                           label={t("ai.deleteSession")}
                           danger
-                          onClick={() => deleteSession(sess.id)}
+                          onClick={() => setPendingDanger({ kind: "session", id: sess.id })}
                         />
                       </>
                     )}
@@ -955,6 +958,26 @@ export function AiPanel() {
           if (!v) setDiff(null);
         }}
         onApply={diff ? () => void applyAction(diff.id, diff.index) : undefined}
+      />
+      <ConfirmDialog
+        open={pendingDanger !== null}
+        onOpenChange={(v) => !v && setPendingDanger(null)}
+        title={pendingDanger?.kind === "session" ? t("ai.confirmDeleteSessionTitle") : t("ai.confirmClearTitle")}
+        description={
+          pendingDanger?.kind === "session"
+            ? t("ai.confirmDeleteSessionDesc", {
+                title: sessions.find((x) => x.id === pendingDanger.id)?.title ?? "",
+              })
+            : t("ai.confirmClearDesc")
+        }
+        confirmLabel={t("common.delete")}
+        onConfirm={() => {
+          const danger = pendingDanger;
+          setPendingDanger(null);
+          if (!danger) return;
+          if (danger.kind === "clear") clear();
+          else deleteSession(danger.id);
+        }}
       />
     </div>
   );

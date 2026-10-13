@@ -18,6 +18,7 @@ const M = vi.hoisted(() => ({
   ),
   docSearchSnippets: vi.fn(() => Promise.resolve([] as string[])),
   getAiEditor: vi.fn((): unknown => null),
+  getAiEditorForView: vi.fn((): unknown => null),
   applyEdit: vi.fn((_op: string, _content: string, _anchor?: unknown) => ({ applied: true, revert: {} })),
   undoAiEdit: vi.fn((_revert: unknown) => true),
   documentGet: vi.fn((): Promise<string | null> => Promise.resolve(null)),
@@ -52,7 +53,7 @@ vi.mock("@/lib/ai", () => ({
   docSearchSnippets: M.docSearchSnippets,
   aiErrorText: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
-vi.mock("@/lib/ai-editor", () => ({ getAiEditor: M.getAiEditor }));
+vi.mock("@/lib/ai-editor", () => ({ getAiEditor: M.getAiEditor, getAiEditorForView: M.getAiEditorForView }));
 vi.mock("@/lib/db", () => ({ newId: M.newId }));
 vi.mock("@/lib/documents", () => ({ documentApi: { get: M.documentGet, save: M.documentSave } }));
 // 工具执行层自带一堆库访问依赖，单测里只关心 store 怎么调度它

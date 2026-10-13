@@ -13,7 +13,7 @@ import { Table } from "@tiptap/extension-table";
 import { TableRow } from "@tiptap/extension-table-row";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { TableCell } from "@tiptap/extension-table-cell";
-import { type JSONContent } from "@tiptap/core";
+import { createNodeFromContent, type JSONContent } from "@tiptap/core";
 import { Slice, Fragment, Node as PMNode } from "@tiptap/pm/model";
 import { toast } from "sonner";
 import { Link2, ChevronDown, ChevronUp } from "lucide-react";
@@ -24,7 +24,7 @@ import { mentionsApi, type MentionRow } from "@/lib/mentions";
 import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown";
 import { pickImageExt, uploadImageBytes } from "@/lib/assets";
 import { registerCloseFlush } from "@/lib/close-flush";
-import { registerAiEditor } from "@/lib/ai-editor";
+import { registerAiEditor, registerAiEditorForView, type AiEditorBridge } from "@/lib/ai-editor";
 import { onEscapeClose } from "@/lib/escape-close";
 import { t } from "@/lib/i18n";
 import {
@@ -574,7 +574,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       }
       return null;
     };
-    return registerAiEditor({
+    const bridge: AiEditorBridge = {
       getPageText: () =>
         editor.isDestroyed ? "" : editor.state.doc.textBetween(0, editor.state.doc.content.size, "\n"),
       getPageTitle: () => (editor.isDestroyed ? "" : view.name),
@@ -669,8 +669,16 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         }
         return false;
       },
-    });
-  }, [editor, isMainPane, view.name]);
+    };
+    // 光标/选区类回填只认主栏；按 viewId 的登记主副栏都要有——
+    // 否则 AI 修改副栏打开的页面只能走 JSON 直写库，会被副栏自动保存覆盖回去
+    const offCurrent = isMainPane ? registerAiEditor(bridge) : () => undefined;
+    const offView = registerAiEditorForView(view.id, bridge);
+    return () => {
+      offCurrent();
+      offView();
+    };
+  }, [editor, isMainPane, view.id, view.name]);
 
   // 全库视图 id → View：mention hover 预览取标题走这张表。
   // mention 目标是任意被引页、不一定是反链来源，查 backlinkViews 会大面积落空显示成 id。
@@ -696,48 +704,87 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     tr.setMeta(STRUCTURE_SYNC_META, true);
     editor.view.dispatch(tr);
   }, [view.name]);
+  const syncH1ToViewNameRef = useRef(syncH1ToViewName);
+  useEffect(() => {
+    syncH1ToViewNameRef.current = syncH1ToViewName;
+  }, [syncH1ToViewName]);
 
   // 加载文档内容：加载完成（或失败）前编辑器保持只读；输入在解锁前无法发生，
-  // 从根上消除加载与输入的竞态。失败也解锁，不让用户被锁死在空文档上。
+  // 从根上消除加载与输入的竞态。
+  // 依赖只认 view.id：syncH1ToViewName 随 view.name 变化，放进依赖会让每次改名
+  // 都重新拉取整文档（全量 IPC + "editor not empty" 告警刷屏）。
   useEffect(() => {
     let alive = true;
     const editor = editorRef.current;
+    const unlock = () => {
+      // setEditable 第二参 false：解锁不产生 update 事件
+      if (alive && editor && !editor.isDestroyed) {
+        editor.setEditable(true, false);
+        // 加载完成后补一次 H1 同步（挂载时的 effect 早退且不会因加载再触发）
+        syncH1ToViewNameRef.current();
+      }
+    };
     documentApi
       .get(view.id)
       .then((content) => {
         if (!alive || !editor || editor.isDestroyed) return;
-        if (content) {
-          try {
-            const json = JSON.parse(content) as JSONContent;
-            if (editor.isEmpty) {
-              // emitUpdate=false：加载不算修改，避免打开页面就触发一轮自动保存
-              editor.commands.setContent(json, { emitUpdate: false });
-            } else {
-              // 只读期间输入不可能到达，理论上不可达；一旦发生宁可告警也不覆盖
-              logger.error("document load skipped: editor not empty", view.id);
+        if (!content) {
+          unlock();
+          return;
+        }
+        let json: JSONContent;
+        try {
+          json = JSON.parse(content) as JSONContent;
+        } catch (e: unknown) {
+          logger.error("parse document content failed", view.id, e);
+          toast.error(t("error.db", { message: String(e) }));
+          // 内容坏掉时保持只读，绝不能留下可编辑的空文档——一次输入就会把空档落库覆盖原文
+          return;
+        }
+        if (!editor.isEmpty) {
+          // 只读期间输入不可能到达，理论上不可达；一旦发生宁可告警也不覆盖
+          logger.error("document load skipped: editor not empty", view.id);
+          return;
+        }
+        // emitUpdate=false：加载不算修改，避免打开页面就触发一轮自动保存
+        try {
+          editor.commands.setContent(json, { emitUpdate: false });
+          unlock();
+          return;
+        } catch (e: unknown) {
+          // schema 演进兼容：旧文档含当前 schema 不认识的节点时逐块降级，
+          // 能装多少装多少——绝不整篇放弃（空文档 + 一次输入 = 覆盖全文）
+          logger.warn("document has unknown nodes, loading block-by-block", view.id, e);
+          const kept: JSONContent[] = [];
+          const children = Array.isArray(json.content) ? json.content : [];
+          for (const child of children) {
+            try {
+              // insertContentAt 命令无法抑制 update 事件，改为直发 preventUpdate 事务：
+              // 逐块加载同样不算用户修改
+              const node = createNodeFromContent(child, editor.schema, { errorOnInvalidContent: true });
+              editor.view.dispatch(
+                editor.state.tr.insert(editor.state.doc.content.size, node).setMeta("preventUpdate", true),
+              );
+              kept.push(child);
+            } catch {
+              /* 单块装不进就跳过 */
             }
-          } catch (e: unknown) {
-            logger.error("parse document content failed", view.id, e);
-            toast.error(t("error.db", { message: String(e) }));
+          }
+          if (kept.length < children.length) {
+            toast.warning(t("editor.partialLoad", { kept: kept.length, total: children.length }));
           }
         }
+        unlock();
       })
       .catch((e: unknown) => {
         logger.error("load document failed", view.id, e);
         toast.error(t("error.db", { message: String(e) }));
-      })
-      .finally(() => {
-        // setEditable 第二参 false：解锁不产生 update 事件
-        if (alive && editor && !editor.isDestroyed) {
-          editor.setEditable(true, false);
-          // 加载完成后补一次 H1 同步（挂载时的 effect 早退且不会因加载再触发）
-          syncH1ToViewName();
-        }
+        // 读取失败同样保持只读：此时磁盘上是未知内容，写回会覆盖它
       });
     return () => {
       alive = false;
     };
-  }, [view.id, syncH1ToViewName]);
+  }, [view.id]);
 
   // 编辑区尾部留白 = 视口高度的 30%（与 CARET_LINE_RATIO 配对）：没有这段余量，
   // 文档末尾无内容可滚时，光标行只能停在视口底部，70% 规则失效

@@ -26,42 +26,49 @@ fn with_recursive_subtree(
 }
 
 /// 软删：视图及其整个子树进回收站（含数据库表的派生视图，否则恢复时视图配置丢失）
+/// 两条 UPDATE 必须同事务：中途失败会留下"父在回收站、派生视图不在"的半删状态。
 pub fn soft_delete(conn: &Connection, id: &str) -> Result<(), String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(dberr("soft delete view"))?;
     let t = now_ms();
     with_recursive_subtree(
-        conn,
+        &tx,
         "UPDATE views SET is_trash = 1, deleted_at = ?2 WHERE id IN (SELECT id FROM sub)",
         id,
         Some(t),
         "soft delete view",
     )?;
     with_recursive_subtree(
-        conn,
+        &tx,
         "UPDATE views SET is_trash = 1, deleted_at = ?2 WHERE source_id IN (SELECT id FROM sub)",
         id,
         Some(t),
         "soft delete derived views",
-    )
-    .map(|_| ())
+    )?;
+    tx.commit().map_err(dberr("soft delete view (commit)"))
 }
 
-/// 恢复：视图及其子树移出回收站（含派生视图）
+/// 恢复：视图及其子树移出回收站（含派生视图）。同事务，理由同 soft_delete。
 pub fn restore(conn: &Connection, id: &str) -> Result<(), String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(dberr("restore view"))?;
     with_recursive_subtree(
-        conn,
+        &tx,
         "UPDATE views SET is_trash = 0, deleted_at = NULL WHERE id IN (SELECT id FROM sub)",
         id,
         None,
         "restore view",
     )?;
     with_recursive_subtree(
-        conn,
+        &tx,
         "UPDATE views SET is_trash = 0, deleted_at = NULL WHERE source_id IN (SELECT id FROM sub)",
         id,
         None,
         "restore derived views",
-    )
-    .map(|_| ())
+    )?;
+    tx.commit().map_err(dberr("restore view (commit)"))
 }
 
 /// 彻底删除：只硬删回收站中的子树部分 + 被显式指定的根节点；

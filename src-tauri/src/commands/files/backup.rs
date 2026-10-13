@@ -16,8 +16,15 @@ use super::ensure_dialog_authorized;
 /// 将数据库文件 + assets/ 目录打包为 zip，写到 target_path（由前端文件对话框选）。
 /// WAL 模式下直接复制主库文件会丢掉尚未 checkpoint 的事务（appflowy.db-wal），
 /// 因此先 VACUUM INTO 出一致性快照（读快照包含全部已提交事务，输出自包含完整库）再打包。
+/// 整库压缩 + 全量附件遍历可达数百 MB 的阻塞 IO，放 blocking 线程池执行。
 #[tauri::command]
 pub async fn export_backup(app: tauri::AppHandle, target_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || export_backup_blocking(app, target_path))
+        .await
+        .map_err(|e| format!("export task failed: {e}"))?
+}
+
+fn export_backup_blocking(app: tauri::AppHandle, target_path: String) -> Result<(), String> {
     ensure_dialog_authorized(&app, &target_path)?;
     let data_dir = app_data_dir(&app)?;
     let db = data_dir.join(DB_FILE);
@@ -58,6 +65,42 @@ pub(crate) fn make_db_snapshot(db: &Path, snap: &Path) -> Result<(), String> {
 }
 
 pub(crate) fn write_backup_zip(
+    target: &Path,
+    snap: &Path,
+    data_dir: &Path,
+    assets: &Path,
+) -> Result<(), String> {
+    // 先写同目录临时文件、成功后 rename 覆盖：中途失败不会留下半截 zip
+    //（半截 zip 会被自动备份清理逻辑当成"最新一份备份"保留下来，真正需要时才发现坏了）
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = target.with_file_name(format!(
+        "{}.tmp-{}-{}",
+        target
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("backup.zip"),
+        std::process::id(),
+        unique
+    ));
+    let result = write_backup_zip_to(&tmp, snap, data_dir, assets);
+    match result {
+        Ok(()) => {
+            if target.exists() {
+                let _ = fs::remove_file(target);
+            }
+            fs::rename(&tmp, target).map_err(|e| format!("install backup file failed: {e}"))
+        }
+        Err(e) => {
+            let _ = fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
+fn write_backup_zip_to(
     target: &Path,
     snap: &Path,
     data_dir: &Path,
@@ -108,6 +151,18 @@ pub(crate) fn write_backup_zip(
 pub async fn import_backup(
     app: tauri::AppHandle,
     db: tauri::State<'_, Db>,
+    source_path: String,
+) -> Result<(), String> {
+    // 校验 + 解压整库与全部附件是重阻塞 IO，放 blocking 线程池执行
+    let db = db.shared();
+    tauri::async_runtime::spawn_blocking(move || import_backup_blocking(app, db, source_path))
+        .await
+        .map_err(|e| format!("import task failed: {e}"))?
+}
+
+fn import_backup_blocking(
+    app: tauri::AppHandle,
+    db: crate::db::SharedDb,
     source_path: String,
 ) -> Result<(), String> {
     ensure_dialog_authorized(&app, &source_path)?;

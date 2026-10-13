@@ -1,7 +1,8 @@
 // AI 助手 ↔ 编辑器桥接：面板需要「取当前页纯文本 / 取选中文本 / 用文本替换选区 /
 // 在光标处插入 / 按标题或原文定位改写」，但 AI 面板与 EditorPage 是兄弟节点，无法用 props 传递 editor 实例。
 // 参照 lib/close-flush.ts 的注册/桥接范式：EditorPage 挂载时注册实现，AI 面板按需读取。
-// 分栏时只注册主栏（与 useEditorStore 推送 editor 的约定一致），避免副栏抢占回填目标。
+// 「当前桥接」槽位分栏时只注册主栏，避免副栏抢占光标类回填目标；
+// 按 viewId 的登记槽则主栏副栏都登记，供 AI 就地修改任意打开中的页面。
 
 import type { AiEditAnchor, AiEditOp } from "./ai-edit";
 
@@ -56,6 +57,9 @@ export interface AiEditorBridge {
 }
 
 let current: AiEditorBridge | null = null;
+// 按 viewId 登记的桥接（含分栏副栏）：AI 落地到"打开中但不是当前主栏"的页面时，
+// 必须走那个实例自己的编辑器事务——JSON 直写库会被该实例随后的自动保存覆盖回旧内容。
+const byView = new Map<string, Set<AiEditorBridge>>();
 
 /** 注册当前文档编辑器桥接；返回注销函数（仅当自己仍是当前注册项时才清空） */
 export function registerAiEditor(bridge: AiEditorBridge): () => void {
@@ -63,6 +67,28 @@ export function registerAiEditor(bridge: AiEditorBridge): () => void {
   return () => {
     if (current === bridge) current = null;
   };
+}
+
+/** 按视图注册编辑器桥接（主栏与副栏都登记）；返回注销函数 */
+export function registerAiEditorForView(viewId: string, bridge: AiEditorBridge): () => void {
+  let set = byView.get(viewId);
+  if (!set) {
+    set = new Set();
+    byView.set(viewId, set);
+  }
+  set.add(bridge);
+  return () => {
+    const entries = byView.get(viewId);
+    if (!entries) return;
+    entries.delete(bridge);
+    if (entries.size === 0) byView.delete(viewId);
+  };
+}
+
+/** 取某视图当前打开着的编辑器桥接；没有存活实例时返回 null */
+export function getAiEditorForView(viewId: string): AiEditorBridge | null {
+  const set = byView.get(viewId);
+  return set && set.size > 0 ? (set.values().next().value ?? null) : null;
 }
 
 /** 取当前注册的编辑器桥接；没有打开中的文档时返回 null */

@@ -29,10 +29,39 @@ pub const DB_FILE: &str = "appflowy.db";
 /// write/read 用 Option<Connection> 支持备份/恢复期间整体关闭再重开；
 /// init_error 记录初始化失败信息（应用照常启动，所有 DB 命令返回该错误而非 panic）。
 pub struct Db {
+    inner: std::sync::Arc<DbInner>,
+}
+
+/// 真正的连接持有者。Db 只是 Arc 外壳：async 命令把 `db.shared()`（Arc<DbInner>）
+/// 搬进 spawn_blocking 就能满足 'static 约束，而 State<'_, Db> 本身做不到。
+pub struct DbInner {
     path: PathBuf,
     write: Mutex<Option<Connection>>,
     read: Mutex<Option<Connection>>,
     init_error: Mutex<Option<String>>,
+}
+
+/// 可跨线程搬移的库句柄（spawn_blocking 命令用）
+pub type SharedDb = std::sync::Arc<DbInner>;
+
+impl Db {
+    /// 永不 panic：打开/PRAGMA/迁移任一步失败都存入 init_error，应用照常启动。
+    pub fn open(path: PathBuf) -> Db {
+        Db {
+            inner: std::sync::Arc::new(DbInner::open(path)),
+        }
+    }
+
+    pub fn shared(&self) -> SharedDb {
+        self.inner.clone()
+    }
+}
+
+impl std::ops::Deref for Db {
+    type Target = DbInner;
+    fn deref(&self) -> &DbInner {
+        &self.inner
+    }
 }
 
 pub fn now_ms() -> i64 {
@@ -47,10 +76,9 @@ pub fn dberr(ctx: &'static str) -> impl Fn(rusqlite::Error) -> String {
     move |e| format!("{ctx}: {e}")
 }
 
-impl Db {
-    /// 永不 panic：打开/PRAGMA/迁移任一步失败都存入 init_error，应用照常启动。
-    pub fn open(path: PathBuf) -> Db {
-        let db = Db {
+impl DbInner {
+    fn open(path: PathBuf) -> DbInner {
+        let db = DbInner {
             path,
             write: Mutex::new(None),
             read: Mutex::new(None),

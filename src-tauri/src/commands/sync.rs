@@ -1,13 +1,14 @@
+use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use super::files::{self, AppConfig};
-use crate::db::{Db, DB_FILE};
+use crate::db::{Db, DbInner, SharedDb, DB_FILE};
 
 // 双向同步（#13）——「同步文件夹」方案
 //
@@ -22,6 +23,10 @@ const SYNC_SUBDIR: &str = "TsFlowySync";
 const CONFLICT_DIR: &str = "conflicts";
 /// conflicts/ 里保留的份数
 const KEEP_CONFLICTS: usize = 5;
+/// 附件删除墓碑文件：同步目录里的持久清单，防止对侧把已删资产「复活」
+const TOMBSTONE_FILE: &str = "deleted-assets.txt";
+/// 墓碑文件名里 assets 相对路径的分隔符（固定 `/`，跨设备一致）
+pub(crate) const TOMBSTONE_PREFIX: &str = "assets/";
 
 #[derive(Serialize)]
 pub struct SyncInfo {
@@ -42,6 +47,8 @@ pub struct SyncOutcome {
     pub pulled: bool,
     /// 本次双向补齐的附件文件数
     pub assets_copied: usize,
+    /// 本次按墓碑删除的附件文件数（两侧合计）
+    pub assets_deleted: usize,
     /// 本次新产生的冲突副本（文件名，位于同步目录的 conflicts/ 下）
     pub conflicts: Vec<String>,
 }
@@ -113,9 +120,9 @@ fn decide(local: &str, remote: &str, last: Option<&str>, remote_newer: bool) -> 
     }
 }
 
-/// 单向补齐：src 里有而 dst 里没有的文件复制过去。
+/// 单向补齐：src 里有而 dst 里没有、且未被墓碑声明删除的文件复制过去。
 /// 附件文件名是纳秒时间戳且从不改写，因此"同名即同内容"，跳过已存在的即可。
-fn copy_missing_files(src: &Path, dst: &Path) -> Result<usize, String> {
+fn copy_missing_files(src: &Path, dst: &Path, tombstones: &HashSet<String>) -> Result<usize, String> {
     if !src.is_dir() {
         return Ok(0);
     }
@@ -127,7 +134,13 @@ fn copy_missing_files(src: &Path, dst: &Path) -> Result<usize, String> {
         if !from.is_file() {
             continue;
         }
-        let to = dst.join(entry.file_name());
+        let Some(file_name) = from.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if tombstones.contains(&format!("{TOMBSTONE_PREFIX}{file_name}")) {
+            continue;
+        }
+        let to = dst.join(file_name);
         if to.exists() {
             continue;
         }
@@ -137,21 +150,181 @@ fn copy_missing_files(src: &Path, dst: &Path) -> Result<usize, String> {
     Ok(n)
 }
 
-/// 双向补齐 assets/：两侧互相补缺，返回复制的文件总数
-fn sync_assets(local_assets: &Path, remote_assets: &Path) -> Result<usize, String> {
-    let up = copy_missing_files(local_assets, remote_assets)?;
-    let down = copy_missing_files(remote_assets, local_assets)?;
+/// 双向补齐 assets/：两侧互相补缺（跳过墓碑中的文件），返回复制的文件总数
+fn sync_assets(
+    local_assets: &Path,
+    remote_assets: &Path,
+    tombstones: &HashSet<String>,
+) -> Result<usize, String> {
+    let up = copy_missing_files(local_assets, remote_assets, tombstones)?;
+    let down = copy_missing_files(remote_assets, local_assets, tombstones)?;
     Ok(up + down)
 }
 
-/// 把一份库存成冲突副本（放同步目录的 conflicts/ 下，两边设备都能看到），返回文件名
+// ———— 附件删除墓碑 ————
+// 背景：orphan purge / 数据修复把文件从 assets/ 挪走后，同步目录里的旧副本还在，
+// 下一轮双向补齐会把它复制回来——附件被「复活」。墓碑是一份持久清单：
+// 本机删除资源时追加到 <data_dir>/deleted-assets.txt（纯相对路径，一行一个），
+// 同步时两侧清单取并集，据此删除两台机器上的对应文件，并把并集写回同步目录，
+// 让之后接入的第三台设备也遵守同一份记录。
+
+/// 墓碑清单里只接受 `assets/<纯文件名>` 形态；注释行（# 开头）与任何越界路径丢弃。
+fn normalize_tombstone_line(line: &str) -> Option<String> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let name = line.strip_prefix(TOMBSTONE_PREFIX)?;
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains(":")
+        || Path::new(name).components().count() != 1
+    {
+        return None;
+    }
+    Some(line.to_string())
+}
+
+fn read_tombstone_file(p: &Path) -> HashSet<String> {
+    let Ok(s) = fs::read_to_string(p) else {
+        return HashSet::new();
+    };
+    s.lines().filter_map(normalize_tombstone_line).collect()
+}
+
+/// 原子写墓碑清单（换行结尾，逐行一词，便于对侧人读与行级 diff）
+fn write_tombstone_file(p: &Path, set: &HashSet<String>) -> Result<(), String> {
+    let mut lines: Vec<&str> = set.iter().map(String::as_str).collect();
+    lines.sort_unstable();
+    let content = format!("{}\n", lines.join("\n"));
+    atomic_write_bytes(p, content.as_bytes())
+}
+
+/// 本机删除附件后追加墓碑（供 orphan purge 等调用）。
+/// data_dir 为数据目录；清单不存在或写失败返回 Err（调用方记日志即可，不阻断删除）。
+pub(crate) fn append_local_tombstones(app: &tauri::AppHandle, rel_paths: &[String]) -> Result<(), String> {
+    if rel_paths.is_empty() {
+        return Ok(());
+    }
+    let data_dir = files::real_data_dir(app)?;
+    let path = data_dir.join(TOMBSTONE_FILE);
+    let mut set = read_tombstone_file(&path);
+    for rel in rel_paths {
+        if let Some(norm) = normalize_tombstone_line(rel) {
+            set.insert(norm);
+        }
+    }
+    let mut lines: Vec<&str> = set.iter().map(String::as_str).collect();
+    lines.sort_unstable();
+    fs::write(&path, format!("{}\n", lines.join("\n")))
+        .map_err(|e| format!("write tombstone manifest failed: {e}"))
+}
+
+/// 读取本机墓碑并并入并集集合（去重），供同步主流程使用。
+fn merge_local_tombstones(data_dir: &Path, union: &mut HashSet<String>) -> usize {
+    let before = union.len();
+    union.extend(read_tombstone_file(&data_dir.join(TOMBSTONE_FILE)));
+    union.len() - before
+}
+
+/// 按并集墓碑删除两侧 assets 里的对应文件，返回删除数（每台文件只计一次）。
+fn apply_tombstones(
+    local_assets: &Path,
+    remote_assets: &Path,
+    tombstones: &HashSet<String>,
+) -> usize {
+    let mut deleted = 0usize;
+    for rel in tombstones {
+        let Some(name) = rel.strip_prefix(TOMBSTONE_PREFIX) else {
+            continue;
+        };
+        for dir in [local_assets, remote_assets] {
+            let p = dir.join(name);
+            if p.is_file() && fs::remove_file(&p).is_ok() {
+                deleted += 1;
+            }
+        }
+    }
+    deleted
+}
+
+/// 原子写字节内容：同目录临时文件 + rename 覆盖（与 replace_file 同语义，用于内存内容）。
+fn atomic_write_bytes(p: &Path, bytes: &[u8]) -> Result<(), String> {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = p.with_file_name(format!(
+        "{}.tmp-{}-{}",
+        p.file_name().and_then(|s| s.to_str()).unwrap_or("file"),
+        std::process::id(),
+        unique
+    ));
+    let result = (|| -> Result<(), String> {
+        fs::write(&tmp, bytes).map_err(|e| format!("write tmp for {} failed: {e}", p.display()))?;
+        if p.exists() {
+            fs::remove_file(p).map_err(|e| format!("remove {} failed: {e}", p.display()))?;
+        }
+        fs::rename(&tmp, p).map_err(|e| format!("install {} failed: {e}", p.display()))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+/// 原子替换目标文件：先拷到同目录临时文件，再 rename 覆盖。
+/// 网盘/资源管理器任何时刻看到的都是"旧完整文件"或"新完整文件"，
+/// 不会出现先删后拷之间的空窗（网盘可能把空窗同步出去导致远端库丢失）。
+fn replace_file(from: &Path, to: &Path) -> Result<(), String> {    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = to.with_file_name(format!(
+        "{}.new-{}-{}",
+        to.file_name().and_then(|s| s.to_str()).unwrap_or("target"),
+        std::process::id(),
+        unique
+    ));
+    let result = (|| -> Result<(), String> {
+        fs::copy(from, &tmp).map_err(|e| format!("stage {} failed: {e}", to.display()))?;
+        // Windows rename 不覆盖已存在文件：先移除旧文件，移除失败即中止（此时目标文件仍完好）
+        if to.exists() {
+            fs::remove_file(to).map_err(|e| format!("remove {} failed: {e}", to.display()))?;
+        }
+        fs::rename(&tmp, to).map_err(|e| format!("install {} failed: {e}", to.display()))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+/// 把一份库存成冲突副本（放同步目录的 conflicts/ 下，两边设备都能看到），返回文件名。
+/// 名字带秒级时间戳 + 纳秒/进程号后缀：同一秒内两次冲突不会互相覆盖。
 fn save_conflict(sync_dir: &Path, src: &Path, tag: &str) -> Result<String, String> {
     let dir = sync_dir.join(CONFLICT_DIR);
     fs::create_dir_all(&dir).map_err(|e| format!("create conflicts dir failed: {e}"))?;
-    let name = format!("{tag}-{}.db", files::backup_stamp());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let name = format!("{tag}-{}-{:x}.db", files::backup_stamp(), nanos % 1_000_000);
     let target = dir.join(&name);
-    let _ = fs::remove_file(&target);
-    fs::copy(src, &target).map_err(|e| format!("save conflict copy failed: {e}"))?;
+    // 原子替换语义：目标同名文件本不应存在；仍先原子写，绝不"先删同名再慢慢拷"
+    let tmp = dir.join(format!("{name}.tmp-{}", std::process::id()));
+    fs::copy(src, &tmp).map_err(|e| format!("save conflict copy failed: {e}"))?;
+    if target.exists() {
+        let _ = fs::remove_file(&target);
+    }
+    fs::rename(&tmp, &target).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("install conflict copy failed: {e}"
+        )
+    })?;
     prune_conflicts(&dir);
     Ok(name)
 }
@@ -178,11 +351,33 @@ fn prune_conflicts(dir: &Path) {
     }
 }
 
-/// 文件的修改时间；取不到时退回 "很久以前"，让另一侧胜出（保守：不拿未知时间去覆盖已知数据）
-fn mtime(p: &Path) -> SystemTime {
-    fs::metadata(p)
-        .and_then(|m| m.modified())
-        .unwrap_or(SystemTime::UNIX_EPOCH)
+/// 库内最近一次数据活动的时间戳（毫秒）。
+/// 冲突裁决用它而不是文件系统 mtime：后者既受跨设备时钟偏差影响，
+/// 又只在 WAL checkpoint 时才更新到主库文件——拿它比新旧会把更新的本机版误判成旧。
+/// 读不出（非 SQLite 文件/缺表/损坏）返回 0，让另一侧胜出（保守：不拿未知覆盖已知）。
+fn db_activity_ms(db_path: &Path) -> i64 {
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return 0;
+    };
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
+    let max_of = |sql: &str| -> Option<i64> {
+        conn.query_row(sql, [], |r| r.get::<_, Option<i64>>(0))
+            .ok()
+            .flatten()
+    };
+    [
+        max_of("SELECT MAX(updated_at) FROM views"),
+        max_of("SELECT MAX(updated_at) FROM database_rows"),
+        max_of("SELECT MAX(updated_at) FROM database_cells"),
+        max_of("SELECT MAX(updated_at) FROM documents"),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+    .unwrap_or(0)
 }
 
 fn info_of(cfg: &AppConfig) -> SyncInfo {
@@ -235,10 +430,22 @@ pub fn open_sync_dir(app: tauri::AppHandle) -> Result<(), String> {
 
 /// 手动双向同步（设置页按钮与前端自动同步定时器共用）。
 /// 拉取路径要替换本机库，因此先整体关库、换完再开库——Windows 下连接未关时主库无法改名。
+/// 同步全程是对库文件/附件的 sha256 与整文件复制（可达数百 MB 的阻塞 IO），
+/// 放到 blocking 线程池执行，避免占死 tokio worker 让其它 IPC 命令排队。
 #[tauri::command]
 pub async fn run_sync(
     app: tauri::AppHandle,
     db: tauri::State<'_, Db>,
+) -> Result<SyncRunResult, String> {
+    let db = db.shared();
+    tauri::async_runtime::spawn_blocking(move || run_sync_blocking(app, db))
+        .await
+        .map_err(|e| format!("sync task failed: {e}"))?
+}
+
+fn run_sync_blocking(
+    app: tauri::AppHandle,
+    db: SharedDb,
 ) -> Result<SyncRunResult, String> {
     let mut cfg = files::load_app_config(&app);
     let Some(dir) = cfg.sync.dir.clone().filter(|d| !d.trim().is_empty()) else {
@@ -262,6 +469,7 @@ pub async fn run_sync(
         &local_db,
         &remote_db,
         &snap,
+        &data_dir,
         &local_assets,
         &remote_assets,
         &sync_dir,
@@ -294,10 +502,11 @@ pub async fn run_sync(
 /// 需要替换本机库时自己负责关库/重开（见 pull_into_local）。
 #[allow(clippy::too_many_arguments)]
 fn run_sync_inner(
-    db: &Db,
+    db: &DbInner,
     local_db: &Path,
     remote_db: &Path,
     snap: &Path,
+    data_dir: &Path,
     local_assets: &Path,
     remote_assets: &Path,
     sync_dir: &Path,
@@ -306,25 +515,28 @@ fn run_sync_inner(
     files::make_db_snapshot(local_db, snap)?;
     let local_hash = sha256_file(snap)?;
 
+    // 墓碑并集 = 本机清单 ∪ 同步目录清单（首次并入时把本机新增项立刻落到远端，防对侧抢先复制）
+    let mut tombstones = read_tombstone_file(&sync_dir.join(TOMBSTONE_FILE));
+    merge_local_tombstones(data_dir, &mut tombstones);
+
     // 首次同步（远端还没有库）：把本机推上去
     if !remote_db.is_file() {
         replace_file(snap, remote_db)?;
-        let assets_copied = sync_assets(local_assets, remote_assets)?;
+        let assets_copied = sync_assets(local_assets, remote_assets, &tombstones)?;
+        let assets_deleted = apply_tombstones(local_assets, remote_assets, &tombstones);
+        write_tombstone_file(&sync_dir.join(TOMBSTONE_FILE), &tombstones)?;
         return Ok(SyncOutcome {
             action: "upload".to_string(),
             pulled: false,
             assets_copied,
+            assets_deleted,
             conflicts: Vec::new(),
         });
     }
 
     let remote_hash = sha256_file(remote_db)?;
-    let decision = decide(
-        &local_hash,
-        &remote_hash,
-        last_hash,
-        mtime(remote_db) > mtime(local_db),
-    );
+    let remote_newer = db_activity_ms(remote_db) > db_activity_ms(snap);
+    let decision = decide(&local_hash, &remote_hash, last_hash, remote_newer);
 
     let mut conflicts: Vec<String> = Vec::new();
     let mut pulled = false;
@@ -354,26 +566,22 @@ fn run_sync_inner(
         }
     };
 
-    let assets_copied = sync_assets(local_assets, remote_assets)?;
+    let assets_copied = sync_assets(local_assets, remote_assets, &tombstones)?;
+    let assets_deleted = apply_tombstones(local_assets, remote_assets, &tombstones);
+    write_tombstone_file(&sync_dir.join(TOMBSTONE_FILE), &tombstones)?;
     Ok(SyncOutcome {
         action: action.to_string(),
         pulled,
         assets_copied,
+        assets_deleted,
         conflicts,
     })
-}
-
-/// 覆盖写目标文件（先删再拷：Windows 下 copy 到已存在文件是允许的，但显式删除更直观）
-fn replace_file(from: &Path, to: &Path) -> Result<(), String> {
-    let _ = fs::remove_file(to);
-    fs::copy(from, to).map_err(|e| format!("copy to {} failed: {e}", to.display()))?;
-    Ok(())
 }
 
 /// 用远端库替换本机库：库还开着时先把远端库拷到同目录临时文件（IO 失败不触碰本机库），
 /// 再关库 → stash 旧库 → rename 原子替换；stash 或替换失败自动回滚回同步前状态。
 /// 旧库的 -wal/-shm 由 stash 一并移走，否则新库会被旧 WAL 回放损坏。
-fn pull_into_local(db: &Db, local_db: &Path, remote_db: &Path) -> Result<(), String> {
+fn pull_into_local(db: &DbInner, local_db: &Path, remote_db: &Path) -> Result<(), String> {
     let tmp = local_db.with_file_name(format!("{DB_FILE}.pull-{}", std::process::id()));
     let _ = fs::remove_file(&tmp);
     fs::copy(remote_db, &tmp).map_err(|e| format!("stage synced db failed: {e}"))?;
@@ -526,7 +734,7 @@ mod tests {
     }
 
     #[test]
-    fn decide_conflict_when_both_changed_and_picks_newer_mtime() {
+    fn decide_conflict_when_both_changed_and_picks_newer_activity() {
         assert_eq!(decide("l", "r", Some("base"), true), Decision::RemoteWins);
         assert_eq!(decide("l", "r", Some("base"), false), Decision::LocalWins);
         // 首次同步（无基线）且两侧不同：退化为按时间取新者，不丢数据
@@ -550,6 +758,104 @@ mod tests {
     }
 
     #[test]
+    fn copy_and_sync_assets_skip_tombstoned_files() {
+        let base =
+            std::env::temp_dir().join(format!("tsflowy-sync-tomb-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let local = base.join("local/assets");
+        let remote = base.join("remote/assets");
+        write(&local.join("keep.png"), b"keep");
+        write(&local.join("dead.png"), b"was-deleted-locally");
+        // 远端残留的旧副本：本机 purge 后对侧还留着
+        write(&remote.join("gone.png"), b"resurrection-attempt");
+
+        let mut ts: HashSet<String> = HashSet::new();
+        ts.insert("assets/dead.png".to_string());
+        ts.insert("assets/gone.png".to_string());
+
+        let copied = sync_assets(&local, &remote, &ts).unwrap();
+        assert_eq!(copied, 1, "只有 keep.png 被补过去，墓碑项跳过");
+        assert!(remote.join("keep.png").is_file());
+        assert!(!remote.join("dead.png").exists());
+
+        let deleted = apply_tombstones(&local, &remote, &ts);
+        assert_eq!(deleted, 2, "本机 dead.png 与远端残留 gone.png 都被墓碑清掉");
+        assert!(!local.join("dead.png").exists());
+        assert!(!remote.join("gone.png").exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn tombstone_manifest_roundtrip_filters_junk() {
+        let base =
+            std::env::temp_dir().join(format!("tsflowy-sync-tombfile-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let p = base.join(TOMBSTONE_FILE);
+        let mut set: HashSet<String> = HashSet::new();
+        set.insert("assets/a.png".to_string());
+        set.insert("assets/b.pdf".to_string());
+        write_tombstone_file(&p, &set).unwrap();
+        // 手工塞入越界行/注释/空行再读回，应全被过滤
+        let mut raw = fs::read_to_string(&p).unwrap();
+        raw.push_str("# comment\n\n../evil.db\nassets\nassets/sub/x.png\nhttp://x/assets/y.png\nassets/ok.txt\n");
+        fs::write(&p, raw).unwrap();
+        let got = read_tombstone_file(&p);
+        assert!(got.contains("assets/a.png"));
+        assert!(got.contains("assets/b.pdf"));
+        assert!(got.contains("assets/ok.txt"));
+        assert_eq!(got.len(), 3, "越界/畸形行必须被丢弃: {got:?}");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn replace_file_is_atomic_and_keeps_target_on_failure() {
+        let base =
+            std::env::temp_dir().join(format!("tsflowy-sync-replace-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let src = base.join("src.bin");
+        let dst = base.join("dst.bin");
+        write(&src, b"new-content");
+        write(&dst, b"old-content");
+        replace_file(&src, &dst).unwrap();
+        assert_eq!(fs::read(&dst).unwrap(), b"new-content");
+        // 源不存在时失败，且目标保持旧内容（不会先删后拷留空窗）
+        let dst2 = base.join("dst2.bin");
+        write(&dst2, b"precious");
+        assert!(replace_file(&base.join("missing.src"), &dst2).is_err());
+        assert_eq!(fs::read(&dst2).unwrap(), b"precious");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn db_activity_ms_reads_max_updated_at_and_survives_junk() {
+        let base =
+            std::env::temp_dir().join(format!("tsflowy-sync-activity-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let db = base.join("act.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE views (updated_at INTEGER);
+             CREATE TABLE database_rows (updated_at INTEGER);
+             CREATE TABLE database_cells (updated_at INTEGER);
+             CREATE TABLE documents (updated_at INTEGER);
+             INSERT INTO views VALUES (100),(500);
+             INSERT INTO database_rows VALUES (300);",
+        )
+        .unwrap();
+        drop(conn);
+        assert_eq!(db_activity_ms(&db), 500);
+        // 非 SQLite 文件 / 缺表：保守返回 0
+        let junk = base.join("junk.db");
+        write(&junk, b"not a database");
+        assert_eq!(db_activity_ms(&junk), 0);
+        assert_eq!(db_activity_ms(&base.join("missing.db")), 0);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn sync_assets_copies_both_directions_and_skips_existing() {
         let base = std::env::temp_dir().join(format!("tsflowy-sync-assets-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
@@ -560,7 +866,7 @@ mod tests {
         write(&local.join("3.png"), b"both-sides");
         write(&remote.join("3.png"), b"both-sides");
 
-        let n = sync_assets(&local, &remote).unwrap();
+        let n = sync_assets(&local, &remote, &HashSet::new()).unwrap();
 
         assert_eq!(n, 2, "只补两侧各缺的那一个");
         assert_eq!(
@@ -577,7 +883,7 @@ mod tests {
             b"both-sides".to_vec()
         );
         // 再跑一次：已补齐，零复制（幂等）
-        assert_eq!(sync_assets(&local, &remote).unwrap(), 0);
+        assert_eq!(sync_assets(&local, &remote, &HashSet::new()).unwrap(), 0);
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -589,7 +895,7 @@ mod tests {
         let local = base.join("local/assets");
         let remote = base.join("remote/assets");
         // 两侧都不存在：不报错、不复制
-        assert_eq!(sync_assets(&local, &remote).unwrap(), 0);
+        assert_eq!(sync_assets(&local, &remote, &HashSet::new()).unwrap(), 0);
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -601,13 +907,15 @@ mod tests {
         let src = base.join("db.bin");
         write(&src, b"payload");
 
-        // 名字带秒级时间戳，同一秒内多次调用会互相覆盖；这里直接造旧文件验证清理
         let name = save_conflict(&sync_dir, &src, "local").unwrap();
         assert!(name.starts_with("local-") && name.ends_with(".db"));
         assert_eq!(
             fs::read(sync_dir.join(CONFLICT_DIR).join(&name)).unwrap(),
             b"payload".to_vec()
         );
+        // 同秒再造一份：纳秒+进程号后缀保证不与上一份同名（旧实现会先删同名再拷）
+        let name2 = save_conflict(&sync_dir, &src, "local").unwrap();
+        assert_ne!(name, name2, "同秒冲突副本必须各留一份");
         for i in 0..KEEP_CONFLICTS + 3 {
             write(
                 &sync_dir.join(CONFLICT_DIR).join(format!("old-{i}.db")),

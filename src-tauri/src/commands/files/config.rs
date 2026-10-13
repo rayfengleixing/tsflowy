@@ -256,13 +256,34 @@ pub fn config_file_path() -> PathBuf {
     app_config_dir_raw().join(CONFIG_FILE_NAME)
 }
 
+/// 读取并解析 config.json。文件存在但内容损坏时**不能**静默回落默认值——
+/// 那会让用户以为自定义数据目录等设置"自己丢了"。先把坏文件挪成 config.json.broken-<毫秒>
+/// （保留原件供人工找回，且避免下次启动重复告警），记 warn 后再落默认值。
+fn parse_config_or_rescue(p: &std::path::Path) -> AppConfig {
+    let Ok(s) = fs::read_to_string(p) else {
+        return AppConfig::default();
+    };
+    match serde_json::from_str::<AppConfig>(&s) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let bak = p.with_file_name(format!("{CONFIG_FILE_NAME}.broken-{ms}"));
+            let moved = fs::rename(p, &bak).is_ok();
+            tracing::warn!(
+                "config.json 损坏（{e}），{}原文件已挪到 {} 供恢复",
+                if moved { "" } else { "备份失败，" },
+                bak.display()
+            );
+            AppConfig::default()
+        }
+    }
+}
+
 pub fn load_config_raw() -> AppConfig {
-    let p = config_file_path();
-    (|| -> Option<AppConfig> {
-        let s = fs::read_to_string(&p).ok()?;
-        serde_json::from_str(&s).ok()
-    })()
-    .unwrap_or_default()
+    parse_config_or_rescue(&config_file_path())
 }
 
 fn app_config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -276,11 +297,7 @@ pub(crate) fn load_app_config(app: &tauri::AppHandle) -> AppConfig {
     let p = app_config_dir(app)
         .map(|d| d.join(CONFIG_FILE_NAME))
         .unwrap_or_else(|_| config_file_path());
-    (|| -> Option<AppConfig> {
-        let s = fs::read_to_string(&p).ok()?;
-        serde_json::from_str(&s).ok()
-    })()
-    .unwrap_or_default()
+    parse_config_or_rescue(&p)
 }
 
 pub(crate) fn save_app_config(app: &tauri::AppHandle, cfg: &AppConfig) -> Result<(), String> {
@@ -288,7 +305,7 @@ pub(crate) fn save_app_config(app: &tauri::AppHandle, cfg: &AppConfig) -> Result
     fs::create_dir_all(&dir).map_err(|e| format!("mkdir config dir: {e}"))?;
     let s = serde_json::to_string_pretty(cfg).map_err(|e| format!("config json: {e}"))?;
     // 同目录临时文件 + rename 覆盖：磁盘上的 config.json 任何时刻要么是旧完整内容、要么是新完整内容，
-    // 不会因写一半崩溃/断电留下半截 JSON（损坏会被 load_app_config 静默回落默认值，自定义目录等设置就“丢了”）
+    // 不会因写一半崩溃/断电留下半截 JSON（损坏会被 load_app_config 挪成 .broken 文件并告警，而不是静默吞掉）
     let tmp = dir.join(format!("{CONFIG_FILE_NAME}.tmp"));
     fs::write(&tmp, s).map_err(|e| format!("write config: {e}"))?;
     fs::rename(&tmp, dir.join(CONFIG_FILE_NAME)).map_err(|e| format!("replace config: {e}"))

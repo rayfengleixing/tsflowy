@@ -67,19 +67,29 @@ pub fn set(
     Ok(())
 }
 
-/// 原样移植旧实现的 position 紧凑查询：DELETE 后子查询已查不到该行 →
-/// COALESCE 落到 -1 → 该 view **全部**行 position-1。属历史行为（UI 顺序仍稳定），本阶段不修。
+/// 删除属性并压缩其后行的 position。
+/// 旧实现的子查询写在 DELETE 之后，永远查不到该行 → COALESCE 落 -1 →
+/// 整个 view 全部行 position-1（哪怕删的 key 根本不存在）。反复误删会漂到负数。
 pub fn remove(conn: &Connection, view_id: &str, key: &str) -> Result<(), String> {
+    let position: Option<i64> = conn
+        .query_row(
+            "SELECT position FROM page_properties WHERE view_id = ?1 AND key = ?2",
+            params![view_id, key],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(dberr("remove page property"))?;
+    let Some(position) = position else {
+        return Ok(());
+    };
     conn.execute(
         "DELETE FROM page_properties WHERE view_id = ?1 AND key = ?2",
         params![view_id, key],
     )
     .map_err(dberr("remove page property"))?;
     conn.execute(
-        "UPDATE page_properties SET position = position - 1 WHERE view_id = ?1 AND position > (
-           SELECT COALESCE((SELECT position FROM page_properties WHERE view_id = ?1 AND key = ?2), -1)
-         )",
-        params![view_id, key],
+        "UPDATE page_properties SET position = position - 1 WHERE view_id = ?1 AND position > ?2",
+        params![view_id, position],
     )
     .map_err(dberr("remove page property"))?;
     Ok(())
@@ -194,30 +204,29 @@ mod tests {
     }
 
     #[test]
-    fn remove_decrements_all_remaining_positions_historical_behavior() {
+    fn remove_compacts_only_positions_after_removed_key() {
         let conn = setup();
         set(&conn, "v1", "k0", "0", "text").unwrap();
         set(&conn, "v1", "k1", "1", "text").unwrap();
         set(&conn, "v1", "k2", "2", "text").unwrap();
 
         remove(&conn, "v1", "k1").unwrap();
-        // 历史行为锁死：DELETE 后子查询为 NULL → COALESCE -1 → 全部剩余行 -1（k0: -1, k2: 1）
+        // 只压缩被删行之后的 position：k0 不变，k2 前移到 1
         assert_eq!(
             keys_positions(&conn),
-            vec![("k0".to_string(), -1), ("k2".to_string(), 1)]
+            vec![("k0".to_string(), 0), ("k2".to_string(), 1)]
         );
     }
 
     #[test]
-    fn remove_missing_key_still_decrements_everything() {
+    fn remove_missing_key_changes_nothing() {
         let conn = setup();
         set(&conn, "v1", "a", "0", "text").unwrap();
         set(&conn, "v1", "b", "1", "text").unwrap();
         remove(&conn, "v1", "ghost").unwrap();
-        // 同上一致的历史行为：目标不存在时全部行也会被减 1
         assert_eq!(
             keys_positions(&conn),
-            vec![("a".to_string(), -1), ("b".to_string(), 0)]
+            vec![("a".to_string(), 0), ("b".to_string(), 1)]
         );
     }
 

@@ -25,7 +25,7 @@ import {
   type AiToolCallRef,
   type AiUsage,
 } from "@/lib/ai";
-import { getAiEditor, type AiEditRevert } from "@/lib/ai-editor";
+import { getAiEditor, getAiEditorForView, type AiEditRevert } from "@/lib/ai-editor";
 import {
   buildEditSystemPrompt,
   CHAT_ONLY_SYSTEM_PROMPT,
@@ -553,8 +553,13 @@ export const useAiStore = create<AiState>()((set, get) => {
 
   /** 当前流式中的助手消息 id：stop() 据此标记「用户主动中止的这一轮」 */
   let streamingAssistantId: string | null = null;
-  /** 本轮是否被用户停止：停止后迟到的 done 帧不得再自动落地编辑 */
-  let cancelledTurn = false;
+  /**
+   * 轮次序号与被用户停止的轮次集合：停止后迟到的 done 帧不得再自动落地编辑。
+   * 必须是每轮独立 token 而不是单个布尔——旧实现里 stop() 后置 true、
+   * 下一次发消息重置 false，被停那轮迟到的 done 会绕过取消判定自动写数据。
+   */
+  let turnSeq = 0;
+  const cancelledTurns = new Set<number>();
 
   /**
    * 当前对话有内容时归档进 sessions（超出上限丢最老），供 newChat / 切换会话复用。
@@ -833,6 +838,17 @@ export const useAiStore = create<AiState>()((set, get) => {
     currentId: useWorkspaceStore.getState().currentViewId,
   });
 
+  /** 指定视图的落地桥接：主栏/副栏打开中的页面一律就地走编辑器事务；未打开时返回 null 走 JSON 直写 */
+  const bridgeFor = (
+    view_id: string | undefined,
+    currentBridge: ReturnType<typeof getAiEditor>,
+    currentId: string | null,
+  ) => {
+    if (!view_id) return currentBridge;
+    if (currentBridge && currentId === view_id) return currentBridge;
+    return getAiEditorForView(view_id);
+  };
+
   /**
    * 对非当前页做定位编辑：save=false 只演练一遍（取 diff 用的改前原文、判断能不能定位到）。
    * JSON 路径没有编辑器事务栈，这样落地的改动无法在界面上「撤销」。
@@ -875,10 +891,11 @@ export const useAiStore = create<AiState>()((set, get) => {
     }
     const { op, content, anchor, view_id } = call.args;
     const { bridge, currentId } = editorTarget();
-    if (!view_id || (bridge && view_id === currentId)) {
-      if (!bridge) return { before: "", pageName: "", blocked: t("ai.noEditor") };
-      return { before: bridge.getEditTargetText(op, anchor), pageName: bridge.getPageTitle() };
+    const target = bridgeFor(view_id, bridge, currentId);
+    if (target) {
+      return { before: target.getEditTargetText(op, anchor), pageName: target.getPageTitle() };
     }
+    if (!view_id) return { before: "", pageName: "", blocked: t("ai.noEditor") };
     const node = resolvePage(view_id);
     if (!node) return { before: "", pageName: "", blocked: t("ai.toolPageNotFound", { ref: view_id }) };
     const dry = await editOnPage(node, op, content, anchor, false);
@@ -892,13 +909,15 @@ export const useAiStore = create<AiState>()((set, get) => {
     if (call.tool === "apply_edit") {
       const { op, content, anchor, view_id } = call.args;
       const { bridge, currentId } = editorTarget();
-      if (!view_id || (bridge && view_id === currentId)) {
-        if (!bridge) return { ...rec, state: "unavailable", detail: t("ai.noEditor") };
-        const result = bridge.applyEdit(op, content, anchor);
+      // 打开中的页面（含分栏副栏）必须走编辑器事务：JSON 直写会被该实例自动保存覆盖回去
+      const target = bridgeFor(view_id, bridge, currentId);
+      if (target) {
+        const result = target.applyEdit(op, content, anchor);
         return result.applied
           ? { ...rec, state: "applied", revert: result.revert }
           : { ...rec, state: "unavailable", detail: result.reason ?? t("ai.editNotApplied") };
       }
+      if (!view_id) return { ...rec, state: "unavailable", detail: t("ai.noEditor") };
       const node = resolvePage(view_id);
       if (!node) return { ...rec, state: "unavailable", detail: t("ai.toolPageNotFound", { ref: view_id }) };
       const done = await editOnPage(node, op, content, anchor, true);
@@ -911,7 +930,7 @@ export const useAiStore = create<AiState>()((set, get) => {
   };
 
   /** 一条动作先预览、再按设置决定停在待确认还是立即落地（confirm_edit 开启时永不自动写） */
-  const planAction = async (call: AiWriteCall): Promise<AiActionRecord> => {
+  const planAction = async (call: AiWriteCall, turnId: number): Promise<AiActionRecord> => {
     const preview = await previewAction(call);
     const record: AiActionRecord = {
       tool: call.tool,
@@ -927,13 +946,14 @@ export const useAiStore = create<AiState>()((set, get) => {
     };
     if (preview.blocked) return record;
     // 用户按「停止」后迟到的 done 帧不能替用户写数据；与开启确认一样停在待确认
-    if (cancelledTurn || get().config?.confirm_edit) return { ...record, state: "pending" };
+    if (cancelledTurns.has(turnId) || get().config?.confirm_edit) return { ...record, state: "pending" };
     return await landAction(record);
   };
 
   /** 收尾：正文剥掉指令块，写动作逐条预览落地；检索达到轮次上限时在正文后说明 */
   const finalizeAssistant = async (
     assistantId: string,
+    turnId: number,
     full: string,
     writes: AiWriteCall[],
     malformed: boolean,
@@ -958,7 +978,7 @@ export const useAiStore = create<AiState>()((set, get) => {
     }
     const records: AiActionRecord[] = [];
     if (malformed) records.push(invalidActionRecord());
-    for (const call of writes) records.push(await planAction(call));
+    for (const call of writes) records.push(await planAction(call, turnId));
     set((s) => ({
       messages: s.messages.map((m) =>
         m.id === assistantId
@@ -1066,7 +1086,7 @@ export const useAiStore = create<AiState>()((set, get) => {
    */
   const runStream = async (assistantId: string) => {
     streamingAssistantId = assistantId;
-    cancelledTurn = false;
+    const turnId = ++turnSeq;
     // usage 是「本轮合计」：先清零，多轮往返才不会被上一轮的用量掺进来
     set({ usage: null });
     // @ 引用的文档要先读盘转文本，再随 system 一起下发
@@ -1124,7 +1144,7 @@ export const useAiStore = create<AiState>()((set, get) => {
         set({ error: failed.message, errorCode: failed.code });
         dropEmptyAssistant(assistantId);
       } else if (!cancelled) {
-        await finalizeAssistant(assistantId, lastFull, writes, malformed, droppedRetrievals);
+        await finalizeAssistant(assistantId, turnId, lastFull, writes, malformed, droppedRetrievals);
       }
     } catch (e) {
       // 起手就失败（未配置 / 命令报错）：没有归类码，界面按通用错误处理
@@ -1133,6 +1153,7 @@ export const useAiStore = create<AiState>()((set, get) => {
     } finally {
       set({ streaming: false, retrieving: false });
       streamingAssistantId = null;
+      cancelledTurns.delete(turnId);
       // 一轮结束（含失败/取消）后落盘，流式增量期间不写
       persistSessions();
     }
@@ -1271,8 +1292,9 @@ export const useAiStore = create<AiState>()((set, get) => {
     },
 
     stop: () => {
-      // 标记本轮被用户停止：之后即便 Rust 尾帧（done）晚一步到达，也不会自动落地编辑
-      if (streamingAssistantId) cancelledTurn = true;
+      // 标记本轮被用户停止：之后即便 Rust 尾帧（done）晚一步到达，也不会自动落地编辑。
+      // 只标记「当时正在流的那一轮」，不影响用户随后立刻发起的新轮
+      if (streamingAssistantId) cancelledTurns.add(turnSeq);
       aiCancel().catch(() => undefined);
       set({ streaming: false });
     },

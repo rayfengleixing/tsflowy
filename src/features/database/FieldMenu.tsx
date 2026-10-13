@@ -45,6 +45,8 @@ export function FieldMenu(props: {
     onOpenOptions,
   } = props;
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // 改类型会清空整列单元格值（后端语义），必须先确认——旧版本直接落库、不可撤销
+  const [pendingType, setPendingType] = useState<FieldType | null>(null);
 
   return (
     <>
@@ -71,7 +73,7 @@ export function FieldMenu(props: {
                 <DropdownMenuItem
                   key={type}
                   disabled={type === fieldType}
-                  onSelect={() => onChangeType(type)}
+                  onSelect={() => setPendingType(type)}
                   data-active={type === fieldType}
                 >
                   <span
@@ -107,6 +109,22 @@ export function FieldMenu(props: {
         onConfirm={() => {
           setConfirmDelete(false);
           onDelete();
+        }}
+      />
+      <ConfirmDialog
+        open={pendingType !== null}
+        onOpenChange={(v) => !v && setPendingType(null)}
+        title={t("field.confirmChangeTypeTitle")}
+        description={t("field.confirmChangeTypeDesc", {
+          name: fieldName,
+          from: t(`field.type.${fieldType}` as never),
+          to: pendingType ? t(`field.type.${pendingType}` as never) : "",
+        })}
+        confirmLabel={t("field.changeType")}
+        onConfirm={() => {
+          const next = pendingType;
+          setPendingType(null);
+          if (next) onChangeType(next);
         }}
       />
     </>

@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { flushAllForClose } from "./close-flush";
+import { t } from "@/lib/i18n";
 import { logger } from "./logger";
 
 // 同步自动化（B7）：启动时拉取一次 + 本机写入静置后自动同步。
@@ -49,6 +51,9 @@ export function loadAutoSyncConfig(): AutoSyncConfig {
 interface SyncRunOutcome {
   action: string;
   pulled: boolean;
+  conflicts?: string[];
+  assets_copied?: number;
+  assets_deleted?: number;
 }
 
 /**
@@ -137,13 +142,20 @@ async function doSync() {
     await flushAllForClose();
     const r = await invoke<SyncRunOutcome>("run_sync");
     logger.info("autoSync", `done: ${r.action}`);
+    // 后台同步的结果必须让用户看得到：冲突与失败只写日志的话，
+    // 用户会带着"以为已同步"的心智继续改数据
     if (r.pulled) {
+      toast.info(t("sync.autoPulled"));
       // 本机库被远端替换：所有前端缓存都是旧数据，重载最彻底
       window.location.reload();
       return;
     }
+    if (r.action === "conflict") {
+      toast.warning(t("sync.autoConflict", { count: (r.conflicts ?? []).length }));
+    }
   } catch (e) {
     logger.warn("autoSync", "run_sync failed", e);
+    toast.error(t("sync.autoFailed", { message: e instanceof Error ? e.message : String(e) }));
   } finally {
     syncing = false;
     if (pendingDuringSync) {

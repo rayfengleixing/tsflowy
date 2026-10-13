@@ -782,25 +782,28 @@ pub(crate) enum SseParse {
 
 /// 解析单行 SSE：按 `data:` 前缀取值，`[DONE]` 结束，取 `choices[0].delta.content`；
 /// content 为空时回退到 `choices[0].delta.reasoning_content`（推理型模型）。
-pub(crate) fn parse_sse_line(line: &str) -> SseParse {
+/// 一行可能同时携带多个事件（正文 + 多个并行函数调用 + 用量），全部按序返回；
+/// 只取第一个 tool_call 会把并行工具调用的后续增量整帧丢掉，回灌给模型的调用列表缺项。
+pub(crate) fn parse_sse_line(line: &str) -> Vec<SseParse> {
     let line = line.strip_suffix('\r').unwrap_or(line);
     let Some(rest) = line.strip_prefix("data:") else {
-        return SseParse::Ignore;
+        return Vec::new();
     };
     // SSE 规范允许 "data:" 后跟一个可选空格
     let payload = rest.strip_prefix(' ').unwrap_or(rest).trim();
     if payload.is_empty() {
-        return SseParse::Ignore;
+        return Vec::new();
     }
     if payload == "[DONE]" {
-        return SseParse::Done;
+        return vec![SseParse::Done];
     }
     let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
-        return SseParse::Ignore;
+        return Vec::new();
     };
     if let Some(msg) = extract_error_message(&v) {
-        return SseParse::Error(msg);
+        return vec![SseParse::Error(msg)];
     }
+    let mut out = Vec::new();
     let delta = v
         .get("choices")
         .and_then(|c| c.get(0))
@@ -810,21 +813,23 @@ pub(crate) fn parse_sse_line(line: &str) -> SseParse {
         .and_then(|c| c.as_str())
         .unwrap_or("");
     if !content.is_empty() {
-        return SseParse::Delta(content.to_string());
+        out.push(SseParse::Delta(content.to_string()));
+    } else {
+        let reasoning = delta
+            .and_then(|d| d.get("reasoning_content"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        if !reasoning.is_empty() {
+            out.push(SseParse::Reasoning(reasoning.to_string()));
+        }
     }
-    let reasoning = delta
-        .and_then(|d| d.get("reasoning_content"))
-        .and_then(|c| c.as_str())
-        .unwrap_or("");
-    if !reasoning.is_empty() {
-        return SseParse::Reasoning(reasoning.to_string());
-    }
-    // 函数调用增量：首个调用带 name，后续调用各自带 index；参数分多帧到达
+    // 函数调用增量：首个调用带 name，后续调用各自带 index；参数分多帧到达。
+    // 一帧内可能出现多个并行调用条目，逐条翻译、一条都不能漏。
     if let Some(calls) = delta
         .and_then(|d| d.get("tool_calls"))
         .and_then(|c| c.as_array())
     {
-        if let Some(first) = calls.first() {
+        for first in calls {
             let index = first.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
             let id = first
                 .get("id")
@@ -842,12 +847,12 @@ pub(crate) fn parse_sse_line(line: &str) -> SseParse {
                 .and_then(|a| a.as_str())
                 .unwrap_or("");
             if id.is_some() || name.is_some() || !args.is_empty() {
-                return SseParse::ToolCallDelta {
+                out.push(SseParse::ToolCallDelta {
                     index,
                     id,
                     name,
                     args: args.to_string(),
-                };
+                });
             }
         }
     }
@@ -869,10 +874,10 @@ pub(crate) fn parse_sse_line(line: &str) -> SseParse {
                 .map(|x| x as u32),
         };
         if usage.is_meaningful() {
-            return SseParse::Usage(usage);
+            out.push(SseParse::Usage(usage));
         }
     }
-    SseParse::Ignore
+    out
 }
 
 /// 值得在流开始前重试的状态码：限流与服务商侧故障通常是瞬时的
@@ -1133,20 +1138,17 @@ mod tests {
     #[test]
     fn parse_sse_single_delta_line() {
         let line = r#"data: {"choices":[{"delta":{"content":"你好"}}]}"#;
-        assert_eq!(parse_sse_line(line), SseParse::Delta("你好".to_string()));
+        assert_eq!(parse_sse_line(line), vec![SseParse::Delta("你好".to_string())]);
     }
 
     #[test]
     fn parse_sse_reasoning_line() {
         // 推理型模型：content 为空、reasoning_content 有内容 → 归为 Reasoning
         let line = r#"data: {"choices":[{"delta":{"content":"","reasoning_content":"思考中"}}]}"#;
-        assert_eq!(
-            parse_sse_line(line),
-            SseParse::Reasoning("思考中".to_string())
-        );
+        assert_eq!(parse_sse_line(line), vec![SseParse::Reasoning("思考中".to_string())]);
         // 两者都有时 content 优先
         let line = r#"data: {"choices":[{"delta":{"content":"答案","reasoning_content":"思考"}}]}"#;
-        assert_eq!(parse_sse_line(line), SseParse::Delta("答案".to_string()));
+        assert_eq!(parse_sse_line(line), vec![SseParse::Delta("答案".to_string())]);
     }
 
     #[test]
@@ -1157,10 +1159,10 @@ data: {"choices":[{"delta":{"content":"b"}}]}
 
 data: [DONE]
 "#;
-        // 空行/非 data 行都会被 Ignore；保留有效事件
+        // 空行/非 data 行不产生事件；保留有效事件
         let meaningful: Vec<SseParse> = text
             .lines()
-            .map(parse_sse_line)
+            .flat_map(parse_sse_line)
             .filter(|e| *e != SseParse::Ignore)
             .collect();
         assert_eq!(
@@ -1175,15 +1177,12 @@ data: [DONE]
 
     #[test]
     fn parse_sse_done_and_ignored_lines() {
-        assert_eq!(parse_sse_line("data: [DONE]"), SseParse::Done);
-        assert_eq!(parse_sse_line("data:[DONE]"), SseParse::Done);
-        assert_eq!(parse_sse_line(": keep-alive"), SseParse::Ignore);
-        assert_eq!(parse_sse_line("event: message"), SseParse::Ignore);
+        assert_eq!(parse_sse_line("data: [DONE]"), vec![SseParse::Done]);
+        assert_eq!(parse_sse_line("data:[DONE]"), vec![SseParse::Done]);
+        assert!(parse_sse_line(": keep-alive").is_empty());
+        assert!(parse_sse_line("event: message").is_empty());
         // 有 choices 但 delta 为空（如首帧/尾帧）：忽略
-        assert_eq!(
-            parse_sse_line(r#"data: {"choices":[{"delta":{}}]}"#),
-            SseParse::Ignore
-        );
+        assert!(parse_sse_line(r#"data: {"choices":[{"delta":{}}]}"#).is_empty());
     }
 
     #[test]
@@ -1191,11 +1190,11 @@ data: [DONE]
         let line = r#"data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":34,"total_tokens":46}}"#;
         assert_eq!(
             parse_sse_line(line),
-            SseParse::Usage(AiUsage {
+            vec![SseParse::Usage(AiUsage {
                 prompt_tokens: Some(12),
                 completion_tokens: Some(34),
                 total_tokens: Some(46),
-            })
+            })]
         );
     }
 
@@ -1205,27 +1204,57 @@ data: [DONE]
         let line = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search_workspace","arguments":""}}]}}]}"#;
         assert_eq!(
             parse_sse_line(line),
-            SseParse::ToolCallDelta {
+            vec![SseParse::ToolCallDelta {
                 index: 0,
                 id: Some("call_1".to_string()),
                 name: Some("search_workspace".to_string()),
                 args: String::new(),
-            }
+            }]
         );
         // 后续帧：只有参数增量
         let line = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"query\":"}}]}}]}"#;
         assert_eq!(
             parse_sse_line(line),
-            SseParse::ToolCallDelta {
+            vec![SseParse::ToolCallDelta {
                 index: 0,
                 id: None,
                 name: None,
                 args: "{\"query\":".to_string(),
+            }]
+        );
+        // 并行多调用同帧到达：每一个条目都要翻译出来（旧实现只取 first，后续整帧丢弃）
+        let line = r#"data: {"choices":[{"delta":{"tool_calls":[
+            {"index":0,"id":"call_a","function":{"name":"search_workspace","arguments":"{}"}},
+            {"index":1,"id":"call_b","function":{"name":"list_pages","arguments":"{}"}}
+        ]}}]}"#;
+        let events = parse_sse_line(line);
+        assert_eq!(events.len(), 2, "同一帧两个并行调用都必须产出: {events:?}");
+        assert_eq!(
+            events[0],
+            SseParse::ToolCallDelta {
+                index: 0,
+                id: Some("call_a".to_string()),
+                name: Some("search_workspace".to_string()),
+                args: "{}".to_string(),
             }
         );
+        assert_eq!(
+            events[1],
+            SseParse::ToolCallDelta {
+                index: 1,
+                id: Some("call_b".to_string()),
+                name: Some("list_pages".to_string()),
+                args: "{}".to_string(),
+            }
+        );
+        // 正文与工具调用同帧：两个事件都在
+        let line = r#"data: {"choices":[{"delta":{"content":"先查一下","tool_calls":[{"index":0,"id":"c1","function":{"name":"list_pages","arguments":"{}"}}]}}]}"#;
+        let events = parse_sse_line(line);
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[0], SseParse::Delta("先查一下".to_string()));
         // 空壳帧（只有 index）忽略
         let line = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0}]}}]}"#;
-        assert_eq!(parse_sse_line(line), SseParse::Ignore);
+        assert!(parse_sse_line(line).is_empty());
     }
 
     #[test]
@@ -1269,11 +1298,8 @@ data: [DONE]
     fn parse_sse_null_usage_is_ignored() {
         // 每帧都带 usage:null 的服务商：不能把内容帧吞掉，也不产生用量事件
         let line = r#"data: {"choices":[{"delta":{"content":"好"}}],"usage":null}"#;
-        assert_eq!(parse_sse_line(line), SseParse::Delta("好".to_string()));
-        assert_eq!(
-            parse_sse_line(r#"data: {"choices":[],"usage":null}"#),
-            SseParse::Ignore
-        );
+        assert_eq!(parse_sse_line(line), vec![SseParse::Delta("好".to_string())]);
+        assert!(parse_sse_line(r#"data: {"choices":[],"usage":null}"#).is_empty());
     }
 
     #[test]
@@ -1281,7 +1307,7 @@ data: [DONE]
         let line = r#"data: {"error":{"message":"invalid api key","type":"auth"}}"#;
         assert_eq!(
             parse_sse_line(line),
-            SseParse::Error("invalid api key".to_string())
+            vec![SseParse::Error("invalid api key".to_string())]
         );
         let v: serde_json::Value = serde_json::from_str(r#"{"error":"boom"}"#).unwrap();
         assert_eq!(extract_error_message(&v).as_deref(), Some("boom"));
