@@ -3,8 +3,10 @@ import { ChevronLeft, ChevronRight, Plus, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { applyFilters, sortRows } from "@/lib/database-query";
+import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
 import { buildCalendarMonth, cellValueForDate, defaultCalendarField, rowDateKey } from "@/lib/board-calendar";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
+import { useRelationDbs } from "./use-database-data";
 import { Button } from "@/components/ui/button";
 import { SelectChips } from "./editors";
 import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
@@ -74,10 +76,19 @@ export function CalendarView({
     [fields],
   );
 
+  // rollup/反向关系求值要读目标库缓存（本表没有这类字段时 computeEvaluatedCells 直接原样返回）
+  const relationDbOf = useRelationDbs(fields);
+
+  // 公式/汇总/反向关系列无存储值：筛选/排序改读求值后的有效单元格，否则这些列上的条件恒不命中/排不动
+  const sortableCells = useMemo(
+    () => computeEvaluatedCells(rows, cells, fields, relationDbOf).sortable,
+    [rows, cells, fields, relationDbOf],
+  );
+
   const displayRows = useMemo(() => {
-    const filtered = applyFilters(rows, cells, filters, fields, filterMode);
-    return sortRows(filtered, cells, sorts);
-  }, [rows, cells, filters, fields, filterMode, sorts]);
+    const filtered = applyFilters(rows, sortableCells, filters, fields, filterMode);
+    return sortRows(filtered, sortableCells, sorts);
+  }, [rows, sortableCells, filters, fields, filterMode, sorts]);
 
   const today = useMemo(() => {
     const d = new Date();

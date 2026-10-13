@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Plus, ExternalLink, LayoutList } from "lucid
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
+import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
 import { NO_GROUP, cellValueForGroup, defaultBoardField, groupRowsForBoard } from "@/lib/board-calendar";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { relationCellText, relationTarget, type RelationDb } from "@/lib/relation";
@@ -90,6 +91,12 @@ export function BoardView({
   // 关联列（主字段/卡片副信息）要解析目标行标题：把本表所有关联字段的目标视图拉进缓存
   const relationDbOf = useRelationDbs(fields);
 
+  // 公式/汇总/反向关系列无存储值：筛选/排序改读求值后的有效单元格，否则这些列上的条件恒不命中/排不动
+  const sortableCells = useMemo(
+    () => computeEvaluatedCells(rows, cells, fields, relationDbOf).sortable,
+    [rows, cells, fields, relationDbOf],
+  );
+
   const toggleCardField = (id: string) => {
     const current = cardFieldIds ?? defaultCardFieldIds;
     const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
@@ -98,9 +105,9 @@ export function BoardView({
   };
 
   const displayRows = useMemo(() => {
-    const filtered = applyFilters(rows, cells, filters, fields, filterMode);
-    return sortRows(filtered, cells, sorts);
-  }, [rows, cells, filters, fields, filterMode, sorts]);
+    const filtered = applyFilters(rows, sortableCells, filters, fields, filterMode);
+    return sortRows(filtered, sortableCells, sorts);
+  }, [rows, sortableCells, filters, fields, filterMode, sorts]);
 
   const groups = useMemo(() => {
     if (!groupField) return [];

@@ -624,13 +624,13 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         let range: { from: number; to: number } | null = null;
         if (op === "insert_under_heading" || op === "replace_under_heading") {
           const sec = locateHeadingSection(anchor?.heading ?? "");
-          if (!sec) return { applied: false, reason: "ai.locateHeadingNotFound" };
-          if (sec.index === 0) return { applied: false, reason: "ai.locateProtectedHeading" };
+          if (!sec) return { applied: false, reason: t("ai.locateHeadingNotFound") };
+          if (sec.index === 0) return { applied: false, reason: t("ai.locateProtectedHeading") };
           range = op === "insert_under_heading" ? { from: sec.end, to: sec.end } : { from: sec.start, to: sec.end };
         } else if (op === "replace_text") {
           const hit = anchor?.text ? locateTextRange(anchor.text) : null;
-          if (!hit) return { applied: false, reason: "ai.locateTextNotFound" };
-          if (hit.index === 0) return { applied: false, reason: "ai.locateProtectedHeading" };
+          if (!hit) return { applied: false, reason: t("ai.locateTextNotFound") };
+          if (hit.index === 0) return { applied: false, reason: t("ai.locateProtectedHeading") };
           range = { from: hit.from, to: hit.to };
         } else {
           range =
@@ -645,7 +645,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         editor.view.dispatch(editor.state.tr.replaceRange(range.from, range.to, slice).scrollIntoView());
         editor.view.focus();
         // 结构锁定（首行标题/第二行分割线）会拦掉落在保护区里的事务：据实回报是否真的改了
-        if (editor.state.doc.eq(before)) return { applied: false, reason: "ai.locateBlockedByLock" };
+        if (editor.state.doc.eq(before)) return { applied: false, reason: t("ai.locateBlockedByLock") };
         // 留下改前快照作为撤销凭据：撤销时据此判断「撤掉的到底是不是这次改动」
         return { applied: true, revert: { before: before.toJSON() } };
       },

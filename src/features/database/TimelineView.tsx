@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDbStore } from "@/stores/database-context";
 import { applyFilters, sortRows } from "@/lib/database-query";
+import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
 import { defaultCalendarField, rowDateKey } from "@/lib/board-calendar";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
+import { useRelationDbs } from "./use-database-data";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
@@ -115,11 +117,20 @@ export function TimelineView({
     patchViewConfig(view, { timelineEndFieldId: id ?? "" });
   };
 
+  // rollup/反向关系求值要读目标库缓存（本表没有这类字段时 computeEvaluatedCells 直接原样返回）
+  const relationDbOf = useRelationDbs(fields);
+
+  // 公式/汇总/反向关系列无存储值：筛选/排序改读求值后的有效单元格，否则这些列上的条件恒不命中/排不动
   // 复用日历的取数方式：先筛后排序，再按日期落位
+  const sortableCells = useMemo(
+    () => computeEvaluatedCells(rows, cells, fields, relationDbOf).sortable,
+    [rows, cells, fields, relationDbOf],
+  );
+
   const displayRows = useMemo(() => {
-    const filtered = applyFilters(rows, cells, filters, fields, filterMode);
-    return sortRows(filtered, cells, sorts);
-  }, [rows, cells, filters, fields, filterMode, sorts]);
+    const filtered = applyFilters(rows, sortableCells, filters, fields, filterMode);
+    return sortRows(filtered, sortableCells, sorts);
+  }, [rows, sortableCells, filters, fields, filterMode, sorts]);
 
   const entries = useMemo(() => {
     if (!startField) return [];

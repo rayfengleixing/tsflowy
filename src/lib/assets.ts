@@ -1,11 +1,16 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { invoke } from "@/lib/invoke";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { AttachmentRef } from "@/types/database";
+import { invoke } from "@/lib/invoke";
+import { logger } from "./logger";
 
 // 图片资源地址（项目说明书 12 节风险 4：二进制存 assets/ + 相对路径入库）。
 // 相对路径 "assets/xxx.png" → asset 协议 URL（依赖 tauri.conf.json 的 assetProtocol 配置）。
+
+/** 附件在数据目录内的相对目录名（与 Rust 侧 ASSETS_DIR 一致） */
+const ASSETS_DIR_NAME = "assets";
+const ASSETS_PREFIX = `${ASSETS_DIR_NAME}/`;
 
 let dataDirPromise: Promise<string> | null = null;
 
@@ -118,6 +123,79 @@ export async function pickAttachment(): Promise<AttachmentRef | null> {
 /** 用系统默认程序打开 assets/ 下的附件（路径越权校验在 Rust 侧） */
 export async function openAttachment(relative: string): Promise<void> {
   await invoke("open_asset", { relative });
+}
+
+/* ————— 导出：附件随文档落盘 ————— */
+
+/** 是否库内附件相对路径（远程 URL / data URI / 绝对路径一律 false） */
+export function isLibraryAssetPath(src: unknown): src is string {
+  return typeof src === "string" && src.startsWith(ASSETS_PREFIX) && !src.includes("..");
+}
+
+/**
+ * 递归收集文档 JSON 引用到的附件相对路径（image / attachment / 相册子图 / 表格内图片），
+ * 按首次出现顺序去重。
+ */
+export function collectAssetPaths(doc: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child);
+      return;
+    }
+    if (!node || typeof node !== "object") return;
+    const rec = node as Record<string, unknown>;
+    if (rec.type === "image" || rec.type === "attachment") {
+      const src = (rec.attrs as Record<string, unknown> | undefined)?.src;
+      if (isLibraryAssetPath(src) && !seen.has(src)) {
+        seen.add(src);
+        out.push(src);
+      }
+    }
+    visit(rec.content);
+  };
+  visit(doc);
+  return out;
+}
+
+export interface ExportAssetContext {
+  /** 已复制过的「目标目录 + 附件」组合：同一目录里的多页共用一份附件 */
+  copied: Set<string>;
+  /** 已建好附件子目录的目标目录 */
+  dirReady: Set<string>;
+}
+
+export function createExportAssetContext(): ExportAssetContext {
+  return { copied: new Set(), dirReady: new Set() };
+}
+
+/**
+ * 把文档引用的附件复制到 <destDir>/assets/<文件名>，让导出内容里的 "assets/xxx" 相对链接可点开。
+ * 走 read_asset_bytes + write_binary_file（与长图导出同一套命令）：附件源路径的越权校验在 Rust 侧，
+ * 目标路径由导出对话框授权，不依赖 $APPDATA scope（自定义数据目录同样可用）。
+ * 单个附件读不到 / 写不进时只记日志并跳过：文档照常导出，链接保持原有写法。
+ */
+export async function copyAssetsForExport(
+  paths: string[],
+  destDir: string,
+  ctx: ExportAssetContext = createExportAssetContext(),
+): Promise<void> {
+  for (const relative of paths) {
+    const key = `${destDir}\u0000${relative}`;
+    if (ctx.copied.has(key)) continue;
+    ctx.copied.add(key);
+    try {
+      const bytes = await invoke<number[]>("read_asset_bytes", { relative });
+      if (!ctx.dirReady.has(destDir)) {
+        await invoke("mkdir_all", { path: `${destDir}/${ASSETS_DIR_NAME}` });
+        ctx.dirReady.add(destDir);
+      }
+      await invoke("write_binary_file", { path: `${destDir}/${relative}`, bytes });
+    } catch (e) {
+      logger.warn("assets.copy-for-export", "attachment copy failed", relative, e);
+    }
+  }
 }
 
 /* ————— 未引用资源扫描 / 回收 ————— */

@@ -20,6 +20,7 @@ import { useDbStore, useDbStoreApi } from "@/stores/database-context";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { viewApi, newId } from "@/lib/db";
 import { parseFieldOptions } from "@/lib/database-values";
+import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
 import { UNGROUPED, applyFilters, canGroupBy, groupRowsForGrid, sortRows, type SortSpec } from "@/lib/database-query";
 import { normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
 import {
@@ -54,7 +55,6 @@ import {
   VIRTUAL_OVERSCAN,
   cellSelector,
   clampColumnWidth,
-  computeEvaluatedCells,
   computeVirtualWindow,
   computeWindowFromHeights,
   lineHeightsOf,

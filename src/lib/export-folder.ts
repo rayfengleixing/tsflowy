@@ -2,9 +2,11 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@/lib/invoke";
 import type { JSONContent } from "@tiptap/core";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { collectAssetPaths, copyAssetsForExport, createExportAssetContext } from "./assets";
 import { documentApi } from "./documents";
 import { jsonToMarkdown } from "./markdown";
 import { logger } from "./logger";
+import { sanitizeFileName } from "./utils";
 import type { ViewNode } from "@/types/models";
 
 // 整库导出 Markdown 文件夹（导入 Markdown 文件夹的逆操作）。
@@ -14,7 +16,8 @@ import type { ViewNode } from "@/types/models";
 //   2. 按 workspace 页面树递归导出：
 //      - 有子页面的页面 → 同名文件夹（mkdir_all），自身内容写 <页面名>/<页面名>.md；
 //      - 叶子文档页 → <页面名>.md；
-//      - grid/board/calendar 页无文档内容，叶子跳过、有子页面时仅作文件夹容器。
+//      - grid/board/calendar 页无文档内容，叶子跳过、有子页面时仅作文件夹容器；
+//      - 每页引用的附件复制到该 md 文件同级的 assets/ 子目录（导出内容里写的就是 assets/xxx 相对路径）。
 //   3. 写文件走自定义 Rust 命令 write_text_file / mkdir_all（同 CSV 导出），
 //      不受 fs 插件 scope 限制。
 //   4. 顺序导出（读文档 + 写盘），避免并发写 SQLite 触发 SQLITE_BUSY。
@@ -25,17 +28,6 @@ export interface ExportFolderResult {
   total: number;
   exported: number;
   failed: number;
-}
-
-/** 页面名 → 合法文件名（不含扩展名） */
-function sanitizeName(name: string): string {
-  const cleaned = name
-    .replace(/[<>:"/\\|?*\p{Cc}]/gu, "_")
-    .replace(/[. ]+$/, "")
-    .trim();
-  if (!cleaned) return "_";
-  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(cleaned)) return `_${cleaned}`;
-  return cleaned;
 }
 
 /** 与 exportPage 相同的解析规则：非 JSON 纯文本按单段落包装 */
@@ -61,14 +53,18 @@ export async function exportMarkdownFolder(): Promise<ExportFolderResult | null>
   let total = 0;
   let exported = 0;
   let failed = 0;
+  // 整库共用一份复制状态：同一目录里多页引用同一附件时只复制一次
+  const assetCtx = createExportAssetContext();
 
   const writeDoc = async (node: ViewNode, file: string): Promise<void> => {
     if (node.layout !== "document") return; // 非文档布局无 Markdown 内容
     total++;
     try {
       const raw = await documentApi.get(node.id);
-      const md = raw ? jsonToMarkdown(parseDoc(raw)) : "";
+      const doc = raw ? parseDoc(raw) : null;
+      const md = doc ? jsonToMarkdown(doc) : "";
       await invoke<void>("write_text_file", { path: file, content: md });
+      if (doc) await copyAssetsForExport(collectAssetPaths(doc), file.slice(0, file.lastIndexOf("/")), assetCtx);
       exported++;
     } catch (e) {
       failed++;
@@ -86,7 +82,7 @@ export async function exportMarkdownFolder(): Promise<ExportFolderResult | null>
     for (const node of nodes) {
       const isBranch = node.children.length > 0;
       if (node.layout !== "document" && !isBranch) continue; // 无内容叶子直接跳过
-      const base = uniqueName(sanitizeName(node.name));
+      const base = uniqueName(sanitizeFileName(node.name));
       if (isBranch) {
         const sub = `${dir}/${base}`;
         await invoke<void>("mkdir_all", { path: sub });

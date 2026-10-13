@@ -1,13 +1,15 @@
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@/lib/invoke";
 import { toast } from "sonner";
 import { useEditorStore } from "@/stores/editor";
 import { flushAllForClose } from "./close-flush";
 import { t } from "./i18n";
+import { collectAssetPaths, copyAssetsForExport } from "./assets";
 import { documentApi } from "./documents";
 import { jsonToMarkdown } from "./markdown";
 import { logger } from "./logger";
+import { sanitizeFileName } from "./utils";
 
 interface JSONContent {
   type?: string;
@@ -230,6 +232,18 @@ export async function exportPage(viewId: string, viewName: string, format: "mark
   // Markdown：复用 markdown.ts 的 jsonToMarkdown（支持 callout/toggle/columns/math 等高级块）
   // HTML：用本地 jsonToHTML（自包含样式，补 escape 防 XSS）
   const content = format === "markdown" ? jsonToMarkdown(doc) : jsonToHTML(doc.content ?? [], viewName);
+  const assetPaths = collectAssetPaths(doc);
+
+  // 带附件时导出到目录：导出内容写的是 assets/xxx 相对路径，附件必须落到同一个目录下才点得开。
+  // 保存对话框只授权它返回的那个文件路径本身，同级 assets/ 要靠目录对话框（recursive）授权。
+  if (assetPaths.length > 0) {
+    const dir = await open({ directory: true, multiple: false, recursive: true });
+    if (typeof dir !== "string" || !dir) return;
+    const file = `${dir}/${sanitizeFileName(viewName)}.${ext}`;
+    await writeTextFile(file, content);
+    await copyAssetsForExport(assetPaths, dir);
+    return;
+  }
 
   const target = await save({
     defaultPath: `${viewName}.${ext}`,

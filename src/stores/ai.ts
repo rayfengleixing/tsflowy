@@ -96,6 +96,8 @@ export interface AiMessage {
   images?: AiImageAttachment[];
   /** 回答评分：点赞 / 点踩，未评过为 undefined */
   rating?: "up" | "down";
+  /** 回答被中断的标记：error=请求失败留下的半截，stopped=用户点停止；重试据此丢弃残响重发 */
+  incomplete?: "error" | "stopped";
 }
 
 /** 指令块解析失败的占位卡片：没有可执行的动作，也就没有确认与撤销 */
@@ -343,6 +345,7 @@ function sanitizeMessage(raw: unknown, pageId: string | null = null): AiMessage 
   const images = sanitizeImages(m.images);
   // 评分不白名单化就会被恢复流程丢掉，重开面板就看不到自己标过的好/坏
   const rating = m.rating === "up" || m.rating === "down" ? m.rating : undefined;
+  const incomplete = m.incomplete === "error" || m.incomplete === "stopped" ? m.incomplete : undefined;
   return {
     id: typeof m.id === "string" && m.id ? m.id : newId(),
     role: m.role,
@@ -350,6 +353,7 @@ function sanitizeMessage(raw: unknown, pageId: string | null = null): AiMessage 
     ...(actions.length > 0 ? { actions } : {}),
     ...(images ? { images } : {}),
     ...(rating ? { rating } : {}),
+    ...(incomplete ? { incomplete } : {}),
   };
 }
 
@@ -819,9 +823,13 @@ export const useAiStore = create<AiState>()((set, get) => {
     return `【用户 @ 引用的文档】\n${parts.join("\n\n")}`;
   };
 
-  /** 失败时丢弃空的助手占位（保留有内容的半截回答），错误单独存供重试 */
-  const dropEmptyAssistant = (assistantId: string) =>
-    set((s) => ({ messages: s.messages.filter((m) => m.id !== assistantId || m.content.trim().length > 0) }));
+  /** 中断收尾：空的助手占位直接丢弃；有内容的半截回答留下并标记中断类型，重试据此判定重发 */
+  const settleIncomplete = (assistantId: string, kind: "error" | "stopped") =>
+    set((s) => ({
+      messages: s.messages
+        .map((m) => (m.id === assistantId ? { ...m, content: m.content.trim(), incomplete: kind } : m))
+        .filter((m) => m.id !== assistantId || m.content.trim().length > 0),
+    }));
 
   /** 定位失败原因 → 界面文案 */
   const LOCATE_REASON: Record<LocateFailure["reason"], MessageKey> = {
@@ -1087,8 +1095,14 @@ export const useAiStore = create<AiState>()((set, get) => {
   const runStream = async (assistantId: string) => {
     streamingAssistantId = assistantId;
     const turnId = ++turnSeq;
+    /**
+     * 本轮是否被用户「停止」：stop() 只标记当前轮号。aiCancel 只能掐断飞行中的请求，
+     * 轮次间隙与检索执行阶段没有请求在跑，必须靠循环自己在各边界核对这个标记。
+     */
+    const cancelledByUser = () => cancelledTurns.has(turnId);
     // usage 是「本轮合计」：先清零，多轮往返才不会被上一轮的用量掺进来
-    set({ usage: null });
+    // retrieving 一并清掉：被停的旧循环可能还挂在检索 await 上，标志是它留下的旧值
+    set({ usage: null, retrieving: false });
     // @ 引用的文档要先读盘转文本，再随 system 一起下发
     let outgoing = requestMessages(assistantId, await buildReferenceContext());
     // 选中内容只随本轮生效：消息组装完就清掉，下一轮不再重复带
@@ -1101,6 +1115,10 @@ export const useAiStore = create<AiState>()((set, get) => {
     let failed: { message: string; code: string | null } | null = null;
     try {
       for (let round = 0; round < MAX_AGENT_ROUNDS; round++) {
+        if (cancelledByUser()) {
+          cancelled = true;
+          break;
+        }
         const result = await streamRound(assistantId, outgoing);
         lastFull = result.full;
         cancelled = result.cancelled;
@@ -1116,22 +1134,40 @@ export const useAiStore = create<AiState>()((set, get) => {
           droppedRetrievals = retrievals.length;
           break;
         }
+        // 此处到 set(retrieving:true) 之间没有 await：停止只可能发生在 await 边界，检查一次即够
+        if (cancelledByUser()) {
+          cancelled = true;
+          break;
+        }
         set({ retrieving: true });
         const toolMode = !!get().config?.use_tools;
         const limit = maxChars();
         const toolRefs: AiToolCallRef[] = [];
         const toolMsgs: AiChatMessage[] = [];
         const plain: { tool: string; result: string }[] = [];
-        for (const [i, x] of retrievals.entries()) {
-          const call = x.call as RetrievalCall;
-          // 函数调用回灌要带原 id；文本协议块没有 id，按序号造一个配套的（assistant 消息里一并声明）
-          const id = x.id || `tcall_${round}_${i}`;
-          const output = await runRetrievalCall(call.tool, call.args, limit);
-          toolRefs.push({ id, type: "function", function: { name: call.tool, arguments: JSON.stringify(call.args) } });
-          if (toolMode) toolMsgs.push({ role: "tool", content: output, tool_call_id: id });
-          else plain.push({ tool: call.tool, result: output });
+        try {
+          for (const [i, x] of retrievals.entries()) {
+            if (cancelledByUser()) break;
+            const call = x.call as RetrievalCall;
+            // 函数调用回灌要带原 id；文本协议块没有 id，按序号造一个配套的（assistant 消息里一并声明）
+            const id = x.id || `tcall_${round}_${i}`;
+            const output = await runRetrievalCall(call.tool, call.args, limit);
+            toolRefs.push({
+              id,
+              type: "function",
+              function: { name: call.tool, arguments: JSON.stringify(call.args) },
+            });
+            if (toolMode) toolMsgs.push({ role: "tool", content: output, tool_call_id: id });
+            else plain.push({ tool: call.tool, result: output });
+          }
+        } finally {
+          // 新轮已开始（用户停止后立刻重发）时不再动全局标志，归新轮自己管
+          if (turnSeq === turnId) set({ retrieving: false });
         }
-        set({ retrieving: false });
+        if (cancelledByUser()) {
+          cancelled = true;
+          break;
+        }
         outgoing = [
           ...outgoing,
           { role: "assistant", content: result.full, ...(toolMode ? { tool_calls: toolRefs } : {}) },
@@ -1142,18 +1178,23 @@ export const useAiStore = create<AiState>()((set, get) => {
       }
       if (failed) {
         set({ error: failed.message, errorCode: failed.code });
-        dropEmptyAssistant(assistantId);
-      } else if (!cancelled) {
+        settleIncomplete(assistantId, "error");
+      } else if (cancelled) {
+        settleIncomplete(assistantId, "stopped");
+      } else {
         await finalizeAssistant(assistantId, turnId, lastFull, writes, malformed, droppedRetrievals);
       }
     } catch (e) {
       // 起手就失败（未配置 / 命令报错）：没有归类码，界面按通用错误处理
       set({ error: aiErrorText(e), errorCode: null });
-      dropEmptyAssistant(assistantId);
+      settleIncomplete(assistantId, "error");
     } finally {
-      set({ streaming: false, retrieving: false });
-      streamingAssistantId = null;
       cancelledTurns.delete(turnId);
+      // 用户停止后又发起了新提问：streaming 状态与在途消息归属新一轮，旧循环不得替它拆掉
+      if (turnSeq === turnId) {
+        set({ streaming: false, retrieving: false });
+        streamingAssistantId = null;
+      }
       // 一轮结束（含失败/取消）后落盘，流式增量期间不写
       persistSessions();
     }
@@ -1293,7 +1334,9 @@ export const useAiStore = create<AiState>()((set, get) => {
 
     stop: () => {
       // 标记本轮被用户停止：之后即便 Rust 尾帧（done）晚一步到达，也不会自动落地编辑。
-      // 只标记「当时正在流的那一轮」，不影响用户随后立刻发起的新轮
+      // 只标记「当时正在流的那一轮」，不影响用户随后立刻发起的新轮。
+      // agent 循环在每轮开始与每个检索步骤前核对这个标记：aiCancel 只掐得断飞行中的请求，
+      // 检索/工具执行阶段没有请求在跑，靠循环自己在边界退出。
       if (streamingAssistantId) cancelledTurns.add(turnSeq);
       aiCancel().catch(() => undefined);
       set({ streaming: false });
@@ -1404,6 +1447,8 @@ export const useAiStore = create<AiState>()((set, get) => {
     retry: async () => {
       if (get().streaming) return;
       const msgs = [...get().messages];
+      // 失败/停止留下的半截回答：整条丢弃后重发这一问（想接着半截往下写走「继续生成」）
+      if (msgs.length > 0 && msgs[msgs.length - 1].role === "assistant" && msgs[msgs.length - 1].incomplete) msgs.pop();
       // 去掉尾部失败/空的助手消息，回到最后一条用户消息重发
       while (msgs.length > 0 && msgs[msgs.length - 1].role === "assistant" && !msgs[msgs.length - 1].content.trim()) {
         msgs.pop();

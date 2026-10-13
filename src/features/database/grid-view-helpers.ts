@@ -1,9 +1,8 @@
-import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
-import { computeRowFormulas } from "@/lib/database-formula";
-import { computeReverseRelation, computeRollup, type RelationDb } from "@/lib/relation";
+import type { DatabaseRow } from "@/types/database";
 
 // GridView 的纯计算/工具函数与常量：从 GridView.tsx 原样搬出（无逻辑改动），
 // 便于单测这些与 React 无关的取值/窗口计算。
+// 计算列求值（computeEvaluatedCells）已提为 Grid/Board/Calendar/Timeline 共用，见 @/lib/database-evaluated-cells。
 
 /** 窗口化阈值：行数超过它才启用（小表保持全量渲染，零行为差异） */
 export const VIRTUAL_MIN_ROWS = 150;
@@ -94,62 +93,6 @@ export function computeWindowFromHeights(p: {
   }
   end = Math.min(p.heights.length, end + VIRTUAL_OVERSCAN);
   return { start, end: Math.max(end, Math.min(p.heights.length, start + 1)) };
-}
-
-/**
- * 公式/汇总/反向关系字段没有存储值：把求值结果提前算进一份"有效单元格"图，排序/列汇总/分组小计都读它，
- * 否则按这些列排序排不动（raw 恒为空值）、汇总恒为空。没有这类字段时直接复用原始 cells。
- *
- * 一次遍历产出两份图：
- * - sortable：数值样式的汇总值转成 number（"9.00" 不会按字典序排在 "42.50" 之后），供排序/筛选/聚合；
- * - display：保留展示文本（rollup 带精度/货币格式），供网格单元格直读——行渲染不再逐格重算。
- */
-export function computeEvaluatedCells(
-  rows: DatabaseRow[],
-  cells: Record<string, Record<string, CellValue>>,
-  fields: DatabaseField[],
-  relationDbOf: (viewId: string) => RelationDb | undefined,
-): { sortable: Record<string, Record<string, CellValue>>; display: Record<string, Record<string, CellValue>> } {
-  const hasComputed = fields.some(
-    (f) => f.field_type === "formula" || f.field_type === "rollup" || f.field_type === "reverse_relation",
-  );
-  if (!hasComputed) return { sortable: cells, display: cells };
-  const hasFormula = fields.some((f) => f.field_type === "formula");
-  const sortable: Record<string, Record<string, CellValue>> = {};
-  const display: Record<string, Record<string, CellValue>> = {};
-  for (const row of rows) {
-    const rowCells = cells[row.id] ?? {};
-    // 每行一次建图：公式串公式按依赖序取计算值，环成员得 #CYCLE
-    const formulaValues = hasFormula ? computeRowFormulas(rowCells, fields) : null;
-    let sortCopy: Record<string, CellValue> | null = null;
-    let displayCopy: Record<string, CellValue> | null = null;
-    for (const f of fields) {
-      if (f.field_type === "formula") {
-        const v = formulaValues?.get(f.id) ?? null;
-        if (v !== null) {
-          (sortCopy ??= { ...rowCells })[f.id] = v;
-          (displayCopy ??= { ...rowCells })[f.id] = v;
-        }
-      } else if (f.field_type === "rollup") {
-        const v = computeRollup(f, rowCells, fields, relationDbOf);
-        if (v !== null) {
-          const n = Number(v);
-          (sortCopy ??= { ...rowCells })[f.id] = v.trim() !== "" && Number.isFinite(n) ? n : v;
-          (displayCopy ??= { ...rowCells })[f.id] = v;
-        }
-      } else if (f.field_type === "reverse_relation") {
-        // 反向关系：实时反查来源行，值为来源行 id 数组（可参与排序/汇总）
-        const v = computeReverseRelation(row.id, f, relationDbOf);
-        if (v !== null) {
-          (sortCopy ??= { ...rowCells })[f.id] = v;
-          (displayCopy ??= { ...rowCells })[f.id] = v;
-        }
-      }
-    }
-    sortable[row.id] = sortCopy ?? rowCells;
-    display[row.id] = displayCopy ?? rowCells;
-  }
-  return { sortable, display };
 }
 
 /** 有并发上限的异步遍历：附件列复制时避免 N 行 × M 个附件同时发起 save_asset 打爆磁盘 I/O */

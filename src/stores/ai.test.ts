@@ -410,6 +410,177 @@ describe("ai store：agent 多步循环", () => {
   });
 });
 
+describe("ai store：停止取消与重试", () => {
+  const callBlock = (json: string) => `\`\`\`tsflowy-call\n${json}\n\`\`\``;
+
+  /** 手动放行的检索桩：复现「检索/工具执行阶段没有飞行中请求，aiCancel 够不着」的窗口 */
+  function deferredRetrieval() {
+    let release: (v: string) => void = () => {};
+    M.runRetrievalCall.mockImplementation(
+      () =>
+        new Promise<string>((r) => {
+          release = r;
+        }),
+    );
+    return () => release("检索桩结果");
+  }
+
+  it("检索阶段点停止：不再发起下一轮请求，保留已产出内容并标记 stopped", async () => {
+    const store = await loadConfiguredStore();
+    const release = deferredRetrieval();
+    const p = store.getState().send("我上周记的评审结论是什么？");
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(1));
+    streamHandlers[0]({ type: "chunk", delta: "先查一下。" });
+    streamHandlers[0]({
+      type: "done",
+      full: `先查一下。\n\n${callBlock('{"tool":"search_workspace","args":{"query":"评审"}}')}`,
+    });
+    await vi.waitFor(() => expect(M.runRetrievalCall).toHaveBeenCalledTimes(1));
+    store.getState().stop();
+    release();
+    await p;
+    const s = store.getState();
+    // 停止后 agent 循环必须自行在边界退出，而不是接着发起第二轮
+    expect(M.aiChat).toHaveBeenCalledTimes(1);
+    expect(s.streaming).toBe(false);
+    expect(s.retrieving).toBe(false);
+    expect(s.error).toBeNull();
+    expect(s.messages[1].content).toBe("先查一下。");
+    expect(s.messages[1].incomplete).toBe("stopped");
+  });
+
+  it("停止后不再执行剩余的检索步骤", async () => {
+    const store = await loadConfiguredStore();
+    let tick = 0;
+    let release: (v: string) => void = () => {};
+    M.runRetrievalCall.mockImplementation(() => {
+      tick++;
+      if (tick === 1) {
+        return new Promise<string>((r) => {
+          release = r;
+        });
+      }
+      return Promise.resolve("检索桩结果");
+    });
+    const p = store.getState().send("一次查两样");
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(1));
+    streamHandlers[0]({
+      type: "done",
+      full: `查。\n\n${callBlock('{"tool":"search_workspace","args":{"query":"a"}}')}\n\n${callBlock('{"tool":"list_pages","args":{}}')}`,
+    });
+    await vi.waitFor(() => expect(M.runRetrievalCall).toHaveBeenCalledTimes(1));
+    store.getState().stop();
+    release("第一项结果");
+    await p;
+    expect(M.runRetrievalCall).toHaveBeenCalledTimes(1);
+    expect(M.aiChat).toHaveBeenCalledTimes(1);
+    // 本轮没产出任何正文：空的助手占位被丢弃，不留诡异空 bubble
+    expect(store.getState().messages.map((m) => m.role)).toEqual(["user"]);
+  });
+
+  it("停止后立刻重新提问：旧循环的收尾不影响新一轮流式", async () => {
+    const store = await loadConfiguredStore();
+    const release = deferredRetrieval();
+    const p1 = store.getState().send("第一问");
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(1));
+    streamHandlers[0]({ type: "chunk", delta: "先查。" });
+    streamHandlers[0]({ type: "done", full: `先查。\n\n${callBlock('{"tool":"list_pages","args":{}}')}` });
+    await vi.waitFor(() => expect(M.runRetrievalCall).toHaveBeenCalledTimes(1));
+    store.getState().stop();
+    // 旧循环还挂在检索 await 上时发起新提问
+    const p2 = store.getState().send("第二问");
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(2));
+    release();
+    await p1;
+    // 旧轮 finally 不得把新轮的 streaming 置回 false，也不得偷发起第二轮
+    expect(store.getState().streaming).toBe(true);
+    expect(streamHandlers).toHaveLength(2);
+    pump([
+      { type: "chunk", delta: "第二问的回答" },
+      { type: "done", full: "第二问的回答" },
+    ]);
+    await p2;
+    const s = store.getState();
+    expect(s.streaming).toBe(false);
+    expect(s.messages.map((m) => m.content)).toEqual(["第一问", "先查。", "第二问", "第二问的回答"]);
+    expect(s.messages[1].incomplete).toBe("stopped");
+    expect(M.aiChat).toHaveBeenCalledTimes(2);
+  });
+
+  it("retry：半截失败的回答被丢弃，重发同一个问题", async () => {
+    const store = await loadConfiguredStore();
+    const { p, feed } = await startTurn(store, "q");
+    feed({ type: "chunk", delta: "写了一半" });
+    await vi.waitFor(() => expect(store.getState().messages[1].content).toBe("写了一半"));
+    feed({ type: "error", message: "请求超时", code: "timeout" });
+    await p;
+    expect(store.getState().error).toBe("请求超时");
+    expect(store.getState().messages[1].incomplete).toBe("error");
+    const before = streamHandlers.length;
+    const pr = store.getState().retry();
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(before + 1));
+    pump([{ type: "done", full: "完整回答" }]);
+    await pr;
+    const s = store.getState();
+    expect(s.error).toBeNull();
+    expect(s.messages.map((m) => [m.role, m.content])).toEqual([
+      ["user", "q"],
+      ["assistant", "完整回答"],
+    ]);
+  });
+
+  it("retry：用户停止留下的半截回答同样重发", async () => {
+    const store = await loadConfiguredStore();
+    const { p, feed } = await startTurn(store, "q");
+    feed({ type: "chunk", delta: "写了一半" });
+    await vi.waitFor(() => expect(store.getState().messages[1].content).toBe("写了一半"));
+    feed({ type: "error", message: "cancelled", code: "cancelled" });
+    await p;
+    expect(store.getState().messages[1].incomplete).toBe("stopped");
+    const before = streamHandlers.length;
+    const pr = store.getState().retry();
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(before + 1));
+    pump([{ type: "done", full: "新回答" }]);
+    await pr;
+    expect(store.getState().messages.map((m) => m.content)).toEqual(["q", "新回答"]);
+  });
+
+  it("retry：正常完成的回答不会被误丢弃，行为与既往一致（不动作）", async () => {
+    const store = await loadConfiguredStore();
+    await completeTurn(store, "q", "完整回答");
+    const before = streamHandlers.length;
+    await store.getState().retry();
+    expect(streamHandlers).toHaveLength(before);
+    expect(store.getState().messages.map((m) => m.content)).toEqual(["q", "完整回答"]);
+  });
+
+  it("会话恢复：incomplete 标记保留，畸形值丢弃", async () => {
+    const store = await loadStore();
+    M.aiSessionList.mockResolvedValue([
+      {
+        id: "db-inc",
+        title: "中断会话",
+        page_id: null,
+        page_title: null,
+        updated_at: "9",
+        archived: false,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        messages: JSON.stringify([
+          { id: "u1", role: "user", content: "问题" },
+          { id: "a1", role: "assistant", content: "写了一半", incomplete: "error" },
+          { id: "u2", role: "user", content: "问题二" },
+          { id: "a2", role: "assistant", content: "中断", incomplete: "随便什么" },
+        ]),
+      },
+    ]);
+    await store.getState().loadSessions();
+    const msgs = store.getState().messages;
+    expect(msgs[1].incomplete).toBe("error");
+    expect(msgs[3].incomplete).toBeUndefined();
+  });
+});
+
 describe("ai store：上下文预算与截断提示", () => {
   it("历史超出 token 预算：丢弃最早的整轮，并随请求下发截断说明", async () => {
     const store = await loadConfiguredStore();

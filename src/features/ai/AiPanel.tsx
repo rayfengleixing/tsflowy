@@ -1030,6 +1030,19 @@ function actionStatusText(a: AiActionRecord): string {
   }
 }
 
+/** 历史数据兜底：旧版本曾把未翻译的裸 i18n key 当失败原因持久化进 detail，显示前翻译，查不到原样 */
+const LEGACY_DETAIL_KEYS = new Map<string, MessageKey>([
+  ["ai.locateHeadingNotFound", "ai.locateHeadingNotFound"],
+  ["ai.locateTextNotFound", "ai.locateTextNotFound"],
+  ["ai.locateProtectedHeading", "ai.locateProtectedHeading"],
+  ["ai.locateBlockedByLock", "ai.locateBlockedByLock"],
+]);
+
+function detailText(detail: string): string {
+  const key = LEGACY_DETAIL_KEYS.get(detail);
+  return key ? t(key) : detail;
+}
+
 /** 值得弹 diff 预览的动作：改文档要看改前改后，建页要看正文；改标题/加行只有一句话说明 */
 function canShowDiff(a: AiActionRecord): boolean {
   if (a.state === "malformed" || a.state === "rejected") return false;
@@ -1114,7 +1127,7 @@ const MessageBubble = memo(function MessageBubble({
               {actionStatusText(a)}
               {a.summary && a.state !== "malformed" ? `：${a.summary}` : ""}
               {/* 执行结果或失败原因（跨页写动作、表行写入等只有说明可展示） */}
-              {a.detail ? `（${a.detail}）` : ""}
+              {a.detail ? `（${detailText(a.detail)}）` : ""}
             </span>
           </div>
           <div className="mt-1 flex flex-wrap gap-1.5">

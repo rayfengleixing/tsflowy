@@ -4,7 +4,7 @@ import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { FIELD_TYPES, isReadonlyType, type FieldType } from "@/types/database";
 import { useDbStore } from "@/stores/database-context";
 import { formatCellValue, parseFieldOptions, ratingMax } from "@/lib/database-values";
-import { computeEvaluatedCells } from "./grid-view-helpers";
+import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
 import { useRelationStore } from "@/stores/relation";
 import { cn } from "@/lib/utils";
 import type { View } from "@/types/models";

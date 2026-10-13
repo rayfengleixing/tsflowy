@@ -9,7 +9,7 @@ import type { AiEditAnchor, AiEditOp } from "./ai-edit";
 /**
  * 编辑指令的落地结果。
  * applied 为假表示没写成（没有目标 / 结构锁定拦掉了事务 / 锚点没找到）；
- * reason 是失败原因（i18n key 或直接文案），供界面展示；
+ * reason 是失败原因文案（产生处已用 t() 翻译；历史会话里可能存有旧版落库的裸 i18n key，展示侧兜底）；
  * revert 是撤销句柄，里面存着改之前的文档快照。
  */
 export interface AiEditApplyResult {
