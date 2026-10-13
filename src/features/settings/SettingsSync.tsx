@@ -230,6 +230,33 @@ export function SettingsSync() {
                   </span>
                 )}
               </label>
+              <label className="flex items-center gap-2 text-[12px] text-neutral-700 dark:text-neutral-200">
+                <input
+                  type="checkbox"
+                  checked={autoSync.periodic}
+                  onChange={(e) => updateAutoSync({ periodic: e.target.checked })}
+                />
+                {t("settings.syncAutoPeriodic")}
+                {autoSync.periodic && (
+                  <span className="ml-1 flex items-center gap-1 text-[11px] text-neutral-500">
+                    {t("settings.syncAutoInterval")}
+                    <input
+                      type="number"
+                      min={1}
+                      max={60}
+                      step={1}
+                      defaultValue={autoSync.intervalSecs / 60}
+                      key={autoSync.intervalSecs}
+                      onBlur={(e) => updateAutoSync({ intervalSecs: Number(e.target.value) * 60 })}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                      }}
+                      className="h-6 w-16 rounded-md border border-neutral-300 bg-white px-1.5 text-[11px] text-neutral-800 outline-none focus:border-brand-500 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-100"
+                    />
+                    {t("settings.syncAutoIntervalUnit")}
+                  </span>
+                )}
+              </label>
               <p className="max-w-lg text-[11px] text-neutral-400">{t("settings.syncAutoHint")}</p>
             </div>
             {conflictFiles.length > 0 && (

@@ -194,14 +194,30 @@ const MAX_AGENT_ROUNDS = 4;
 export const AI_WIDTH_LIMITS = { min: MIN_WIDTH, max: MAX_WIDTH };
 
 const SESSIONS_KEY = "tsflowy-ai-sessions-v1";
+/** localStorage 兜底容量；同时作为历史面板的默认显示窗口 / 「加载更多」步长（库中的会话不计数截断、不删除） */
 const MAX_SESSIONS = 20;
 const MAX_SESSION_MESSAGES = 200;
 const MAX_MESSAGE_CHARS = 100_000;
 // 长对话防超限：历史消息按估算 token 从最新往前收进预算，放不下的早期轮次直接丢弃
 // （system prompt 与 @ 引用上下文不占预算，不受影响）。
 // 按 token 而非字符计：中文 1 字 ≈ 1 token、拉丁 4 字符 ≈ 1 token，字符预算对两种文本失真严重。
-const HISTORY_TOKEN_BUDGET = 3000;
-const HISTORY_MAX_MESSAGES = 40;
+// 两项可在设置里配置（config.ctx_token_budget / ctx_max_messages），这里只是兜底默认值。
+export const DEFAULT_HISTORY_TOKEN_BUDGET = 3000;
+export const DEFAULT_HISTORY_MAX_MESSAGES = 40;
+
+/**
+ * 历史面板的显示窗口：归档会话全部保留（用户明确要留档），
+ * 普通会话按列表原序（updated_at 降序）取前 limit 条；其余靠「加载更多」放量。
+ */
+export function visibleSessionWindow(sessions: StoredSession[], limit: number): StoredSession[] {
+  const out: StoredSession[] = [];
+  let normal = 0;
+  for (const s of sessions) {
+    if (s.archived) out.push(s);
+    else if (normal++ < limit) out.push(s);
+  }
+  return out;
+}
 
 /** 会话累计 token 用量（服务商不回 usage 时整份为 0） */
 export interface SessionUsage {
@@ -503,6 +519,10 @@ interface AiState {
   loadConfig: () => Promise<void>;
   /** 从库中恢复历史会话（库不可用时回退 localStorage），只在首次打开面板时执行一次 */
   loadSessions: () => Promise<void>;
+  /** 历史面板当前展示的普通会话条数窗口（归档不受窗口限制） */
+  sessionsShown: number;
+  /** 「加载更多」：放大显示窗口，一步 MAX_SESSIONS 条 */
+  loadMoreSessions: () => void;
   setConfig: (c: AiConfig) => void;
   /** 设置/清除下一条提问要附带的选中内容 */
   setPendingContext: (text: string | null) => void;
@@ -566,8 +586,10 @@ export const useAiStore = create<AiState>()((set, get) => {
   const cancelledTurns = new Set<number>();
 
   /**
-   * 当前对话有内容时归档进 sessions（超出上限丢最老），供 newChat / 切换会话复用。
-   * archived 为刚落档的会话；pruned 为被挤出上限、需要从库里删除的 id。
+   * 当前对话有内容时归档进 sessions，供 newChat / 切换会话复用。
+   * 不再按条数上限淘汰：库里的会话全部保留，显示窗口在面板侧控制，
+   * 否则「列表里看得见 100 条、下次 newChat 悄悄删掉 80 条」比截断展示更糟。
+   * archived 为刚落档的会话。
    */
   const archiveCurrent = (s: {
     messages: AiMessage[];
@@ -576,8 +598,8 @@ export const useAiStore = create<AiState>()((set, get) => {
     sessionPageId: string | null;
     sessionPageTitle: string | null;
     usageTotal: { prompt: number; completion: number; total: number };
-  }): { sessions: StoredSession[]; archived: StoredSession | null; pruned: string[] } => {
-    if (s.messages.length === 0) return { sessions: s.sessions, archived: null, pruned: [] };
+  }): { sessions: StoredSession[]; archived: StoredSession | null } => {
+    if (s.messages.length === 0) return { sessions: s.sessions, archived: null };
     const entry: StoredSession = {
       id: s.activeSessionId,
       title: sessionTitle(s.messages),
@@ -587,14 +609,7 @@ export const useAiStore = create<AiState>()((set, get) => {
       pageTitle: s.sessionPageTitle,
       usage: { prompt: s.usageTotal.prompt, completion: s.usageTotal.completion },
     };
-    const list = [entry, ...s.sessions];
-    const overflow = list.slice(MAX_SESSIONS);
-    return {
-      // 用户主动归档的会话代表「要留档」，超出条数上限时先裁普通会话
-      sessions: list.filter((x, i) => i < MAX_SESSIONS || x.archived === true),
-      archived: entry,
-      pruned: overflow.filter((x) => x.archived !== true).map((x) => x.id),
-    };
+    return { sessions: [entry, ...s.sessions], archived: entry };
   };
 
   /** 会话快照落盘（流式增量不触发，只在轮次结束 / 显式操作时调用） */
@@ -738,15 +753,21 @@ export const useAiStore = create<AiState>()((set, get) => {
         // 只给路径：图片字节由 Rust 在发请求前按 assets 相对路径读出内联
         ...(m.images?.length ? { images: m.images.map((i) => ({ path: i.path })) } : {}),
       }));
-    // 长对话防超限：按估算 token 从最新往前收进预算，放不下的早期轮次丢弃
+    // 长对话防超限：按估算 token 从最新往前收进预算，放不下的早期轮次丢弃。
+    // 预算与条数上限可在设置里配置，非法/缺省值回落默认。
+    const cfg = get().config;
+    const tokenBudget =
+      cfg?.ctx_token_budget && cfg.ctx_token_budget > 0 ? cfg.ctx_token_budget : DEFAULT_HISTORY_TOKEN_BUDGET;
+    const maxHistory =
+      cfg?.ctx_max_messages && cfg.ctx_max_messages > 0 ? cfg.ctx_max_messages : DEFAULT_HISTORY_MAX_MESSAGES;
     const kept: AiChatMessage[] = [];
-    let budget = HISTORY_TOKEN_BUDGET;
-    for (let i = history.length - 1; i >= 0 && kept.length < HISTORY_MAX_MESSAGES; i--) {
+    let budget = tokenBudget;
+    for (let i = history.length - 1; i >= 0 && kept.length < maxHistory; i--) {
       const m = history[i];
       const cost = estimateTokens(m.content);
       if (cost > budget) {
         // 一条都放不下（如首轮就粘贴长文）：保最新一条的尾部
-        if (kept.length === 0) kept.push({ role: m.role, content: tailTokens(m.content, HISTORY_TOKEN_BUDGET) });
+        if (kept.length === 0) kept.push({ role: m.role, content: tailTokens(m.content, tokenBudget) });
         break;
       }
       budget -= cost;
@@ -1221,6 +1242,7 @@ export const useAiStore = create<AiState>()((set, get) => {
     sessionPageId: null,
     sessionPageTitle: null,
     sessionsLoaded: false,
+    sessionsShown: MAX_SESSIONS,
     usage: null,
     usageTotal: sessionUsageTotal(restored.active?.usage),
     usageSummary: null,
@@ -1267,15 +1289,12 @@ export const useAiStore = create<AiState>()((set, get) => {
         applyLocal(local);
         return;
       }
-      // 库按 updated_at 降序返回。普通会话取到条数上限即止，归档的不受上限裁剪——
-      // 那是用户明确要留档的，历史搜索正是为它们准备的。
+      // 库按 updated_at 降序返回。全部保留：历史上超出的会话曾因不可见又被静默删除，
+      // 现在改由面板显示窗口（sessionsShown）控制，数据一条不丢。
       const all: StoredSession[] = [];
-      let normal = 0;
       for (const r of rows) {
         const s = fromSessionRow(r);
-        if (!s) continue;
-        if (s.archived) all.push(s);
-        else if (normal++ < MAX_SESSIONS + 1) all.push(s);
+        if (s) all.push(s);
       }
       if (all.length === 0) {
         const pending = [local.active, ...local.sessions].filter((s): s is StoredSession => s !== null);
@@ -1285,7 +1304,7 @@ export const useAiStore = create<AiState>()((set, get) => {
           return;
         }
         // 保持本地那份的当前会话在第一位，切过来还是用户正在看的那段对话
-        all.push(...pending.slice(0, MAX_SESSIONS + 1));
+        all.push(...pending);
       }
       // 当前对话取最近一条未归档的；全被归档了就退回最近那条
       const fresh = all.findIndex((x) => !x.archived);
@@ -1301,6 +1320,8 @@ export const useAiStore = create<AiState>()((set, get) => {
       });
       fetchUsage();
     },
+
+    loadMoreSessions: () => set((s) => ({ sessionsShown: s.sessionsShown + MAX_SESSIONS })),
     setConfig: (config) => set({ config, configLoaded: true }),
     setPendingContext: (text) => set({ pendingContext: text }),
 
@@ -1361,7 +1382,7 @@ export const useAiStore = create<AiState>()((set, get) => {
 
     /** 归档当前对话并开始新会话 */
     newChat: () => {
-      const { sessions, archived, pruned } = archiveCurrent(get());
+      const { sessions, archived } = archiveCurrent(get());
       set({
         sessions,
         messages: [],
@@ -1378,7 +1399,6 @@ export const useAiStore = create<AiState>()((set, get) => {
         activeSessionId: newId(),
       });
       if (archived) saveSession(archived);
-      dropSessions(pruned);
     },
 
     /** 切换到历史会话（当前对话有内容时先归档；流式进行中不允许切） */
@@ -1406,7 +1426,6 @@ export const useAiStore = create<AiState>()((set, get) => {
         usageTotal: sessionUsageTotal(target.usage),
       });
       if (archived.archived) saveSession(archived.archived);
-      dropSessions(archived.pruned);
     },
 
     deleteSession: (id) => {
@@ -1548,7 +1567,8 @@ export const useAiStore = create<AiState>()((set, get) => {
       persistSessions();
     },
 
-    // 切换档位：只改 active_profile，其余配置原样回传（apiKey 传 null 表示不改动已保存的 Key）
+    // 切换档位：只改 active_profile，其余配置原样回传（apiKey 传 null 表示不改动已保存的 Key；
+    // 档位对象不带 api_key 字段，Rust 侧按 id 保留各档原有 Key）
     switchProfile: async (id) => {
       const c = get().config;
       if (!c) return;
@@ -1562,6 +1582,9 @@ export const useAiStore = create<AiState>()((set, get) => {
           maxChars: c.max_chars,
           confirmEdit: c.confirm_edit,
           temperature: c.temperature,
+          thinking: c.thinking,
+          ctxTokenBudget: c.ctx_token_budget,
+          ctxMaxMessages: c.ctx_max_messages,
           maxTokens: c.max_tokens,
           systemPrompt: c.system_prompt,
           profiles: c.profiles,
@@ -1668,7 +1691,7 @@ export const useAiStore = create<AiState>()((set, get) => {
       if (i < 0) return;
       const prefix = s.messages.slice(0, i + 1);
       // 原对话整段归档保留，分支是一个新会话，两条线互不影响
-      const { sessions, archived, pruned } = archiveCurrent(s);
+      const { sessions, archived } = archiveCurrent(s);
       const branch: StoredSession = {
         id: newId(),
         title: sessionTitle(prefix),
@@ -1690,7 +1713,6 @@ export const useAiStore = create<AiState>()((set, get) => {
         usageTotal: { prompt: 0, completion: 0, total: 0 },
       });
       if (archived) saveSession(archived);
-      dropSessions(pruned);
       saveSession(branch);
     },
 

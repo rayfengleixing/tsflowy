@@ -32,7 +32,7 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { viewIcon } from "@/components/view-icon";
-import { useAiStore, type AiActionRecord, type AiMessage, type StoredSession } from "@/stores/ai";
+import { useAiStore, visibleSessionWindow, type AiActionRecord, type AiMessage, type StoredSession } from "@/stores/ai";
 import { useWorkspaceStore } from "@/stores/workspace";
 import {
   aiErrorText,
@@ -142,6 +142,8 @@ export function AiPanel() {
   const loadConfig = useAiStore((s) => s.loadConfig);
   const loadSessions = useAiStore((s) => s.loadSessions);
   const sessionsLoaded = useAiStore((s) => s.sessionsLoaded);
+  const sessionsShown = useAiStore((s) => s.sessionsShown);
+  const loadMoreSessions = useAiStore((s) => s.loadMoreSessions);
   const switchProfile = useAiStore((s) => s.switchProfile);
   const runQuickAction = useAiStore((s) => s.runQuickAction);
   const continueGenerate = useAiStore((s) => s.continueGenerate);
@@ -327,7 +329,7 @@ export function AiPanel() {
   // 最后一条是 AI 的半截回答（被手动停止或超时中断）时，才提供「继续生成」
   const canContinue = !streaming && messages.length > 0 && messages[messages.length - 1].role === "assistant";
   const errorHint = errorCode ? AI_ERROR_HINT[errorCode] : undefined;
-  const configured = !!config && config.enabled && config.has_api_key && !!config.base_url && !!config.model;
+  const configured = !!config && config.enabled && !!config.base_url && !!config.model;
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content.trim().length > 0);
 
   // 费用估算：按设置里的「每 100 万 token 单价」算，未填价时 estimateAiCost 返回 null（不显示金额）
@@ -343,9 +345,12 @@ export function AiPanel() {
     : null;
   const showUsage = !!usage || usageTotal.total > 0 || !!usageSummary;
 
-  // 历史列表只在面板展开时算：正文逐条比对不便宜，没必要跟着流式增量每帧跑一遍
+  // 历史列表只在面板展开时算：正文逐条比对不便宜，没必要跟着流式增量每帧跑一遍。
+  // 先取显示窗口（归档全留 + 最近 MAX_SESSIONS×n 条普通会话），再按分区/关键词筛。
+  const windowedSessions = showHistory ? visibleSessionWindow(sessions, sessionsShown) : [];
+  const hiddenNormalCount = showHistory ? sessions.length - windowedSessions.length : 0;
   const archivedCount = showHistory ? sessions.filter((x) => x.archived).length : 0;
-  const historyList = showHistory ? filterHistorySessions(sessions, historyArchived, historyQuery) : [];
+  const historyList = showHistory ? filterHistorySessions(windowedSessions, historyArchived, historyQuery) : [];
 
   const closeHistory = () => {
     setShowHistory(false);
@@ -642,6 +647,14 @@ export function AiPanel() {
                     )}
                   </div>
                 ))
+              )}
+              {!historyArchived && hiddenNormalCount > 0 && (
+                <button
+                  className="block w-full px-3 py-1.5 text-left text-[11px] text-brand-600 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+                  onClick={loadMoreSessions}
+                >
+                  {t("ai.loadMoreSessions")}（{t("ai.moreSessionCount", { count: hiddenNormalCount })}）
+                </button>
               )}
             </div>
           </div>

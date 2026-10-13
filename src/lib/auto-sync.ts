@@ -4,10 +4,12 @@ import { flushAllForClose } from "./close-flush";
 import { t } from "@/lib/i18n";
 import { logger } from "./logger";
 
-// 同步自动化（B7）：启动时拉取一次 + 本机写入静置后自动同步。
+// 同步自动化（B7）：启动时拉取一次 + 本机写入静置后自动同步 + 周期性拉取。
 // 全部在前端实现：业务模块统一从 @/lib/invoke 导入 invoke，包装层识别写命令后
 // 调用 markLocalWrite 驱动防抖定时器；到点直接调用已有 run_sync 命令，
 // 与设置页手动同步同一条链路（先冲刷挂起写入，pulled 后重载窗口）。
+// 周期性同步独立走 setInterval：应用常开时远端更新也能按间隔拉到，
+// 休眠/挂后台导致定时器停摆时，恢复回前台会自查周期并立刻补跑一拍。
 // 本模块自身仍直接用 @tauri-apps/api/core（run_sync 不是写命令，且避免循环依赖）。
 
 const CONFIG_KEY = "tsflowy:auto-sync";
@@ -19,9 +21,19 @@ export interface AutoSyncConfig {
   syncAfterWrite: boolean;
   /** 防抖延迟（秒）：最后一次写入后静置满这个时间才执行 */
   delaySecs: number;
+  /** 周期性自动同步：无论本机有没有写入，按固定间隔跑一轮（拉取远端更新） */
+  periodic: boolean;
+  /** 周期同步的间隔（秒） */
+  intervalSecs: number;
 }
 
-const DEFAULTS: AutoSyncConfig = { pullOnStart: false, syncAfterWrite: false, delaySecs: 60 };
+const DEFAULTS: AutoSyncConfig = {
+  pullOnStart: false,
+  syncAfterWrite: false,
+  delaySecs: 60,
+  periodic: false,
+  intervalSecs: 300,
+};
 
 export function loadAutoSyncConfig(): AutoSyncConfig {
   let raw: string | null = null;
@@ -40,6 +52,11 @@ export function loadAutoSyncConfig(): AutoSyncConfig {
         typeof v.delaySecs === "number" && Number.isFinite(v.delaySecs)
           ? Math.min(3600, Math.max(5, Math.round(v.delaySecs)))
           : DEFAULTS.delaySecs,
+      periodic: v.periodic === true,
+      intervalSecs:
+        typeof v.intervalSecs === "number" && Number.isFinite(v.intervalSecs)
+          ? Math.min(3600, Math.max(60, Math.round(v.intervalSecs)))
+          : DEFAULTS.intervalSecs,
     };
   } catch (e) {
     logger.warn("autoSync", "config parse failed, fallback to default", e);
@@ -111,6 +128,7 @@ const WRITE_COMMANDS = new Set([
   "write_binary_file",
   "mkdir_all",
   "import_backup",
+  "restore_backup",
   "change_data_dir",
   "reset_data_dir_default",
   "rebuild_data_dir",
@@ -127,6 +145,8 @@ let syncing = false;
 /** 同步进行中又发生了新的写入：本轮结束后重新计时，而不是丢掉这次变更 */
 let pendingDuringSync = false;
 let timer: number | null = null;
+let intervalTimer: number | null = null;
+let lastSyncAt = 0;
 
 function clearTimer() {
   if (timer !== null) {
@@ -135,8 +155,17 @@ function clearTimer() {
   }
 }
 
+function clearIntervalTimer() {
+  if (intervalTimer !== null) {
+    window.clearInterval(intervalTimer);
+    intervalTimer = null;
+    document.removeEventListener("visibilitychange", onForeground);
+  }
+}
+
 async function doSync() {
   syncing = true;
+  lastSyncAt = Date.now();
   clearTimer();
   try {
     // 与手动同步一致：先把编辑器/视图配置等挂起写入冲刷落库，再执行同步
@@ -171,6 +200,24 @@ function armTimer() {
   timer = window.setTimeout(() => void doSync(), cfg.delaySecs * 1000);
 }
 
+/** 休眠/最小化会冻结 setInterval，且恢复后不会补跑 overdue 的一拍：回前台时自查是否已超周期 */
+function onForeground() {
+  if (document.visibilityState !== "visible") return;
+  if (!started || !cfg.periodic || syncing) return;
+  if (Date.now() - lastSyncAt >= cfg.intervalSecs * 1000) void doSync();
+}
+
+/** 周期同步调度：与进行中的 sync 不重入——上一轮还没结束就跳过本拍，等下一拍 */
+function armInterval() {
+  clearIntervalTimer();
+  if (!cfg.periodic) return;
+  intervalTimer = window.setInterval(() => {
+    if (syncing) return;
+    void doSync();
+  }, cfg.intervalSecs * 1000);
+  document.addEventListener("visibilitychange", onForeground);
+}
+
 /**
  * main.tsx 包装 invoke 后对每个命令调用一次：写命令 → 重置防抖定时器。
  * 未启动 / 未开启 / 同步进行中时分别处理，同步进行中的写入记为 pending。
@@ -186,10 +233,13 @@ export function markLocalWrite(cmd: string) {
 
 /** 设置页保存配置后刷新本模块的生效值 */
 export function saveAutoSyncConfig(next: AutoSyncConfig): void {
+  const prev = cfg;
   cfg = {
     pullOnStart: next.pullOnStart,
     syncAfterWrite: next.syncAfterWrite,
     delaySecs: Math.min(3600, Math.max(5, Math.round(next.delaySecs) || DEFAULTS.delaySecs)),
+    periodic: next.periodic === true,
+    intervalSecs: Math.min(3600, Math.max(60, Math.round(next.intervalSecs) || DEFAULTS.intervalSecs)),
   };
   try {
     localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg));
@@ -198,15 +248,22 @@ export function saveAutoSyncConfig(next: AutoSyncConfig): void {
   }
   // 关闭自动同步时撤掉已挂起的定时器
   if (!cfg.syncAfterWrite) clearTimer();
+  // 周期开关/间隔变了才动调度定时器（其余字段修改不打断当前周期）
+  if (cfg.periodic !== prev.periodic || cfg.intervalSecs !== prev.intervalSecs) {
+    clearIntervalTimer();
+    if (started && cfg.periodic) armInterval();
+  }
 }
 
 /**
  * App 数据就绪后调用一次：
- * 开启"启动拉取"则先同步一次；开启"写入后同步"则由 markLocalWrite 驱动定时器。
+ * 开启"启动拉取"则先同步一次；开启"写入后同步"则由 markLocalWrite 驱动定时器；
+ * 开启"周期同步"则挂起 setInterval（回前台自查周期，休眠超期时立刻补跑一拍）。
  */
 export function startAutoSync(): void {
   if (started) return;
   started = true;
   cfg = loadAutoSyncConfig();
+  if (cfg.periodic) armInterval();
   if (cfg.pullOnStart) void doSync();
 }

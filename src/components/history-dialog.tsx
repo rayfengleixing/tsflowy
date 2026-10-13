@@ -23,7 +23,7 @@ function formatTime(ms: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${time}`;
 }
 
-/** 历史版本：快照列表（新→旧）+ 一键恢复。保存时每 10 分钟自动落一份，每页保留 50 份。 */
+/** 历史版本：快照列表（新→旧）+ 一键恢复。快照间隔与份数见设置 → 数据保留策略。 */
 export function HistoryDialog({ view, open, onOpenChange }: HistoryDialogProps) {
   const reload = useWorkspaceStore((s) => s.reload);
   const [snapshots, setSnapshots] = useState<SnapshotRow[]>([]);

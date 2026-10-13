@@ -67,6 +67,45 @@ impl Endpoint {
     }
 }
 
+/// 按协议拼鉴权头。Key 为空时**不发**鉴权头：本地模型（Ollama / LM Studio）不吃 Key，
+/// 而空的 `Bearer ` / `x-api-key:` 会被部分网关判成格式错误的凭据直接 401。
+/// anthropic-version 是协议要求而非凭据，与 Key 无关，照常下发。
+fn headers_for(ai: &AiConfig, protocol: Protocol) -> Vec<(String, String)> {
+    let key = ai.api_key.trim();
+    match protocol {
+        Protocol::OpenAi => {
+            if key.is_empty() {
+                Vec::new()
+            } else {
+                vec![("authorization".to_string(), format!("Bearer {key}"))]
+            }
+        }
+        Protocol::Anthropic => {
+            let mut headers = Vec::new();
+            if !key.is_empty() {
+                headers.push(("x-api-key".to_string(), key.to_string()));
+            }
+            headers.push((
+                "anthropic-version".to_string(),
+                ANTHROPIC_VERSION.to_string(),
+            ));
+            headers
+        }
+        Protocol::Gemini => {
+            if key.is_empty() {
+                Vec::new()
+            } else {
+                vec![("x-goog-api-key".to_string(), key.to_string())]
+            }
+        }
+    }
+}
+
+/// 用户显式关闭思考（auto = 不下发任何推理参数，维持历史行为）
+fn thinking_off(ai: &AiConfig) -> bool {
+    ai.thinking.eq_ignore_ascii_case("off")
+}
+
 /// 会话接口：地址 + 请求体。`stream=false` 用于连通性测试。
 pub fn chat(
     ai: &AiConfig,
@@ -78,24 +117,15 @@ pub fn chat(
     let endpoint = match protocol {
         Protocol::OpenAi => Endpoint {
             url: format!("{}/chat/completions", tail(&ai.base_url)),
-            headers: vec![(
-                "authorization".to_string(),
-                format!("Bearer {}", ai.api_key),
-            )],
+            headers: headers_for(ai, protocol),
         },
         Protocol::Anthropic => Endpoint {
             url: format!("{}/messages", anthropic_root(&ai.base_url)),
-            headers: vec![
-                ("x-api-key".to_string(), ai.api_key.clone()),
-                (
-                    "anthropic-version".to_string(),
-                    ANTHROPIC_VERSION.to_string(),
-                ),
-            ],
+            headers: headers_for(ai, protocol),
         },
         Protocol::Gemini => Endpoint {
             url: gemini_call_url(&ai.base_url, &ai.model, stream),
-            headers: vec![("x-goog-api-key".to_string(), ai.api_key.clone())],
+            headers: headers_for(ai, protocol),
         },
     };
     let body = match protocol {
@@ -111,24 +141,15 @@ pub fn models(ai: &AiConfig, protocol: Protocol) -> Endpoint {
     match protocol {
         Protocol::OpenAi => Endpoint {
             url: format!("{}/models", tail(&ai.base_url)),
-            headers: vec![(
-                "authorization".to_string(),
-                format!("Bearer {}", ai.api_key),
-            )],
+            headers: headers_for(ai, protocol),
         },
         Protocol::Anthropic => Endpoint {
             url: format!("{}/models", anthropic_root(&ai.base_url)),
-            headers: vec![
-                ("x-api-key".to_string(), ai.api_key.clone()),
-                (
-                    "anthropic-version".to_string(),
-                    ANTHROPIC_VERSION.to_string(),
-                ),
-            ],
+            headers: headers_for(ai, protocol),
         },
         Protocol::Gemini => Endpoint {
             url: format!("{}/models", gemini_root(&ai.base_url)),
-            headers: vec![("x-goog-api-key".to_string(), ai.api_key.clone())],
+            headers: headers_for(ai, protocol),
         },
     }
 }
@@ -257,6 +278,9 @@ fn openai_body(ai: &AiConfig, messages: &[AiMessage], tools: Option<Value>, stre
     if ai.max_tokens > 0 {
         body["max_tokens"] = json!(ai.max_tokens);
     }
+    // 关闭思考：OpenAI 兼容家族没有统一参数——官方 API 的 reasoning_effort 只认推理模型
+    // （发给非推理模型直接 400），Ollama 的 think、LM Studio 的 chat_template_kv 又各成一套。
+    // 无法判定端点方言，宁可不发（auto 语义即维持现状）；需要精确关闭请用 Anthropic / Gemini 协议。
     // 工具定义由前端下发（agent 工具集在前端定义与执行），原样透传
     if let Some(list) = tools_of(tools) {
         body["tools"] = json!(list);
@@ -307,6 +331,10 @@ fn anthropic_body(
     body["messages"] = json!(anthropic_messages(&turns));
     if stream {
         body["stream"] = json!(true);
+    }
+    // 官方 Messages API 用 thinking.type=disabled 显式关闭扩展思考
+    if thinking_off(ai) {
+        body["thinking"] = json!({ "type": "disabled" });
     }
     if !system.is_empty() {
         body["system"] = json!(system);
@@ -395,6 +423,11 @@ fn gemini_body(ai: &AiConfig, messages: &[AiMessage], tools: Option<Value>) -> V
         .collect::<Vec<_>>());
     if ai.max_tokens > 0 {
         body["generationConfig"]["maxOutputTokens"] = json!(ai.max_tokens);
+    }
+    // 官方文档：thinkingBudget=0 关闭思考（2.5 Flash 系），includeThoughts=false 双保险
+    if thinking_off(ai) {
+        body["generationConfig"]["thinkingConfig"] =
+            json!({ "thinkingBudget": 0, "includeThoughts": false });
     }
     if !system.is_empty() {
         body["systemInstruction"] = json!({ "parts": [{ "text": system }] });
@@ -1255,6 +1288,65 @@ mod tests {
         // 空帧（Ignore）不再变成事件，省掉一次无谓的 match
         assert!(d.decode(": keep-alive").is_empty());
         assert_eq!(d.decode("data: [DONE]"), vec![SseParse::Done]);
+    }
+
+    #[test]
+    fn empty_api_key_omits_auth_headers_but_keeps_protocol_headers() {
+        let mut no_key = cfg("", "https://api.deepseek.com/v1");
+        no_key.api_key = String::new();
+        let (ep, _) = chat(&no_key, Protocol::OpenAi, vec![], None, true);
+        assert!(ep.headers.is_empty(), "空 Key 不发空的 Bearer: {:?}", ep.headers);
+        let ep = models(&no_key, Protocol::OpenAi);
+        assert!(ep.headers.is_empty());
+
+        let mut no_key = cfg("anthropic", "https://api.anthropic.com");
+        no_key.api_key = "   ".to_string();
+        let (ep, _) = chat(&no_key, Protocol::Anthropic, vec![], None, true);
+        assert_eq!(
+            ep.headers,
+            vec![("anthropic-version".to_string(), "2023-06-01".to_string())],
+            "anthropic-version 与凭据无关，必须保留"
+        );
+
+        let mut no_key = cfg("gemini", "https://generativelanguage.googleapis.com");
+        no_key.api_key = String::new();
+        let (ep, _) = chat(&no_key, Protocol::Gemini, vec![], None, true);
+        assert!(ep.headers.is_empty());
+        let ep = models(&no_key, Protocol::Gemini);
+        assert!(ep.headers.is_empty());
+    }
+
+    #[test]
+    fn thinking_off_sends_disable_params_where_defined() {
+        let mut ai = cfg("anthropic", "https://api.anthropic.com");
+        ai.thinking = "off".to_string();
+        let (_, body) = chat(&ai, Protocol::Anthropic, vec![], None, true);
+        assert_eq!(body["thinking"], json!({ "type": "disabled" }));
+
+        let mut ai = cfg("gemini", "https://generativelanguage.googleapis.com");
+        ai.thinking = "off".to_string();
+        let (_, body) = chat(&ai, Protocol::Gemini, vec![], None, true);
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"],
+            json!({ "thinkingBudget": 0, "includeThoughts": false })
+        );
+
+        // auto（默认）：三家都不带思考参数
+        let mut ai = cfg("anthropic", "https://api.anthropic.com");
+        ai.thinking = "auto".to_string();
+        let (_, body) = chat(&ai, Protocol::Anthropic, vec![], None, true);
+        assert!(body.get("thinking").is_none());
+        let mut ai = cfg("gemini", "https://generativelanguage.googleapis.com");
+        ai.thinking = "auto".to_string();
+        let (_, body) = chat(&ai, Protocol::Gemini, vec![], None, true);
+        assert!(body["generationConfig"].get("thinkingConfig").is_none());
+
+        // OpenAI 兼容：即使 off 也不下发（各家方言不一，见 openai_body 注释）
+        let mut ai = cfg("openai", "https://api.deepseek.com/v1");
+        ai.thinking = "off".to_string();
+        let (_, body) = chat(&ai, Protocol::OpenAi, vec![], None, true);
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("thinking").is_none());
     }
 
     #[test]

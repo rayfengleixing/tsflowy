@@ -2,6 +2,7 @@ import { workspaceApi, viewApi } from "@/lib/db";
 import { documentApi } from "@/lib/documents";
 import { logger } from "@/lib/logger";
 import { t } from "@/lib/i18n";
+import { trashDeadlineMs } from "@/lib/retention";
 import { useSettingsStore } from "../settings";
 import { buildWelcomeDoc, welcomeDocTitle } from "@/lib/welcome-doc";
 import { patchTreeAndRestoreTabs } from "./tree";
@@ -10,16 +11,15 @@ import type { WorkspaceGet, WorkspaceSliceCreator, WorkspaceState } from "./type
 
 let initPromise: Promise<void> | null = null;
 
-/** 30 天回收站自动清空定时器：全局只建一次；每小时扫一次，跨空间清理 */
+/** 回收站自动清空定时器：全局只建一次；每小时扫一次，跨空间清理 */
 let autoPurgeTimer: ReturnType<typeof setInterval> | null = null;
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 const HOURLY_MS = 60 * 60 * 1000;
 
 const purgeAllExpiredTrash = async (get: WorkspaceGet): Promise<void> => {
   const workspaces = get().workspaces;
   if (workspaces.length === 0) return;
-  const now = Date.now();
-  const deadline = now - THIRTY_DAYS_MS;
+  // 保留天数读应用配置（设置 → 数据保留策略），每轮扫描重新取一次，改设置无需重启
+  const deadline = await trashDeadlineMs();
   let purged = 0;
   for (const ws of workspaces) {
     try {
@@ -97,7 +97,7 @@ export const createWorkspacesSlice: WorkspaceSliceCreator<Partial<WorkspaceState
               .map((n) => n.id),
           ),
         });
-        // 30 天回收站自动清空：启动立即扫一次，然后每小时轮询
+        // 回收站自动清空：启动立即扫一次，然后每小时轮询
         if (autoPurgeTimer === null) {
           void purgeAllExpiredTrash(get);
           autoPurgeTimer = setInterval(() => {

@@ -122,6 +122,12 @@ export interface AiFormState {
   confirmEdit: boolean;
   /** 采样温度 0–2 */
   temperature: number;
+  /** 思考模式："auto" = 不下发推理参数，"off" = 显式关闭 */
+  thinking: string;
+  /** 上下文 token 预算（历史回截） */
+  ctxTokenBudget: number;
+  /** 上下文消息条数上限 */
+  ctxMaxMessages: number;
   /** 最大 token 数，0 表示不限制 */
   maxTokens: number;
   /** 追加的自定义系统提示 */

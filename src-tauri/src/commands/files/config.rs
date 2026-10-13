@@ -23,6 +23,12 @@ pub struct AppConfig {
     /// AI 助手设置（旧 config.json 无此字段时视为未配置）
     #[serde(default)]
     pub ai: Option<AiConfig>,
+    /// 文档历史快照策略（旧 config.json 无此字段时取默认值）
+    #[serde(default)]
+    pub snapshot: SnapshotConfig,
+    /// 回收站自动清空策略（旧 config.json 无此字段时取默认值）
+    #[serde(default)]
+    pub trash: TrashConfig,
 }
 
 /// AI 助手设置。provider / base_url / model 全部由用户填写：base_url 是否已含 /v1、
@@ -53,6 +59,15 @@ pub struct AiConfig {
     /// 采样温度（0–2）：写代码偏确定性用 0.2，写作可到 0.8
     #[serde(default = "default_temperature")]
     pub temperature: f64,
+    /// 思考模式：auto = 不下发任何推理参数（维持历史行为）；off = 显式关闭推理模型的思考。
+    #[serde(default = "default_thinking")]
+    pub thinking: String,
+    /// 上下文 token 预算：历史消息回截时估算 token 的上限。0 或缺省时用默认值。
+    #[serde(default = "default_ctx_token_budget")]
+    pub ctx_token_budget: u32,
+    /// 上下文消息条数上限：历史消息回截的最少条数目标。0 或缺省时用默认值。
+    #[serde(default = "default_ctx_max_messages")]
+    pub ctx_max_messages: u32,
     /// 单次回答的最大 token 数；0 表示不限制（用服务端默认）
     #[serde(default)]
     pub max_tokens: u32,
@@ -85,6 +100,22 @@ fn default_temperature() -> f64 {
     0.7
 }
 
+fn default_thinking() -> String {
+    "auto".to_string()
+}
+
+fn default_ctx_token_budget() -> u32 {
+    AI_CTX_TOKEN_BUDGET_DEFAULT
+}
+
+fn default_ctx_max_messages() -> u32 {
+    AI_CTX_MAX_MESSAGES_DEFAULT
+}
+
+/// 上下文预算默认值：前端 store 与保存时归零回落共用同一口径
+pub const AI_CTX_TOKEN_BUDGET_DEFAULT: u32 = 3000;
+pub const AI_CTX_MAX_MESSAGES_DEFAULT: u32 = 40;
+
 fn default_confirm_edit() -> bool {
     true
 }
@@ -101,6 +132,9 @@ impl Default for AiConfig {
             max_chars: 8000,
             confirm_edit: true,
             temperature: default_temperature(),
+            thinking: default_thinking(),
+            ctx_token_budget: default_ctx_token_budget(),
+            ctx_max_messages: default_ctx_max_messages(),
             max_tokens: 0,
             system_prompt: String::new(),
             profiles: Vec::new(),
@@ -113,7 +147,8 @@ impl Default for AiConfig {
     }
 }
 
-/// 一个模型档位：同一套 Key 下切换不同服务商 / 模型 / 温度
+/// 一个模型档位：同一套 Key 下切换不同服务商 / 模型 / 温度。
+/// protocol / api_key 为空表示继承全局设置（本地模型的档位通常无需 Key）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiProfile {
@@ -122,6 +157,8 @@ pub struct AiProfile {
     pub base_url: String,
     pub model: String,
     pub temperature: f64,
+    pub protocol: String,
+    pub api_key: String,
 }
 
 impl Default for AiProfile {
@@ -132,6 +169,8 @@ impl Default for AiProfile {
             base_url: String::new(),
             model: String::new(),
             temperature: default_temperature(),
+            protocol: String::new(),
+            api_key: String::new(),
         }
     }
 }
@@ -227,6 +266,158 @@ impl AutoBackupConfig {
     }
 }
 
+/// 文档历史快照策略。默认值与早期写死在 db::snapshots 里的常量一致。
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SnapshotConfig {
+    /// 同一页面两次快照的最小间隔（分钟）
+    #[serde(default = "default_snapshot_interval_minutes")]
+    pub interval_minutes: u64,
+    /// 每页保留的自动快照份数
+    #[serde(default = "default_snapshot_keep")]
+    pub keep: u64,
+    /// 每页保留的 pre_restore 备份份数
+    #[serde(default = "default_pre_restore_keep")]
+    pub pre_restore_keep: u64,
+}
+
+fn default_snapshot_interval_minutes() -> u64 {
+    crate::db::snapshots::SNAPSHOT_INTERVAL_MINUTES_DEFAULT
+}
+
+fn default_snapshot_keep() -> u64 {
+    crate::db::snapshots::SNAPSHOT_KEEP_DEFAULT
+}
+
+fn default_pre_restore_keep() -> u64 {
+    crate::db::snapshots::PRE_RESTORE_KEEP_DEFAULT
+}
+
+impl Default for SnapshotConfig {
+    fn default() -> Self {
+        Self {
+            interval_minutes: default_snapshot_interval_minutes(),
+            keep: default_snapshot_keep(),
+            pre_restore_keep: default_pre_restore_keep(),
+        }
+    }
+}
+
+/// 前端输入框与 normalized() 共用的取值边界
+pub const SNAPSHOT_INTERVAL_MINUTES_MIN: u64 = 1;
+pub const SNAPSHOT_INTERVAL_MINUTES_MAX: u64 = 1440;
+pub const SNAPSHOT_KEEP_MIN: u64 = 1;
+pub const SNAPSHOT_KEEP_MAX: u64 = 500;
+pub const PRE_RESTORE_KEEP_MIN: u64 = 1;
+pub const PRE_RESTORE_KEEP_MAX: u64 = 50;
+
+impl SnapshotConfig {
+    /// 字段可能被前端写入任意值（甚至手改 config.json），统一夹到安全范围
+    pub(crate) fn normalized(&self) -> Self {
+        Self {
+            interval_minutes: self
+                .interval_minutes
+                .clamp(SNAPSHOT_INTERVAL_MINUTES_MIN, SNAPSHOT_INTERVAL_MINUTES_MAX),
+            keep: self.keep.clamp(SNAPSHOT_KEEP_MIN, SNAPSHOT_KEEP_MAX),
+            pre_restore_keep: self
+                .pre_restore_keep
+                .clamp(PRE_RESTORE_KEEP_MIN, PRE_RESTORE_KEEP_MAX),
+        }
+    }
+
+    /// 转成 db::snapshots 实际使用的策略参数（已 normalized，值域安全）
+    pub(crate) fn policy(&self) -> crate::db::snapshots::SnapshotPolicy {
+        let cfg = self.normalized();
+        crate::db::snapshots::SnapshotPolicy {
+            interval_ms: cfg.interval_minutes as i64 * 60_000,
+            keep: cfg.keep as i64,
+            pre_restore_keep: cfg.pre_restore_keep as i64,
+        }
+    }
+}
+
+/// 回收站自动清空策略
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TrashConfig {
+    /// 删除超过该天数的回收站条目由后台自动清空
+    #[serde(default = "default_trash_retention_days")]
+    pub retention_days: u64,
+}
+
+/// 默认保留 30 天（与前端取不到配置时的兜底值同口径）
+pub const TRASH_RETENTION_DAYS_DEFAULT: u64 = 30;
+pub const TRASH_RETENTION_DAYS_MIN: u64 = 1;
+pub const TRASH_RETENTION_DAYS_MAX: u64 = 365;
+
+fn default_trash_retention_days() -> u64 {
+    TRASH_RETENTION_DAYS_DEFAULT
+}
+
+impl Default for TrashConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: default_trash_retention_days(),
+        }
+    }
+}
+
+impl TrashConfig {
+    pub(crate) fn normalized(&self) -> Self {
+        Self {
+            retention_days: self
+                .retention_days
+                .clamp(TRASH_RETENTION_DAYS_MIN, TRASH_RETENTION_DAYS_MAX),
+        }
+    }
+}
+
+/// 数据保留策略（文档快照 + 回收站），设置页读写
+#[derive(Debug, Serialize)]
+pub struct RetentionPolicyInfo {
+    pub snapshot_interval_minutes: u64,
+    pub snapshot_keep: u64,
+    pub snapshot_pre_restore_keep: u64,
+    pub trash_retention_days: u64,
+}
+
+/// 读取数据保留策略（返回 normalized 后的有效值）
+#[tauri::command]
+pub fn get_retention_policy(app: tauri::AppHandle) -> RetentionPolicyInfo {
+    retention_info(&load_app_config(&app))
+}
+
+/// 写入数据保留策略（前端传变更后的完整四项；越界值夹回后再落盘）
+#[tauri::command]
+pub fn set_retention_policy(
+    app: tauri::AppHandle,
+    snapshot_interval_minutes: u64,
+    snapshot_keep: u64,
+    snapshot_pre_restore_keep: u64,
+    trash_retention_days: u64,
+) -> Result<RetentionPolicyInfo, String> {
+    let mut cfg = load_app_config(&app);
+    cfg.snapshot = SnapshotConfig {
+        interval_minutes: snapshot_interval_minutes,
+        keep: snapshot_keep,
+        pre_restore_keep: snapshot_pre_restore_keep,
+    };
+    cfg.trash = TrashConfig {
+        retention_days: trash_retention_days,
+    };
+    save_app_config(&app, &cfg)?;
+    Ok(retention_info(&cfg))
+}
+
+fn retention_info(cfg: &AppConfig) -> RetentionPolicyInfo {
+    let snapshot = cfg.snapshot.normalized();
+    let trash = cfg.trash.normalized();
+    RetentionPolicyInfo {
+        snapshot_interval_minutes: snapshot.interval_minutes,
+        snapshot_keep: snapshot.keep,
+        snapshot_pre_restore_keep: snapshot.pre_restore_keep,
+        trash_retention_days: trash.retention_days,
+    }
+}
+
 /// 独立于 AppHandle 的 config 目录解析（给 lib.rs 在 Builder.plugin() 之前调用）。
 /// 放在系统 config 目录下的"TsFlowyConfig"子目录，与默认数据目录物理独立，
 /// 保证"把默认数据目录重命名为备份"时，config.json 不会被一并搬走。
@@ -309,4 +500,137 @@ pub(crate) fn save_app_config(app: &tauri::AppHandle, cfg: &AppConfig) -> Result
     let tmp = dir.join(format!("{CONFIG_FILE_NAME}.tmp"));
     fs::write(&tmp, s).map_err(|e| format!("write config: {e}"))?;
     fs::rename(&tmp, dir.join(CONFIG_FILE_NAME)).map_err(|e| format!("replace config: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retention_defaults_match_the_old_hardcoded_values() {
+        let cfg = AppConfig::default();
+        assert_eq!(cfg.snapshot.interval_minutes, 10);
+        assert_eq!(cfg.snapshot.keep, 50);
+        assert_eq!(cfg.snapshot.pre_restore_keep, 5);
+        assert_eq!(cfg.trash.retention_days, 30);
+    }
+
+    /// 旧 config.json 没有 snapshot / trash 字段：整体按默认值回落，其余字段不受影响
+    #[test]
+    fn config_without_retention_fields_falls_back_to_defaults() {
+        let legacy = r#"{
+            "custom_data_dir": "D:/data",
+            "auto_backup": { "enabled": false, "interval_hours": 6, "keep": 3 },
+            "sync": { "dir": null }
+        }"#;
+        let cfg: AppConfig = serde_json::from_str(legacy).unwrap();
+        assert_eq!(cfg.custom_data_dir.as_deref(), Some("D:/data"));
+        assert_eq!(
+            (
+                cfg.auto_backup.enabled,
+                cfg.auto_backup.interval_hours,
+                cfg.auto_backup.keep
+            ),
+            (false, 6, 3)
+        );
+        assert_eq!(cfg.snapshot.interval_minutes, 10);
+        assert_eq!(cfg.snapshot.keep, 50);
+        assert_eq!(cfg.snapshot.pre_restore_keep, 5);
+        assert_eq!(cfg.trash.retention_days, 30);
+    }
+
+    /// 字段残缺（如只写了 keep）时，缺的那几项同样走默认值而不是 0
+    #[test]
+    fn partially_present_retention_fields_use_defaults() {
+        let cfg: AppConfig =
+            serde_json::from_str(r#"{"snapshot":{"keep":120},"trash":{}}"#).unwrap();
+        assert_eq!(cfg.snapshot.keep, 120);
+        assert_eq!(cfg.snapshot.interval_minutes, 10);
+        assert_eq!(cfg.snapshot.pre_restore_keep, 5);
+        assert_eq!(cfg.trash.retention_days, 30);
+    }
+
+    #[test]
+    fn snapshot_config_clamps_to_safe_range() {
+        let low = SnapshotConfig {
+            interval_minutes: 0,
+            keep: 0,
+            pre_restore_keep: 0,
+        }
+        .normalized();
+        assert_eq!(
+            (low.interval_minutes, low.keep, low.pre_restore_keep),
+            (
+                SNAPSHOT_INTERVAL_MINUTES_MIN,
+                SNAPSHOT_KEEP_MIN,
+                PRE_RESTORE_KEEP_MIN
+            )
+        );
+
+        let high = SnapshotConfig {
+            interval_minutes: 999_999,
+            keep: 999_999,
+            pre_restore_keep: 999_999,
+        }
+        .normalized();
+        assert_eq!(
+            (high.interval_minutes, high.keep, high.pre_restore_keep),
+            (
+                SNAPSHOT_INTERVAL_MINUTES_MAX,
+                SNAPSHOT_KEEP_MAX,
+                PRE_RESTORE_KEEP_MAX
+            )
+        );
+    }
+
+    #[test]
+    fn trash_config_clamps_to_safe_range() {
+        assert_eq!(
+            TrashConfig { retention_days: 0 }
+                .normalized()
+                .retention_days,
+            TRASH_RETENTION_DAYS_MIN
+        );
+        assert_eq!(
+            TrashConfig {
+                retention_days: 400
+            }
+            .normalized()
+            .retention_days,
+            TRASH_RETENTION_DAYS_MAX
+        );
+        assert_eq!(
+            TrashConfig { retention_days: 7 }
+                .normalized()
+                .retention_days,
+            7
+        );
+    }
+
+    /// 配置以分钟为单位，注入 db::snapshots 时换算成毫秒
+    #[test]
+    fn snapshot_policy_converts_minutes_and_clamps_first() {
+        let policy = SnapshotConfig {
+            interval_minutes: 30,
+            keep: 20,
+            pre_restore_keep: 2,
+        }
+        .policy();
+        assert_eq!(policy.interval_ms, 30 * 60 * 1000);
+        assert_eq!(policy.keep, 20);
+        assert_eq!(policy.pre_restore_keep, 2);
+
+        let clamped = SnapshotConfig {
+            interval_minutes: 0,
+            keep: 5_000,
+            pre_restore_keep: 5_000,
+        }
+        .policy();
+        assert_eq!(
+            clamped.interval_ms,
+            SNAPSHOT_INTERVAL_MINUTES_MIN as i64 * 60_000
+        );
+        assert_eq!(clamped.keep, SNAPSHOT_KEEP_MAX as i64);
+        assert_eq!(clamped.pre_restore_keep, PRE_RESTORE_KEEP_MAX as i64);
+    }
 }

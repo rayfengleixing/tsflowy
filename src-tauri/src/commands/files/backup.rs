@@ -166,8 +166,19 @@ fn import_backup_blocking(
     source_path: String,
 ) -> Result<(), String> {
     ensure_dialog_authorized(&app, &source_path)?;
+    restore_backup_from(&app, db, Path::new(&source_path))
+}
+
+/// 恢复主体：关库 → 校验/导入 → 重开。
+/// 路径安全性由调用方负责（对话框白名单校验，或 Rust 侧从数据目录内拼好的纯文件名）。
+/// 备份列表的「恢复」命令走这里，与「导入备份」完全同一条链路，不另造恢复语义。
+pub(crate) fn restore_backup_from(
+    app: &tauri::AppHandle,
+    db: crate::db::SharedDb,
+    source: &Path,
+) -> Result<(), String> {
     db.close_for_maintenance()?;
-    let result = import_backup_inner(app, &source_path);
+    let result = import_backup_into(&app_data_dir(app)?, source);
     match result {
         Ok(()) => {
             // 导入成功即数据目录已重建（悬空联接被 create_dir_all 治好），告警随之失效
@@ -180,11 +191,6 @@ fn import_backup_blocking(
             Err(e)
         }
     }
-}
-
-fn import_backup_inner(app: tauri::AppHandle, source_path: &str) -> Result<(), String> {
-    let data_dir = app_data_dir(&app)?;
-    import_backup_into(&data_dir, Path::new(source_path))
 }
 
 /// 导入实现（数据目录显式传入便于测试）：校验 → stash → 解压 → 失败回滚

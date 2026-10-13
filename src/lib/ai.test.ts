@@ -6,7 +6,14 @@ const invokeMock = vi.hoisted(() => vi.fn((_cmd: string, _args?: unknown) => Pro
 vi.mock("@/lib/assets", () => ({ uploadImageBytes: uploadMock }));
 vi.mock("@tauri-apps/api/core", () => ({ Channel: class {}, invoke: invokeMock }));
 
-import { MAX_AI_IMAGE_BYTES, aiSaveConfig, estimateAiCost, formatAiCost, saveAiImageFile } from "./ai";
+import {
+  MAX_AI_IMAGE_BYTES,
+  aiProfileKeyInput,
+  aiSaveConfig,
+  estimateAiCost,
+  formatAiCost,
+  saveAiImageFile,
+} from "./ai";
 
 /** File 在 jsdom 里缺 arrayBuffer()；这里只需要 name/type/size 三个属性参与判断 */
 function imageLike(init: { name?: string; type?: string; size?: number; payload?: number }): File {
@@ -87,6 +94,9 @@ describe("aiSaveConfig 入参", () => {
       maxChars: 8000,
       confirmEdit: true,
       temperature: 0.7,
+      thinking: "off",
+      ctxTokenBudget: 5000,
+      ctxMaxMessages: 12,
       maxTokens: 0,
       systemPrompt: "",
       profiles: [],
@@ -101,6 +111,68 @@ describe("aiSaveConfig 入参", () => {
     expect(cfg.protocol).toBe("anthropic");
     expect(cfg.price_input).toBe(2);
     expect(cfg.price_output).toBe(8);
+    // 新字段同样要转成 snake_case 下发（serde 按 Rust 字段名反序列化）
+    expect(cfg.thinking).toBe("off");
+    expect(cfg.ctx_token_budget).toBe(5000);
+    expect(cfg.ctx_max_messages).toBe(12);
+  });
+
+  it("档位草稿 Key 按 aiProfileKeyInput 口径转成 api_key 字段", async () => {
+    await aiSaveConfig({
+      enabled: true,
+      provider: "custom",
+      protocol: "",
+      baseUrl: "https://x",
+      model: "m",
+      maxChars: 8000,
+      confirmEdit: true,
+      temperature: 0.7,
+      thinking: "auto",
+      ctxTokenBudget: 3000,
+      ctxMaxMessages: 40,
+      maxTokens: 0,
+      systemPrompt: "",
+      profiles: [
+        {
+          id: "p1",
+          name: "A",
+          base_url: "",
+          model: "",
+          temperature: 0.7,
+          protocol: "",
+          api_key: aiProfileKeyInput("  "),
+        },
+        {
+          id: "p2",
+          name: "B",
+          base_url: "",
+          model: "",
+          temperature: 0.7,
+          protocol: "gemini",
+          api_key: aiProfileKeyInput(" new-key "),
+        },
+      ],
+      activeProfile: "",
+      quickActions: [],
+      useTools: false,
+      priceInput: 0,
+      priceOutput: 0,
+      apiKey: null,
+    });
+    const cfg = (invokeMock.mock.calls[0][1] as { cfg: Record<string, unknown> }).cfg;
+    const profiles = cfg.profiles as Record<string, unknown>[];
+    // 空草稿 → null = 保持该档原 Key；有草稿 → 去空白后覆盖
+    expect(profiles[0].api_key).toBeNull();
+    expect(profiles[1].api_key).toBe("new-key");
+    expect(profiles[1].protocol).toBe("gemini");
+  });
+});
+
+describe("aiProfileKeyInput", () => {
+  it("空串与纯空白都是「不修改」；其余去首尾空白", () => {
+    expect(aiProfileKeyInput("")).toBeNull();
+    expect(aiProfileKeyInput("   ")).toBeNull();
+    expect(aiProfileKeyInput(" sk-abc ")).toBe("sk-abc");
   });
 });
 

@@ -3,13 +3,13 @@ import type { AiConfig, AiChatEvent, AiChatMessage } from "@/lib/ai";
 import type { StoredSession } from "@/stores/ai";
 
 // AI store 单测：IPC / 编辑器桥 / 工具执行层 / 工作区全部打桩，只验证 store 自身的编排逻辑
-// （落库时机、token 预算截断、停止后动作竞态、agent 多步循环、会话归档/裁剪）。
+// （落库时机、token 预算截断、停止后动作竞态、agent 多步循环、会话归档/显示窗口）。
 
 const M = vi.hoisted(() => ({
   aiChat: vi.fn((_msgs: unknown, _onEvent: unknown) => Promise.resolve()),
   aiCancel: vi.fn(() => Promise.resolve()),
   aiGetConfig: vi.fn((): Promise<unknown> => Promise.resolve({})),
-  aiSaveConfig: vi.fn(() => Promise.resolve()),
+  aiSaveConfig: vi.fn((_input: Record<string, unknown>) => Promise.resolve()),
   aiSessionList: vi.fn((): Promise<unknown[]> => Promise.resolve([])),
   aiSessionSave: vi.fn((_row: unknown) => Promise.resolve()),
   aiSessionDelete: vi.fn((_id: string) => Promise.resolve()),
@@ -89,6 +89,9 @@ function defaultConfig(overrides: Partial<AiConfig> = {}): AiConfig {
     max_chars: 8000,
     confirm_edit: true,
     temperature: 0.7,
+    thinking: "auto",
+    ctx_token_budget: 3000,
+    ctx_max_messages: 40,
     max_tokens: 0,
     system_prompt: "",
     profiles: [],
@@ -415,7 +418,7 @@ describe("ai store：停止取消与重试", () => {
 
   /** 手动放行的检索桩：复现「检索/工具执行阶段没有飞行中请求，aiCancel 够不着」的窗口 */
   function deferredRetrieval() {
-    let release: (v: string) => void = () => {};
+    let release: (v: string) => void = () => undefined;
     M.runRetrievalCall.mockImplementation(
       () =>
         new Promise<string>((r) => {
@@ -452,7 +455,7 @@ describe("ai store：停止取消与重试", () => {
   it("停止后不再执行剩余的检索步骤", async () => {
     const store = await loadConfiguredStore();
     let tick = 0;
-    let release: (v: string) => void = () => {};
+    let release: (v: string) => void = () => undefined;
     M.runRetrievalCall.mockImplementation(() => {
       tick++;
       if (tick === 1) {
@@ -619,6 +622,49 @@ describe("ai store：上下文预算与截断提示", () => {
     expect(msgs.some((m) => m.content.includes("受上下文预算限制"))).toBe(false);
   });
 
+  it("预算从配置取：ctx_token_budget 覆盖默认的 3000", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ ctx_token_budget: 1000 }) });
+    const { p, feed } = await startTurn(store, "语".repeat(5000));
+    feed({ type: "done", full: "ok" });
+    await p;
+    const msgs = M.aiChat.mock.calls[0][0] as AiChatMessage[];
+    const history = msgs.filter((m) => m.role === "user");
+    expect(history).toHaveLength(1);
+    // 单条超预算时保留尾部：按配置的 1000 token 而不是默认 3000
+    expect(history[0].content).toBe("语".repeat(1000));
+  });
+
+  it("条数上限从配置取：ctx_max_messages 限制保留的历史条数", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ ctx_max_messages: 2 }) });
+    store.setState({
+      messages: [
+        { id: "h1", role: "user", content: "一问" },
+        { id: "h2", role: "assistant", content: "一答" },
+        { id: "h3", role: "user", content: "二问" },
+        { id: "h4", role: "assistant", content: "二答" },
+      ],
+    });
+    const { p, feed } = await startTurn(store, "三问");
+    feed({ type: "done", full: "ok" });
+    await p;
+    const msgs = M.aiChat.mock.calls[0][0] as AiChatMessage[];
+    const roles = msgs.filter((m) => m.role !== "system");
+    // 从最新往回只保留 2 条（二答 + 本轮提问），其余按截断说明上报
+    expect(roles.map((m) => m.content)).toEqual(["二答", "三问"]);
+    const note = msgs.filter((m) => m.role === "system" && m.content.includes("受上下文预算限制"));
+    expect(note[0].content).toContain("3 条");
+  });
+
+  it("配置缺省/非法值回落默认预算", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ ctx_token_budget: 0, ctx_max_messages: 0 }) });
+    const { p, feed } = await startTurn(store, "语".repeat(5000));
+    feed({ type: "done", full: "ok" });
+    await p;
+    const msgs = M.aiChat.mock.calls[0][0] as AiChatMessage[];
+    const history = msgs.filter((m) => m.role === "user");
+    expect(history[0].content).toBe("语".repeat(3000));
+  });
+
   it("@ 引用长文档且检索不命中：整篇截断并在参考上下文里写明", async () => {
     const store = await loadConfiguredStore();
     M.workspaceState.currentViewId = "v1";
@@ -654,7 +700,7 @@ describe("ai store：会话生命周期", () => {
     expect(M.aiSessionDelete).not.toHaveBeenCalled();
   });
 
-  it("newChat：归档当前会话，超出 20 条上限时删除被挤出的最老会话", async () => {
+  it("newChat：归档当前会话；历史超过 20 条也不裁剪、不删除", async () => {
     const store = await loadConfiguredStore();
     const sessions = Array.from({ length: 20 }, (_, i) => session(20 - i)); // s20 最新 … s1 最老
     const oldActive = store.getState().activeSessionId;
@@ -662,12 +708,13 @@ describe("ai store：会话生命周期", () => {
     store.getState().newChat();
     const s = store.getState();
     expect(s.messages).toEqual([]);
-    expect(s.sessions).toHaveLength(20);
+    // 全部保留：显示窗口由面板负责，数据一条不删
+    expect(s.sessions).toHaveLength(21);
     expect(s.sessions[0].title).toBe("你好");
-    expect(s.sessions.some((x) => x.id === "s1")).toBe(false);
+    expect(s.sessions.some((x) => x.id === "s1")).toBe(true);
     expect(M.aiSessionSave).toHaveBeenCalledTimes(1);
     expect(M.aiSessionSave.mock.calls[0][0]).toMatchObject({ id: oldActive });
-    expect(M.aiSessionDelete).toHaveBeenCalledWith("s1");
+    expect(M.aiSessionDelete).not.toHaveBeenCalled();
   });
 
   it("switchSession：当前对话先归档，目标会话载入", async () => {
@@ -1403,22 +1450,32 @@ describe("ai store：会话归档、改名与回答评分", () => {
     expect(store.getState().sessions.find((x) => x.id === "old")?.archived).toBe(true);
   });
 
-  it("归档的会话不受条数上限裁剪，普通会话才被淘汰", async () => {
+  it("会话多于显示窗口：库里全部保留，窗口只管展示，加载更多逐步放量", async () => {
     const store = await loadStore();
-    const many = Array.from({ length: 20 }, (_, i) => row(`p${i}`, { updatedAt: 100 - i }));
+    const many = Array.from({ length: 30 }, (_, i) => row(`p${i}`, { updatedAt: 100 - i }));
     M.aiSessionList.mockResolvedValue([
       row("cur", { updatedAt: 200 }),
       ...many,
       row("arch", { updatedAt: 1, archived: true }),
     ]);
     await store.getState().loadSessions();
-    await completeTurn(store, "新的一问");
-    store.getState().newChat();
-    const ids = store.getState().sessions.map((x) => x.id);
-    expect(ids).toContain("arch");
-    expect(M.aiSessionDelete.mock.calls.flat()).not.toContain("arch");
-    // 上限之外最老的普通会话被删掉
-    expect(M.aiSessionDelete.mock.calls.flat()).toContain("p19");
+    const s = store.getState();
+    // 31 条历史全部进 sessions（不再按 21 条截断），且没有任何删除
+    expect(s.sessions).toHaveLength(31);
+    expect(M.aiSessionDelete).not.toHaveBeenCalled();
+    expect(s.sessionsShown).toBe(20);
+
+    const { visibleSessionWindow } = await import("@/stores/ai");
+    const windowed = visibleSessionWindow(s.sessions, s.sessionsShown);
+    // 归档不受窗口限制；普通会话按序取前 20 条
+    expect(windowed).toHaveLength(21);
+    expect(windowed.some((x) => x.id === "arch")).toBe(true);
+    expect(windowed.some((x) => x.id === "p19")).toBe(true);
+    expect(windowed.some((x) => x.id === "p20")).toBe(false);
+
+    store.getState().loadMoreSessions();
+    expect(store.getState().sessionsShown).toBe(40);
+    expect(visibleSessionWindow(store.getState().sessions, store.getState().sessionsShown)).toHaveLength(31);
   });
 
   it("改名：整行重写新标题，空标题忽略", async () => {
@@ -1478,5 +1535,43 @@ describe("ai store：会话归档、改名与回答评分", () => {
     store.getState().rateMessage(first.id, "up");
     await completeTurn(store, "再答一次");
     expect(store.getState().messages.some((m) => m.id === first.id && m.rating === "up")).toBe(true);
+  });
+});
+
+describe("ai store：档位切换回传整份配置", () => {
+  it("switchProfile：只改 activeProfile，thinking/上下文预算与档位（不含明文 Key）原样带回", async () => {
+    const profiles = [
+      {
+        id: "p1",
+        name: "强力",
+        base_url: "https://b.example/v1",
+        model: "m-strong",
+        temperature: 0.3,
+        protocol: "anthropic",
+        has_api_key: true,
+        api_key_masked: "sk-****cdef",
+      },
+    ];
+    const store = await loadConfiguredStore({
+      config: defaultConfig({
+        thinking: "off",
+        ctx_token_budget: 5000,
+        ctx_max_messages: 12,
+        profiles,
+        active_profile: "p1",
+      }),
+    });
+    await store.getState().switchProfile("p2");
+    expect(M.aiSaveConfig).toHaveBeenCalledTimes(1);
+    const input = M.aiSaveConfig.mock.calls[0][0];
+    expect(input.activeProfile).toBe("p2");
+    expect(input.apiKey).toBeNull();
+    expect(input.thinking).toBe("off");
+    expect(input.ctxTokenBudget).toBe(5000);
+    expect(input.ctxMaxMessages).toBe(12);
+    const saved = input.profiles as Record<string, unknown>[];
+    expect(saved[0]).toMatchObject({ id: "p1", model: "m-strong", protocol: "anthropic" });
+    // 掩码字段不回传成 Key；缺 api_key 即「Rust 侧按 id 保留原 Key」的语义
+    expect(saved[0].api_key).toBeUndefined();
   });
 });

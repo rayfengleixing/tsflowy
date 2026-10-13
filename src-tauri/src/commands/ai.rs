@@ -30,8 +30,9 @@ const PRE_STREAM_RETRIES: u32 = 2;
 /// 重试退避时长（第 1、2 次重试各用一档）
 const RETRY_BACKOFFS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
 
-/// 未配置 AI 时的统一错误文案（前后端约定）
-const NOT_CONFIGURED: &str = "尚未配置 AI：请在设置中填写服务商与 API Key";
+/// 未配置 AI 时的统一错误文案（前后端约定）。
+/// 本地模型（Ollama / LM Studio 等）无需 API Key，因此就绪判断只要求 Base URL + 模型。
+const NOT_CONFIGURED: &str = "尚未配置 AI：请在设置中填写 Base URL 与模型名";
 
 /// 一条消息最多附几张图
 const MAX_IMAGES_PER_MESSAGE: usize = 4;
@@ -159,6 +160,12 @@ pub struct AiConfigPublic {
     pub confirm_edit: bool,
     /// 采样温度（0–2）
     pub temperature: f64,
+    /// 思考模式：auto / off
+    pub thinking: String,
+    /// 上下文 token 预算
+    pub ctx_token_budget: u32,
+    /// 上下文消息条数上限
+    pub ctx_max_messages: u32,
     /// 最大 token 数，0 表示不限制
     pub max_tokens: u32,
     /// 用户追加的自定义系统提示
@@ -181,7 +188,7 @@ pub struct AiConfigPublic {
     pub api_key_plaintext: bool,
 }
 
-/// 档位（不含任何敏感字段，直接回传前端）
+/// 档位（key 只回传掩码，绝不回传明文）
 #[derive(Serialize, Clone)]
 pub struct AiProfilePublic {
     pub id: String,
@@ -189,6 +196,10 @@ pub struct AiProfilePublic {
     pub base_url: String,
     pub model: String,
     pub temperature: f64,
+    /// 空串表示跟随全局协议
+    pub protocol: String,
+    pub has_api_key: bool,
+    pub api_key_masked: String,
 }
 
 /// 自定义快捷指令
@@ -212,6 +223,14 @@ pub struct AiConfigInput {
     pub max_chars: u32,
     pub confirm_edit: bool,
     pub temperature: f64,
+    /// 思考模式：非 "off" 的任何值都归一为 "auto"
+    #[serde(default)]
+    pub thinking: String,
+    /// 0 = 回落默认值（保存时归一）
+    #[serde(default)]
+    pub ctx_token_budget: u32,
+    #[serde(default)]
+    pub ctx_max_messages: u32,
     pub max_tokens: u32,
     pub system_prompt: String,
     /// 档位整体覆盖（前端编辑后整份传回）
@@ -234,6 +253,12 @@ pub struct AiProfileInput {
     pub base_url: String,
     pub model: String,
     pub temperature: f64,
+    /// 空串 = 跟随全局协议
+    #[serde(default)]
+    pub protocol: String,
+    /// 档位独立 Key（None=保持该档位原值、Some("")=清空、Some(s)=覆盖；空串=继承全局）
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -268,17 +293,48 @@ pub fn ai_save_config(app: tauri::AppHandle, cfg: AiConfigInput) -> Result<(), S
     ai.max_chars = cfg.max_chars;
     ai.confirm_edit = cfg.confirm_edit;
     ai.temperature = cfg.temperature.clamp(0.0, 2.0);
+    ai.thinking = if cfg.thinking.eq_ignore_ascii_case("off") {
+        "off".to_string()
+    } else {
+        "auto".to_string()
+    };
+    // 0 视为「未设置」回落默认值，其余夹到安全范围（输入框可能被填成极端值）
+    ai.ctx_token_budget = if cfg.ctx_token_budget == 0 {
+        files::AI_CTX_TOKEN_BUDGET_DEFAULT
+    } else {
+        cfg.ctx_token_budget.clamp(100, 200_000)
+    };
+    ai.ctx_max_messages = if cfg.ctx_max_messages == 0 {
+        files::AI_CTX_MAX_MESSAGES_DEFAULT
+    } else {
+        cfg.ctx_max_messages.clamp(1, 500)
+    };
     ai.max_tokens = cfg.max_tokens;
     ai.system_prompt = cfg.system_prompt;
+    // 档位 Key 是逐档密文：入参 api_key=None 表示「不改该档 Key」，按 id 从旧配置带回。
+    // Key 明文存 config.json（系统凭据库只有单个账户位，装不下多档 Key）。
+    let old_profiles = std::mem::take(&mut ai.profiles);
     ai.profiles = cfg
         .profiles
         .into_iter()
-        .map(|p| files::AiProfile {
-            id: p.id,
-            name: p.name,
-            base_url: p.base_url,
-            model: p.model,
-            temperature: p.temperature.clamp(0.0, 2.0),
+        .map(|p| {
+            let api_key = match p.api_key {
+                Some(key) => key.trim().to_string(),
+                None => old_profiles
+                    .iter()
+                    .find(|o| o.id == p.id)
+                    .map(|o| o.api_key.clone())
+                    .unwrap_or_default(),
+            };
+            files::AiProfile {
+                id: p.id,
+                name: p.name,
+                base_url: p.base_url,
+                model: p.model,
+                temperature: p.temperature.clamp(0.0, 2.0),
+                protocol: p.protocol.trim().to_ascii_lowercase(),
+                api_key,
+            }
         })
         .collect();
     ai.active_profile = cfg.active_profile;
@@ -707,6 +763,9 @@ fn public_of(
         max_chars: ai.max_chars,
         confirm_edit: ai.confirm_edit,
         temperature: ai.temperature,
+        thinking: ai.thinking.clone(),
+        ctx_token_budget: ai.ctx_token_budget,
+        ctx_max_messages: ai.ctx_max_messages,
         max_tokens: ai.max_tokens,
         system_prompt: ai.system_prompt.clone(),
         profiles: ai
@@ -718,6 +777,9 @@ fn public_of(
                 base_url: p.base_url.clone(),
                 model: p.model.clone(),
                 temperature: p.temperature,
+                protocol: p.protocol.clone(),
+                has_api_key: !p.api_key.trim().is_empty(),
+                api_key_masked: mask_api_key(&p.api_key),
             })
             .collect(),
         active_profile: ai.active_profile.clone(),
@@ -1044,11 +1106,33 @@ fn effective_api_key(app: &tauri::AppHandle) -> (String, bool) {
     }
 }
 
-/// 读配置并校验：base_url / api_key 为空时返回统一错误
+/// 档位覆盖：非空的档位项优先，空项继承全局。temperature 无「未设置」语义，始终取档位值。
+fn apply_profile(ai: &mut AiConfig, p: &files::AiProfile) {
+    if !p.base_url.trim().is_empty() {
+        ai.base_url = p.base_url.clone();
+    }
+    if !p.model.trim().is_empty() {
+        ai.model = p.model.clone();
+    }
+    if !p.protocol.trim().is_empty() {
+        ai.protocol = p.protocol.clone();
+    }
+    if !p.api_key.trim().is_empty() {
+        ai.api_key = p.api_key.clone();
+    }
+    ai.temperature = p.temperature;
+}
+
+/// 请求就绪判断：Base URL + 模型名。API Key 可为空——本地模型（Ollama / LM Studio）不吃 Key。
+fn request_ready(ai: &AiConfig) -> bool {
+    !ai.base_url.trim().is_empty() && !ai.model.trim().is_empty()
+}
+
+/// 读配置并校验：base_url / model 为空时返回统一错误
 fn effective_ai(app: &tauri::AppHandle) -> Result<AiConfig, String> {
     let mut ai = files::load_app_config(app).ai.unwrap_or_default();
     ai.api_key = effective_api_key(app).0;
-    // 档位覆盖：选中某个档位时，用它的地址 / 模型 / 温度（字段为空的档位项保持原值）
+    // 档位覆盖：选中某个档位时，用它的地址 / 模型 / 协议 / Key / 温度
     if !ai.active_profile.trim().is_empty() {
         if let Some(p) = ai
             .profiles
@@ -1056,16 +1140,10 @@ fn effective_ai(app: &tauri::AppHandle) -> Result<AiConfig, String> {
             .find(|p| p.id == ai.active_profile)
             .cloned()
         {
-            if !p.base_url.trim().is_empty() {
-                ai.base_url = p.base_url;
-            }
-            if !p.model.trim().is_empty() {
-                ai.model = p.model;
-            }
-            ai.temperature = p.temperature;
+            apply_profile(&mut ai, &p);
         }
     }
-    if ai.base_url.trim().is_empty() || ai.api_key.trim().is_empty() {
+    if !request_ready(&ai) {
         return Err(NOT_CONFIGURED.to_string());
     }
     Ok(ai)
@@ -1409,5 +1487,92 @@ data: [DONE]
         assert_eq!(parse_retry_after(Some("0"), fb), Duration::from_millis(200));
         assert_eq!(parse_retry_after(Some("not-a-number"), fb), fb);
         assert_eq!(parse_retry_after(None, fb), fb);
+    }
+
+    #[test]
+    fn request_ready_allows_empty_api_key() {
+        let mut ai = AiConfig::default();
+        assert!(!request_ready(&ai));
+        ai.base_url = "http://localhost:11434".to_string();
+        assert!(!request_ready(&ai), "缺模型名仍未就绪");
+        ai.model = "qwen2.5".to_string();
+        assert!(request_ready(&ai), "本地模型无 Key 也应就绪");
+        ai.api_key = "  ".to_string();
+        assert!(request_ready(&ai), "空白 Key 等同于无 Key，不影响就绪");
+        // Base URL 空白 → 未就绪
+        ai.base_url = " ".to_string();
+        assert!(!request_ready(&ai));
+    }
+
+    #[test]
+    fn apply_profile_overrides_only_nonempty_fields() {
+        let mut ai = AiConfig {
+            enabled: true,
+            protocol: "openai".to_string(),
+            base_url: "https://api.deepseek.com".to_string(),
+            model: "deepseek-chat".to_string(),
+            api_key: "global-key".to_string(),
+            temperature: 1.0,
+            ..Default::default()
+        };
+        // 本地档位：自带协议与地址，但无 Key（继承全局 Key）
+        let p = files::AiProfile {
+            id: "local".to_string(),
+            name: "本地".to_string(),
+            base_url: "http://localhost:11434/v1".to_string(),
+            model: "qwen2.5".to_string(),
+            temperature: 0.3,
+            protocol: String::new(),
+            api_key: String::new(),
+        };
+        apply_profile(&mut ai, &p);
+        assert_eq!(ai.base_url, "http://localhost:11434/v1");
+        assert_eq!(ai.model, "qwen2.5");
+        assert_eq!(ai.temperature, 0.3);
+        assert_eq!(ai.protocol, "openai", "空协议应继承全局");
+        assert_eq!(ai.api_key, "global-key", "空 Key 应继承全局");
+
+        // 档位显式指定协议与 Key 时优先
+        let p2 = files::AiProfile {
+            protocol: "anthropic".to_string(),
+            api_key: "profile-key".to_string(),
+            ..p
+        };
+        apply_profile(&mut ai, &p2);
+        assert_eq!(ai.protocol, "anthropic");
+        assert_eq!(ai.api_key, "profile-key");
+    }
+
+    #[test]
+    fn profile_input_without_api_key_keeps_old_value() {
+        // AiProfileInput.api_key 缺省（None）时 serde 反序列化应为 None 而非报错
+        let input: AiProfileInput =
+            serde_json::from_str(r#"{"id":"a","name":"A","base_url":"","model":"","temperature":0.7}"#)
+                .unwrap();
+        assert!(input.api_key.is_none());
+        assert_eq!(input.protocol, "");
+        // Some("") 表示清空
+        let input: AiProfileInput = serde_json::from_str(
+            r#"{"id":"a","name":"A","base_url":"","model":"","temperature":0.7,"api_key":"","protocol":"Gemini"}"#,
+        )
+        .unwrap();
+        assert_eq!(input.api_key.as_deref(), Some(""));
+        assert_eq!(input.protocol, "Gemini");
+    }
+
+    #[test]
+    fn old_config_without_new_ai_fields_deserializes() {
+        // 升级前写出的 config.json：ai 段没有 thinking / ctx_* / 档位 protocol+api_key
+        let cfg: files::AppConfig = serde_json::from_str(
+            r#"{"ai":{"enabled":true,"provider":"","base_url":"u","model":"m","api_key":"k","max_chars":8000,"confirm_edit":true,"profiles":[{"id":"p1","name":"P","base_url":"","model":"m2","temperature":0.5}]}}"#,
+        )
+        .unwrap();
+        let ai = cfg.ai.unwrap();
+        assert_eq!(ai.thinking, "auto");
+        assert_eq!(ai.ctx_token_budget, files::AI_CTX_TOKEN_BUDGET_DEFAULT);
+        assert_eq!(ai.ctx_max_messages, files::AI_CTX_MAX_MESSAGES_DEFAULT);
+        let p = &ai.profiles[0];
+        assert_eq!(p.protocol, "");
+        assert_eq!(p.api_key, "");
     }
 }

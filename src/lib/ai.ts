@@ -19,11 +19,17 @@ export interface AiConfig {
   confirm_edit: boolean;
   /** 采样温度 0–2 */
   temperature: number;
+  /** 思考模式：auto = 不下发推理参数（默认），off = 显式关闭思考 */
+  thinking: string;
+  /** 上下文 token 预算（历史消息回截的估算上限） */
+  ctx_token_budget: number;
+  /** 上下文消息条数上限 */
+  ctx_max_messages: number;
   /** 最大 token 数，0 表示不限制 */
   max_tokens: number;
   /** 用户追加的自定义系统提示 */
   system_prompt: string;
-  profiles: AiProfile[];
+  profiles: AiProfilePublic[];
   /** 当前生效档位 id，空串表示单档配置 */
   active_profile: string;
   quick_actions: AiQuickActionDef[];
@@ -63,13 +69,39 @@ export interface AiToolSpec {
   function: { name: string; description: string; parameters: Record<string, unknown> };
 }
 
-/** 一个模型档位：同一套 Key 下切换不同服务商 / 模型 / 温度 */
+/** 一个模型档位：可覆盖服务商地址 / 模型 / 温度，协议与 Key 留空则继承全局 */
 export interface AiProfile {
   id: string;
   name: string;
   base_url: string;
   model: string;
   temperature: number;
+  /** "" = 跟随全局协议 */
+  protocol?: string;
+  /** 保存入参专用：null = 保持该档原 Key、"" = 清空、非空 = 覆盖 */
+  api_key?: string | null;
+}
+
+/** Rust 回传的档位：Key 只有掩码，绝不回传明文 */
+export interface AiProfilePublic {
+  id: string;
+  name: string;
+  base_url: string;
+  model: string;
+  temperature: number;
+  protocol: string;
+  has_api_key: boolean;
+  api_key_masked: string;
+}
+
+/**
+ * 档位 Key 输入框的值 → 保存入参的 api_key 字段。
+ * 空串按「不修改」处理（与全局 Key 的界面口径一致）——档位 Key 是逐档保存的，
+ * 编辑别的字段时不该把已存的 Key 顺带清空。
+ */
+export function aiProfileKeyInput(draftKey: string): string | null {
+  const key = draftKey.trim();
+  return key === "" ? null : key;
 }
 
 /** 用户自定义快捷指令；scope 决定用哪段文本填进提示词 */
@@ -244,6 +276,10 @@ export async function aiSaveConfig(input: {
   maxChars: number;
   confirmEdit: boolean;
   temperature: number;
+  /** "auto" | "off" */
+  thinking: string;
+  ctxTokenBudget: number;
+  ctxMaxMessages: number;
   maxTokens: number;
   systemPrompt: string;
   profiles: AiProfile[];
@@ -267,6 +303,9 @@ export async function aiSaveConfig(input: {
       max_chars: input.maxChars,
       confirm_edit: input.confirmEdit,
       temperature: input.temperature,
+      thinking: input.thinking,
+      ctx_token_budget: input.ctxTokenBudget,
+      ctx_max_messages: input.ctxMaxMessages,
       max_tokens: input.maxTokens,
       system_prompt: input.systemPrompt,
       profiles: input.profiles,

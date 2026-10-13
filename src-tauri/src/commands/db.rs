@@ -297,11 +297,17 @@ pub async fn doc_get(db: State<'_, Db>, view_id: String) -> Result<Option<String
 }
 
 #[tauri::command]
-pub async fn doc_save(db: State<'_, Db>, view_id: String, content: String) -> Result<(), String> {
+pub async fn doc_save(
+    app: tauri::AppHandle,
+    db: State<'_, Db>,
+    view_id: String,
+    content: String,
+) -> Result<(), String> {
     let conn = db.write_conn()?;
     db::docs::save(&conn, &view_id, &content)?;
     // 历史快照：节流后失败不影响保存本身（快照是尽力而为的保底）
-    if let Err(e) = db::snapshots::maybe_snapshot(&conn, &view_id, &content) {
+    let policy = super::files::load_app_config(&app).snapshot.policy();
+    if let Err(e) = db::snapshots::maybe_snapshot(&conn, &view_id, &content, &policy) {
         tracing::warn!(error = %e, view_id = %view_id, "snapshot after save failed");
     }
     Ok(())
@@ -319,9 +325,14 @@ pub async fn doc_snapshot_list(
 }
 
 #[tauri::command]
-pub async fn doc_snapshot_restore(db: State<'_, Db>, id: i64) -> Result<String, String> {
+pub async fn doc_snapshot_restore(
+    app: tauri::AppHandle,
+    db: State<'_, Db>,
+    id: i64,
+) -> Result<String, String> {
     let conn = db.write_conn()?;
-    db::snapshots::restore(&conn, id)
+    let policy = super::files::load_app_config(&app).snapshot.policy();
+    db::snapshots::restore(&conn, id, &policy)
 }
 
 #[tauri::command]

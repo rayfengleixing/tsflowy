@@ -19,9 +19,11 @@ pub mod secret;
 // —— 配置读写（config.json）——
 pub use config::{
     app_config_dir_raw, config_file_path, load_config_raw, AiConfig, AiProfile, AiQuickAction,
-    AppConfig, AutoBackupConfig, SyncConfig,
+    AI_CTX_MAX_MESSAGES_DEFAULT, AI_CTX_TOKEN_BUDGET_DEFAULT, AppConfig, AutoBackupConfig,
+    SnapshotConfig, SyncConfig, TrashConfig,
 };
 pub(crate) use config::{load_app_config, save_app_config};
+pub use config::{get_retention_policy, set_retention_policy, RetentionPolicyInfo};
 
 // —— 数据目录解析 / 迁移 / 自定义目录命令 ——
 pub(crate) use data_dir::{app_data_dir, open_path_in_system, timestamp_suffix};
@@ -46,8 +48,9 @@ pub(crate) use backup::{make_db_snapshot, stash_current_db};
 // —— 自动备份调度 ——
 pub(crate) use auto_backup::{backup_dir, backup_stamp, format_local_time, latest_auto_backup};
 pub use auto_backup::{
-    get_auto_backup_config, maybe_run_auto_backup, run_auto_backup, run_auto_backup_now,
-    set_auto_backup_config, AutoBackupInfo,
+    get_auto_backup_config, list_backups, maybe_run_auto_backup, open_backups_dir,
+    restore_backup, run_auto_backup, run_auto_backup_now, set_auto_backup_config,
+    AutoBackupInfo, BackupArchive,
 };
 
 // —— 数据库健康诊断（兜底提示页）——
@@ -90,9 +93,16 @@ pub use asset::{
 };
 #[doc(hidden)]
 pub use auto_backup::{
-    __cmd__get_auto_backup_config, __cmd__run_auto_backup_now, __cmd__set_auto_backup_config,
-    __tauri_command_name_get_auto_backup_config, __tauri_command_name_run_auto_backup_now,
-    __tauri_command_name_set_auto_backup_config,
+    __cmd__get_auto_backup_config, __cmd__list_backups, __cmd__open_backups_dir,
+    __cmd__restore_backup, __cmd__run_auto_backup_now, __cmd__set_auto_backup_config,
+    __tauri_command_name_get_auto_backup_config, __tauri_command_name_list_backups,
+    __tauri_command_name_open_backups_dir, __tauri_command_name_restore_backup,
+    __tauri_command_name_run_auto_backup_now, __tauri_command_name_set_auto_backup_config,
+};
+#[doc(hidden)]
+pub use config::{
+    __cmd__get_retention_policy, __cmd__set_retention_policy,
+    __tauri_command_name_get_retention_policy, __tauri_command_name_set_retention_policy,
 };
 #[doc(hidden)]
 pub use backup::{

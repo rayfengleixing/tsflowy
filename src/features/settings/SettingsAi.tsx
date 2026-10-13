@@ -7,6 +7,7 @@ import { useAiStore } from "@/stores/ai";
 import {
   aiGetConfig,
   aiListModels,
+  aiProfileKeyInput,
   aiSaveConfig,
   aiTestConnection,
   AI_PROVIDER_PRESETS,
@@ -37,6 +38,9 @@ export function SettingsAi() {
     maxChars: 8000,
     confirmEdit: true,
     temperature: 0.7,
+    thinking: "auto",
+    ctxTokenBudget: 3000,
+    ctxMaxMessages: 40,
     maxTokens: 0,
     systemPrompt: "",
     profiles: [],
@@ -47,6 +51,8 @@ export function SettingsAi() {
     priceOutput: 0,
   });
   const [aiApiKey, setAiApiKey] = useState("");
+  // 档位专用 Key 草稿（按档位 id）：保存成功后清空，留空的草稿表示「不修改该档 Key」
+  const [profileKeys, setProfileKeys] = useState<Record<string, string>>({});
   const [busyAiTest, setBusyAiTest] = useState(false);
   // 从服务端拉取到的模型列表（为空表示未拉取或服务商不支持，此时模型名仍手填）
   const [modelOptions, setModelOptions] = useState<string[]>([]);
@@ -73,6 +79,9 @@ export function SettingsAi() {
       maxChars: c.max_chars,
       confirmEdit: c.confirm_edit,
       temperature: c.temperature,
+      thinking: c.thinking,
+      ctxTokenBudget: c.ctx_token_budget,
+      ctxMaxMessages: c.ctx_max_messages,
       maxTokens: c.max_tokens,
       systemPrompt: c.system_prompt,
       profiles: c.profiles,
@@ -97,9 +106,21 @@ export function SettingsAi() {
       maxChars: next.maxChars,
       confirmEdit: next.confirmEdit,
       temperature: next.temperature,
+      thinking: next.thinking,
+      ctxTokenBudget: next.ctxTokenBudget,
+      ctxMaxMessages: next.ctxMaxMessages,
       maxTokens: next.maxTokens,
       systemPrompt: next.systemPrompt,
-      profiles: next.profiles,
+      // 档位 Key 走草稿：留空的草稿 → api_key=null（Rust 侧按 id 保留原 Key）
+      profiles: next.profiles.map((p) => ({
+        id: p.id,
+        name: p.name,
+        base_url: p.base_url,
+        model: p.model,
+        temperature: p.temperature,
+        protocol: p.protocol ?? "",
+        api_key: aiProfileKeyInput(profileKeys[p.id] ?? ""),
+      })),
       activeProfile: next.activeProfile,
       quickActions: next.quickActions,
       useTools: next.useTools,
@@ -111,6 +132,7 @@ export function SettingsAi() {
     applyAiConfig(c);
     useAiStore.getState().setConfig(c);
     setAiApiKey("");
+    setProfileKeys({});
   };
 
   const saveAi = (partial?: Partial<AiFormState>) => {
@@ -303,6 +325,7 @@ export function SettingsAi() {
       {aiConfig?.has_api_key && aiConfig.api_key_plaintext && (
         <p className="-mt-2 text-right text-[11px] text-amber-600">{t("settings.aiApiKeyPlaintextWarn")}</p>
       )}
+      <p className="-mt-2 text-[11px] text-neutral-400">{t("settings.aiApiKeyOptional")}</p>
       <Row label={t("settings.aiMaxChars")}>
         <input
           type="number"
@@ -350,6 +373,30 @@ export function SettingsAi() {
             className={AI_NUM_INPUT}
           />
         </Row>
+        <Row label={t("settings.aiCtxBudget")}>
+          <input
+            type="number"
+            min={100}
+            max={200000}
+            step={100}
+            value={aiForm.ctxTokenBudget}
+            onChange={(e) => setAiForm((f) => ({ ...f, ctxTokenBudget: Number(e.target.value) }))}
+            onBlur={() => saveAiQuietly()}
+            className={AI_NUM_INPUT}
+          />
+        </Row>
+        <Row label={t("settings.aiCtxMaxMessages")}>
+          <input
+            type="number"
+            min={1}
+            max={500}
+            step={1}
+            value={aiForm.ctxMaxMessages}
+            onChange={(e) => setAiForm((f) => ({ ...f, ctxMaxMessages: Number(e.target.value) }))}
+            onBlur={() => saveAiQuietly()}
+            className={AI_NUM_INPUT}
+          />
+        </Row>
         <Row label={t("settings.aiPriceIn")}>
           <input
             type="number"
@@ -376,6 +423,24 @@ export function SettingsAi() {
         </Row>
       </div>
       <p className="-mt-2 text-[11px] text-neutral-400">{t("settings.aiPriceDesc")}</p>
+      <p className="-mt-2 text-[11px] text-neutral-400">
+        {t("settings.aiCtxDesc", { budget: aiForm.ctxTokenBudget, messages: aiForm.ctxMaxMessages })}
+      </p>
+
+      {/* 思考模式 */}
+      <Row label={t("settings.aiThinking")}>
+        <div className="flex flex-col gap-1">
+          <select
+            value={aiForm.thinking === "off" ? "off" : "auto"}
+            onChange={(e) => saveAi({ thinking: e.target.value })}
+            className="w-fit rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs outline-none focus:border-brand-500"
+          >
+            <option value="auto">{t("settings.aiThinkingAuto")}</option>
+            <option value="off">{t("settings.aiThinkingOff")}</option>
+          </select>
+          <p className="max-w-80 text-[11px] text-neutral-500">{t("settings.aiThinkingDesc")}</p>
+        </div>
+      </Row>
 
       {/* 自定义系统提示 */}
       <div>
@@ -468,6 +533,43 @@ export function SettingsAi() {
                   placeholder={t("settings.aiBaseUrlPlaceholder")}
                   className={`${AI_TEXT_INPUT} mt-1 w-full font-mono`}
                 />
+                <div className="mt-1 flex items-center gap-1.5">
+                  <select
+                    value={p.protocol ?? ""}
+                    onChange={(e) =>
+                      saveAi({
+                        profiles: aiForm.profiles.map((x) => (x.id === p.id ? { ...x, protocol: e.target.value } : x)),
+                      })
+                    }
+                    title={t("settings.aiProtocol")}
+                    className={`${AI_TEXT_INPUT} w-36`}
+                  >
+                    <option value="">{t("settings.aiProfileInherit")}</option>
+                    {AI_PROTOCOL_OPTIONS.filter((o) => o !== "").map((o) => (
+                      <option key={o} value={o}>
+                        {t(AI_PROTOCOL_LABEL_KEY[o])}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="password"
+                    value={profileKeys[p.id] ?? ""}
+                    onChange={(e) => setProfileKeys((k) => ({ ...k, [p.id]: e.target.value }))}
+                    onBlur={() => saveAiQuietly()}
+                    autoComplete="off"
+                    placeholder={
+                      aiConfig?.profiles.some((x) => x.id === p.id && x.has_api_key)
+                        ? t("settings.aiProfileKeySavedPlaceholder")
+                        : t("settings.aiProfileKeyPlaceholder")
+                    }
+                    className={`${AI_TEXT_INPUT} min-w-0 flex-1 font-mono`}
+                  />
+                </div>
+                {aiConfig?.profiles.some((x) => x.id === p.id && x.has_api_key && x.api_key_masked) && (
+                  <p className="mt-0.5 text-[11px] text-neutral-400">
+                    {`${t("settings.aiApiKeySaved")}：${aiConfig.profiles.find((x) => x.id === p.id)?.api_key_masked ?? ""}`}
+                  </p>
+                )}
               </div>
             ))}
           </div>
