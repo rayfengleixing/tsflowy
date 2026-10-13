@@ -112,13 +112,19 @@ function SwatchPalette<T extends SwatchPal>(props: {
   const { palette, current, onPick, title, editor } = props;
   const ref = useRef<HTMLDivElement>(null);
   const flip = usePopoverFlip(editor, ref);
+  // onClose 由调用方内联传入（每次渲染都是新函数）：放 ref 里取最新值，
+  // 全局监听只挂/卸一次，避免每渲染 add/remove 抖动。
+  const onCloseRef = useRef(props.onClose);
+  useEffect(() => {
+    onCloseRef.current = props.onClose;
+  });
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) props.onClose();
+      if (ref.current && !ref.current.contains(e.target as Node)) onCloseRef.current();
     };
     window.addEventListener("mousedown", onClick);
     return () => window.removeEventListener("mousedown", onClick);
-  }, [props]);
+  }, []);
   return (
     <div
       ref={ref}
@@ -159,13 +165,17 @@ function LinkPopover(props: {
   const [value, setValue] = useState(props.current ?? "");
   const ref = useRef<HTMLDivElement>(null);
   const flip = usePopoverFlip(props.editor, ref);
+  const onCloseRef = useRef(props.onClose);
+  useEffect(() => {
+    onCloseRef.current = props.onClose;
+  });
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) props.onClose();
+      if (ref.current && !ref.current.contains(e.target as Node)) onCloseRef.current();
     };
     window.addEventListener("mousedown", onClick);
     return () => window.removeEventListener("mousedown", onClick);
-  }, [props]);
+  }, []);
   return (
     <div
       ref={ref}
@@ -278,20 +288,22 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
         setVisible(false);
       }
     };
-    editor.on("selectionUpdate", update);
-    editor.on("update", update);
-    editor.on("blur", () => {
+    const onBlur = () => {
       // 延迟：点击自己工具栏前 blur 会触发；用 rAF 让 onMouseDown 的 preventDefault 阻止 blur 之后再隐藏
       requestAnimationFrame(() => {
         if (!document.activeElement || boxRef.current?.contains(document.activeElement)) return;
         if (boxRef.current?.matches(":hover")) return;
         setVisible(false);
       });
-    });
+    };
+    editor.on("selectionUpdate", update);
+    editor.on("update", update);
+    editor.on("blur", onBlur);
     update();
     return () => {
       editor.off("selectionUpdate", update);
       editor.off("update", update);
+      editor.off("blur", onBlur);
     };
   }, [editor]);
 

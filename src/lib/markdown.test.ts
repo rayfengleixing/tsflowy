@@ -23,6 +23,14 @@ describe("parseInline", () => {
   it("keeps plain text untouched", () => {
     expect(parseInline("普通文本")).toEqual([{ type: "text", text: "普通文本" }]);
   });
+
+  it("parses <u>…</u> into underline marks, inner marks preserved", () => {
+    expect(parseInline("<u>划线</u>")).toEqual([{ type: "text", text: "划线", marks: [{ type: "underline" }] }]);
+    expect(parseInline("<u>**粗**划线</u>")).toEqual([
+      { type: "text", text: "粗", marks: [{ type: "bold" }, { type: "underline" }] },
+      { type: "text", text: "划线", marks: [{ type: "underline" }] },
+    ]);
+  });
 });
 
 describe("markdownToJson", () => {
@@ -222,6 +230,65 @@ describe("markdownToJson", () => {
   it("returns empty doc for empty input", () => {
     expect(markdownToJson("")).toEqual({ type: "doc", content: [] });
     expect(markdownToJson("\n\n")).toEqual({ type: "doc", content: [] });
+  });
+
+  it("builds nested lists from indentation instead of flattening", () => {
+    const json = markdownToJson("- 父\n  - 子\n- 次");
+    expect(json.content).toEqual([
+      {
+        type: "bulletList",
+        content: [
+          {
+            type: "listItem",
+            content: [
+              { type: "paragraph", content: [{ type: "text", text: "父" }] },
+              {
+                type: "bulletList",
+                content: [
+                  { type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "子" }] }] },
+                ],
+              },
+            ],
+          },
+          { type: "listItem", content: [{ type: "paragraph", content: [{ type: "text", text: "次" }] }] },
+        ],
+      },
+    ]);
+  });
+
+  it("splits table rows on unescaped pipes only", () => {
+    const json = markdownToJson("| A \\| B | C |\n| --- | --- |\n| 1 | 2 |");
+    const header = json.content?.[0]?.content?.[0];
+    expect(header?.content?.[0]?.content).toEqual([{ type: "paragraph", content: [{ type: "text", text: "A | B" }] }]);
+    expect(header?.content?.[1]?.content).toEqual([{ type: "paragraph", content: [{ type: "text", text: "C" }] }]);
+  });
+
+  it("restores callout export format as callout node", () => {
+    const json = markdownToJson("> ⚠️ **Callout**\n> 注意内容");
+    expect(json.content).toEqual([
+      {
+        type: "callout",
+        attrs: { emoji: "⚠️" },
+        content: [{ type: "paragraph", content: [{ type: "text", text: "注意内容" }] }],
+      },
+    ]);
+  });
+
+  it("restores gallery export format as imageGallery node (no comment residue)", () => {
+    const json = markdownToJson("<!-- image gallery (2 images) -->\n![a](a.png)\n![b](b.png)");
+    expect(json.content).toEqual([
+      {
+        type: "imageGallery",
+        content: [
+          { type: "image", attrs: { src: "a.png", alt: "a" } },
+          { type: "image", attrs: { src: "b.png", alt: "b" } },
+        ],
+      },
+    ]);
+  });
+
+  it("restores outline placeholder comment as outline node", () => {
+    expect(markdownToJson("<!-- outline block -->")).toEqual({ type: "doc", content: [{ type: "outline" }] });
   });
 });
 
@@ -644,5 +711,135 @@ describe("jsonToMarkdown", () => {
       ],
     };
     expect(markdownToJson(jsonToMarkdown(json))).toEqual(json);
+  });
+
+  it("round-trips nested lists: json → md → json", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "bulletList",
+          content: [
+            {
+              type: "listItem",
+              content: [
+                { type: "paragraph", content: [{ type: "text", text: "父" }] },
+                {
+                  type: "bulletList",
+                  content: [
+                    {
+                      type: "listItem",
+                      content: [
+                        { type: "paragraph", content: [{ type: "text", text: "子" }] },
+                        {
+                          type: "taskList",
+                          content: [
+                            {
+                              type: "taskItem",
+                              attrs: { checked: true },
+                              content: [{ type: "paragraph", content: [{ type: "text", text: "任务" }] }],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("  - 子");
+    expect(md).toContain("    - [x] 任务");
+    expect(markdownToJson(md)).toEqual(json);
+  });
+
+  it("round-trips table cells containing the pipe character", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [
+                { type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "A" }] }] },
+                { type: "tableHeader", content: [{ type: "paragraph", content: [{ type: "text", text: "B" }] }] },
+              ],
+            },
+            {
+              type: "tableRow",
+              content: [
+                {
+                  type: "tableCell",
+                  content: [{ type: "paragraph", content: [{ type: "text", text: "x | y" }] }],
+                },
+                { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "2" }] }] },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("x \\| y");
+    expect(markdownToJson(md)).toEqual(json);
+  });
+
+  it("round-trips callout: json → md → json", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "callout",
+          attrs: { emoji: "💡" },
+          content: [{ type: "paragraph", content: [{ type: "text", text: "提示正文" }] }],
+        },
+      ],
+    };
+    expect(markdownToJson(jsonToMarkdown(json))).toEqual(json);
+  });
+
+  it("round-trips gallery: json → md → json", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "imageGallery",
+          content: [
+            { type: "image", attrs: { src: "a.png", alt: "图A" } },
+            { type: "image", attrs: { src: "b.png", alt: "", width: 60 } },
+          ],
+        },
+      ],
+    };
+    expect(markdownToJson(jsonToMarkdown(json))).toEqual(json);
+  });
+
+  it("round-trips outline: json → md → json", () => {
+    const json = { type: "doc", content: [{ type: "outline" }] };
+    expect(markdownToJson(jsonToMarkdown(json))).toEqual(json);
+  });
+
+  it("round-trips underline mark: json → md → json", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "前 " },
+            { type: "text", text: "划线", marks: [{ type: "underline" }] },
+          ],
+        },
+      ],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("<u>划线</u>");
+    expect(markdownToJson(md)).toEqual(json);
   });
 });

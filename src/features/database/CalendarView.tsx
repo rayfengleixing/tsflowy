@@ -42,6 +42,8 @@ export function CalendarView({
   const [month, setMonth] = useState<number>(new Date().getMonth() + 1);
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
   const [dragOverDate, setDragOverDate] = useState<string | null>(null);
+  // 单日卡片折叠：超过 3 条只露前 2 张 + 「+N 更多」，避免密集日期把整周撑爆
+  const [expandedDate, setExpandedDate] = useState<string | null>(null);
 
   useEffect(() => {
     load(view).catch((e: unknown) => logger.error("calendar.load", e));
@@ -239,6 +241,8 @@ export function CalendarView({
                 const isToday = d.date === today;
                 const overThis = draggingRow && dragOverDate === d.date;
                 const date = d.date;
+                const expandedThis = !!d.date && expandedDate === d.date;
+                const collapsed = !!d.date && !expandedThis && d.rows.length > 3;
                 return (
                   <div
                     key={i}
@@ -294,8 +298,8 @@ export function CalendarView({
                       )}
                     </div>
 
-                    <div className="flex min-h-0 flex-1 flex-col gap-1 px-1 pb-1">
-                      {d.rows.map((row) => (
+                    <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-1 pb-1">
+                      {(collapsed ? d.rows.slice(0, 2) : d.rows).map((row) => (
                         <CalCard
                           key={row.id}
                           row={row}
@@ -312,6 +316,22 @@ export function CalendarView({
                           onOpenDetail={() => void openRowDetail(row, source)}
                         />
                       ))}
+                      {collapsed && (
+                        <button
+                          className="shrink-0 self-start rounded px-1.5 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+                          onClick={() => setExpandedDate(d.date)}
+                        >
+                          {t("calendar.more", { n: String(d.rows.length - 2) })}
+                        </button>
+                      )}
+                      {expandedThis && (
+                        <button
+                          className="shrink-0 self-start rounded px-1.5 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+                          onClick={() => setExpandedDate(null)}
+                        >
+                          {t("calendar.less")}
+                        </button>
+                      )}
                     </div>
 
                     {date && d.rows.length < 3 && (

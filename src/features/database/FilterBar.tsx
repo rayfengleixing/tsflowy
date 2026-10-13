@@ -39,6 +39,11 @@ function FilterValueInput(props: { field: DatabaseField; value: CellValue; onCha
         value={draft}
         onChange={(e) => {
           setDraft(e.target.value);
+          // 清空输入框时 Number("") === 0，会把筛选条件变成"等于 0"
+          if (e.target.value.trim() === "") {
+            onChange(null);
+            return;
+          }
           const n = Number(e.target.value);
           onChange(Number.isFinite(n) ? n : null);
         }}

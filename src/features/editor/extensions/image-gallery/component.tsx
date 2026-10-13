@@ -33,7 +33,7 @@ export function ImageGalleryNodeView(props: ReactNodeViewProps<HTMLElement>) {
       );
       const rels = uploads.filter((x): x is string => Boolean(x));
       if (rels.length === 0) return;
-      if (typeof posVal !== "number" || posVal <= 0) {
+      if (typeof posVal !== "number" || posVal < 0) {
         // 兜底：通过命令在选区末尾依次插入（会跑到 gallery 外，但不至于彻底失败）
         for (const r of rels) {
           editor
@@ -44,8 +44,11 @@ export function ImageGalleryNodeView(props: ReactNodeViewProps<HTMLElement>) {
         }
         return;
       }
+      // 上传是异步的：完成时文档可能已变，posVal 处未必还是本 gallery；
+      // 不做类型校验会把图片插进别的节点（表格/数据库视图内部等）
       const galleryNode = editor.state.doc.nodeAt(posVal);
       if (!galleryNode) return;
+      if (galleryNode.type.name !== "imageGallery") return;
       const galleryEnd = posVal + galleryNode.nodeSize - 1;
       const newImgNodes = rels.map((r) => editor.schema.node("image", { src: r, alt: "", caption: "" }));
       const tr = editor.state.tr.insert(galleryEnd, newImgNodes);

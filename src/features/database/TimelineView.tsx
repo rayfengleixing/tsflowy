@@ -21,7 +21,7 @@ import {
 } from "@/lib/timeline";
 import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
 import { RowDetailPanel } from "./RowDetail";
-import type { DatabaseRow } from "@/types/database";
+import type { CellValue, DatabaseRow } from "@/types/database";
 import type { View } from "@/types/models";
 
 // 时间线视图：一条横向时间轴 + 每行按日期落位。
@@ -31,6 +31,22 @@ import type { View } from "@/types/models";
 // 日期/刻度纯逻辑见 @/lib/timeline（可单测）。
 // v2 交互：拖动点/条改开始日期（条整体拖动保持时长不变），拖条右缘改结束日期；
 // 仅当字段类型为 date 时可写（created_at/last_edited_at 只读，拖了不生效）。
+
+/** 拖拽后的写入值：纯日期字段用日期键；include_time 字段把原 ISO 时刻整体平移拖拽增量，
+ *  保留时分（直接写日期键会把时间抹掉，破坏该字段的存储约定） */
+function draggedDateValue(rawValue: CellValue, originMs: number, targetMs: number, includeTime: boolean): string {
+  if (!includeTime) return msToDateKey(targetMs);
+  const base = typeof rawValue === "string" ? Date.parse(rawValue) : NaN;
+  if (Number.isNaN(base)) return new Date(targetMs).toISOString();
+  return new Date(base + (targetMs - originMs)).toISOString();
+}
+
+/** 字段选项是否带时间（date 类型的 include_time） */
+function fieldHasTime(field: { options: string | null } | null): boolean {
+  if (!field) return false;
+  const opts = parseFieldOptions(field.options);
+  return opts.kind === "date" && opts.include_time;
+}
 
 /** Timeline 时间线视图：横向时间轴，支持拖拽改期（条可拖整体或拖右缘） */
 export function TimelineView({
@@ -190,11 +206,26 @@ export function TimelineView({
       setDragPreview(null);
       void (async () => {
         try {
+          const rowCells = cells[entry.row.id] ?? {};
+          const startWithTime = fieldHasTime(startField);
           const updates: { rowId: string; fieldId: string; value: string }[] = [
-            { rowId: entry.row.id, fieldId: startField.id, value: msToDateKey(latest.startMs) },
+            {
+              rowId: entry.row.id,
+              fieldId: startField.id,
+              value: draggedDateValue(rowCells[startField.id] ?? null, origin.startMs, latest.startMs, startWithTime),
+            },
           ];
           if (endField && endWritable && latest.endMs !== origin.endMs) {
-            updates.push({ rowId: entry.row.id, fieldId: endField.id, value: msToDateKey(latest.endMs) });
+            updates.push({
+              rowId: entry.row.id,
+              fieldId: endField.id,
+              value: draggedDateValue(
+                rowCells[endField.id] ?? null,
+                origin.endMs,
+                latest.endMs,
+                fieldHasTime(endField),
+              ),
+            });
           }
           await store.setCellsMany(updates);
         } catch (err) {
@@ -313,7 +344,7 @@ export function TimelineView({
         </div>
       ) : (
         <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto">
-          <div className="min-w-[720px]">
+          <div className="relative min-w-[720px]">
             {/* 轴标题行 */}
             <div className="flex border-b border-neutral-200 bg-neutral-100/60 text-[11px] text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800/40 dark:text-neutral-400">
               <div className="w-44 shrink-0 border-r border-neutral-200 px-3 dark:border-neutral-700" />
@@ -324,6 +355,20 @@ export function TimelineView({
                   </div>
                 ))}
               </div>
+            </div>
+
+            {/* 刻度线/今天线底衬：整列轨道只画一次（原先每行一份，N 行 × M 刻度全是重复 DOM） */}
+            <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 left-44 top-8">
+              {axis.ticks.map((tk, i) => (
+                <div
+                  key={i}
+                  className="absolute inset-y-0 w-px bg-neutral-100 dark:bg-neutral-800"
+                  style={{ left: `${tk.pct}%` }}
+                />
+              ))}
+              {todayPct !== null && (
+                <div className="absolute inset-y-0 w-px bg-red-400/70" style={{ left: `${todayPct}%` }} />
+              )}
             </div>
 
             {/* 每行一条轨道：有结束日期画条，否则画点；可拖拽改期 */}
@@ -349,18 +394,7 @@ export function TimelineView({
                     )}
                   </div>
                   <div data-track className="relative h-9 flex-1">
-                    {/* 刻度线 */}
-                    {axis.ticks.map((tk, i) => (
-                      <div
-                        key={i}
-                        className="absolute inset-y-0 w-px bg-neutral-100 dark:bg-neutral-800"
-                        style={{ left: `${tk.pct}%` }}
-                      />
-                    ))}
-                    {/* 「今天」参考线 */}
-                    {todayPct !== null && (
-                      <div className="absolute inset-y-0 w-px bg-red-400/70" style={{ left: `${todayPct}%` }} />
-                    )}
+                    {/* 刻度线/今天线由整列底衬统一绘制 */}
                     {isSpan ? (
                       <div
                         data-row-id={row.id}

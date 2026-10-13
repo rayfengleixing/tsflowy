@@ -169,6 +169,8 @@ export function NumberCellEditor({ field: _field, value, onCommit, onCancel }: C
 export function ProgressCellEditor({ value, onCommit, onCancel }: CellEditorProps) {
   const current = typeof value === "number" ? Math.min(100, Math.max(0, Math.round(value))) : 0;
   const [draft, setDraft] = useState(String(current));
+  // 滑条拖动期间只更新本地值：每次 onChange 就提交会让一次拖拽变成几十次 setCell IPC
+  const [slide, setSlide] = useState(current);
   const commitNum = (n: number | null) => onCommit(n === null ? null : Math.min(100, Math.max(0, n)));
   return (
     <div className="flex h-full items-center gap-2 px-2" onKeyDown={(e) => e.key === "Escape" && onCancel()}>
@@ -176,12 +178,17 @@ export function ProgressCellEditor({ value, onCommit, onCancel }: CellEditorProp
         type="range"
         min={0}
         max={100}
-        value={current}
+        value={slide}
         className="h-1.5 min-w-0 flex-1 accent-brand-500"
         onChange={(e) => {
           const n = Number(e.target.value);
+          setSlide(n);
           setDraft(String(n));
-          commitNum(n);
+        }}
+        onPointerUp={() => commitNum(slide)}
+        onKeyUp={(e) => {
+          // 键盘调值（方向键等）逐次提交：离散操作没有"拖完"这一刻
+          if (e.key.startsWith("Arrow") || e.key === "Home" || e.key === "End") commitNum(slide);
         }}
         onMouseDown={(e) => e.stopPropagation()}
       />

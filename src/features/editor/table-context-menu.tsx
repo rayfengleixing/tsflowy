@@ -19,18 +19,24 @@ export function TableContextMenu({ editor }: { editor: Editor | null }) {
     const onContextMenu = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
       if (!target.closest("table")) return; // 非表格区域交给系统默认行为
-      event.preventDefault();
-      // 将 ProseMirror 选择定位到被右键的单元格，确保增删命令作用于该单元格
+      // 坐标→文档位置：必须真的落在 tableCell/tableHeader 内才算命中。
+      // databaseView 渲染的也是 <table>，closest 拦不住它；不校验单元格的话，
+      // 右键数据库网格会弹出编辑器表格菜单，且未选单元格时增删命令作用到别处。
       const at = editor.view.posAtCoords({ left: event.clientX, top: event.clientY });
+      let cellPos = -1;
       if (at) {
         const $pos = editor.state.doc.resolve(at.pos);
-        let d = $pos.depth;
-        while (d >= 0 && !CELL_TYPES.includes($pos.node(d).type.name)) d--;
-        if (d >= 0) {
-          const cellPos = $pos.before(d);
-          editor.chain().setCellSelection({ anchorCell: cellPos, headCell: cellPos }).run();
+        for (let d = $pos.depth; d >= 0; d--) {
+          if (CELL_TYPES.includes($pos.node(d).type.name)) {
+            cellPos = $pos.before(d);
+            break;
+          }
         }
       }
+      if (cellPos < 0) return;
+      event.preventDefault();
+      // 将 ProseMirror 选择定位到被右键的单元格，确保增删命令作用于该单元格
+      editor.chain().setCellSelection({ anchorCell: cellPos, headCell: cellPos }).run();
       setRaw({ x: event.clientX, y: event.clientY });
     };
     dom.addEventListener("contextmenu", onContextMenu);

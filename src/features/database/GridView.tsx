@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   ArrowUpDown,
   CheckSquare,
@@ -35,14 +35,7 @@ import {
   selectCellToIds,
 } from "@/lib/csv";
 import { CsvImportDialog } from "./CsvImportDialog";
-import { computeFormula } from "@/lib/database-formula";
-import {
-  computeReverseRelation,
-  computeRollup,
-  relationRowIds,
-  relationRowLabel,
-  relationTarget,
-} from "@/lib/relation";
+import { relationRowIds, relationRowLabel, relationTarget } from "@/lib/relation";
 import { useRelationDbs } from "./use-database-data";
 import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
@@ -55,6 +48,7 @@ import { AddFieldButton, HiddenColumnsMenu, RenameInput, needsFieldSettings } fr
 import { renderGridRow, type GridRowContext } from "./grid-row";
 import { GridAddRow, GridGroupHeaderRow, GridSpacerRow, GridSubtotalRow } from "./grid-rows";
 import {
+  GROUP_LINE_H_FALLBACK,
   ROW_H_FALLBACK,
   VIRTUAL_MIN_ROWS,
   VIRTUAL_OVERSCAN,
@@ -62,8 +56,11 @@ import {
   clampColumnWidth,
   computeEvaluatedCells,
   computeVirtualWindow,
+  computeWindowFromHeights,
+  lineHeightsOf,
   mapWithConcurrency,
-  rowCenterScrollTop,
+  offsetOfHeights,
+  type GridFlatLine,
 } from "./grid-view-helpers";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -165,17 +162,20 @@ export function GridView({
   // 关联/汇总要读目标库：把本表所有关联字段的目标视图拉进缓存（同一目标库只请求一次）
   const relationDbOf = useRelationDbs(fields);
 
-  // 公式/汇总字段没有存储值：把求值结果提前算进一份"有效单元格"图，排序/列汇总/分组小计都读它，
-  // 否则按这两列排序排不动（raw 恒为空值）、汇总恒为空。没有这类字段时直接复用原始 cells。
-  const evaluatedCells = useMemo(
+  // 公式/汇总字段没有存储值：把求值结果提前算进"有效单元格"图。
+  // sortable 给排序/筛选/汇总（rollup 转数值），display 给行渲染（rollup 保留展示格式）。
+  const evaluated = useMemo(
     () => computeEvaluatedCells(rows, cells, fields, relationDbOf),
     [rows, cells, fields, relationDbOf],
   );
+  const sortableCells = evaluated.sortable;
+  const displayCells = evaluated.display;
 
   const displayRows = useMemo(() => {
-    const filtered = applyFilters(rows, cells, filters, fields, filterMode);
-    return sortRows(filtered, evaluatedCells, sorts);
-  }, [rows, cells, evaluatedCells, filters, fields, filterMode, sorts]);
+    // 筛选也走求值后的单元格：否则按公式/汇总列筛选恒不命中（raw 值永远是空）
+    const filtered = applyFilters(rows, sortableCells, filters, fields, filterMode);
+    return sortRows(filtered, sortableCells, sorts);
+  }, [rows, sortableCells, filters, fields, filterMode, sorts]);
 
   // 底部汇总菜单的 rowIds：每次渲染都新建数组会让菜单里的 useMemo 全部失效
   const displayRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
@@ -237,17 +237,51 @@ export function GridView({
     [groupField, displayRows, cells],
   );
 
+  // 字段类型可能已经变了：历史选择不在候选里就回落成计数
+  const aggregateOf = (field: DatabaseField) => normalizeAggregate(field.field_type, aggregates[field.id]);
+  const hasAggregates = visibleFields.some((f) => aggregateOf(f));
+
+  // 分组模式摊平成线性条目（组头 / 数据行 / 组小计），窗口化与非分组共用一套条目序号逻辑
+  const flatLines = useMemo<GridFlatLine[]>(() => {
+    if (!groups) return displayRows.map((row) => ({ kind: "row", row }));
+    const out: GridFlatLine[] = [];
+    for (const g of groups) {
+      const collapsed = collapsedGroups.has(g.key);
+      out.push({
+        kind: "header",
+        key: g.key,
+        label: g.key === UNGROUPED || !g.label ? t("grid.ungrouped") : g.label,
+        count: g.rows.length,
+        collapsed,
+      });
+      if (collapsed) continue;
+      for (const r of g.rows) out.push({ kind: "row", row: r });
+      if (hasAggregates) out.push({ kind: "subtotal", key: g.key, rowIds: g.rows.map((r) => r.id) });
+    }
+    return out;
+  }, [groups, collapsedGroups, hasAggregates, displayRows]);
+
   // 搜索命中定位：折叠键作 revision，命中行所在分组一展开就能重新定位
   const collapsedKey = groups ? [...collapsedGroups].join("|") : "";
   const { scrollerRef, focusRowId } = useRowFocus(collapsedKey);
 
-  // ---------- 大表窗口化 ----------
-  // 行高固定（td h-8），行数超阈值时只渲染视口附近的行，上下用占位行撑住滚动条；
-  // 阈值以下走原路径，小表零行为变化。分组视图不窗口化（组头/小计参与纵向布局）。
+  // ---------- 大表窗口化（分组模式同样生效） ----------
+  // 行高固定（td h-8），条目数超阈值时只渲染视口附近的行，上下用占位行撑住滚动条；
+  // 阈值以下走原路径，小表零行为变化。分组时组头/小计作为线性条目参与窗口化，
+  // 各自高度先走兜底常量，DOM 出现后测量纠正。
   const tbodyRef = useRef<HTMLTableSectionElement | null>(null);
   const rowHeightRef = useRef(ROW_H_FALLBACK);
+  const groupLineHRef = useRef<{ header: number; subtotal: number }>({
+    header: GROUP_LINE_H_FALLBACK,
+    subtotal: GROUP_LINE_H_FALLBACK,
+  });
   const [win, setWin] = useState<{ start: number; end: number } | null>(null);
-  const virtual = !groups && displayRows.length > VIRTUAL_MIN_ROWS;
+  const virtual = flatLines.length > VIRTUAL_MIN_ROWS;
+
+  const lineHeights = useCallback(
+    () => lineHeightsOf(flatLines, rowHeightRef.current, groupLineHRef.current.header, groupLineHRef.current.subtotal),
+    [flatLines],
+  );
 
   // 量出"数据区在滚动内容里的 y 偏移"再折算窗口：表头高度随缩放/字体变化，写死常量会越滚越偏
   const measureWindow = useCallback(() => {
@@ -256,17 +290,27 @@ export function GridView({
     if (!el || !body) return;
     const first = body.querySelector<HTMLElement>("tr[data-row-id]");
     if (first?.offsetHeight) rowHeightRef.current = first.offsetHeight;
-    const h = rowHeightRef.current;
+    const hdr = body.querySelector<HTMLElement>("tr[data-group-header]");
+    if (hdr?.offsetHeight) groupLineHRef.current.header = hdr.offsetHeight;
+    const sub = body.querySelector<HTMLElement>("tr[data-subtotal]");
+    if (sub?.offsetHeight) groupLineHRef.current.subtotal = sub.offsetHeight;
     const dataTop = body.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
-    const next = computeVirtualWindow({
-      scrollTop: el.scrollTop,
-      dataTop,
-      clientHeight: el.clientHeight,
-      total: displayRows.length,
-      rowHeight: h,
-    });
+    const next = groups
+      ? computeWindowFromHeights({
+          scrollTop: el.scrollTop,
+          dataTop,
+          clientHeight: el.clientHeight,
+          heights: lineHeights(),
+        })
+      : computeVirtualWindow({
+          scrollTop: el.scrollTop,
+          dataTop,
+          clientHeight: el.clientHeight,
+          total: displayRows.length,
+          rowHeight: rowHeightRef.current,
+        });
     setWin((prev) => (prev?.start === next.start && prev.end === next.end ? prev : next));
-  }, [scrollerRef, displayRows.length]);
+  }, [scrollerRef, displayRows.length, groups, lineHeights]);
 
   useEffect(() => {
     if (!virtual) {
@@ -286,24 +330,32 @@ export function GridView({
     };
   }, [virtual, measureWindow, scrollerRef]);
 
+  /** 把某条线性条目滚到视口中央（窗口化下目标可能没渲染，先滚过去下一帧才找得到 DOM） */
+  const scrollToLine = useCallback(
+    (index: number) => {
+      const el = scrollerRef.current;
+      const body = tbodyRef.current;
+      if (index < 0 || !el || !body) return;
+      const dataTop = body.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+      const top = groups ? offsetOfHeights(lineHeights(), index) : index * rowHeightRef.current;
+      el.scrollTo({ top: Math.max(0, dataTop + top - el.clientHeight / 2) });
+    },
+    [scrollerRef, groups, lineHeights],
+  );
+
+  const lineIndexOfRow = useCallback(
+    (rowId: string) => flatLines.findIndex((l) => l.kind === "row" && l.row.id === rowId),
+    [flatLines],
+  );
+
   // 命中行在窗口外时先滚过去，等下一帧 useRowFocus 的 DOM 查询才找得到它
   useEffect(() => {
     if (!focusRowId || !virtual) return;
-    const idx = displayRows.findIndex((r) => r.id === focusRowId);
-    const el = scrollerRef.current;
-    const body = tbodyRef.current;
-    if (idx < 0 || !el || !body) return;
+    const idx = lineIndexOfRow(focusRowId);
+    if (idx < 0) return;
     if (win && idx >= win.start && idx < win.end) return;
-    const dataTop = body.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
-    el.scrollTo({
-      top: rowCenterScrollTop({
-        dataTop,
-        index: idx,
-        rowHeight: rowHeightRef.current,
-        clientHeight: el.clientHeight,
-      }),
-    });
-  }, [focusRowId, virtual, displayRows, win, scrollerRef]);
+    scrollToLine(idx);
+  }, [focusRowId, virtual, lineIndexOfRow, win, scrollToLine]);
 
   useEffect(() => {
     if (!focusRowId || !groups) return;
@@ -316,10 +368,6 @@ export function GridView({
     });
   }, [focusRowId, groups, collapsedGroups]);
 
-  // 字段类型可能已经变了：历史选择不在候选里就回落成计数
-  const aggregateOf = (field: DatabaseField) => normalizeAggregate(field.field_type, aggregates[field.id]);
-  const hasAggregates = visibleFields.some((f) => aggregateOf(f));
-
   // ---------- 键盘导航 ----------
   /** 光标移动：越界即夹紧；虚拟窗口外的行先滚过去，渲染完成后再聚焦 */
   const moveCursorTo = (rowIndex: number, colIndex: number) => {
@@ -328,19 +376,11 @@ export function GridView({
     if (displayRows.length === 0 || visibleFields.length === 0) return;
     const row = displayRows[ri];
     const field = visibleFields[ci];
-    if (virtual && (ri < (win?.start ?? 0) || ri >= (win?.end ?? Infinity))) {
+    // 分组窗口化后行号与物理行不再一一对应：以"目标单元格是否在 DOM 里"决定要不要先滚过去
+    if (virtual) {
       const el = scrollerRef.current;
-      const body = tbodyRef.current;
-      if (el && body) {
-        const dataTop = body.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
-        el.scrollTo({
-          top: rowCenterScrollTop({
-            dataTop,
-            index: ri,
-            rowHeight: rowHeightRef.current,
-            clientHeight: el.clientHeight,
-          }),
-        });
+      if (el && !el.querySelector(cellSelector({ rowId: row.id, fieldId: field.id }))) {
+        scrollToLine(lineIndexOfRow(row.id));
       }
     }
     setCursor({ rowId: row.id, fieldId: field.id });
@@ -519,21 +559,13 @@ export function GridView({
   // CSV 导出（公式列在导出前注入算好的值；只导出当前筛选/排序后的可见行）
   const exportCsv = async () => {
     try {
+      // 计算列直读展示图（渲染期已按行求值一次，不再为导出重算一遍）
       const cellsWithFormula = { ...cells };
       for (const row of displayRows) {
         const rowCells = cells[row.id] ?? {};
+        const display = displayCells[row.id] ?? {};
         for (const f of fields) {
-          if (f.field_type === "formula") {
-            const v = computeFormula(f, rowCells, fields);
-            if (v !== null) {
-              cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: v };
-            }
-          } else if (f.field_type === "rollup") {
-            const v = computeRollup(f, rowCells, fields, relationDbOf);
-            if (v !== null) {
-              cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: v };
-            }
-          } else if (f.field_type === "relation") {
+          if (f.field_type === "relation") {
             // 导出成行标题而不是行 id：导出的 CSV 才对人可读
             const db = relationDbOf(relationTarget(f) ?? "");
             const text = relationRowIds(rowCells[f.id] ?? null)
@@ -541,12 +573,15 @@ export function GridView({
               .join("; ");
             cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: text };
           } else if (f.field_type === "reverse_relation") {
-            // 反向关系无存储值：实时反查来源行并导出标题（同样对人可读）
-            const ids = computeReverseRelation(row.id, f, relationDbOf) ?? [];
+            // 反向关系无存储值：来源行 id 同样翻成标题
+            const ids = Array.isArray(display[f.id]) ? (display[f.id] as string[]) : [];
             const cfg = parseFieldOptions(f.options);
             const db = cfg.kind === "reverse_relation" ? relationDbOf(cfg.source_view_id) : undefined;
             const text = ids.map((id) => (db ? relationRowLabel(db, id) : null) ?? id).join("; ");
             if (text !== "") cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: text };
+          } else if (f.field_type === "formula" || f.field_type === "rollup") {
+            const v = display[f.id] ?? null;
+            if (v !== null) cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: v };
           }
         }
       }
@@ -679,12 +714,119 @@ export function GridView({
     }
   };
 
+  /** 追加到当前表：列名匹配现有可写字段（忽略大小写/空白），逐行建空行再批量写单元格；
+   *  未匹配或只读派生列跳过并提示。选择列缺的选项当场补建（与 TSV 粘贴同一套路径）。 */
+  const runAppendCsv = async (foldersByColumn: Record<number, Record<string, string>>) => {
+    const plan = importPlan;
+    if (!plan) return;
+    try {
+      const byName = new Map<string, DatabaseField>();
+      for (const f of fields) {
+        const key = f.name.trim().toLowerCase();
+        if (!byName.has(key)) byName.set(key, f);
+      }
+      const colTargets = plan.headers.map((h) => {
+        const f = byName.get(h.trim().toLowerCase()) ?? null;
+        if (!f || isReadonlyType(f.field_type) || f.field_type === "relation") return null;
+        return f;
+      });
+      const skippedCols = colTargets.filter((f) => f === null).length;
+      if (colTargets.length > 0 && skippedCols === colTargets.length) {
+        toast.error(t("csv.appendNoMatch"));
+        return;
+      }
+      // 附件列与新建表路径同构：文件夹文件名索引 → save_asset 复制 → 写 AttachmentRef 数组
+      const pendingSources = new Set<string>();
+      const resolved: Record<number, { matched: { name: string; sourcePath: string }[]; missing: string[] }[]> = {};
+      colTargets.forEach((f, col) => {
+        if (f?.field_type !== "attachment") return;
+        const files = foldersByColumn[col] ?? {};
+        resolved[col] = plan.dataRows.map((line) => {
+          const r = resolveAttachmentNames(line[col] ?? "", files);
+          for (const m of r.matched) pendingSources.add(m.sourcePath);
+          return r;
+        });
+      });
+      const relBySource = new Map<string, string>();
+      await mapWithConcurrency([...pendingSources], 8, async (sourcePath) => {
+        try {
+          relBySource.set(sourcePath, await invoke<string>("save_asset", { sourcePath }));
+        } catch (e) {
+          logger.warn("csv-import.save_asset", "save_asset failed", sourcePath, e);
+        }
+      });
+
+      const created = await store.addRows(plan.dataRows.length);
+      const updates: { rowId: string; fieldId: string; value: CellValue }[] = [];
+      const missingNames = new Set<string>();
+      for (let ri = 0; ri < plan.dataRows.length; ri++) {
+        const rowId = created[ri]?.id;
+        if (!rowId) continue;
+        const line = plan.dataRows[ri];
+        for (let col = 0; col < colTargets.length; col++) {
+          const field = colTargets[col];
+          if (!field) continue;
+          const raw = line[col] ?? "";
+          if (raw.trim() === "") continue;
+          if (field.field_type === "attachment") {
+            const refs: AttachmentRef[] = [];
+            for (const m of resolved[col][ri].matched) {
+              const path = relBySource.get(m.sourcePath);
+              if (path) refs.push({ name: m.name, path });
+              else missingNames.add(m.name);
+            }
+            for (const name of resolved[col][ri].missing) missingNames.add(name);
+            if (refs.length > 0) updates.push({ rowId, fieldId: field.id, value: refs });
+            continue;
+          }
+          if (field.field_type === "single_select" || field.field_type === "multi_select") {
+            // 每格取 store 最新字段：上一格补建的选项要参与下一格解析，避免同名重复建
+            const fresh = storeApi.getState().fields.find((x) => x.id === field.id) ?? field;
+            const opts = parseFieldOptions(fresh.options);
+            if (opts.kind !== "select") continue;
+            const { ids, missing } = resolveSelectRefs(field.field_type, raw, opts.options);
+            for (const name of missing) {
+              const createdOpt = await store.addSelectOption(field.id, name);
+              if (createdOpt) ids.push(createdOpt);
+            }
+            updates.push({
+              rowId,
+              fieldId: field.id,
+              value: field.field_type === "multi_select" ? ids : (ids[0] ?? null),
+            });
+            continue;
+          }
+          updates.push({ rowId, fieldId: field.id, value: csvValueToCell(field.field_type, raw) });
+        }
+      }
+      await store.setCellsMany(updates);
+      toast.success(t("csv.appended", { count: String(created.length) }));
+      if (skippedCols > 0) toast.warning(t("csv.appendSkippedCols", { n: String(skippedCols) }));
+      if (missingNames.size > 0) {
+        const names = [...missingNames];
+        const shown = names.slice(0, 5).join(", ") + (names.length > 5 ? ` …(+${names.length - 5})` : "");
+        toast.warning(t("csv.attachment.missingToast", { n: String(names.length), names: shown }));
+      }
+    } catch (e) {
+      logger.error("csv append failed", e);
+      toast.error(t("error.csv", { message: String(e) }));
+    }
+  };
+
   /** 用户确认字段类型后执行真正的导入：建视图 → 建字段/行 → csv_import。
    *  附件列把「候选文件名」在所选文件夹索引里匹配，命中的先复制进 assets/ 再写单元格。 */
-  const runImportCsv = async (types: FieldType[], foldersByColumn: Record<number, Record<string, string>>) => {
+  const runImportCsv = async (
+    types: FieldType[],
+    foldersByColumn: Record<number, Record<string, string>>,
+    target: "new" | "current",
+  ) => {
     const plan = importPlan;
     setImportPlan(null);
     if (!plan) return;
+    if (target === "current") {
+      await runAppendCsv(foldersByColumn);
+      return;
+    }
     try {
       const wsId = useWorkspaceStore.getState().currentWorkspaceId;
       if (!wsId) return;
@@ -793,9 +935,7 @@ export function GridView({
     visibleFields,
     primaryField,
     editing,
-    cells,
-    fields,
-    relationDbOf,
+    cells: displayCells,
     checkedRows,
     focusRowId,
     draggingRow,
@@ -809,6 +949,31 @@ export function GridView({
     pasteAnchorRef,
   };
   const renderRow = (row: DatabaseRow) => renderGridRow(row, rowCtx);
+
+  // 线性条目渲染：组头 / 数据行 / 组小计（窗口化切片直接 map 它）
+  const renderLine = (line: GridFlatLine) => {
+    if (line.kind === "row") return renderRow(line.row);
+    if (line.kind === "header")
+      return (
+        <GridGroupHeaderRow
+          key={"hdr_" + line.key}
+          label={line.label}
+          count={line.count}
+          collapsed={line.collapsed}
+          onToggle={() => toggleGroup(line.key)}
+          colSpan={visibleFields.length + 2}
+        />
+      );
+    return (
+      <GridSubtotalRow
+        key={"sub_" + line.key}
+        rowIds={line.rowIds}
+        visibleFields={visibleFields}
+        aggregateOf={aggregateOf}
+        cells={sortableCells}
+      />
+    );
+  };
 
   const toggleGroup = (key: string) => {
     const next = new Set(collapsedGroups);
@@ -1065,51 +1230,25 @@ export function GridView({
             </tr>
           </thead>
           <tbody ref={tbodyRef}>
-            {groups
-              ? groups.map((group) => {
-                  const collapsed = collapsedGroups.has(group.key);
+            {virtual
+              ? (() => {
+                  // 首次 commit 还没量过窗口：先渲染开头一段，effect 量完立刻纠正
+                  const start = win?.start ?? 0;
+                  const end = win?.end ?? Math.min(flatLines.length, VIRTUAL_OVERSCAN * 4);
+                  const heights = groups ? lineHeights() : null;
+                  const above = heights ? offsetOfHeights(heights, start) : start * rowHeightRef.current;
+                  const below = heights
+                    ? offsetOfHeights(heights, heights.length) - offsetOfHeights(heights, end)
+                    : (flatLines.length - end) * rowHeightRef.current;
                   return (
-                    <Fragment key={group.key}>
-                      <GridGroupHeaderRow
-                        label={group.key === UNGROUPED || !group.label ? t("grid.ungrouped") : group.label}
-                        count={group.rows.length}
-                        collapsed={collapsed}
-                        onToggle={() => toggleGroup(group.key)}
-                        colSpan={visibleFields.length + 2}
-                      />
-                      {!collapsed && group.rows.map(renderRow)}
-                      {!collapsed && hasAggregates && (
-                        <GridSubtotalRow
-                          rowIds={group.rows.map((r) => r.id)}
-                          visibleFields={visibleFields}
-                          aggregateOf={aggregateOf}
-                          cells={evaluatedCells}
-                        />
-                      )}
-                    </Fragment>
+                    <>
+                      {above > 0 && <GridSpacerRow height={above} colSpan={visibleFields.length + 2} />}
+                      {flatLines.slice(start, end).map(renderLine)}
+                      {below > 0 && <GridSpacerRow height={below} colSpan={visibleFields.length + 2} />}
+                    </>
                   );
-                })
-              : virtual
-                ? (() => {
-                    // 首次 commit 还没量过窗口：先渲染开头一段，effect 量完立刻纠正
-                    const start = win?.start ?? 0;
-                    const end = win?.end ?? Math.min(displayRows.length, VIRTUAL_OVERSCAN * 4);
-                    return (
-                      <>
-                        {start > 0 && (
-                          <GridSpacerRow height={start * rowHeightRef.current} colSpan={visibleFields.length + 2} />
-                        )}
-                        {displayRows.slice(start, end).map(renderRow)}
-                        {end < displayRows.length && (
-                          <GridSpacerRow
-                            height={(displayRows.length - end) * rowHeightRef.current}
-                            colSpan={visibleFields.length + 2}
-                          />
-                        )}
-                      </>
-                    );
-                  })()
-                : displayRows.map(renderRow)}
+                })()
+              : flatLines.map(renderLine)}
             {/* 新建行：跨整行底部，避免无字段时挤在窄列里 */}
             <GridAddRow colSpan={1 + visibleFields.length + 1} onAdd={addRow} />
           </tbody>
@@ -1124,7 +1263,7 @@ export function GridView({
                       field={field}
                       fn={aggregateOf(field)}
                       rowIds={displayRowIds}
-                      cells={evaluatedCells}
+                      cells={sortableCells}
                       onPick={(fn) => changeAggregate(field.id, fn)}
                     />
                   )}
@@ -1175,14 +1314,18 @@ export function GridView({
         onConfirm={() => void deleteSelected()}
       />
 
-      {/* CSV 导入确认：逐列选类型 + 附件列选文件夹（取消则不建视图） */}
+      {/* CSV 导入确认：逐列选类型 + 附件列选文件夹（取消则不建视图）；可选追加到当前表 */}
       {importPlan && (
         <CsvImportDialog
           headers={importPlan.headers}
           initialTypes={importPlan.types}
           dataRows={importPlan.dataRows}
+          appendTarget={{
+            name: source.name,
+            fields: fields.map((f) => ({ name: f.name, field_type: f.field_type })),
+          }}
           onCancel={() => setImportPlan(null)}
-          onConfirm={(types, foldersByColumn) => void runImportCsv(types, foldersByColumn)}
+          onConfirm={(types, foldersByColumn, target) => void runImportCsv(types, foldersByColumn, target)}
         />
       )}
 

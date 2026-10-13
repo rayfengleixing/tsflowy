@@ -32,7 +32,15 @@ describe("parseCsv", () => {
   });
 
   it("strips BOM and trailing empty rows", () => {
-    expect(parseCsv("\uFEFFa,b\r\n\r\n")).toEqual([["a", "b"]]);
+    expect(parseCsv("﻿a,b\r\n\r\n")).toEqual([["a", "b"]]);
+  });
+
+  it("treats a quote in the middle of a field as a literal, not a quote-open", () => {
+    // 裸引号曾把状态机带进引用态：逗号被吞、后续行全部粘连
+    expect(parseCsv('abc"def,x\ny,2')).toEqual([
+      ['abc"def', "x"],
+      ["y", "2"],
+    ]);
   });
 
   it("round-trips with toCsv", () => {
@@ -52,6 +60,12 @@ describe("inferFieldType", () => {
     expect(inferFieldType(["hello", "world"])).toBe("text");
     expect(inferFieldType([])).toBe("text");
     expect(inferFieldType(["", ""])).toBe("text");
+  });
+
+  it("keeps leading-zero codes as text so 007 survives the import", () => {
+    expect(inferFieldType(["007", "008"])).toBe("text");
+    expect(inferFieldType(["010-6666", "021"])).toBe("text");
+    expect(inferFieldType(["0", "0.5", "-1"])).toBe("number");
   });
 });
 

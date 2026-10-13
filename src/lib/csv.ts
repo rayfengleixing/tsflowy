@@ -29,7 +29,9 @@ export function parseCsv(text: string): string[][] {
       i++;
       continue;
     }
-    if (ch === '"') {
+    // 只有字段起始处的引号才开启引用态；字段中间的裸引号按字面字符处理（Excel 行为），
+    // 否则 `abc"def,x` 会进入引用态把逗号吞进同一字段
+    if (ch === '"' && field === "") {
       inQuotes = true;
       i++;
       continue;
@@ -130,7 +132,8 @@ export function inferFieldType(samples: string[]): FieldType {
   const nonEmpty = samples.filter((v) => String(v).trim() !== "");
   if (nonEmpty.length === 0) return "text";
   const looksLike = (re: RegExp) => nonEmpty.every((v) => re.test(String(v).trim()));
-  if (looksLike(/^[+-]?\d+(\.\d+)?$/)) return "number";
+  // 前导零（"007"、电话号码）不是数字语义：回落 text，否则 Number() 一过 0 就丢了
+  if (looksLike(/^[+-]?(?:0|[1-9]\d*)(?:\.\d+)?$/)) return "number";
   if (looksLike(/^(true|false|是|否|✓|✗)$/i)) return "checkbox";
   if (looksLike(/^\d{4}-\d{1,2}-\d{1,2}([ T]\d{1,2}:\d{2}(:\d{2})?)?$/)) return "date";
   return "text";

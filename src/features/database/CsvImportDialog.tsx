@@ -86,15 +86,29 @@ export interface CsvImportDialogProps {
   initialTypes: FieldType[];
   /** CSV 数据行（不含表头），用于实时计算附件列匹配统计 */
   dataRows: string[][];
+  /** 「追加到当前表」目标（表名 + 字段清单，按名匹配）；省略则只能导入为新表 */
+  appendTarget?: { name: string; fields: { name: string; field_type: FieldType }[] };
   /** 取消：整件事中止，不建视图 */
   onCancel: () => void;
-  /** 确认导入：回传最终类型，以及每个附件列所选文件夹的文件索引（列下标 → 小写文件名 → 绝对路径） */
-  onConfirm: (types: FieldType[], foldersByColumn: Record<number, Record<string, string>>) => void;
+  /** 确认导入：回传最终类型、每个附件列所选文件夹的文件索引，以及导入目标（新表 / 追加当前表） */
+  onConfirm: (
+    types: FieldType[],
+    foldersByColumn: Record<number, Record<string, string>>,
+    target: "new" | "current",
+  ) => void;
 }
 
-/** 导入选项对话框：逐列确认类型；附件列可选文件夹看匹配统计 */
-export function CsvImportDialog({ headers, initialTypes, dataRows, onCancel, onConfirm }: CsvImportDialogProps) {
+/** 导入选项对话框：逐列确认类型；附件列可选文件夹看匹配统计；可选追加到当前表（按列名匹配字段） */
+export function CsvImportDialog({
+  headers,
+  initialTypes,
+  dataRows,
+  appendTarget,
+  onCancel,
+  onConfirm,
+}: CsvImportDialogProps) {
   const [types, setTypes] = useState<FieldType[]>(initialTypes);
+  const [target, setTarget] = useState<"new" | "current">("new");
   // 每个附件列各选一个文件夹：列下标 → { 文件夹名, 小写文件名 → 绝对路径 }
   const [folders, setFolders] = useState<Record<number, { name: string; files: Record<string, string> } | undefined>>(
     {},
@@ -117,11 +131,30 @@ export function CsvImportDialog({ headers, initialTypes, dataRows, onCancel, onC
     }
   };
 
+  // 追加模式：列名 → 当前表可写同名字段（忽略大小写/首尾空白，与重名判定一致）；匹配不到的列跳过
+  const matchByCol = useMemo(() => {
+    if (!appendTarget) return [];
+    return headers.map((h) => {
+      const key = h.trim().toLowerCase();
+      const field = appendTarget.fields.find((f) => f.name.trim().toLowerCase() === key);
+      return field && IMPORT_TYPES.includes(field.field_type) ? field : null;
+    });
+  }, [headers, appendTarget]);
+
+  // 附件列判定按当前目标走：新表看所选类型，追加看匹配到的字段类型
+  const attachByCol = useMemo(
+    () =>
+      headers.map((_, col) =>
+        target === "current" ? matchByCol[col]?.field_type === "attachment" : types[col] === "attachment",
+      ),
+    [headers, target, matchByCol, types],
+  );
+
   // 每个附件列的匹配统计（跨整列去重，实时反映当前列值与所选文件夹的匹配结果）
   const stats = useMemo(() => {
     const out: Record<number, { matched: number; missing: number } | undefined> = {};
-    types.forEach((type, col) => {
-      if (type !== "attachment") return;
+    headers.forEach((_, col) => {
+      if (!attachByCol[col]) return;
       const files = folders[col]?.files ?? {};
       const matched = new Set<string>();
       const missing = new Set<string>();
@@ -133,12 +166,12 @@ export function CsvImportDialog({ headers, initialTypes, dataRows, onCancel, onC
       out[col] = { matched: matched.size, missing: missing.size };
     });
     return out;
-  }, [types, dataRows, folders]);
+  }, [attachByCol, headers, dataRows, folders]);
 
   const confirm = () => {
     const foldersByColumn: Record<number, Record<string, string>> = {};
     for (const [col, v] of Object.entries(folders)) if (v) foldersByColumn[Number(col)] = v.files;
-    onConfirm(types, foldersByColumn);
+    onConfirm(types, foldersByColumn, target);
   };
 
   return (
@@ -153,52 +186,76 @@ export function CsvImportDialog({ headers, initialTypes, dataRows, onCancel, onC
           <DialogTitle>{t("csv.importOptionsTitle")}</DialogTitle>
           <DialogDescription>{t("csv.importOptionsDesc")}</DialogDescription>
         </DialogHeader>
+        {appendTarget && (
+          <div className="mb-2 flex items-center gap-3 border-b border-neutral-200 pb-2 text-[12px] dark:border-neutral-800">
+            <span className="text-neutral-500">{t("csv.targetLabel")}</span>
+            <label className="flex items-center gap-1">
+              <input type="radio" checked={target === "new"} onChange={() => setTarget("new")} />
+              {t("csv.targetNew")}
+            </label>
+            <label className="flex min-w-0 items-center gap-1">
+              <input type="radio" checked={target === "current"} onChange={() => setTarget("current")} />
+              <span className="truncate" title={appendTarget.name}>
+                {t("csv.targetCurrent", { name: appendTarget.name })}
+              </span>
+            </label>
+          </div>
+        )}
         <div className="max-h-[60vh] overflow-y-auto">
-          {headers.map((header, col) => (
-            <div key={col} className="border-b border-neutral-200 py-2 last:border-b-0 dark:border-neutral-800">
-              <div className="flex items-center gap-2">
-                <span className="min-w-0 flex-1 truncate text-[13px]" title={header}>
-                  {header}
-                </span>
-                <select
-                  className="h-7 rounded-md border border-neutral-300 bg-white px-2 text-[12px] outline-none focus:border-brand-500 dark:border-neutral-700 dark:bg-neutral-900"
-                  value={types[col]}
-                  onChange={(e) => setType(col, e.target.value as FieldType)}
-                >
-                  {ALL_TYPE_ORDER.map((ft) => {
-                    const reason = DISABLED_IMPORT_TYPES[ft];
-                    return (
-                      <option
-                        key={ft}
-                        value={ft}
-                        disabled={reason !== undefined}
-                        title={reason ? t(reason) : undefined}
-                      >
-                        {t(`field.type.${ft}` as MessageKey)}
-                        {reason ? ` — ${t(reason)}` : ""}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-              {types[col] === "attachment" && (
-                <div className="mt-2 flex items-center gap-2">
-                  <Button size="sm" variant="outline" onClick={() => pickFolder(col)}>
-                    {t("csv.attachment.chooseFolder")}
-                  </Button>
-                  <span className="min-w-0 flex-1 truncate text-[12px] text-neutral-500">
-                    {folders[col]?.name ?? t("csv.attachment.noFolder")}
+          {headers.map((header, col) => {
+            const matched = matchByCol[col] ?? null;
+            return (
+              <div key={col} className="border-b border-neutral-200 py-2 last:border-b-0 dark:border-neutral-800">
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-[13px]" title={header}>
+                    {header}
                   </span>
-                  <span className="shrink-0 text-[12px] text-neutral-500">
-                    {t("csv.attachment.stats", {
-                      matched: stats[col]?.matched ?? 0,
-                      missing: stats[col]?.missing ?? 0,
-                    })}
-                  </span>
+                  {target === "current" ? (
+                    <span className="shrink-0 text-[12px] text-neutral-500">
+                      {matched ? t("csv.appendMatched", { name: matched.name }) : t("csv.appendSkipCol")}
+                    </span>
+                  ) : (
+                    <select
+                      className="h-7 rounded-md border border-neutral-300 bg-white px-2 text-[12px] outline-none focus:border-brand-500 dark:border-neutral-700 dark:bg-neutral-900"
+                      value={types[col]}
+                      onChange={(e) => setType(col, e.target.value as FieldType)}
+                    >
+                      {ALL_TYPE_ORDER.map((ft) => {
+                        const reason = DISABLED_IMPORT_TYPES[ft];
+                        return (
+                          <option
+                            key={ft}
+                            value={ft}
+                            disabled={reason !== undefined}
+                            title={reason ? t(reason) : undefined}
+                          >
+                            {t(`field.type.${ft}` as MessageKey)}
+                            {reason ? ` — ${t(reason)}` : ""}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  )}
                 </div>
-              )}
-            </div>
-          ))}
+                {attachByCol[col] && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <Button size="sm" variant="outline" onClick={() => pickFolder(col)}>
+                      {t("csv.attachment.chooseFolder")}
+                    </Button>
+                    <span className="min-w-0 flex-1 truncate text-[12px] text-neutral-500">
+                      {folders[col]?.name ?? t("csv.attachment.noFolder")}
+                    </span>
+                    <span className="shrink-0 text-[12px] text-neutral-500">
+                      {t("csv.attachment.stats", {
+                        matched: stats[col]?.matched ?? 0,
+                        missing: stats[col]?.missing ?? 0,
+                      })}
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onCancel}>

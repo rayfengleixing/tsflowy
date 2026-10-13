@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -243,6 +243,85 @@ export function AiPanel() {
     if (open && focusTick > 0) textareaRef.current?.focus();
   }, [open, focusTick]);
 
+  // ——— 消息气泡操作集（必须在 !open 提前返回之前定义，useCallback/UseMemo 是 hook）———
+  // 逐个内联箭头传给 MessageBubble 会击穿 memo：流式每来一个 token，
+  // 所有历史气泡全量重渲。这里把消息级操作收敛成一个引用稳定的 api 对象，
+  // 气泡内部按 message 自身内容决定是否展示/如何调用。
+  const copyMessage = useCallback((text: string) => {
+    if (!text.trim()) return;
+    navigator.clipboard.writeText(text).then(
+      () => toast.success(t("ai.copied")),
+      (e: unknown) => toast.error(aiErrorText(e)),
+    );
+  }, []);
+
+  // 把文本填回输入框并把光标移到末尾（改提问、采用改写候选都走这里）
+  const fillInput = useCallback((text: string) => {
+    setInput(text);
+    setMention(null);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  }, []);
+
+  // 改后重发的入口：标记目标提问，同时把原文填回输入框等用户改完再发送
+  const editMessage = useCallback(
+    (message: AiMessage) => {
+      startEdit(message.id);
+      fillInput(message.content);
+    },
+    [startEdit, fillInput],
+  );
+
+  // 回填：把助手回答写入文档（替换选区 / 光标处插入）
+  const writeBack = useCallback((text: string, mode: "replace" | "insert") => {
+    const bridge = getAiEditor();
+    if (!bridge) {
+      toast.error(t("ai.noEditor"));
+      return;
+    }
+    if (mode === "replace") {
+      bridge.replaceSelection(text);
+      toast.success(t("ai.replaced"));
+    } else {
+      bridge.insertAtCursor(text);
+      toast.success(t("ai.inserted"));
+    }
+  }, []);
+
+  const bubbleApi = useMemo<BubbleApi>(
+    () => ({
+      copy: copyMessage,
+      regenerate: (id) => void regenerate(id),
+      edit: editMessage,
+      savePage: (id) => void saveMessageAsPage(id),
+      exportMsg: (id) => void exportMessage(id),
+      branch: (id) => branchFrom(id),
+      rate: (id, rating) => rateMessage(id, rating),
+      writeBack,
+      undo: (msgId, index) => undoAction(msgId, index),
+      apply: (msgId, index) => void applyAction(msgId, index),
+      reject: (msgId, index) => rejectAction(msgId, index),
+      viewDiff: (msgId, index, record) => setDiff({ id: msgId, index, record }),
+    }),
+    [
+      copyMessage,
+      editMessage,
+      writeBack,
+      regenerate,
+      saveMessageAsPage,
+      exportMessage,
+      branchFrom,
+      rateMessage,
+      undoAction,
+      applyAction,
+      rejectAction,
+    ],
+  );
+
   if (!open) return null;
 
   // 最后一条是 AI 的半截回答（被手动停止或超时中断）时，才提供「继续生成」
@@ -327,32 +406,6 @@ export function AiPanel() {
 
   const removeAttachment = (path: string) => setAttachments((cur) => cur.filter((i) => i.path !== path));
 
-  const copyMessage = (text: string) => {
-    if (!text.trim()) return;
-    navigator.clipboard.writeText(text).then(
-      () => toast.success(t("ai.copied")),
-      (e: unknown) => toast.error(aiErrorText(e)),
-    );
-  };
-
-  // 把文本填回输入框并把光标移到末尾（改提问、采用改写候选都走这里）
-  const fillInput = (text: string) => {
-    setInput(text);
-    setMention(null);
-    requestAnimationFrame(() => {
-      const el = textareaRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
-    });
-  };
-
-  // 改后重发的入口：标记目标提问，同时把原文填回输入框等用户改完再发送
-  const editMessage = (message: AiMessage) => {
-    startEdit(message.id);
-    fillInput(message.content);
-  };
-
   const stopEdit = () => {
     cancelEdit();
     setInput("");
@@ -414,22 +467,6 @@ export function AiPanel() {
 
   const copyLast = () => {
     copyMessage(lastAssistant?.content ?? "");
-  };
-
-  // 回填：把助手回答写入文档（替换选区 / 光标处插入）
-  const writeBack = (text: string, mode: "replace" | "insert") => {
-    const bridge = getAiEditor();
-    if (!bridge) {
-      toast.error(t("ai.noEditor"));
-      return;
-    }
-    if (mode === "replace") {
-      bridge.replaceSelection(text);
-      toast.success(t("ai.replaced"));
-    } else {
-      bridge.insertAtCursor(text);
-      toast.success(t("ai.inserted"));
-    }
   };
 
   // 拖拽左边缘调宽：向左拖变宽
@@ -644,24 +681,7 @@ export function AiPanel() {
                 {t("ai.sendHint", { host: safeHost(config.base_url) })}
               </p>
               {messages.map((m) => (
-                <MessageBubble
-                  key={m.id}
-                  message={m}
-                  busy={streaming}
-                  onCopy={() => copyMessage(m.content)}
-                  onRegenerate={m.role === "assistant" ? () => void regenerate(m.id) : undefined}
-                  onEdit={m.role === "user" ? () => editMessage(m) : undefined}
-                  onSavePage={m.role === "assistant" ? () => void saveMessageAsPage(m.id) : undefined}
-                  onExport={m.role === "assistant" ? () => void exportMessage(m.id) : undefined}
-                  onBranch={() => branchFrom(m.id)}
-                  onRate={m.role === "assistant" ? (rating) => rateMessage(m.id, rating) : undefined}
-                  onReplace={m.role === "assistant" ? () => writeBack(m.content, "replace") : undefined}
-                  onInsert={m.role === "assistant" ? () => writeBack(m.content, "insert") : undefined}
-                  onUndo={(i) => undoAction(m.id, i)}
-                  onApply={(i) => void applyAction(m.id, i)}
-                  onReject={(i) => rejectAction(m.id, i)}
-                  onViewDiff={(i, record) => setDiff({ id: m.id, index: i, record })}
-                />
+                <MessageBubble key={m.id} message={m} busy={streaming} api={bubbleApi} />
               ))}
               {/* 推理型模型的思考过程：流式时展开，结束后折叠保留，方便回看模型是怎么想的 */}
               {reasoning && (
@@ -1017,43 +1037,32 @@ function canShowDiff(a: AiActionRecord): boolean {
   return a.tool === "create_page" && a.content.trim().length > 0;
 }
 
-function MessageBubble({
+/** 传给 MessageBubble 的稳定操作集：引用不变才能让 memo 生效（见 bubbleApi） */
+interface BubbleApi {
+  copy: (content: string) => void;
+  regenerate: (id: string) => void;
+  edit: (message: AiMessage) => void;
+  savePage: (id: string) => void;
+  exportMsg: (id: string) => void;
+  branch: (id: string) => void;
+  rate: (id: string, rating: "up" | "down") => void;
+  writeBack: (text: string, mode: "replace" | "insert") => void;
+  undo: (msgId: string, index: number) => void;
+  apply: (msgId: string, index: number) => void;
+  reject: (msgId: string, index: number) => void;
+  viewDiff: (msgId: string, index: number, record: AiActionRecord) => void;
+}
+
+/** memo：消息对象与 api 引用不变即跳过重渲——流式增量只重渲染最后一条 */
+const MessageBubble = memo(function MessageBubble({
   message,
   busy = false,
-  onCopy,
-  onRegenerate,
-  onEdit,
-  onSavePage,
-  onExport,
-  onBranch,
-  onRate,
-  onReplace,
-  onInsert,
-  onUndo,
-  onApply,
-  onReject,
-  onViewDiff,
+  api,
 }: {
   message: AiMessage;
   /** 流式进行中：消息级操作会改写消息列表，此时一律禁用 */
   busy?: boolean;
-  onCopy?: () => void;
-  /** 助手回答：丢掉这条及之后的消息，用同一个问题重问一次 */
-  onRegenerate?: () => void;
-  /** 用户提问：填回输入框，改完发送即重发 */
-  onEdit?: () => void;
-  onSavePage?: () => void;
-  onExport?: () => void;
-  /** 从这条消息处分支出一个新会话（当前会话原样归档） */
-  onBranch?: () => void;
-  /** 助手回答打分（赞/踩），再点同向即取消 */
-  onRate?: (rating: "up" | "down") => void;
-  onReplace?: () => void;
-  onInsert?: () => void;
-  onUndo: (index: number) => void;
-  onApply: (index: number) => void;
-  onReject: (index: number) => void;
-  onViewDiff: (index: number, record: AiActionRecord) => void;
+  api: BubbleApi;
 }) {
   const isUser = message.role === "user";
   const actions = message.actions ?? [];
@@ -1109,69 +1118,91 @@ function MessageBubble({
             </span>
           </div>
           <div className="mt-1 flex flex-wrap gap-1.5">
-            {canShowDiff(a) && <MiniButton label={t("ai.viewDiff")} onClick={() => onViewDiff(i, a)} />}
-            {a.state === "pending" && <MiniButton label={t("ai.applyEdit")} onClick={() => onApply(i)} />}
-            {a.state === "pending" && <MiniButton label={t("ai.rejectEdit")} onClick={() => onReject(i)} />}
+            {canShowDiff(a) && <MiniButton label={t("ai.viewDiff")} onClick={() => api.viewDiff(message.id, i, a)} />}
+            {a.state === "pending" && <MiniButton label={t("ai.applyEdit")} onClick={() => api.apply(message.id, i)} />}
+            {a.state === "pending" && (
+              <MiniButton label={t("ai.rejectEdit")} onClick={() => api.reject(message.id, i)} />
+            )}
             {a.state === "applied" && !a.undone && a.revert && (
-              <MiniButton label={t("ai.undoEdit")} onClick={() => onUndo(i)} />
+              <MiniButton label={t("ai.undoEdit")} onClick={() => api.undo(message.id, i)} />
             )}
           </div>
         </div>
       ))}
-      {!isUser && bubbleText.trim() && (onReplace ?? onInsert) && (
+      {!isUser && bubbleText.trim() && (
         <div className="mt-1.5 flex gap-1.5">
-          {onReplace && (
-            <button
-              className="flex items-center gap-1 rounded-md border border-neutral-200 px-1.5 py-0.5 text-[11px] text-neutral-600 hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-              title={t("ai.replaceSelection")}
-              onClick={onReplace}
-            >
-              <Replace className="h-3 w-3" />
-              {t("ai.replaceSelection")}
-            </button>
-          )}
-          {onInsert && (
-            <button
-              className="flex items-center gap-1 rounded-md border border-neutral-200 px-1.5 py-0.5 text-[11px] text-neutral-600 hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-              title={t("ai.insertToCursor")}
-              onClick={onInsert}
-            >
-              <CornerDownLeft className="h-3 w-3" />
-              {t("ai.insertToCursor")}
-            </button>
-          )}
+          <button
+            className="flex items-center gap-1 rounded-md border border-neutral-200 px-1.5 py-0.5 text-[11px] text-neutral-600 hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            title={t("ai.replaceSelection")}
+            onClick={() => api.writeBack(message.content, "replace")}
+          >
+            <Replace className="h-3 w-3" />
+            {t("ai.replaceSelection")}
+          </button>
+          <button
+            className="flex items-center gap-1 rounded-md border border-neutral-200 px-1.5 py-0.5 text-[11px] text-neutral-600 hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            title={t("ai.insertToCursor")}
+            onClick={() => api.writeBack(message.content, "insert")}
+          >
+            <CornerDownLeft className="h-3 w-3" />
+            {t("ai.insertToCursor")}
+          </button>
         </div>
       )}
-      {/* 消息级操作：重新生成 / 改这条提问 / 复制 / 存为页面 / 导出 / 分支 */}
+      {/* 消息级操作：重新生成 / 改这条提问 / 复制 / 存为页面 / 导出 / 分支（按角色取舍） */}
       {!busy && message.content.trim() && (
         <div className="mt-1 flex gap-0.5">
-          {onRegenerate && (
-            <IconAction icon={<RefreshCw className="h-3 w-3" />} label={t("ai.msgRegenerate")} onClick={onRegenerate} />
+          {!isUser && (
+            <IconAction
+              icon={<RefreshCw className="h-3 w-3" />}
+              label={t("ai.msgRegenerate")}
+              onClick={() => api.regenerate(message.id)}
+            />
           )}
-          {onEdit && <IconAction icon={<PenLine className="h-3 w-3" />} label={t("ai.msgEdit")} onClick={onEdit} />}
-          {onCopy && <IconAction icon={<Copy className="h-3 w-3" />} label={t("ai.msgCopy")} onClick={onCopy} />}
-          {onSavePage && (
-            <IconAction icon={<FileText className="h-3 w-3" />} label={t("ai.msgSavePage")} onClick={onSavePage} />
+          {isUser && (
+            <IconAction
+              icon={<PenLine className="h-3 w-3" />}
+              label={t("ai.msgEdit")}
+              onClick={() => api.edit(message)}
+            />
           )}
-          {onExport && (
-            <IconAction icon={<Download className="h-3 w-3" />} label={t("ai.msgExport")} onClick={onExport} />
+          <IconAction
+            icon={<Copy className="h-3 w-3" />}
+            label={t("ai.msgCopy")}
+            onClick={() => api.copy(message.content)}
+          />
+          {!isUser && (
+            <IconAction
+              icon={<FileText className="h-3 w-3" />}
+              label={t("ai.msgSavePage")}
+              onClick={() => api.savePage(message.id)}
+            />
           )}
-          {onBranch && (
-            <IconAction icon={<GitBranch className="h-3 w-3" />} label={t("ai.msgBranch")} onClick={onBranch} />
+          {!isUser && (
+            <IconAction
+              icon={<Download className="h-3 w-3" />}
+              label={t("ai.msgExport")}
+              onClick={() => api.exportMsg(message.id)}
+            />
           )}
-          {onRate && (
+          <IconAction
+            icon={<GitBranch className="h-3 w-3" />}
+            label={t("ai.msgBranch")}
+            onClick={() => api.branch(message.id)}
+          />
+          {!isUser && (
             <>
               <IconAction
                 icon={<ThumbsUp className="h-3 w-3" />}
                 label={t("ai.msgRateUp")}
                 active={message.rating === "up"}
-                onClick={() => onRate("up")}
+                onClick={() => api.rate(message.id, "up")}
               />
               <IconAction
                 icon={<ThumbsDown className="h-3 w-3" />}
                 label={t("ai.msgRateDown")}
                 active={message.rating === "down"}
-                onClick={() => onRate("down")}
+                onClick={() => api.rate(message.id, "down")}
               />
             </>
           )}
@@ -1179,7 +1210,7 @@ function MessageBubble({
       )}
     </div>
   );
-}
+});
 
 /** 历史会话行右侧的悬浮操作（改名 / 归档 / 删除） */
 function RowAction({

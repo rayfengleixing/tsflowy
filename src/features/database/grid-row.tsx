@@ -6,8 +6,6 @@ import { ExternalLink, CheckSquare, GripVertical, Square, Trash2 } from "lucide-
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import type { DatabaseState } from "@/stores/database";
-import { computeFormula } from "@/lib/database-formula";
-import { computeReverseRelation, computeRollup, type RelationDb } from "@/lib/relation";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import type { View } from "@/types/models";
@@ -21,9 +19,8 @@ export interface GridRowContext {
   visibleFields: DatabaseField[];
   primaryField: DatabaseField | null;
   editing: { rowId: string; fieldId: string } | null;
+  /** 有效单元格展示图：公式/汇总/反向关系已按行求值一次（见 computeEvaluatedCells 的 display） */
   cells: Record<string, Record<string, CellValue>>;
-  fields: DatabaseField[];
-  relationDbOf: (viewId: string) => RelationDb | undefined;
   checkedRows: Set<string>;
   focusRowId: string | null;
   draggingRow: string | null;
@@ -45,8 +42,6 @@ export function renderGridRow(row: DatabaseRow, ctx: GridRowContext) {
     primaryField,
     editing,
     cells,
-    fields,
-    relationDbOf,
     checkedRows,
     focusRowId,
     draggingRow,
@@ -125,16 +120,9 @@ export function renderGridRow(row: DatabaseRow, ctx: GridRowContext) {
       {visibleFields.map((field) => {
         const isPrimary = field.id === primaryField?.id;
         const isEditing = editing?.rowId === row.id && editing.fieldId === field.id;
-        // 公式/汇总/反向关系字段无存储值：渲染时按表达式/关联行/来源行实时计算
-        const value =
-          field.field_type === "formula"
-            ? computeFormula(field, cells[row.id] ?? {}, fields)
-            : field.field_type === "rollup"
-              ? computeRollup(field, cells[row.id] ?? {}, fields, relationDbOf)
-              : field.field_type === "reverse_relation"
-                ? computeReverseRelation(row.id, field, relationDbOf)
-                : // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
-                  (cells[row.id]?.[field.id] ?? null);
+        // cells 传入的已是"有效单元格"展示图（公式/汇总/反向关系已按行求值一次），这里直读不再逐格重算
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
+        const value = cells[row.id]?.[field.id] ?? null;
         return (
           <td
             key={field.id}

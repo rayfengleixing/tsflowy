@@ -49,6 +49,7 @@ tauri-plugin-single-instance = "2.4.5"
 tauri-plugin-window-state = "2.4.1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+encoding_rs = "0.8.42"
 
 # Windows 凭据管理器：把 AI 的 API Key 从 config.json 明文迁移到系统凭据库。
 # 仅 Windows 目标引入（其它平台 secret 模块走"不可用"分支，保持跨平台可编译）。

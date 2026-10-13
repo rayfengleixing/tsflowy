@@ -4,9 +4,15 @@ import { t } from "./i18n";
 // Markdown 粘贴转换（项目说明书 8.2/10-M3：粘贴 markdown 文本自动转成块）。
 // 纯函数：文本 → TipTap JSON，便于 Vitest 单测。
 
-/** 行内语法：mention/数据库链接/加粗/斜体/行内代码/删除线/高亮/图片/链接 */
-const INLINE_RE =
-  /(@\[[^\]]*\]\(view:[^)\n]+\))|(→\[[^\]]*\]\(db:[^)\n]+\))|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)|(`[^`\n]+`)|(~~[^~\n]+~~)|(==[^=\n]+==)|(!\[[^\]]*\]\([^)\n]+\))|(\[[^\]]+\]\([^)\n]+\))/g;
+/** 行内语法：mention/数据库链接/加粗/斜体/行内代码/删除线/高亮/下划线/图片/链接 */
+const INLINE_SRC =
+  "(<u>[^<\\n]*<\\/u>)|(@\\[[^\\]]*\\]\\(view:[^)\\n]+\\))|(→\\[[^\\]]*\\]\\(db:[^)\\n]+\\))|(\\*\\*[^*]+\\*\\*)|(\\*[^*\\n]+\\*)|(`[^`\\n]+`)|(~~[^~\\n]+~~)|(==[^=\\n]+==)|(!\\[[^\\]]*\\]\\([^)\\n]+\\))|(\\[[^\\]]+\\]\\([^)\\n]+\\))";
+
+// 每次调用新建实例：parseInline 的 <u> 分支会递归自身，共享同一个 global regex
+// 会在递归中重置 lastIndex，导致外层死循环重复匹配同一段
+function inlineRe(): RegExp {
+  return new RegExp(INLINE_SRC, "g");
+}
 
 // 导出时 escapeInline 会给特殊符号加反斜杠；导入解析前先把 `\X` 换成私用区占位符，
 // 否则 `\*literal\*` 会被当成斜体匹配，解析完再还原（正文不会出现私用区字符）。
@@ -45,6 +51,11 @@ const COLUMNS_RE = /^<!--\s*columns\s*\((\d+)\)\s*-->$/;
 const COLUMN_RE = /^<!--\s*column\s+(\d+)\s*\/\s*(\d+)\s*-->$/;
 const COLUMNS_END_RE = /^<!--\s*\/columns\s*-->$/;
 const DB_VIEW_RE = /^→\[([^\]]*)\]\(db:([^)\n]+)\)$/;
+/** 相册导出头 `<!-- image gallery (n images) -->`（后跟连续图片行） */
+const GALLERY_RE = /^<!--\s*image gallery\b/i;
+const OUTLINE_RE = /^<!--\s*outline block\s*-->$/i;
+/** callout 导出首行 `> 💡 **Callout**`（引用块内识别，emoji 取前导部分） */
+const CALLOUT_HEAD_RE = /^(.*?)\s*\*\*Callout\*\*\s*$/;
 /** 附件导出格式 `[name](attach:src)` 的协议前缀 */
 const ATTACH_PREFIX = "attach:";
 
@@ -62,8 +73,8 @@ export function parseInline(text: string): JSONContent[] {
   };
   let last = 0;
   let m: RegExpExecArray | null;
-  INLINE_RE.lastIndex = 0;
-  while ((m = INLINE_RE.exec(source)) !== null) {
+  const re = inlineRe();
+  while ((m = re.exec(source)) !== null) {
     if (m.index > last) push(source.slice(last, m.index));
     last = m.index + m[0].length;
     const raw = m[0];
@@ -76,6 +87,15 @@ export function parseInline(text: string): JSONContent[] {
       // 数据库视图引用（导出格式 →[label](db:viewId)）：行内出现时按纯文本保留，
       // 独占一段的由 markdownToJson 直接还原成 databaseView 块
       push(raw);
+    } else if (raw.startsWith("<u>")) {
+      // 下划线导出为 <u>…</u>：内层递归解析（可含粗斜体），给文本节点统一追加 underline mark
+      for (const inner of parseInline(raw.slice(3, -4))) {
+        if (inner.type === "text") {
+          out.push({ type: "text", text: inner.text, marks: [...(inner.marks ?? []), { type: "underline" }] });
+        } else {
+          out.push(inner);
+        }
+      }
     } else if (raw.startsWith("**")) {
       push(raw.slice(2, -2), [{ type: "bold" }]);
     } else if (raw.startsWith("~~")) {
@@ -226,6 +246,29 @@ export function markdownToJson(md: string): JSONContent {
       continue;
     }
 
+    // 相册：<!-- image gallery (n images) --> + 紧随的连续图片行（jsonToMarkdown 的导出格式），
+    // 不识别注释行会把占位注释当段落文本残留
+    if (GALLERY_RE.test(trimmed)) {
+      i++;
+      const imgs: JSONContent[] = [];
+      while (i < lines.length && lines[i].trim() !== "") {
+        const inline = parseInline(lines[i].trim());
+        const solo = inline.length === 1 ? inline[0] : undefined;
+        if (solo?.type !== "image") break;
+        imgs.push(solo);
+        i++;
+      }
+      blocks.push({ type: "imageGallery", content: imgs });
+      continue;
+    }
+
+    // 目录块：导出为占位注释（atom，渲染时重新扫描 heading），导入还原为空 outline
+    if (OUTLINE_RE.test(trimmed)) {
+      blocks.push({ type: "outline" });
+      i++;
+      continue;
+    }
+
     // 分栏：<!-- columns (n) --> … <!-- column i/n --> … <!-- /columns -->（jsonToMarkdown 的导出格式）
     if (COLUMNS_RE.test(trimmed)) {
       i++;
@@ -291,56 +334,33 @@ export function markdownToJson(md: string): JSONContent {
       continue;
     }
 
-    // 引用（单层）
+    // 引用：连续 > 行合并；callout 导出格式（首行 `> 💡 **Callout**`）还原为提示框块
     if (trimmed.startsWith(">")) {
-      blocks.push({ type: "blockquote", content: parseInline(trimmed.replace(/^>\s?/, "")) });
-      i++;
-      continue;
-    }
-
-    // 待办列表
-    const task = TASK_RE.exec(trimmed);
-    if (task) {
-      const items: JSONContent[] = [];
-      while (i < lines.length) {
-        const m = TASK_RE.exec(lines[i].trim());
-        if (!m) break;
-        items.push({
-          type: "taskItem",
-          attrs: { checked: m[1].toLowerCase() === "x" },
-          content: [{ type: "paragraph", content: parseInline(m[2]) }],
+      const quoteLines: string[] = [];
+      while (i < lines.length && lines[i].trim().startsWith(">")) {
+        quoteLines.push(lines[i].trim().replace(/^>\s?/, ""));
+        i++;
+      }
+      const head = quoteLines.length > 0 ? CALLOUT_HEAD_RE.exec(quoteLines[0]) : null;
+      if (head) {
+        const inner = markdownToJson(quoteLines.slice(1).join("\n"));
+        blocks.push({
+          type: "callout",
+          attrs: { emoji: head[1].trim() !== "" ? head[1].trim() : "💡" },
+          content: (inner.content?.length ?? 0) > 0 ? inner.content : [{ type: "paragraph" }],
         });
-        i++;
+      } else {
+        blocks.push({ type: "blockquote", content: parseInline(quoteLines.join(" ")) });
       }
-      blocks.push({ type: "taskList", content: items });
       continue;
     }
 
-    // 无序列表
-    const bullet = BULLET_RE.exec(trimmed);
-    if (bullet) {
-      const items: JSONContent[] = [];
-      while (i < lines.length) {
-        const m = BULLET_RE.exec(lines[i].trim());
-        if (!m) break;
-        items.push({ type: "listItem", content: [{ type: "paragraph", content: parseInline(m[1]) }] });
-        i++;
-      }
-      blocks.push({ type: "bulletList", content: items });
-      continue;
-    }
-
-    // 有序列表
-    const ordered = ORDERED_RE.exec(trimmed);
-    if (ordered) {
-      const items: JSONContent[] = [];
-      while (i < lines.length) {
-        const m = ORDERED_RE.exec(lines[i].trim());
-        if (!m) break;
-        items.push({ type: "listItem", content: [{ type: "paragraph", content: parseInline(m[1]) }] });
-        i++;
-      }
-      blocks.push({ type: "orderedList", content: items });
+    // 列表（待办/无序/有序）：按缩进递归构建嵌套结构（jsonToMarkdown 用两空格缩进导出嵌套项）
+    const li = listItemOf(lines[i]);
+    if (li) {
+      const [list, next] = buildList(lines, i, li.indent);
+      blocks.push(list);
+      i = next;
       continue;
     }
 
@@ -370,13 +390,77 @@ export function markdownToJson(md: string): JSONContent {
   return { type: "doc", content: blocks };
 }
 
-/** 表格行 `| a | b |` → 单元格文本数组 */
+interface ParsedListItem {
+  indent: number;
+  kind: "task" | "bullet" | "ordered";
+  checked: boolean;
+  text: string;
+}
+
+/** 单行 → 列表项（含缩进宽度）；非列表行返回 null */
+function listItemOf(line: string): ParsedListItem | null {
+  const indent = line.length - line.trimStart().length;
+  const t = line.trim();
+  const task = TASK_RE.exec(t);
+  if (task) return { indent, kind: "task", checked: task[1].toLowerCase() === "x", text: task[2] };
+  const bullet = BULLET_RE.exec(t);
+  if (bullet) return { indent, kind: "bullet", checked: false, text: bullet[1] };
+  const ordered = ORDERED_RE.exec(t);
+  if (ordered) return { indent, kind: "ordered", checked: false, text: ordered[1] };
+  return null;
+}
+
+/** 从 start 起按 indent 层构建列表；更深缩进的行递归成嵌套列表挂进当前项 */
+function buildList(lines: string[], start: number, indent: number): [JSONContent, number] {
+  const items: JSONContent[] = [];
+  let i = start;
+  let kind: "task" | "bullet" | "ordered" | null = null;
+  while (i < lines.length) {
+    const li = listItemOf(lines[i]);
+    if (li?.indent !== indent) break;
+    kind ??= li.kind;
+    const para: JSONContent = { type: "paragraph", content: parseInline(li.text) };
+    const item: JSONContent =
+      li.kind === "task"
+        ? { type: "taskItem", attrs: { checked: li.checked }, content: [para] }
+        : { type: "listItem", content: [para] };
+    i++;
+    if (i < lines.length) {
+      const deeper = listItemOf(lines[i]);
+      if (deeper && deeper.indent > indent) {
+        const [nested, after] = buildList(lines, i, deeper.indent);
+        item.content = [...(item.content ?? []), nested];
+        i = after;
+      }
+    }
+    items.push(item);
+  }
+  const type = kind === "task" ? "taskList" : kind === "ordered" ? "orderedList" : "bulletList";
+  return [{ type, content: items }, i];
+}
+
+/** 表格行 `| a | b |` → 单元格文本数组（`\|` 是导出时转义的单元格内容竖线，不作为分隔符） */
 function splitTableRow(line: string): string[] {
-  return line
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((c) => c.trim());
+  const inner = line.replace(/^\|/, "").replace(/\|$/, "");
+  const cells: string[] = [];
+  let cur = "";
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch === "\\" && i + 1 < inner.length) {
+      // 转义对原样保留（含 \|），单元格内容最终由 parseInline 还原
+      cur += ch + inner[i + 1];
+      i++;
+      continue;
+    }
+    if (ch === "|") {
+      cells.push(cur.trim());
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  cells.push(cur.trim());
+  return cells;
 }
 
 /** 单元格文本 → 单元格内容：导出时单元格内多块用 <br> 连接，导回时还原为 hardBreak */
@@ -436,8 +520,8 @@ function decodeHtmlEntities(s: string): string {
 //
 // 设计原则：
 //   - 纯函数，便于 Vitest 单测。
-//   - 对 TipTap 原生块做精确映射；可往返块（table/columns/toggle/math/mermaid/databaseView/attachment）
-//     的导出格式与 markdownToJson 的解析一一对应；callout/gallery/outline 输出占位注释。
+//   - 对 TipTap 原生块做精确映射；可往返块（table/columns/toggle/math/mermaid/databaseView/attachment/
+//     callout/gallery/outline）的导出格式与 markdownToJson 的解析一一对应。
 //   - mention 输出自定义语法 `@[label](view:<id>)`，数据库视图块（databaseView）输出 `→[label](db:<id>)`（可导入还原）。
 // ——————————————————————————————————————
 
@@ -455,6 +539,7 @@ interface MarksRecord {
   code?: boolean;
   link?: string | null;
   highlight?: boolean;
+  underline?: boolean;
 }
 
 function marksOf(node: JSONContent): MarksRecord {
@@ -480,6 +565,9 @@ function marksOf(node: JSONContent): MarksRecord {
       case "highlight":
         m.highlight = true;
         break;
+      case "underline":
+        m.underline = true;
+        break;
       // color/textStyle 等颜色不映射 Markdown，保留纯文本即可
     }
   }
@@ -498,6 +586,8 @@ function wrapMarks(text: string, m: MarksRecord): string {
   if (m.link) out = `[${out}](${m.link})`;
   // highlight：Markdown 无原生语法，用 ==包裹（Obsidian/Notion 兼容）
   if (m.highlight) out = `==${out}==`;
+  // 下划线：Markdown 无原生语法，导出 HTML <u>（导入侧 parseInline 识别还原）
+  if (m.underline) out = `<u>${out}</u>`;
   return out;
 }
 
@@ -650,9 +740,14 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
     }
 
     case "imageGallery": {
-      // gallery 无 attrs（子节点是 image，content: "image*"）；遍历子节点导出图片引用
-      const srcs = (node.content ?? []).map((img) => (img.attrs?.src as string | undefined) ?? "");
-      return `<!-- image gallery (${srcs.length} images) -->\n${srcs.map((u) => `![](${u})`).join("\n")}`;
+      // gallery 无 attrs（子节点是 image，content: "image*"）；导出标记注释 + 连续图片行（可导入还原）
+      const imgs = (node.content ?? []).map((img) => {
+        const src = (img.attrs?.src as string | undefined) ?? "";
+        const alt = (img.attrs?.alt as string | undefined) ?? "";
+        const w = (img.attrs?.width as number | undefined) ?? 100;
+        return `![${alt}](${src}${w !== 100 ? `{width=${w}%}` : ""})`;
+      });
+      return `<!-- image gallery (${imgs.length} images) -->\n${imgs.join("\n")}`;
     }
 
     case "subpages": {
@@ -720,8 +815,8 @@ function renderChildren(children: JSONContent[] | undefined, indent: string): st
  *
  * 支持：paragraph / heading / horizontalRule / blockquote / codeBlock /
  *       bulletList / orderedList / taskList / table / image / mention / math / mermaid /
- *       toggle / attachment / columns / databaseView（可往返）；
- * 高级块（callout/gallery/outline）输出可读占位注释，不保证严格往返，但内容可读不丢失。
+ *       toggle / attachment / columns / databaseView / callout / gallery / outline（可往返）；
+ * 不支持的未知块输出 `<!-- unsupported block -->` 占位注释（不保证还原，但内容可读不丢失）。
  */
 export function jsonToMarkdown(json: JSONContent): string {
   const root = json.type === "doc" ? json : { type: "doc", content: [json] };

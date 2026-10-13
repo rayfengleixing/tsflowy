@@ -4,6 +4,7 @@ import { databaseApi } from "@/lib/database";
 import { newSelectOption, parseFieldOptions } from "@/lib/database-values";
 import { renameFormulaRef } from "@/lib/database-formula";
 import { viewApi } from "@/lib/db";
+import { useRelationStore } from "@/stores/relation";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
@@ -89,23 +90,42 @@ async function clearRemovedOptionRefs(
   removed: string[],
 ) {
   const gone = new Set(removed);
-  const cells = { ...get().cells };
+  const prev = get().cells;
+  const cells: Record<string, Record<string, CellValue>> = { ...prev };
   const changed: { rowId: string; value: CellValue }[] = [];
-  for (const [rowId, rowCells] of Object.entries(cells)) {
-    const v = rowCells[fieldId];
+  for (const [rowId, prevRow] of Object.entries(prev)) {
+    // 与 setCell 同理：行映射逐行浅拷贝，不复用旧 state 的行对象
+    let rowCells = prevRow;
+    let copied = false;
+    const v = prevRow[fieldId];
     if (typeof v === "string" && gone.has(v)) {
-      rowCells[fieldId] = null;
+      rowCells = { ...prevRow, [fieldId]: null };
+      copied = true;
       changed.push({ rowId, value: null });
     } else if (Array.isArray(v) && v.some((x) => typeof x === "string" && gone.has(x))) {
       // 只清引用该选项字符串 id 的元素；附件等对象型数组项原样保留
       const next = v.filter((x) => typeof x !== "string" || !gone.has(x));
-      rowCells[fieldId] = next;
+      rowCells = { ...prevRow, [fieldId]: next };
+      copied = true;
       changed.push({ rowId, value: next });
     }
+    if (copied) cells[rowId] = rowCells;
   }
   if (changed.length === 0) return;
   set({ cells });
   for (const c of changed) await databaseApi.setCell(c.rowId, fieldId, c.value);
+}
+
+/** 重名判定：忽略首尾空白与大小写（与公式引用的按名解析宽松度一致）；exceptId 排除被改名的字段自身 */
+function hasDuplicateName(fields: DatabaseField[], name: string, exceptId: string | null): boolean {
+  const key = name.trim().toLowerCase();
+  return fields.some((f) => f.id !== exceptId && f.name.trim().toLowerCase() === key);
+}
+
+/** 单元格值的同值判定（数组/附件引用按内容比较）：用于跳过无变化的提交 */
+function sameCellValue(a: CellValue, b: CellValue): boolean {
+  if (a === b) return true;
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
 export type DatabaseStore = ReturnType<typeof createDatabaseStore>;
@@ -115,316 +135,349 @@ export function createDatabaseStore() {
   // 并发 load/reload 只允许最新一次写入：本实例内快速切换视图时慢请求的旧数据不能盖住新视图
   let loadSeq = 0;
 
-  return create<DatabaseState>()((set, get) => ({
-    viewId: null,
-    view: null,
-    fields: [],
-    rows: [],
-    cells: {},
-    loading: false,
-    sorts: [],
-    filters: [],
-    filterMode: "and",
-    rowDetail: null,
+  return create<DatabaseState>()((setRaw, get) => {
+    // 字段/行/单元格的任何变化都可能被其它库的关联/汇总/反向关系列读到：
+    // 统一在写入口失效本库在 relation 缓存里的快照（派生视图的数据挂在宿主上，按宿主 id 失效），
+    // 否则对端会一直显示首次拉取时的旧数据。
+    const set: typeof setRaw = (partial) => {
+      const prev = get();
+      setRaw(partial);
+      const next = get();
+      if (next.fields !== prev.fields || next.rows !== prev.rows || next.cells !== prev.cells) {
+        const view = next.view;
+        useRelationStore.getState().invalidate(view ? [view.source_id ?? view.id] : undefined);
+      }
+    };
+    return {
+      viewId: null,
+      view: null,
+      fields: [],
+      rows: [],
+      cells: {},
+      loading: false,
+      sorts: [],
+      filters: [],
+      filterMode: "and",
+      rowDetail: null,
 
-    setSorts: (sorts) => {
-      set({ sorts });
-      const view = get().view;
-      if (view) patchViewConfig(view, { sorts });
-    },
-    setFilters: (filters, filterMode) => {
-      set({ filters, filterMode });
-      const view = get().view;
-      if (view) patchViewConfig(view, { filters, filterMode });
-    },
+      setSorts: (sorts) => {
+        set({ sorts });
+        const view = get().view;
+        if (view) patchViewConfig(view, { sorts });
+      },
+      setFilters: (filters, filterMode) => {
+        set({ filters, filterMode });
+        const view = get().view;
+        if (view) patchViewConfig(view, { filters, filterMode });
+      },
 
-    load: async (view) => {
-      const viewId = view.id;
-      if (get().viewId === viewId && get().fields.length > 0) return;
-      const seq = ++loadSeq;
-      const cfg = readViewConfig(view);
-      set({
-        loading: true,
-        view,
-        viewId,
-        sorts: cfg.sorts ?? [],
-        filters: cfg.filters ?? [],
-        filterMode: cfg.filterMode ?? "and",
-      });
-      try {
+      load: async (view) => {
+        const viewId = view.id;
+        if (get().viewId === viewId && get().fields.length > 0) return;
+        const seq = ++loadSeq;
+        const cfg = readViewConfig(view);
+        set({
+          loading: true,
+          view,
+          viewId,
+          sorts: cfg.sorts ?? [],
+          filters: cfg.filters ?? [],
+          filterMode: cfg.filterMode ?? "and",
+        });
+        try {
+          const [fields, rows, cells] = await Promise.all([
+            databaseApi.listFields(viewId),
+            databaseApi.listRows(viewId),
+            databaseApi.loadCells(viewId),
+          ]);
+          // 等待期间已切到别的视图（viewId 变了）或有更新的请求 → 丢弃本次结果，不碰 loading
+          if (seq !== loadSeq || get().viewId !== viewId) return;
+          set({ fields, rows, cells, loading: false });
+          // 自愈：extra 里可能残留已删除字段的排序/筛选引用（旧版 removeField 未持久化清理），
+          // 悬空引用会让排序条显示条目但表头无箭头、数据也不排序。按现有字段过滤并回写。
+          const ids = new Set(fields.map((f) => f.id));
+          const cur = get();
+          const nextSorts = cur.sorts.filter((s) => ids.has(s.field_id));
+          const nextFilters = cur.filters.filter((f) => ids.has(f.field_id));
+          if (nextSorts.length !== cur.sorts.length || nextFilters.length !== cur.filters.length) {
+            set({ sorts: nextSorts, filters: nextFilters });
+            patchViewConfig(view, { sorts: nextSorts, filters: nextFilters });
+          }
+        } catch (e) {
+          if (seq === loadSeq) {
+            logger.error("database.load", e);
+            toast.error(t("error.db", { message: String(e) }));
+            set({ loading: false });
+          }
+          throw e;
+        }
+      },
+
+      reload: async () => {
+        const viewId = get().viewId;
+        if (!viewId) return;
+        const seq = ++loadSeq;
         const [fields, rows, cells] = await Promise.all([
           databaseApi.listFields(viewId),
           databaseApi.listRows(viewId),
           databaseApi.loadCells(viewId),
         ]);
-        // 等待期间已切到别的视图（viewId 变了）或有更新的请求 → 丢弃本次结果，不碰 loading
         if (seq !== loadSeq || get().viewId !== viewId) return;
-        set({ fields, rows, cells, loading: false });
-        // 自愈：extra 里可能残留已删除字段的排序/筛选引用（旧版 removeField 未持久化清理），
-        // 悬空引用会让排序条显示条目但表头无箭头、数据也不排序。按现有字段过滤并回写。
-        const ids = new Set(fields.map((f) => f.id));
-        const cur = get();
-        const nextSorts = cur.sorts.filter((s) => ids.has(s.field_id));
-        const nextFilters = cur.filters.filter((f) => ids.has(f.field_id));
-        if (nextSorts.length !== cur.sorts.length || nextFilters.length !== cur.filters.length) {
-          set({ sorts: nextSorts, filters: nextFilters });
-          patchViewConfig(view, { sorts: nextSorts, filters: nextFilters });
+        set({ fields, rows, cells });
+      },
+
+      addField: async (type, name) => {
+        const viewId = get().viewId;
+        if (!viewId) return null;
+        // 公式以 {字段名} 引用字段，同名会让引用二义（求值时第一个胜出）：建档时就拦下
+        const trimmed = name?.trim();
+        if (trimmed && hasDuplicateName(get().fields, trimmed, null)) {
+          toast.error(t("field.nameDuplicate", { name: trimmed }));
+          return null;
         }
-      } catch (e) {
-        if (seq === loadSeq) {
-          logger.error("database.load", e);
-          toast.error(t("error.db", { message: String(e) }));
-          set({ loading: false });
+        const field = await databaseApi.createField(viewId, type, name);
+        set({ fields: [...get().fields, field] });
+        return field;
+      },
+
+      renameField: async (id, name) => {
+        const trimmed = name.trim();
+        if (hasDuplicateName(get().fields, trimmed, id)) {
+          toast.error(t("field.nameDuplicate", { name: trimmed }));
+          return;
         }
-        throw e;
-      }
-    },
-
-    reload: async () => {
-      const viewId = get().viewId;
-      if (!viewId) return;
-      const seq = ++loadSeq;
-      const [fields, rows, cells] = await Promise.all([
-        databaseApi.listFields(viewId),
-        databaseApi.listRows(viewId),
-        databaseApi.loadCells(viewId),
-      ]);
-      if (seq !== loadSeq || get().viewId !== viewId) return;
-      set({ fields, rows, cells });
-    },
-
-    addField: async (type, name) => {
-      const viewId = get().viewId;
-      if (!viewId) return null;
-      const field = await databaseApi.createField(viewId, type, name);
-      set({ fields: [...get().fields, field] });
-      return field;
-    },
-
-    renameField: async (id, name) => {
-      const before = get().fields.find((f) => f.id === id);
-      await databaseApi.renameField(id, name);
-      set({ fields: get().fields.map((f) => (f.id === id ? { ...f, name } : f)) });
-      if (!before || before.name === name) return;
-      // 公式以 {字段名} 引用：不同步改写的话，重命名会让引用该字段的公式全部变空
-      const formulas = get().fields.filter((f) => f.id !== id && parseFieldOptions(f.options).kind === "formula");
-      for (const f of formulas) {
-        const opts = parseFieldOptions(f.options);
-        if (opts.kind !== "formula") continue;
-        const next = renameFormulaRef(opts.formula, before.name, name);
-        if (next === opts.formula) continue;
-        await get().updateFieldOptions(f.id, { ...opts, formula: next });
-      }
-    },
-
-    changeFieldType: async (id, type) => {
-      const field = get().fields.find((f) => f.id === id);
-      if (field?.field_type === type) return; // 同类型重选：不清列、不重置选项
-      await databaseApi.changeFieldType(id, type);
-      await get().reload();
-    },
-
-    removeField: async (id) => {
-      await databaseApi.deleteField(id);
-      set({ fields: get().fields.filter((f) => f.id !== id) });
-      // 清理本地单元格缓存与排序/筛选引用
-      const cells = { ...get().cells };
-      for (const rowId of Object.keys(cells)) {
-        const { [id]: _removed, ...rest } = cells[rowId];
-        cells[rowId] = rest;
-      }
-      const sorts = get().sorts.filter((s) => s.field_id !== id);
-      const filters = get().filters.filter((f) => f.field_id !== id);
-      set({ cells, sorts, filters });
-      // 必须同步回写 extra：只改内存的话，重开页面仍会读回已删字段的排序/筛选（悬空引用）
-      const view = get().view;
-      if (view) patchViewConfig(view, { sorts, filters });
-    },
-
-    setFieldWidth: async (id, width) => {
-      await databaseApi.setFieldWidth(id, width);
-      set({ fields: get().fields.map((f) => (f.id === id ? { ...f, width } : f)) });
-    },
-
-    toggleFieldHidden: async (id) => {
-      const field = get().fields.find((f) => f.id === id);
-      if (!field) return;
-      await databaseApi.setFieldHidden(id, field.is_hidden === 0);
-      set({ fields: get().fields.map((f) => (f.id === id ? { ...f, is_hidden: f.is_hidden === 0 ? 1 : 0 } : f)) });
-    },
-
-    reorderFields: async (orderedIds) => {
-      const viewId = get().viewId;
-      if (!viewId) return;
-      await databaseApi.reorderFields(viewId, orderedIds);
-      const byId = new Map(get().fields.map((f) => [f.id, f]));
-      set({
-        fields: orderedIds.flatMap((id, i) => {
-          const field = byId.get(id);
-          return field ? [{ ...field, position: i }] : [];
-        }),
-      });
-    },
-
-    updateFieldOptions: async (id, options) => {
-      const before = get().fields.find((f) => f.id === id);
-      await databaseApi.updateFieldOptions(id, options);
-      set({ fields: get().fields.map((f) => (f.id === id ? { ...f, options: JSON.stringify(options) } : f)) });
-      if (!before) return;
-      const prev = parseFieldOptions(before.options);
-      if (prev.kind !== "select" || options.kind !== "select") return;
-      const kept = new Set(options.options.map((o) => o.id));
-      const removed = prev.options.filter((o) => !kept.has(o.id)).map((o) => o.id);
-      if (removed.length > 0) await clearRemovedOptionRefs(set, get, id, removed);
-    },
-
-    addSelectOption: async (id, name) => {
-      const field = get().fields.find((f) => f.id === id);
-      if (!field) return null;
-      const opts = parseFieldOptions(field.options);
-      if (opts.kind !== "select") return null;
-      const option = newSelectOption(name);
-      const next: FieldOptions = { ...opts, options: [...opts.options, option] };
-      await databaseApi.updateFieldOptions(id, next);
-      set({ fields: get().fields.map((f) => (f.id === id ? { ...f, options: JSON.stringify(next) } : f)) });
-      return option.id;
-    },
-
-    /** 删除选项：从字段 options 移除（单元格清理统一由 updateFieldOptions 完成） */
-    removeSelectOption: async (id, optionId) => {
-      const field = get().fields.find((f) => f.id === id);
-      if (!field) return;
-      const opts = parseFieldOptions(field.options);
-      if (opts.kind !== "select") return;
-      await get().updateFieldOptions(id, { ...opts, options: opts.options.filter((o) => o.id !== optionId) });
-    },
-
-    addRow: async () => {
-      const viewId = get().viewId;
-      if (!viewId) return null;
-      const row = await databaseApi.createRow(viewId);
-      set({ rows: [...get().rows, row] });
-      return row;
-    },
-
-    addRows: async (count) => {
-      const viewId = get().viewId;
-      if (!viewId || count <= 0) return [];
-      const created = await databaseApi.createRows(viewId, count);
-      set({ rows: [...get().rows, ...created] });
-      return created;
-    },
-
-    removeRow: async (id) => {
-      await databaseApi.deleteRow(id);
-      set({ rows: compactRowPositions(get().rows.filter((r) => r.id !== id)) });
-    },
-
-    removeRows: async (ids) => {
-      if (ids.length === 0) return 0;
-      const gone = new Set(ids);
-      const n = await databaseApi.deleteRows(ids);
-      const cells = Object.fromEntries(Object.entries(get().cells).filter(([rowId]) => !gone.has(rowId)));
-      set({ rows: compactRowPositions(get().rows.filter((r) => !gone.has(r.id))), cells });
-      return n;
-    },
-
-    duplicateRows: async (ids) => {
-      const viewId = get().viewId;
-      if (!viewId || ids.length === 0) return [];
-      // 新行顺序按当前表格行序（store 顺序 = position 顺序，与选择顺序无关）
-      const src = new Set(ids);
-      const ordered = get().rows.filter((r) => src.has(r.id));
-      if (ordered.length === 0) return [];
-      const created = await databaseApi.createRows(viewId, ordered.length);
-      // 逐行搬运存储值：新行 id 与源行 id 一一对应
-      const updates: { rowId: string; fieldId: string; value: CellValue }[] = [];
-      for (let i = 0; i < ordered.length; i++) {
-        const rowCells = get().cells[ordered[i].id] ?? {};
-        for (const [fieldId, value] of Object.entries(rowCells)) {
-          updates.push({ rowId: created[i].id, fieldId, value });
+        const before = get().fields.find((f) => f.id === id);
+        await databaseApi.renameField(id, name);
+        set({ fields: get().fields.map((f) => (f.id === id ? { ...f, name } : f)) });
+        if (!before || before.name === name) return;
+        // 公式以 {字段名} 引用：不同步改写的话，重命名会让引用该字段的公式全部变空
+        const formulas = get().fields.filter((f) => f.id !== id && parseFieldOptions(f.options).kind === "formula");
+        for (const f of formulas) {
+          const opts = parseFieldOptions(f.options);
+          if (opts.kind !== "formula") continue;
+          const next = renameFormulaRef(opts.formula, before.name, name);
+          if (next === opts.formula) continue;
+          await get().updateFieldOptions(f.id, { ...opts, formula: next });
         }
-      }
-      if (updates.length > 0) {
-        await databaseApi.setCellsMany(updates);
+      },
+
+      changeFieldType: async (id, type) => {
+        const field = get().fields.find((f) => f.id === id);
+        if (field?.field_type === type) return; // 同类型重选：不清列、不重置选项
+        await databaseApi.changeFieldType(id, type);
+        await get().reload();
+      },
+
+      removeField: async (id) => {
+        await databaseApi.deleteField(id);
+        set({ fields: get().fields.filter((f) => f.id !== id) });
+        // 清理本地单元格缓存与排序/筛选引用
         const cells = { ...get().cells };
-        for (const u of updates) {
-          cells[u.rowId] = { ...(cells[u.rowId] ?? {}), [u.fieldId]: u.value };
+        for (const rowId of Object.keys(cells)) {
+          const { [id]: _removed, ...rest } = cells[rowId];
+          cells[rowId] = rest;
         }
-        set({ rows: [...get().rows, ...created], cells });
-      } else {
+        const sorts = get().sorts.filter((s) => s.field_id !== id);
+        const filters = get().filters.filter((f) => f.field_id !== id);
+        set({ cells, sorts, filters });
+        // 必须同步回写 extra：只改内存的话，重开页面仍会读回已删字段的排序/筛选（悬空引用）
+        const view = get().view;
+        if (view) patchViewConfig(view, { sorts, filters });
+      },
+
+      setFieldWidth: async (id, width) => {
+        await databaseApi.setFieldWidth(id, width);
+        set({ fields: get().fields.map((f) => (f.id === id ? { ...f, width } : f)) });
+      },
+
+      toggleFieldHidden: async (id) => {
+        const field = get().fields.find((f) => f.id === id);
+        if (!field) return;
+        await databaseApi.setFieldHidden(id, field.is_hidden === 0);
+        set({ fields: get().fields.map((f) => (f.id === id ? { ...f, is_hidden: f.is_hidden === 0 ? 1 : 0 } : f)) });
+      },
+
+      reorderFields: async (orderedIds) => {
+        const viewId = get().viewId;
+        if (!viewId) return;
+        await databaseApi.reorderFields(viewId, orderedIds);
+        const byId = new Map(get().fields.map((f) => [f.id, f]));
+        set({
+          fields: orderedIds.flatMap((id, i) => {
+            const field = byId.get(id);
+            return field ? [{ ...field, position: i }] : [];
+          }),
+        });
+      },
+
+      updateFieldOptions: async (id, options) => {
+        const before = get().fields.find((f) => f.id === id);
+        await databaseApi.updateFieldOptions(id, options);
+        set({ fields: get().fields.map((f) => (f.id === id ? { ...f, options: JSON.stringify(options) } : f)) });
+        if (!before) return;
+        const prev = parseFieldOptions(before.options);
+        if (prev.kind !== "select" || options.kind !== "select") return;
+        const kept = new Set(options.options.map((o) => o.id));
+        const removed = prev.options.filter((o) => !kept.has(o.id)).map((o) => o.id);
+        if (removed.length > 0) await clearRemovedOptionRefs(set, get, id, removed);
+      },
+
+      addSelectOption: async (id, name) => {
+        const field = get().fields.find((f) => f.id === id);
+        if (!field) return null;
+        const opts = parseFieldOptions(field.options);
+        if (opts.kind !== "select") return null;
+        const option = newSelectOption(name);
+        const next: FieldOptions = { ...opts, options: [...opts.options, option] };
+        await databaseApi.updateFieldOptions(id, next);
+        set({ fields: get().fields.map((f) => (f.id === id ? { ...f, options: JSON.stringify(next) } : f)) });
+        return option.id;
+      },
+
+      /** 删除选项：从字段 options 移除（单元格清理统一由 updateFieldOptions 完成） */
+      removeSelectOption: async (id, optionId) => {
+        const field = get().fields.find((f) => f.id === id);
+        if (!field) return;
+        const opts = parseFieldOptions(field.options);
+        if (opts.kind !== "select") return;
+        await get().updateFieldOptions(id, { ...opts, options: opts.options.filter((o) => o.id !== optionId) });
+      },
+
+      addRow: async () => {
+        const viewId = get().viewId;
+        if (!viewId) return null;
+        const row = await databaseApi.createRow(viewId);
+        set({ rows: [...get().rows, row] });
+        return row;
+      },
+
+      addRows: async (count) => {
+        const viewId = get().viewId;
+        if (!viewId || count <= 0) return [];
+        const created = await databaseApi.createRows(viewId, count);
         set({ rows: [...get().rows, ...created] });
-      }
-      return created;
-    },
+        return created;
+      },
 
-    reorderRows: async (orderedIds) => {
-      const viewId = get().viewId;
-      if (!viewId) return;
-      await databaseApi.reorderRows(viewId, orderedIds);
-      const byId = new Map(get().rows.map((r) => [r.id, r]));
-      set({
-        rows: orderedIds.flatMap((id, i) => {
-          const row = byId.get(id);
-          return row ? [{ ...row, position: i }] : [];
-        }),
-      });
-    },
+      removeRow: async (id) => {
+        await databaseApi.deleteRow(id);
+        set({ rows: compactRowPositions(get().rows.filter((r) => r.id !== id)) });
+      },
 
-    setCell: async (rowId, fieldId, value) => {
-      await databaseApi.setCell(rowId, fieldId, value);
-      const cells = { ...get().cells };
-      (cells[rowId] ??= {})[fieldId] = value;
-      set({ cells });
-    },
+      removeRows: async (ids) => {
+        if (ids.length === 0) return 0;
+        const gone = new Set(ids);
+        const n = await databaseApi.deleteRows(ids);
+        const cells = Object.fromEntries(Object.entries(get().cells).filter(([rowId]) => !gone.has(rowId)));
+        set({ rows: compactRowPositions(get().rows.filter((r) => !gone.has(r.id))), cells });
+        return n;
+      },
 
-    setCellsMany: async (updates) => {
-      if (updates.length === 0) return;
-      await databaseApi.setCellsMany(updates);
-      const cells = { ...get().cells };
-      for (const u of updates) {
-        // 逐行浅拷贝后替换：不原地改上一份 state 里的对象
-        const rowCells = { ...(cells[u.rowId] ?? {}) };
-        rowCells[u.fieldId] = u.value;
-        cells[u.rowId] = rowCells;
-      }
-      set({ cells });
-    },
-
-    openRowDetail: async (row, host) => {
-      try {
-        // 用最新行数据（document_id 可能已被之前会话更新，store 里是旧副本）
-        const fresh = await databaseApi.getRow(row.id);
-        if (!fresh) throw new Error("row missing: " + row.id);
-        row = fresh;
-        if (!row.document_id) {
-          // 首次打开：创建行详情文档 view（extra 标记 row_detail，说明书 12 节风险 7）
-          const name = t("row.detailName", { n: row.position + 1 });
-          const view = await viewApi.create({
-            workspace_id: host.workspace_id,
-            parent_id: host.id,
-            name,
-            layout: "document",
-            extra: JSON.stringify({ row_detail: true }),
-          });
-          await databaseApi.setRowDocumentId(row.id, view.id);
-          // 同步 store 里的行（document_id 绑定）
-          const bound = { ...row, document_id: view.id };
-          set({ rows: get().rows.map((r) => (r.id === bound.id ? bound : r)), rowDetail: { row: bound, view } });
-        } else {
-          // 已有文档：从库中读回 view（含名称等）
-          const view = await viewApi.get(row.document_id);
-          if (!view) throw new Error("row detail view missing: " + row.document_id);
-          set({ rowDetail: { row, view } });
+      duplicateRows: async (ids) => {
+        const viewId = get().viewId;
+        if (!viewId || ids.length === 0) return [];
+        // 新行顺序按当前表格行序（store 顺序 = position 顺序，与选择顺序无关）
+        const src = new Set(ids);
+        const ordered = get().rows.filter((r) => src.has(r.id));
+        if (ordered.length === 0) return [];
+        const created = await databaseApi.createRows(viewId, ordered.length);
+        // 逐行搬运存储值：新行 id 与源行 id 一一对应
+        const updates: { rowId: string; fieldId: string; value: CellValue }[] = [];
+        for (let i = 0; i < ordered.length; i++) {
+          const rowCells = get().cells[ordered[i].id] ?? {};
+          for (const [fieldId, value] of Object.entries(rowCells)) {
+            updates.push({ rowId: created[i].id, fieldId, value });
+          }
         }
-      } catch (e) {
-        logger.error("open row detail failed", e);
-        toast.error(t("error.db", { message: String(e) }));
-      }
-    },
+        if (updates.length > 0) {
+          await databaseApi.setCellsMany(updates);
+          const cells = { ...get().cells };
+          for (const u of updates) {
+            cells[u.rowId] = { ...(cells[u.rowId] ?? {}), [u.fieldId]: u.value };
+          }
+          set({ rows: [...get().rows, ...created], cells });
+        } else {
+          set({ rows: [...get().rows, ...created] });
+        }
+        return created;
+      },
 
-    closeRowDetail: () => set({ rowDetail: null }),
-  }));
+      reorderRows: async (orderedIds) => {
+        const viewId = get().viewId;
+        if (!viewId) return;
+        await databaseApi.reorderRows(viewId, orderedIds);
+        const byId = new Map(get().rows.map((r) => [r.id, r]));
+        set({
+          rows: orderedIds.flatMap((id, i) => {
+            const row = byId.get(id);
+            return row ? [{ ...row, position: i }] : [];
+          }),
+        });
+      },
+
+      setCell: async (rowId, fieldId, value) => {
+        // 同值提交直接跳过：点开单元格再点出去不该产生一次 IPC + 关系快照失效
+        const prev = get().cells;
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
+        if (sameCellValue(prev[rowId]?.[fieldId] ?? null, value)) return;
+        await databaseApi.setCell(rowId, fieldId, value);
+        // 行映射整体换新：原地改旧 state 的行对象会让按引用比较的记忆化消费方漏掉更新
+        set({ cells: { ...prev, [rowId]: { ...(prev[rowId] ?? {}), [fieldId]: value } } });
+      },
+
+      setCellsMany: async (updates) => {
+        const cur = get().cells;
+        const effective = updates.filter((u) => {
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
+          return !sameCellValue(cur[u.rowId]?.[u.fieldId] ?? null, u.value);
+        });
+        if (effective.length === 0) return;
+        await databaseApi.setCellsMany(effective);
+        const cells = { ...cur };
+        for (const u of effective) {
+          // 逐行浅拷贝后替换：不原地改上一份 state 里的对象
+          const rowCells = { ...(cells[u.rowId] ?? {}) };
+          rowCells[u.fieldId] = u.value;
+          cells[u.rowId] = rowCells;
+        }
+        set({ cells });
+      },
+
+      openRowDetail: async (row, host) => {
+        try {
+          // 用最新行数据（document_id 可能已被之前会话更新，store 里是旧副本）
+          const fresh = await databaseApi.getRow(row.id);
+          if (!fresh) throw new Error("row missing: " + row.id);
+          row = fresh;
+          if (!row.document_id) {
+            // 首次打开：创建行详情文档 view（extra 标记 row_detail，说明书 12 节风险 7）
+            const name = t("row.detailName", { n: row.position + 1 });
+            const view = await viewApi.create({
+              workspace_id: host.workspace_id,
+              parent_id: host.id,
+              name,
+              layout: "document",
+              extra: JSON.stringify({ row_detail: true }),
+            });
+            await databaseApi.setRowDocumentId(row.id, view.id);
+            // 同步 store 里的行（document_id 绑定）
+            const bound = { ...row, document_id: view.id };
+            set({ rows: get().rows.map((r) => (r.id === bound.id ? bound : r)), rowDetail: { row: bound, view } });
+          } else {
+            // 已有文档：从库中读回 view（含名称等）
+            const view = await viewApi.get(row.document_id);
+            if (!view) throw new Error("row detail view missing: " + row.document_id);
+            set({ rowDetail: { row, view } });
+          }
+        } catch (e) {
+          logger.error("open row detail failed", e);
+          toast.error(t("error.db", { message: String(e) }));
+        }
+      },
+
+      closeRowDetail: () => set({ rowDetail: null }),
+    };
+  });
 }
 
 /** 全局默认实例：测试与未显式提供 Provider 的场景使用 */

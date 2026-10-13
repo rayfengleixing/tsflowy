@@ -27,10 +27,12 @@ export function useRelationDbs(fields: DatabaseField[]): (viewId: string) => Rel
     [fields],
   );
   const relationData = useRelationStore((s) => s.data);
+  const revision = useRelationStore((s) => s.revision);
   const ensureRelationDbs = useRelationStore((s) => s.ensure);
   useEffect(() => {
     if (relatedViewIds.length > 0) ensureRelationDbs(relatedViewIds);
-  }, [relatedViewIds, ensureRelationDbs]);
+    // revision：目标库快照被 invalidate（对端有改动）后靠它触发重拉
+  }, [relatedViewIds, revision, ensureRelationDbs]);
   // 行 id → 显示标题；对应库未加载时返回 null，由调用方降级到原始 id
   return useCallback((viewId: string) => relationData[viewId], [relationData]);
 }

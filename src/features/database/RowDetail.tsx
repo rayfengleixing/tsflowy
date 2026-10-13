@@ -4,8 +4,7 @@ import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { FIELD_TYPES, isReadonlyType, type FieldType } from "@/types/database";
 import { useDbStore } from "@/stores/database-context";
 import { formatCellValue, parseFieldOptions, ratingMax } from "@/lib/database-values";
-import { computeFormula } from "@/lib/database-formula";
-import { computeReverseRelation, computeRollup } from "@/lib/relation";
+import { computeEvaluatedCells } from "./grid-view-helpers";
 import { useRelationStore } from "@/stores/relation";
 import { cn } from "@/lib/utils";
 import type { View } from "@/types/models";
@@ -37,29 +36,19 @@ function uniqueName(base: string, existing: string[]): string {
 function RowPropertyField({
   field,
   row,
+  value,
   primary = false,
 }: {
   field: DatabaseField;
   row: DatabaseRow;
+  /** 已求值的展示值（公式/汇总/反向关系在面板层算好）——选择器内联计算会产出
+   *  新引用触发过度重渲，且数组结果违反 zustand selector 的快照稳定性约定 */
+  value: CellValue;
   primary?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [nameEditing, setNameEditing] = useState(false);
   const [nameDraft, setNameDraft] = useState(field.name);
-  // 关联/汇总要读目标库：目标库缓存变化时本组件也要重渲
-  const relationData = useRelationStore((s) => s.data);
-  // 原子 selector：只订阅本行本字段值，其他行/字段变化不触发本组件重渲
-  // 公式/汇总字段无存储值：按整行字段实时计算（结果为数字/字符串，引用稳定）
-  const value = useDbStore((s) =>
-    field.field_type === "formula"
-      ? computeFormula(field, s.cells[row.id] ?? {}, s.fields)
-      : field.field_type === "rollup"
-        ? computeRollup(field, s.cells[row.id] ?? {}, s.fields, (id) => relationData[id])
-        : field.field_type === "reverse_relation"
-          ? computeReverseRelation(row.id, field, (id) => relationData[id])
-          : // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
-            (s.cells[row.id]?.[field.id] ?? null),
-  );
   const setCell = useDbStore((s) => s.setCell);
   const addSelectOption = useDbStore((s) => s.addSelectOption);
   const removeSelectOption = useDbStore((s) => s.removeSelectOption);
@@ -197,8 +186,16 @@ function RowPropertyField({
 /** 行详情右侧滑出面板（说明书 6.1：宽 400px，右侧滑入 + 遮罩 + 滑入动画），复用 M3 编辑器 */
 export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view: View; onClose: () => void }) {
   const fields = useDbStore((s) => s.fields);
+  const cells = useDbStore((s) => s.cells);
+  const relationData = useRelationStore((s) => s.data);
   const addField = useDbStore((s) => s.addField);
   const visibleFields = useMemo(() => fields.filter((f) => f.is_hidden === 0), [fields]);
+  // 与 GridView 同源：公式/汇总/反向关系提前算进有效单元格图，字段组件只读值不算式
+  const rowValues = useMemo(() => {
+    const evaluated = computeEvaluatedCells([row], cells, fields, (id) => relationData[id]);
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- 两张图都按行稀疏存储，本行没有条目时运行时 undefined
+    return evaluated.display[row.id] ?? cells[row.id] ?? {};
+  }, [row, cells, fields, relationData]);
   // 放大态：居中大尺寸面板（配合头部放大/缩小按钮切换）
   const [enlarged, setEnlarged] = useState(false);
 
@@ -254,7 +251,13 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
         {/* 属性区 */}
         <div className="flex flex-col gap-0.5 border-b border-neutral-200 px-4 pb-2">
           {visibleFields.map((f) => (
-            <RowPropertyField key={f.id} field={f} row={row} primary={f.id === visibleFields[0]?.id} />
+            <RowPropertyField
+              key={f.id}
+              field={f}
+              row={row}
+              value={rowValues[f.id] ?? null}
+              primary={f.id === visibleFields[0]?.id}
+            />
           ))}
           <button
             data-testid="add-row-field"

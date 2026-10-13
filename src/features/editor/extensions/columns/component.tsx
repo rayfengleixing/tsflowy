@@ -11,9 +11,11 @@ export function ColumnsNodeView(props: ReactNodeViewProps<HTMLElement>) {
 
   const switchTo = (cols: 2 | 3 | 4) => {
     const posVal = typeof getPos === "function" ? getPos() : undefined;
-    if (typeof posVal !== "number" || posVal <= 0) return;
+    // pos 0 是合法位置（无结构锁定的历史文档里 columns 可能就是首块）
+    if (typeof posVal !== "number" || posVal < 0) return;
     const current = editor.state.doc.nodeAt(posVal);
     if (!current) return;
+    if (current.type.name !== "columns") return;
     const currentCols: JSONContent[] = [];
     current.forEach((col) => {
       currentCols.push(col.toJSON() as JSONContent);
@@ -28,6 +30,14 @@ export function ColumnsNodeView(props: ReactNodeViewProps<HTMLElement>) {
           content: [{ type: "paragraph" }],
         },
       );
+    }
+    // 减列不丢内容：溢出列的块并入最后一列，否则用户列里的段落凭空蒸发
+    for (let i = cols; i < currentCols.length; i++) {
+      const overflow = currentCols[i];
+      const last = result[cols - 1];
+      const kept = Array.isArray(last.content) ? last.content : [];
+      const extra = Array.isArray(overflow.content) ? overflow.content : [];
+      last.content = [...kept, ...extra];
     }
     const schema = editor.state.schema;
     const colNodes = result.map((c) => schema.nodeFromJSON(c));

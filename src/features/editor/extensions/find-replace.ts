@@ -14,7 +14,8 @@ import type { Editor } from "@tiptap/core";
 
 export const findReplaceKey = new PluginKey<FindState>("findReplace");
 
-/** 命中数上限：单字符查询在长文里会出几千个 decoration，超出部分不参与高亮 */
+/** 命中数上限：单字符查询在长文里会出几千个 decoration，超出部分不参与高亮；
+ *  「全部替换」同样只作用于上限内命中，UI（FindReplaceBar）负责提示结果不完整 */
 const MAX_MATCHES = 1000;
 
 /** 文档编辑后延迟重算的尾抖动时长：太长高亮跟不上，太短等于没节流 */
@@ -30,6 +31,8 @@ export interface FindState {
   matches: FindMatch[];
   /** 当前命中下标；无命中为 -1 */
   active: number;
+  /** 命中数触顶（MAX_MATCHES）：超出部分未参与高亮，UI 须提示结果不完整 */
+  truncated: boolean;
 }
 
 type FindMeta =
@@ -38,44 +41,92 @@ type FindMeta =
   | { type: "clear" }
   | { type: "recompute" };
 
-/** 文本块内 "文本偏移 → 文档位置" 的映射片（只统计文本字符，原子 inline 节点不占文本偏移） */
-interface Piece {
-  docPos: number;
-  textStart: number;
-  len: number;
+/** 全文拼接索引：每个可匹配字符对应一个文档位置 */
+interface TextIndex {
+  text: string;
+  /** posMap[i] = 第 i 个字符在文档中的位置 */
+  posMap: number[];
 }
 
-export function collectMatches(doc: ProseMirrorNode, query: string): FindMatch[] {
-  const out: FindMatch[] = [];
-  if (!query) return out;
-  const needle = query.toLowerCase();
-  doc.descendants((node, pos) => {
-    if (!node.isTextblock) return true;
-    const text = node.textContent.toLowerCase();
-    if (!text.includes(needle)) return false;
-    const pieces: Piece[] = [];
-    let textStart = 0;
-    node.forEach((child, offset) => {
-      if (!child.isText || !child.text) return;
-      pieces.push({ docPos: pos + 1 + offset, textStart, len: child.text.length });
-      textStart += child.text.length;
-    });
-    const toDocPos = (offset: number): number => {
-      let hit = pieces[0];
-      for (const p of pieces) {
-        if (offset >= p.textStart) hit = p;
-        else break;
-      }
-      return hit.docPos + (offset - hit.textStart);
-    };
-    let idx = text.indexOf(needle);
-    while (idx !== -1 && out.length < MAX_MATCHES) {
-      out.push({ from: toDocPos(idx), to: toDocPos(idx + needle.length) });
-      idx = text.indexOf(needle, idx + needle.length);
+/** 原子 inline 节点（image/mention 等）在拼接索引中的占位符（U+FFFC，OBJ 字符） */
+const ATOM_SENTINEL = String.fromCharCode(0xfffc);
+
+/**
+ * 递归拼接整篇文档的文本：
+ *   - 文本节点逐字符映射（pos + i）；
+ *   - 非文本叶子（image/mention 等 atom）以 ATOM_SENTINEL 占位，hardBreak 以 \n 占位——
+ *     旧实现直接拼接 textContent 会让跨 hardBreak 的假命中出现；
+ *   - 块级兄弟之间插 \n：既不产生跨块假命中，也允许显式含 \n 的查询跨块匹配。
+ */
+function stitchNode(node: ProseMirrorNode, pos: number, text: string[], posMap: number[]) {
+  if (node.isText && node.text) {
+    for (let i = 0; i < node.text.length; i++) {
+      text.push(node.text[i]);
+      posMap.push(pos + i);
     }
-    return false; // 命中已在块内收集完，不再下钻子节点
+    return;
+  }
+  if (node.isLeaf) {
+    text.push(node.type.name === "hardBreak" ? "\n" : ATOM_SENTINEL);
+    posMap.push(pos);
+    return;
+  }
+  // doc 无开闭标记，子节点从 pos 起算；其余容器节点子节点从 pos+1 起算
+  const base = pos + (node.type.name === "doc" ? 0 : 1);
+  let first = true;
+  node.forEach((child, offset) => {
+    if (!child.isInline && !first) {
+      text.push("\n");
+      posMap.push(base + offset);
+    }
+    first = false;
+    stitchNode(child, base + offset, text, posMap);
   });
-  return out;
+}
+
+function buildTextIndex(doc: ProseMirrorNode): TextIndex {
+  const text: string[] = [];
+  const posMap: number[] = [];
+  stitchNode(doc, 0, text, posMap);
+  return { text: text.join(""), posMap };
+}
+
+export interface FindScan {
+  matches: FindMatch[];
+  truncated: boolean;
+}
+
+/** 全档扫描：块内/跨块/跨 atom 的映射统一走拼接索引，命中超 MAX_MATCHES 提前止损 */
+export function scanMatches(doc: ProseMirrorNode, query: string): FindScan {
+  if (!query) return { matches: [], truncated: false };
+  const { text, posMap } = buildTextIndex(doc);
+  let hay = text.toLowerCase();
+  let needle = query.toLowerCase();
+  // toLowerCase 偶尔改变长度（如 İ→i̇，两字符）导致字符↔位置错位：
+  // 长度不一致时退回大小写敏感匹配，保证位置映射可靠
+  if (hay.length !== text.length) {
+    hay = text;
+    needle = query;
+  }
+  const matches: FindMatch[] = [];
+  let count = 0;
+  let truncated = false;
+  let idx = hay.indexOf(needle);
+  while (idx !== -1) {
+    count++;
+    if (count > MAX_MATCHES) {
+      truncated = true;
+      break;
+    }
+    matches.push({ from: posMap[idx], to: posMap[idx + needle.length - 1] + 1 });
+    idx = hay.indexOf(needle, idx + needle.length);
+  }
+  return { matches, truncated };
+}
+
+/** 兼容旧调用方：只取命中列表 */
+export function collectMatches(doc: ProseMirrorNode, query: string): FindMatch[] {
+  return scanMatches(doc, query).matches;
 }
 
 export function getFindState(editor: Editor): FindState | null {
@@ -108,9 +159,9 @@ function replaceable(st: FindState | null): st is FindState {
 
 /** 文档编辑后的重算：命中数变化时把活动项夹回范围内 */
 function recomputeMatches(state: FindState, doc: ProseMirrorNode): FindState {
-  const matches = collectMatches(doc, state.query);
-  const active = matches.length === 0 ? -1 : Math.min(Math.max(state.active, 0), matches.length - 1);
-  return { ...state, matches, active };
+  const scan = scanMatches(doc, state.query);
+  const active = scan.matches.length === 0 ? -1 : Math.min(Math.max(state.active, 0), scan.matches.length - 1);
+  return { ...state, matches: scan.matches, active, truncated: scan.truncated };
 }
 
 /** 替换前/替换后强制同步重算：位置全变或可能吃到延迟窗口内的旧命中，等不起尾抖动 */
@@ -162,10 +213,15 @@ export function clearFind(editor: Editor) {
 }
 
 function applyMeta(state: FindState, tr: Transaction, meta: FindMeta): FindState {
-  if (meta.type === "clear") return { query: "", matches: [], active: -1 };
+  if (meta.type === "clear") return { query: "", matches: [], active: -1, truncated: false };
   if (meta.type === "setQuery") {
-    const matches = collectMatches(tr.doc, meta.query);
-    return { query: meta.query, matches, active: matches.length > 0 ? 0 : -1 };
+    const scan = scanMatches(tr.doc, meta.query);
+    return {
+      query: meta.query,
+      matches: scan.matches,
+      active: scan.matches.length > 0 ? 0 : -1,
+      truncated: scan.truncated,
+    };
   }
   if (meta.type === "recompute") return recomputeMatches(state, tr.doc);
   const n = state.matches.length;
@@ -201,7 +257,7 @@ export const FindReplace = Extension.create({
       new Plugin<FindState>({
         key: findReplaceKey,
         state: {
-          init: () => ({ query: "", matches: [], active: -1 }),
+          init: () => ({ query: "", matches: [], active: -1, truncated: false }),
           apply(tr, prev) {
             const meta = tr.getMeta(findReplaceKey) as FindMeta | undefined;
             if (meta) {

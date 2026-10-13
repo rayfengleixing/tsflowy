@@ -24,15 +24,21 @@ const HANDLE_CLASS = "block-drag-handle";
 const HANDLE_WIDTH = 20; // px，含 padding
 /** 拖拽启动阈值（px） */
 const DRAG_THRESHOLD = 5;
-// 需要跳过的块（它们有自己的 drag handle，见 image/component.tsx）
-const SKIP_BLOCK_TYPES = new Set(["image", "databaseView", "database_view", "imageGallery", "image-gallery"]);
+// 自带拖拽手柄的块（NodeViewWrapper 上标了 data-drag-handle，见 image/columns/gallery 等组件）：
+// 通用手柄不再叠加显示。注意不能把它们从 listTopBlocks 里整个剔除——
+// 该列表同时是 drop 目标来源，剔除后拖拽指示条会跳过这些块定位到更远的块。
+// （旧实现按 data-node-type 匹配 SKIP_BLOCK_TYPES，但全库没有任何节点渲染该属性，等于死代码）
+function hasOwnDragHandle(el: HTMLElement): boolean {
+  return el.hasAttribute("data-drag-handle") || el.querySelector("[data-drag-handle]") !== null;
+}
 
 /** 顶层块信息列表（按 DOM 顺序），用于根据鼠标 Y 计算 hover 目标。 */
-function listTopBlocks(view: EditorView): { dom: HTMLElement; top: number; bottom: number; pos: number }[] {
+function listTopBlocks(
+  view: EditorView,
+): { dom: HTMLElement; top: number; bottom: number; left: number; width: number; pos: number }[] {
   const docEl = view.dom;
-  const rects: { dom: HTMLElement; top: number; bottom: number; pos: number }[] = [];
+  const rects: { dom: HTMLElement; top: number; bottom: number; left: number; width: number; pos: number }[] = [];
   for (const child of Array.from(docEl.children) as HTMLElement[]) {
-    if (SKIP_BLOCK_TYPES.has(child.getAttribute("data-node-type") ?? "")) continue;
     const r = child.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) continue;
     // posAtDOM 是 DOM→文档位置的直接映射；posAtCoords（坐标命中）要跑一次完整
@@ -47,7 +53,7 @@ function listTopBlocks(view: EditorView): { dom: HTMLElement; top: number; botto
     const pos = $.depth >= 1 ? $.before(Math.min($.depth, 1)) : $.pos;
     // 文档结构锁定块（首行 H1 标题 / 第二行分割线）：不显示手柄、不作为拖拽目标
     if (isProtectedStructureBlock(view, pos)) continue;
-    rects.push({ dom: child, top: r.top, bottom: r.bottom, pos });
+    rects.push({ dom: child, top: r.top, bottom: r.bottom, left: r.left, width: r.width, pos });
   }
   return rects;
 }
@@ -108,6 +114,9 @@ class BlockDragView {
   /** 普通 hover 的 rAF 合并（mousemove 高频事件里全量扫描顶层块代价高） */
   private hoverRaf = 0;
   private lastHoverEvent: MouseEvent | null = null;
+  /** 拖拽中同样按帧合并：updateDropTarget 每次都要全量扫描顶层块 */
+  private dragRaf = 0;
+  private lastDragY: number | null = null;
 
   constructor(view: EditorView, editor: Editor) {
     this.view = view;
@@ -194,7 +203,13 @@ class BlockDragView {
         this.dragging.dom.style.opacity = "0.5";
         this.hideHandle();
       }
-      this.updateDropTarget(e.clientY);
+      this.lastDragY = e.clientY;
+      if (this.dragRaf) return;
+      this.dragRaf = requestAnimationFrame(() => {
+        this.dragRaf = 0;
+        const y = this.lastDragY;
+        if (y !== null && this.dragging?.moved) this.updateDropTarget(y);
+      });
       return;
     }
     // 普通 hover：按帧合并（回调里再判断是否在 editor 范围内）
@@ -231,7 +246,7 @@ class BlockDragView {
       this.hideHandle();
       return;
     }
-    if (target.dom.querySelector("[data-drag-handle]")) {
+    if (hasOwnDragHandle(target.dom)) {
       this.hideHandle();
       return;
     }
@@ -242,6 +257,12 @@ class BlockDragView {
     if (!this.dragging) return;
     const session = this.dragging;
     if (session.moved) {
+      // 最后一帧的 mousemove 可能还没跑：同步补算，避免松手瞬间丢目标
+      if (this.dragRaf) {
+        cancelAnimationFrame(this.dragRaf);
+        this.dragRaf = 0;
+        if (this.lastDragY !== null) this.updateDropTarget(this.lastDragY);
+      }
       this.performDrop();
     } else {
       // 点击（未超过拖拽阈值）→ 打开块菜单
@@ -257,6 +278,11 @@ class BlockDragView {
       this.hoverRaf = 0;
     }
     this.lastHoverEvent = null;
+    if (this.dragRaf) {
+      cancelAnimationFrame(this.dragRaf);
+      this.dragRaf = 0;
+    }
+    this.lastDragY = null;
     this.hideHandle();
     this.clearDropTarget();
     if (this.dragging && !this.dragging.moved) this.dragging = null;
@@ -303,8 +329,8 @@ class BlockDragView {
           pos: b.pos,
           sibling: b.dom,
           top: b.top - 1,
-          left: b.dom.getBoundingClientRect().left,
-          width: b.dom.getBoundingClientRect().width,
+          left: b.left,
+          width: b.width,
         };
         break;
       }
@@ -314,8 +340,8 @@ class BlockDragView {
           pos: b.pos,
           sibling: b.dom,
           top: b.bottom - 1,
-          left: b.dom.getBoundingClientRect().left,
-          width: b.dom.getBoundingClientRect().width,
+          left: b.left,
+          width: b.width,
         };
       }
     }
@@ -367,6 +393,13 @@ class BlockDragView {
           // fallback：若目标块不存在（极端情况），插入文档末尾
           targetPos = Math.max(0, tr2.doc.content.size - 1);
         }
+      }
+      // 插入点必须对父节点的内容模型成立：fallback（块不存在→文档末尾）分支可能把
+      // targetPos 落进块内部，那种事务会被 PM 校验/filterTransaction 静默吞掉，提前拒绝。
+      const $t = tr2.doc.resolve(targetPos);
+      if (!$t.parent.contentMatchAt($t.index()).matchType(node.type)) {
+        logger.warn("block drag drop: invalid insertion position", targetPos);
+        return;
       }
       tr2 = tr2.insert(targetPos, slice.content);
       // 不 scrollIntoView：删除+插入后映射的选区常落在文档首尾，会导致滚动跳到顶部/底部

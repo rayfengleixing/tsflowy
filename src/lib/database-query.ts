@@ -83,10 +83,23 @@ export function sortRows(
   return out;
 }
 
+/** 日期单元格 → 本地日历日毫秒：date-only "YYYY-MM-DD" 与含时间 ISO（同 formatCellValue 的 +Z 约定）都归到同日 */
+function dayMs(value: CellValue): number | null {
+  if (typeof value !== "string") return null;
+  const s = value.trim();
+  if (!s) return null;
+  const d = s.length === 10 ? new Date(`${s}T00:00:00`) : new Date(s.endsWith("Z") ? s : `${s}Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+const DATE_FIELD_TYPES: ReadonlySet<FieldType> = new Set<FieldType>(["date", "created_at", "last_edited_at"]);
+
 /**
  * 单条筛选求值。
  * select 字段的 equals 用选项 id；multi_select 的 contains 判断数组是否含选项 id；
  * checkbox 用 checked/unchecked；relation 的 contains 判断数组是否含对端行 id。
+ * 日期字段按日历日比较（筛选操作数来自 <input type="date">，恒为天粒度）。
  */
 export function evaluateFilter(fieldType: FieldType, value: CellValue, op: FilterOp, operand: CellValue): boolean {
   const empty = isCellEmpty(value);
@@ -101,6 +114,29 @@ export function evaluateFilter(fieldType: FieldType, value: CellValue, op: Filte
       return fieldType === "checkbox" && value !== true;
   }
   if (empty) return false; // 需要比较的运算符对空值一律不命中
+  if (
+    DATE_FIELD_TYPES.has(fieldType) &&
+    (op === "equals" || op === "not_equals" || op === "gt" || op === "gte" || op === "lt" || op === "lte")
+  ) {
+    if (isCellEmpty(operand)) return op === "not_equals"; // 操作数未填：与旧的字符串比较行为一致（不改变命中集）
+    const a = dayMs(value);
+    const b = dayMs(operand);
+    if (a === null || b === null) return false;
+    switch (op) {
+      case "equals":
+        return a === b;
+      case "not_equals":
+        return a !== b;
+      case "gt":
+        return a > b;
+      case "gte":
+        return a >= b;
+      case "lt":
+        return a < b;
+      default:
+        return a <= b;
+    }
+  }
   switch (op) {
     case "contains": {
       if (fieldType === "multi_select" || fieldType === "relation") {

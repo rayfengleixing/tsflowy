@@ -19,7 +19,11 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [replacement, setReplacement] = useState("");
   const [showReplace, setShowReplace] = useState(false);
-  const [info, setInfo] = useState<{ total: number; active: number }>({ total: 0, active: -1 });
+  const [info, setInfo] = useState<{ total: number; active: number; truncated: boolean }>({
+    total: 0,
+    active: -1,
+    truncated: false,
+  });
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -38,7 +42,12 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
       const st = getFindState(editor);
       const total = st?.matches.length ?? 0;
       const active = st?.active ?? -1;
-      setInfo((prev) => (prev.total === total && prev.active === active ? prev : { total, active }));
+      const truncated = st?.truncated ?? false;
+      setInfo((prev) =>
+        prev.total === total && prev.active === active && prev.truncated === truncated
+          ? prev
+          : { total, active, truncated },
+      );
     };
     sync();
     editor.on("transaction", sync);
@@ -91,7 +100,11 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
           }}
         />
         <span className="shrink-0 text-[11px] tabular-nums text-neutral-400">
-          {info.total === 0 ? (query ? t("find.noResult") : "") : `${info.active + 1}/${info.total}`}
+          {info.total === 0
+            ? query
+              ? t("find.noResult")
+              : ""
+            : `${info.active + 1}/${info.total}${info.truncated ? "+" : ""}`}
         </span>
         <button
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-neutral-700 disabled:opacity-40 dark:hover:bg-neutral-800"
@@ -128,6 +141,12 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
+
+      {info.truncated && (
+        <div className="border-t border-neutral-200 px-2 pb-1.5 text-[11px] text-amber-600 dark:border-neutral-800">
+          {t("find.truncated")}
+        </div>
+      )}
 
       {showReplace && (
         <div className="flex items-center gap-1 border-t border-neutral-200 px-2 py-1.5 dark:border-neutral-800">

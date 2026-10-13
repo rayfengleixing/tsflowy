@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { evalFormula, renameFormulaRef } from "./database-formula";
+import type { DatabaseField } from "@/types/database";
+import { computeFormula, computeRowFormulas, evalFormula, FORMULA_CYCLE, renameFormulaRef } from "./database-formula";
 
 describe("evalFormula", () => {
   const ref = (n: string) => ({ a: 2, b: 3, empty: null })[n] ?? null;
@@ -129,5 +130,53 @@ describe("renameFormulaRef", () => {
 
   it("未闭合的引用不改写", () => {
     expect(renameFormulaRef("{价格", "价格", "单价")).toBe("{价格");
+  });
+});
+
+describe("computeRowFormulas 依赖图求值", () => {
+  const mk = (id: string, name: string, formula?: string): DatabaseField => ({
+    id,
+    database_view_id: "v1",
+    name,
+    field_type: formula !== undefined ? "formula" : "number",
+    options: formula !== undefined ? JSON.stringify({ kind: "formula", formula }) : JSON.stringify({ kind: "none" }),
+    width: 120,
+    is_hidden: 0,
+    position: 0,
+  });
+
+  it("公式引用公式：取对方的计算值而不是空存储格", () => {
+    const fields = [mk("qty", "数量"), mk("total", "金额", "{数量} * 2"), mk("shown", "展示", "{金额} + 1")];
+    const values = computeRowFormulas({ qty: 20 }, fields);
+    expect(values.get("total")).toBe(40);
+    expect(values.get("shown")).toBe(41);
+  });
+
+  it("互相引用 → 环成员标记 #CYCLE，不递归不死循环", () => {
+    const fields = [mk("a", "A", "{B}"), mk("b", "B", "{A}")];
+    const values = computeRowFormulas({}, fields);
+    expect(values.get("a")).toBe(FORMULA_CYCLE);
+    expect(values.get("b")).toBe(FORMULA_CYCLE);
+  });
+
+  it("引用环成员（自己不在环里）：拿到 #CYCLE 文本按无效参与运算", () => {
+    const fields = [mk("a", "A", "{B}"), mk("b", "B", "{A}"), mk("c", "C", "{A} + 1")];
+    const values = computeRowFormulas({}, fields);
+    expect(values.get("c")).toBeNull();
+  });
+
+  it("自引用保持旧行为：按无效（null），不标环", () => {
+    const fields = [mk("s", "S", "{S} + 1")];
+    expect(computeRowFormulas({}, fields).get("s")).toBeNull();
+  });
+
+  it("拓扑序与声明顺序无关", () => {
+    const fields = [mk("shown", "展示", "{金额} * 10"), mk("total", "金额", "{数量} + 1"), mk("qty", "数量")];
+    expect(computeRowFormulas({ qty: 4 }, fields).get("shown")).toBe(50);
+  });
+
+  it("computeFormula 走同一套依赖求值", () => {
+    const fields = [mk("qty", "数量"), mk("total", "金额", "{数量} * 2"), mk("shown", "展示", "{金额} + 1")];
+    expect(computeFormula(fields[2], { qty: 20 }, fields)).toBe(41);
   });
 });

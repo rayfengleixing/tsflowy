@@ -21,6 +21,7 @@ import { logger } from "./logger";
 import { jsonToMarkdown } from "./markdown";
 import { searchApi } from "./search";
 import { flattenTree } from "./tree";
+import { useRelationStore } from "@/stores/relation";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { CellValue, DatabaseField } from "@/types/database";
 import type { ViewNode } from "@/types/models";
@@ -304,6 +305,8 @@ async function addDatabaseRow(args: { database: string; cells?: Record<string, u
     written.push(field.name);
   }
   const tail = skipped.length > 0 ? t("ai.actionCellsSkipped", { fields: skipped.join(", ") }) : "";
+  // 绕开了 database store 的写入口：手动失效 relation 缓存，否则其它库的关联/汇总列看不到这条新行
+  useRelationStore.getState().invalidate([node.id]);
   return {
     ok: true,
     id: row.id,

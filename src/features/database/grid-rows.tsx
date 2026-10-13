@@ -30,7 +30,7 @@ export function GridGroupHeaderRow({
   colSpan: number;
 }) {
   return (
-    <tr>
+    <tr data-group-header="1">
       <td
         colSpan={colSpan}
         className="border-b border-neutral-200 bg-neutral-50 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900/40"
@@ -65,7 +65,7 @@ export function GridSubtotalRow({
   cells: Record<string, Record<string, CellValue>>;
 }) {
   return (
-    <tr className="bg-neutral-50/80 dark:bg-neutral-900/40">
+    <tr data-subtotal="1" className="bg-neutral-50/80 dark:bg-neutral-900/40">
       <td className="border-b border-r border-neutral-200 px-1 text-right text-[11px] text-neutral-400 dark:border-neutral-700">
         {t("grid.subtotal")}
       </td>

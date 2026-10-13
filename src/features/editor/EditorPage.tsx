@@ -498,10 +498,11 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     return registerDocEditor(view.id, editor);
   }, [editor, view.id]);
 
-  // AI 助手桥接：供 AI 面板取当前页/选区文本、回填内容。分栏时只注册主栏
-  // （与 useEditorStore 推送 editor 的约定一致），避免副栏抢占回填目标。
+  // AI 助手桥接：供 AI 面板取当前页/选区文本、回填内容。光标/选区类目标
+  // （registerAiEditor）只认主栏，与 useEditorStore 推送 editor 的约定一致；
+  // 按 viewId 的登记主副栏都要有，故此处不能按 isMainPane 提前 return。
   useEffect(() => {
-    if (editor.isDestroyed || !isMainPane) return;
+    if (editor.isDestroyed) return;
     // 回填文本 → ProseMirror 节点：含 markdown 结构（# 标题 / - 列表 / ``` 围栏…）时走
     // markdownToJson，否则按行拆段落保留换行。复用粘贴的转换逻辑，避免把 **粗体**、- 列表
     // 这类标记原样落成字面文本，也避免多段被合并成一段。
@@ -664,8 +665,12 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         if (beforeNode.eq(editor.state.doc)) return true;
         editor.commands.redo();
         if (!editor.state.doc.eq(current)) {
-          // redo 没能复原（撤销栈被清空等极端情况）：整体写回原文兜底
-          editor.view.dispatch(editor.state.tr.replaceWith(0, editor.state.doc.content.size, current.content));
+          // redo 没能复原（撤销栈被清空等极端情况）：整体写回原文兜底。
+          // 必须带 STRUCTURE_SYNC_META：不带的话，写回文档首块的结构事务会被结构锁定
+          // filterTransaction 拒掉，兜底形同虚设，用户内容就停在错的状态上。
+          const tr = editor.state.tr.replaceWith(0, editor.state.doc.content.size, current.content);
+          tr.setMeta(STRUCTURE_SYNC_META, true);
+          editor.view.dispatch(tr);
         }
         return false;
       },

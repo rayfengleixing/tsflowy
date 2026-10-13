@@ -427,11 +427,22 @@ function evalNode(node: Node, resolveRef: (name: string) => FormulaValue): Formu
 /** 求值表达式；引用值通过 resolveRef 回调获取（返回 null 视为该引用为空）。
  *  非法表达式 → null。 */
 export function evalFormula(expr: string, resolveRef: (name: string) => FormulaValue): FormulaValue {
-  const tokens = tokenize(expr);
-  if (!tokens || tokens.length === 0) return null;
-  const ast = parse(tokens);
+  const ast = parseCached(expr);
   if (!ast) return null;
   return evalNode(ast, resolveRef);
+}
+
+// tokenize/parse 是纯函数：同一表达式在多行/多单元格渲染中反复出现，
+// 缓存 AST 后逐格求值不再重复词法/语法分析（大表格渲染的主要开销之一）。
+const astCache = new Map<string, Node | null>();
+
+function parseCached(expr: string): Node | null {
+  if (astCache.has(expr)) return astCache.get(expr) ?? null;
+  const tokens = tokenize(expr);
+  const ast = tokens && tokens.length > 0 ? parse(tokens) : null;
+  if (astCache.size > 256) astCache.clear();
+  astCache.set(expr, ast);
+  return ast;
 }
 
 /** 单元格值 → 公式里的引用值：数组（多选/关联/附件）转文本串参与字符串运算，
@@ -444,21 +455,128 @@ function cellToFormulaValue(v: CellValue): FormulaValue {
   return v;
 }
 
-/** 公式字段当前行的值：字段名 → 该行同字段值；解析失败/引用无效 → null。
- *  纯展示用途（Grid/行详情/CSV 导出），不落库。 */
+/** 环依赖（A={B}、B={A}）的公式字段显示值 */
+export const FORMULA_CYCLE = "#CYCLE";
+
+/** 收集表达式引用的字段名（AST 里的 ref 节点；非法表达式 → 空） */
+function formulaRefNames(expr: string): Set<string> {
+  const names = new Set<string>();
+  const walk = (node: Node) => {
+    switch (node.t) {
+      case "ref":
+        names.add(node.name);
+        break;
+      case "neg":
+      case "not":
+        walk(node.arg);
+        break;
+      case "bin":
+        walk(node.l);
+        walk(node.r);
+        break;
+      case "call":
+        for (const a of node.args) walk(a);
+        break;
+    }
+  };
+  const ast = parseCached(expr);
+  if (ast) walk(ast);
+  return names;
+}
+
+/**
+ * 一行内所有公式字段的值（fieldId → 值），按依赖顺序求值：
+ * 公式引用另一个公式字段时取的是**对方的计算值**（旧实现读对方存储格——恒为空，
+ * 公式串公式静默失效）。互相引用的字段构成环 → 成员标记 FORMULA_CYCLE，
+ * 不会无限递归也不会静默变空。无公式字段时返回空 Map。
+ */
+export function computeRowFormulas(
+  rowCells: Record<string, CellValue>,
+  fields: DatabaseField[],
+): Map<string, FormulaValue> {
+  const values = new Map<string, FormulaValue>();
+  const exprs = new Map<string, string>();
+  for (const f of fields) {
+    if (f.field_type !== "formula") continue;
+    const opts = parseFieldOptions(f.options);
+    if (opts.kind === "formula" && opts.formula.trim()) exprs.set(f.id, opts.formula);
+  }
+  if (exprs.size === 0) return values;
+
+  const byName = new Map<string, DatabaseField>();
+  for (const f of fields) if (!byName.has(f.name)) byName.set(f.name, f);
+
+  // 公式字段间的依赖边（自引用不建边——保持旧行为：按空值参与运算）
+  const deps = new Map<string, string[]>();
+  for (const [id, expr] of exprs) {
+    const ds = new Set<string>();
+    for (const name of formulaRefNames(expr)) {
+      const t = byName.get(name);
+      if (t && t.id !== id && exprs.has(t.id)) ds.add(t.id);
+    }
+    deps.set(id, [...ds]);
+  }
+
+  // 环判定：依赖能绕回自己的字段是环成员（下游引用环的字段不算环）。
+  // 自引用已在建边时排除，这里找到的都是长度 ≥2 的互引环。
+  const onCycle = (start: string): boolean => {
+    const seen = new Set<string>();
+    const stack = [...deps.get(start)!];
+    while (stack.length > 0) {
+      const d = stack.pop()!;
+      if (d === start) return true;
+      if (seen.has(d)) continue;
+      seen.add(d);
+      stack.push(...deps.get(d)!);
+    }
+    return false;
+  };
+  const evaluate = (id: string) => {
+    values.set(
+      id,
+      evalFormula(exprs.get(id)!, (name) => {
+        const t = byName.get(name);
+        if (!t || t.id === id) return null; // 引用自身/不存在 → 无效
+        if (exprs.has(t.id)) return values.get(t.id) ?? null; // 环成员=#CYCLE；其余按拓扑序已有值
+        return cellToFormulaValue(rowCells[t.id] ?? null);
+      }),
+    );
+  };
+
+  for (const id of exprs.keys()) {
+    if (onCycle(id)) values.set(id, FORMULA_CYCLE);
+  }
+  // 其余字段按依赖就绪顺序求值
+  const todo = [...exprs.keys()].filter((id) => !values.has(id));
+  let progressed = true;
+  while (todo.length > 0 && progressed) {
+    progressed = false;
+    for (let i = 0; i < todo.length;) {
+      const id = todo[i];
+      if (deps.get(id)!.every((d) => values.has(d))) {
+        evaluate(id);
+        todo.splice(i, 1);
+        progressed = true;
+      } else {
+        i++;
+      }
+    }
+  }
+  // 理论上到不了这里（环依赖已预置值）；出现即图有 bug，宁可标错也不留空洞
+  for (const id of todo) values.set(id, FORMULA_CYCLE);
+  return values;
+}
+
+/** 公式字段当前行的值：字段名 → 该行同字段值；解析失败/引用无效 → null，环依赖 → FORMULA_CYCLE。
+ *  纯展示用途（Grid/行详情/CSV 导出），不落库。
+ *  整行/整表批量场景请直接用 computeRowFormulas（每行只建一次依赖图）。 */
 export function computeFormula(
   field: DatabaseField,
   rowCells: Record<string, CellValue>,
   fields: DatabaseField[],
 ): FormulaValue {
-  const opts = parseFieldOptions(field.options);
-  if (opts.kind !== "formula" || !opts.formula.trim()) return null;
-  const byName = new Map(fields.map((f) => [f.name, f]));
-  return evalFormula(opts.formula, (name) => {
-    const target = byName.get(name);
-    if (!target || target.id === field.id) return null; // 引用自身/不存在 → 无效
-    return cellToFormulaValue(rowCells[target.id] ?? null);
-  });
+  if (field.field_type !== "formula") return null;
+  return computeRowFormulas(rowCells, fields).get(field.id) ?? null;
 }
 
 /** 字段改名时同步改写公式里的 {旧名} 引用；只动引用，数字/运算符/其它引用原样保留。

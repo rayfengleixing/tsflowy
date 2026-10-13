@@ -107,11 +107,21 @@ pub fn open_asset(app: tauri::AppHandle, relative: String) -> Result<(), String>
         .map_err(|e| format!("failed to open asset: {e}"))
 }
 
-/// 读取任意 UTF-8 文本文件（CSV 导入用；路径来自文件对话框）
+/// 读取文本文件（CSV 导入用；路径来自文件对话框）。
+/// UTF-8 优先；非 UTF-8 按 GBK 解码回退——中文版 Excel 存出的「CSV」默认就是 GBK，
+/// 直接 read_to_string 会报 InvalidData 让用户以为文件坏了。
 #[tauri::command]
 pub async fn read_text_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
     ensure_dialog_authorized(&app, &path)?;
-    fs::read_to_string(&path).map_err(|e| format!("failed to read {path}: {e}"))
+    let bytes = fs::read(&path).map_err(|e| format!("failed to read {path}: {e}"))?;
+    if let Ok(s) = std::str::from_utf8(&bytes) {
+        return Ok(s.to_string());
+    }
+    let (decoded, _, had_errors) = encoding_rs::GBK.decode(&bytes);
+    if had_errors {
+        return Err(format!("failed to decode {path}: not valid UTF-8 or GBK"));
+    }
+    Ok(decoded.into_owned())
 }
 
 /// 写入任意 UTF-8 文本文件（CSV 导出用；路径来自文件对话框）

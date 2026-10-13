@@ -110,6 +110,21 @@ describe("evaluateFilter", () => {
     expect(evaluateFilter("date", "2026-08-31", "lt", "2027-01-01")).toBe(true);
   });
 
+  it("compares date fields by calendar day, including time-bearing cells", () => {
+    // 本地正午 → ISO：dayMs 折回本地日，任何时区下都落在同一天，测试不依赖运行机器时区
+    const noonIso = (day: string) => new Date(`${day}T12:00:00`).toISOString();
+    const cell = noonIso("2026-10-13");
+    expect(evaluateFilter("date", cell, "equals", "2026-10-13")).toBe(true);
+    expect(evaluateFilter("date", cell, "not_equals", "2026-10-12")).toBe(true);
+    expect(evaluateFilter("date", cell, "gt", "2026-10-13")).toBe(false); // 旧字符串比较：带时间恒大于纯日期
+    expect(evaluateFilter("date", cell, "gte", "2026-10-13")).toBe(true);
+    expect(evaluateFilter("date", cell, "lt", "2026-10-14")).toBe(true);
+    expect(evaluateFilter("created_at", cell, "lte", "2026-10-13")).toBe(true);
+    // 操作数未填保持旧行为：equals 不命中、not_equals 全命中
+    expect(evaluateFilter("date", "2026-10-13", "equals", null)).toBe(false);
+    expect(evaluateFilter("date", "2026-10-13", "not_equals", null)).toBe(true);
+  });
+
   it("evaluates checkbox ops", () => {
     expect(evaluateFilter("checkbox", true, "checked", null)).toBe(true);
     expect(evaluateFilter("checkbox", false, "unchecked", null)).toBe(true);
