@@ -15,6 +15,31 @@ use crate::db::{
     WorkspaceRow,
 };
 
+// ---------- 命令入口参数校验 ----------
+// UI 入口已先行空白/同名校验；这里是持久层边界上的第二道防线：
+// 老版本前端、同步重放或任何绕过 UI 的调用者，都不该把空名或超长 id/name 写进库。
+
+/// 主键由前端 newId()（UUID，36 位）生成，Rust 派生 id 追加 `_序号` 后缀；上限 64 足够宽松
+fn check_id(id: &str) -> Result<(), String> {
+    if id.trim().is_empty() {
+        return Err("id 不能为空".to_string());
+    }
+    if id.chars().count() > 64 {
+        return Err("id 过长（最多 64 字符）".to_string());
+    }
+    Ok(())
+}
+
+fn check_name(name: &str) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("名称不能为空（仅空白）".to_string());
+    }
+    if name.chars().count() > 500 {
+        return Err("名称过长（最多 500 字符）".to_string());
+    }
+    Ok(())
+}
+
 // ---------- workspace ----------
 
 #[tauri::command]
@@ -30,12 +55,16 @@ pub async fn workspace_create(
     name: String,
 ) -> Result<WorkspaceRow, String> {
     // id 由前端 newId() 生成后传入
+    check_id(&id)?;
+    check_name(&name)?;
     let conn = db.write_conn()?;
     db::workspaces::create(&conn, &id, &name)
 }
 
 #[tauri::command]
 pub async fn workspace_rename(db: State<'_, Db>, id: String, name: String) -> Result<(), String> {
+    check_id(&id)?;
+    check_name(&name)?;
     let conn = db.write_conn()?;
     db::workspaces::rename(&conn, &id, &name)
 }
@@ -115,6 +144,8 @@ pub async fn view_create(
     extra: Option<String>,
     source_id: Option<String>,
 ) -> Result<ViewRow, String> {
+    check_id(&id)?;
+    check_name(&name)?;
     let conn = db.write_conn()?;
     db::views::create(
         &conn,
@@ -151,6 +182,8 @@ pub async fn view_duplicate(
     name: String,
 ) -> Result<ViewDuplicateResult, String> {
     // new_id 由前端 newId() 生成（后代 id 在 Rust 侧派生）
+    check_id(&new_id)?;
+    check_name(&name)?;
     let conn = db.write_conn()?;
     let (view, documents) = db::views::duplicate(&conn, &id, &new_id, &name)?;
     Ok(ViewDuplicateResult { view, documents })
@@ -158,6 +191,8 @@ pub async fn view_duplicate(
 
 #[tauri::command]
 pub async fn view_rename(db: State<'_, Db>, id: String, name: String) -> Result<(), String> {
+    check_id(&id)?;
+    check_name(&name)?;
     let conn = db.write_conn()?;
     db::views::rename(&conn, &id, &name)
 }
@@ -442,8 +477,11 @@ pub async fn ai_usage_summary(db: State<'_, Db>) -> Result<AiUsageSummary, Strin
 #[tauri::command]
 pub async fn ai_session_delete(db: State<'_, Db>, id: String) -> Result<(), String> {
     let conn = db.write_conn()?;
-    conn.execute("DELETE FROM ai_sessions WHERE id = ?1", rusqlite::params![id])
-        .map_err(|e| format!("删除 AI 会话失败：{e}"))?;
+    conn.execute(
+        "DELETE FROM ai_sessions WHERE id = ?1",
+        rusqlite::params![id],
+    )
+    .map_err(|e| format!("删除 AI 会话失败：{e}"))?;
     Ok(())
 }
 
@@ -518,12 +556,17 @@ pub async fn field_create(
     name: Option<String>,
 ) -> Result<DatabaseFieldRow, String> {
     // id 由前端 newId() 生成
+    check_id(&id)?;
+    if let Some(n) = &name {
+        check_name(n)?;
+    }
     let conn = db.write_conn()?;
     db::database::create_field(&conn, &view_id, &id, &field_type, name.as_deref())
 }
 
 #[tauri::command]
 pub async fn field_rename(db: State<'_, Db>, field_id: String, name: String) -> Result<(), String> {
+    check_name(&name)?;
     let conn = db.write_conn()?;
     db::database::rename_field(&conn, &field_id, &name)
 }
@@ -691,4 +734,27 @@ pub async fn csv_import(
     let conn = db.write_conn()?;
     let (_, _, cells) = db::database::csv_import(&conn, &view_id, &fields, &rows)?;
     Ok(cells as i64)
+}
+
+#[cfg(test)]
+mod entry_checks {
+    use super::{check_id, check_name};
+
+    #[test]
+    fn blank_or_oversize_id_rejected() {
+        check_id("0f6c1f2e-2b48-4c30-9b6d-7c8ef2a9c1d3").unwrap(); // UUID 36 位
+        check_id(&"a".repeat(64)).unwrap(); // 边界内
+        assert!(check_id("").is_err());
+        assert!(check_id("   ").is_err());
+        assert!(check_id(&"a".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn blank_or_oversize_name_rejected() {
+        check_name("页面").unwrap();
+        check_name(&"名".repeat(500)).unwrap(); // 按字符数计，中文一个字算 1
+        assert!(check_name("").is_err());
+        assert!(check_name(" \u{3000}\t\n").is_err()); // 全角空格/制表符都算空白
+        assert!(check_name(&"名".repeat(501)).is_err());
+    }
 }

@@ -12,7 +12,6 @@
     "fs:allow-appdata-write-recursive",
     "fs:allow-appconfig-write-recursive",
     "fs:allow-appcache-write-recursive",
-    "fs:allow-home-read",
     "dialog:allow-open",
     "dialog:allow-save",
     "dialog:default",

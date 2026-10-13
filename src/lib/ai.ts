@@ -35,6 +35,8 @@ export interface AiConfig {
   price_output: number;
   has_api_key: boolean;
   api_key_masked: string;
+  /** true = 系统凭据库不可用（或明文清不掉），Key 目前明文存于 config.json */
+  api_key_plaintext?: boolean;
 }
 
 export interface AiChatMessage {

@@ -122,7 +122,11 @@ fn decide(local: &str, remote: &str, last: Option<&str>, remote_newer: bool) -> 
 
 /// 单向补齐：src 里有而 dst 里没有、且未被墓碑声明删除的文件复制过去。
 /// 附件文件名是纳秒时间戳且从不改写，因此"同名即同内容"，跳过已存在的即可。
-fn copy_missing_files(src: &Path, dst: &Path, tombstones: &HashSet<String>) -> Result<usize, String> {
+fn copy_missing_files(
+    src: &Path,
+    dst: &Path,
+    tombstones: &HashSet<String>,
+) -> Result<usize, String> {
     if !src.is_dir() {
         return Ok(0);
     }
@@ -203,7 +207,10 @@ fn write_tombstone_file(p: &Path, set: &HashSet<String>) -> Result<(), String> {
 
 /// 本机删除附件后追加墓碑（供 orphan purge 等调用）。
 /// data_dir 为数据目录；清单不存在或写失败返回 Err（调用方记日志即可，不阻断删除）。
-pub(crate) fn append_local_tombstones(app: &tauri::AppHandle, rel_paths: &[String]) -> Result<(), String> {
+pub(crate) fn append_local_tombstones(
+    app: &tauri::AppHandle,
+    rel_paths: &[String],
+) -> Result<(), String> {
     if rel_paths.is_empty() {
         return Ok(());
     }
@@ -278,7 +285,8 @@ fn atomic_write_bytes(p: &Path, bytes: &[u8]) -> Result<(), String> {
 /// 原子替换目标文件：先拷到同目录临时文件，再 rename 覆盖。
 /// 网盘/资源管理器任何时刻看到的都是"旧完整文件"或"新完整文件"，
 /// 不会出现先删后拷之间的空窗（网盘可能把空窗同步出去导致远端库丢失）。
-fn replace_file(from: &Path, to: &Path) -> Result<(), String> {    let unique = SystemTime::now()
+fn replace_file(from: &Path, to: &Path) -> Result<(), String> {
+    let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
@@ -322,8 +330,7 @@ fn save_conflict(sync_dir: &Path, src: &Path, tag: &str) -> Result<String, Strin
     }
     fs::rename(&tmp, &target).map_err(|e| {
         let _ = fs::remove_file(&tmp);
-        format!("install conflict copy failed: {e}"
-        )
+        format!("install conflict copy failed: {e}")
     })?;
     prune_conflicts(&dir);
     Ok(name)
@@ -443,10 +450,7 @@ pub async fn run_sync(
         .map_err(|e| format!("sync task failed: {e}"))?
 }
 
-fn run_sync_blocking(
-    app: tauri::AppHandle,
-    db: SharedDb,
-) -> Result<SyncRunResult, String> {
+fn run_sync_blocking(app: tauri::AppHandle, db: SharedDb) -> Result<SyncRunResult, String> {
     let mut cfg = files::load_app_config(&app);
     let Some(dir) = cfg.sync.dir.clone().filter(|d| !d.trim().is_empty()) else {
         return Err("sync dir not configured".to_string());
@@ -685,7 +689,9 @@ pub async fn restore_sync_conflict(
     name: String,
 ) -> Result<(), String> {
     // 只接受 conflicts/ 下的纯文件名，拒绝任何路径成分
-    if name.is_empty() || Path::new(&name).file_name().and_then(|s| s.to_str()) != Some(name.as_str()) {
+    if name.is_empty()
+        || Path::new(&name).file_name().and_then(|s| s.to_str()) != Some(name.as_str())
+    {
         return Err("invalid conflict name".to_string());
     }
     let cfg = files::load_app_config(&app);
@@ -759,8 +765,7 @@ mod tests {
 
     #[test]
     fn copy_and_sync_assets_skip_tombstoned_files() {
-        let base =
-            std::env::temp_dir().join(format!("tsflowy-sync-tomb-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("tsflowy-sync-tomb-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let local = base.join("local/assets");
         let remote = base.join("remote/assets");

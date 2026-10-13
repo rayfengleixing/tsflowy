@@ -128,11 +128,17 @@ pub fn create_field(
 }
 
 pub fn rename_field(conn: &Connection, field_id: &str, name: &str) -> Result<(), String> {
-    conn.execute(
-        "UPDATE database_fields SET name = ?1 WHERE id = ?2",
-        params![name, field_id],
-    )
-    .map_err(dberr("rename field"))?;
+    // 归属校验：id 不存在（错视图/已删除的悬空引用）时报错，而不是静默 no-op——
+    // 否则前端还会带着旧 name 乐观更新，公式改名连锁也整条走空
+    let affected = conn
+        .execute(
+            "UPDATE database_fields SET name = ?1 WHERE id = ?2",
+            params![name, field_id],
+        )
+        .map_err(dberr("rename field"))?;
+    if affected == 0 {
+        return Err(format!("重命名字段失败：字段 {field_id} 不存在"));
+    }
     Ok(())
 }
 
@@ -633,6 +639,17 @@ mod tests {
         assert_eq!(fs[0].width, 240);
         assert_eq!(fs[0].is_hidden, 1);
         assert_eq!(fs[0].options, r#"{"kind":"number"}"#);
+    }
+
+    #[test]
+    fn rename_field_of_missing_id_errors() {
+        // 悬空/跨视图 field_id 不能静默 no-op：前端会带着旧名乐观更新，公式连锁整条走空
+        let conn = setup();
+        create_field(&conn, "v1", "f1", "text", None).unwrap();
+        let err = rename_field(&conn, "ghost", "幽灵").unwrap_err();
+        assert!(err.contains("ghost"), "报错需带上缺失的字段 id：{err}");
+        // 真实字段不受影响
+        assert_eq!(list_fields(&conn, "v1").unwrap()[0].name, "text");
     }
 
     #[test]

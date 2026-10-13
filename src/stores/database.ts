@@ -242,20 +242,22 @@ export function createDatabaseStore() {
 
       renameField: async (id, name) => {
         const trimmed = name.trim();
+        // 空白名直接丢弃：持久层入口校验会拒空，UI 侧不该把报错抛给用户
+        if (!trimmed) return;
         if (hasDuplicateName(get().fields, trimmed, id)) {
           toast.error(t("field.nameDuplicate", { name: trimmed }));
           return;
         }
         const before = get().fields.find((f) => f.id === id);
-        await databaseApi.renameField(id, name);
-        set({ fields: get().fields.map((f) => (f.id === id ? { ...f, name } : f)) });
-        if (!before || before.name === name) return;
+        await databaseApi.renameField(id, trimmed);
+        set({ fields: get().fields.map((f) => (f.id === id ? { ...f, name: trimmed } : f)) });
+        if (!before || before.name === trimmed) return;
         // 公式以 {字段名} 引用：不同步改写的话，重命名会让引用该字段的公式全部变空
         const formulas = get().fields.filter((f) => f.id !== id && parseFieldOptions(f.options).kind === "formula");
         for (const f of formulas) {
           const opts = parseFieldOptions(f.options);
           if (opts.kind !== "formula") continue;
-          const next = renameFormulaRef(opts.formula, before.name, name);
+          const next = renameFormulaRef(opts.formula, before.name, trimmed);
           if (next === opts.formula) continue;
           await get().updateFieldOptions(f.id, { ...opts, formula: next });
         }

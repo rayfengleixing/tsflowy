@@ -66,7 +66,8 @@ const WRITE_COMMANDS = new Set([
   "workspace_rename",
   "workspace_set_icon",
   "workspace_remove",
-  "view_touch_visited",
+  // view_touch_visited 不在列：仅"打开过页面"就刷新访问时间戳，若参与防抖，
+  // 用户只是浏览也会不断触发自动同步/上传，还会推高两端冲突概率
   "view_create",
   "view_duplicate",
   "view_rename",

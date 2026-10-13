@@ -86,7 +86,10 @@ pub async fn scan_orphan_assets(
         .map_err(|e| format!("orphan scan task failed: {e}"))?
 }
 
-fn scan_orphan_assets_blocking(app: tauri::AppHandle, db: crate::db::SharedDb) -> Result<OrphanScan, String> {
+fn scan_orphan_assets_blocking(
+    app: tauri::AppHandle,
+    db: crate::db::SharedDb,
+) -> Result<OrphanScan, String> {
     let assets_dir = app_data_dir(&app)?.join(ASSETS_DIR);
     if !assets_dir.is_dir() {
         return Ok(OrphanScan {

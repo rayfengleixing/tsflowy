@@ -179,8 +179,8 @@ pub fn search(
 /// 因此对中文串切 3 字滑窗、对英数串按空白/标点切词，再用 OR 组合交给 bm25 排序。
 pub(crate) fn keywords(query: &str, max: usize) -> Vec<String> {
     const SEPARATORS: &[char] = &[
-        ' ', '\t', '\n', '\r', '，', '。', '！', '？', '；', '：', '、', '（', '）', '《', '》', '“', '”', '‘',
-        '’', ',', '.', '!', '?', ';', ':', '(', ')', '[', ']', '{', '}', '/', '-',
+        ' ', '\t', '\n', '\r', '，', '。', '！', '？', '；', '：', '、', '（', '）', '《', '》',
+        '“', '”', '‘', '’', ',', '.', '!', '?', ';', ':', '(', ')', '[', ']', '{', '}', '/', '-',
     ];
     let mut out: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -221,7 +221,11 @@ pub(crate) fn keywords(query: &str, max: usize) -> Vec<String> {
 
 /// 把关键词拼成 FTS5 的 MATCH 表达式：`"词一" OR "词二"`（每个词已按短语转义）
 pub(crate) fn match_expr(words: &[String]) -> String {
-    words.iter().map(|w| escape_fts(w)).collect::<Vec<_>>().join(" OR ")
+    words
+        .iter()
+        .map(|w| escape_fts(w))
+        .collect::<Vec<_>>()
+        .join(" OR ")
 }
 
 /// 在单篇文档内检索与查询词相关的片段（AI @ 引用的上下文用）。
@@ -245,10 +249,9 @@ pub fn search_in_view(
                ORDER BY bm25(documents_fts) LIMIT ?3";
     let mut stmt = conn.prepare(sql).map_err(dberr("search in view"))?;
     let rows = stmt
-        .query_map(
-            params![view_id, match_expr(&words), limit as i64],
-            |r| r.get::<_, String>(0),
-        )
+        .query_map(params![view_id, match_expr(&words), limit as i64], |r| {
+            r.get::<_, String>(0)
+        })
         .map_err(dberr("search in view"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(dberr("search in view"))?;
@@ -363,7 +366,10 @@ mod tests {
 
     #[test]
     fn match_expr_joins_with_or() {
-        assert_eq!(match_expr(&["甲乙丙".to_string(), "丙丁戊".to_string()]), "\"甲乙丙\" OR \"丙丁戊\"");
+        assert_eq!(
+            match_expr(&["甲乙丙".to_string(), "丙丁戊".to_string()]),
+            "\"甲乙丙\" OR \"丙丁戊\""
+        );
     }
 
     #[test]
@@ -388,8 +394,12 @@ mod tests {
         seed_doc_view(&conn, "v1", "甲", "这是一篇关于前端渲染的笔记。");
         seed_doc_view(&conn, "v2", "乙", "这是一篇关于数据库索引的笔记。");
         // 关键词只出现在 v2，查 v1 应当没有命中
-        assert!(search_in_view(&conn, "v1", "数据库索引", 5).unwrap().is_empty());
-        assert!(!search_in_view(&conn, "v2", "数据库索引", 5).unwrap().is_empty());
+        assert!(search_in_view(&conn, "v1", "数据库索引", 5)
+            .unwrap()
+            .is_empty());
+        assert!(!search_in_view(&conn, "v2", "数据库索引", 5)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

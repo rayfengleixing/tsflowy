@@ -105,9 +105,9 @@ export async function patchTreeAndRestoreTabs(set: WorkspaceSet, get: WorkspaceG
     viewApi.listTrash(currentWorkspaceId),
   ]);
   const tree = buildTree(views);
-  const { tabs, currentViewId } = await loadTabsForWs(currentWorkspaceId, tree);
+  const { tabs, currentViewId, splitViewId } = await loadTabsForWs(currentWorkspaceId, tree);
   if (seq !== treeSeq || get().currentWorkspaceId !== currentWorkspaceId) return;
-  set({ tree, trash, tabs, currentViewId, splitViewId: null });
+  set({ tree, trash, tabs, currentViewId, splitViewId });
   persistNow(get);
   void backfillSubpages(get, currentWorkspaceId);
 }

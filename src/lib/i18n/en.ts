@@ -894,6 +894,8 @@ export const en: Record<MessageKey, string> = {
   "settings.aiApiKeyPlaceholderEmpty": "Enter API key",
   "settings.aiApiKeyPlaceholderSaved": "Saved — leave blank to keep",
   "settings.aiApiKeySaved": "Current key",
+  "settings.aiApiKeyPlaintextWarn":
+    "The system credential store is unavailable; this key is saved as plaintext in the config file",
   "settings.aiMaxChars": "Max context characters",
   "settings.aiTest": "Test connection",
   "settings.aiTesting": "Testing…",

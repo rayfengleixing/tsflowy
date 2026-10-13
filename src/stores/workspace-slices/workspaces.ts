@@ -20,16 +20,19 @@ const purgeAllExpiredTrash = async (get: WorkspaceGet): Promise<void> => {
   if (workspaces.length === 0) return;
   const now = Date.now();
   const deadline = now - THIRTY_DAYS_MS;
+  let purged = 0;
   for (const ws of workspaces) {
     try {
-      await viewApi.purgeExpiredTrash(ws.id, deadline);
+      purged += await viewApi.purgeExpiredTrash(ws.id, deadline);
     } catch (e) {
       logger.error("WorkspaceStore", "auto purge expired trash failed", ws.id, e);
     }
   }
-  // 如果当前 workspace 的 trash 列表在 store，重新 reload 刷新 UI
-  const ws = get().currentWorkspaceId;
-  if (ws) await get().reload();
+  // 真的清掉过东西才 reload 刷新 UI：每小时空扫描不该引发整树重拉与订阅风暴
+  if (purged > 0) {
+    const ws = get().currentWorkspaceId;
+    if (ws) await get().reload();
+  }
 };
 
 /* ————— 欢迎文档：内容随版本更新，启动时按版本号刷新一次 ————— */
@@ -103,6 +106,8 @@ export const createWorkspacesSlice: WorkspaceSliceCreator<Partial<WorkspaceState
         }
       } catch (e) {
         logger.error("WorkspaceStore.init", "workspace init failed", e);
+        // 失败缓存必须清掉：否则 initPromise 永远是同一个 rejected，兜底页的「重试」无从重试
+        initPromise = null;
         // 修复 App 死循环：init 失败时**由 store 内部**最终保证 ready=true，
         // 避免 App.catch 外部再写一份 setState 引发 zustand selector 重判定触发 React 19 开发模式的快照检查。
         // ready 相同值短路（zustand 默认比较对象是整 state，这里字段本身已 true 时不会额外 emit）。

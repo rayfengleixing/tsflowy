@@ -871,6 +871,7 @@ export const zh = {
   "settings.aiApiKeyPlaceholderEmpty": "填写 API Key",
   "settings.aiApiKeyPlaceholderSaved": "已保存，留空表示不修改",
   "settings.aiApiKeySaved": "当前 Key",
+  "settings.aiApiKeyPlaintextWarn": "系统凭据库不可用，此 Key 以明文保存在配置文件中，请注意本机文件安全",
   "settings.aiMaxChars": "最大上下文字符数",
   "settings.aiTest": "测试连接",
   "settings.aiTesting": "测试中…",

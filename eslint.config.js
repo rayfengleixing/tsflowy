@@ -85,8 +85,10 @@ export default tseslint.config(
       "@typescript-eslint/consistent-type-definitions": "warn",
       "@typescript-eslint/strict-boolean-expressions": "off",
       "@typescript-eslint/no-confusing-void-expression": "off",
-      "@typescript-eslint/no-floating-promises": "off",
-      "@typescript-eslint/no-misused-promises": "off",
+      "@typescript-eslint/no-floating-promises": "error",
+      // JSX 事件属性里传 async handler 是 React 惯例（错误在 handler 内部自理），不查 attribute；
+      // 其余 void 回调位（setTimeout、非 Promise 语义的 callback 参数等）仍按 error 拦
+      "@typescript-eslint/no-misused-promises": ["error", { checksVoidReturn: { attributes: false } }],
     },
   },
   {

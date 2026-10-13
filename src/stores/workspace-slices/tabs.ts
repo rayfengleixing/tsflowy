@@ -94,7 +94,10 @@ export const createTabsSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (
     void viewApi.touchVisited(id).catch(logger.catch("WorkspaceStore.openInSplit", "touchVisited failed", id));
   },
 
-  closeSplit: () => set({ splitViewId: null }),
+  closeSplit: () => {
+    set({ splitViewId: null });
+    persistNow(get);
+  },
 
   swapSplit: () => {
     const { currentViewId, splitViewId } = get();

@@ -177,6 +177,8 @@ pub struct AiConfigPublic {
     pub price_output: f64,
     pub has_api_key: bool,
     pub api_key_masked: String,
+    /// true = 凭据库不可用（或明文清不掉），Key 目前以明文存在 config.json
+    pub api_key_plaintext: bool,
 }
 
 /// 档位（不含任何敏感字段，直接回传前端）
@@ -248,8 +250,8 @@ pub struct AiQuickActionInput {
 #[tauri::command]
 pub fn ai_get_config(app: tauri::AppHandle) -> Result<AiConfigPublic, String> {
     let cfg = files::load_app_config(&app);
-    let key = effective_api_key(&app);
-    Ok(public_of(&cfg, &key))
+    let (key, plaintext) = effective_api_key(&app);
+    Ok(public_of(&cfg, &key, plaintext))
 }
 
 /// 保存 AI 配置
@@ -689,7 +691,12 @@ fn cancelled(generation: u64) -> bool {
 
 /// 从 AppConfig 构造回传前端的掩码视图；key 相关字段基于「生效 key」计算
 /// （生效 key = 系统凭据库优先，回退 config.json 明文）。
-fn public_of(cfg: &files::AppConfig, effective_key: &str) -> AiConfigPublic {
+/// `api_key_plaintext` 为 true 时前端需明示明文落盘风险。
+fn public_of(
+    cfg: &files::AppConfig,
+    effective_key: &str,
+    api_key_plaintext: bool,
+) -> AiConfigPublic {
     let ai = cfg.ai.clone().unwrap_or_default();
     AiConfigPublic {
         enabled: ai.enabled,
@@ -729,6 +736,7 @@ fn public_of(cfg: &files::AppConfig, effective_key: &str) -> AiConfigPublic {
         price_output: ai.price_output,
         has_api_key: !effective_key.is_empty(),
         api_key_masked: mask_api_key(effective_key),
+        api_key_plaintext,
     }
 }
 
@@ -1002,9 +1010,10 @@ pub(crate) fn parse_completion_text(body: &str) -> Result<String, String> {
 
 /// 取「生效 key」：系统凭据库优先；为空则回退 config.json 明文，
 /// 并在读到时尝试一次性迁移（写入凭据库成功后清空 config.json 明文；失败则保持明文回退）。
-fn effective_api_key(app: &tauri::AppHandle) -> String {
+/// 返回 (key, 是否仍明文落盘)：明文号只可能来自 config.json 且未能迁走。
+fn effective_api_key(app: &tauri::AppHandle) -> (String, bool) {
     if let Some(key) = secret::load_key().filter(|k| !k.trim().is_empty()) {
-        return key;
+        return (key, false);
     }
     let mut app_cfg = files::load_app_config(app);
     let plain = app_cfg
@@ -1013,7 +1022,7 @@ fn effective_api_key(app: &tauri::AppHandle) -> String {
         .map(|a| a.api_key.clone())
         .unwrap_or_default();
     if plain.trim().is_empty() {
-        return String::new();
+        return (String::new(), false);
     }
     // 迁移：明文写入凭据库成功后，把 config.json 的明文清空并写回（一次性）
     if secret::store_key(&plain) {
@@ -1021,17 +1030,24 @@ fn effective_api_key(app: &tauri::AppHandle) -> String {
             ai.api_key = String::new();
         }
         match files::save_app_config(app, &app_cfg) {
-            Ok(()) => tracing::info!("api key migrated out of config.json"),
-            Err(e) => tracing::warn!("clear plaintext api key in config failed: {e}"),
+            Ok(()) => {
+                tracing::info!("api key migrated out of config.json");
+                (plain, false)
+            }
+            Err(e) => {
+                tracing::warn!("clear plaintext api key in config failed: {e}");
+                (plain, true)
+            }
         }
+    } else {
+        (plain, true)
     }
-    plain
 }
 
 /// 读配置并校验：base_url / api_key 为空时返回统一错误
 fn effective_ai(app: &tauri::AppHandle) -> Result<AiConfig, String> {
     let mut ai = files::load_app_config(app).ai.unwrap_or_default();
-    ai.api_key = effective_api_key(app);
+    ai.api_key = effective_api_key(app).0;
     // 档位覆盖：选中某个档位时，用它的地址 / 模型 / 温度（字段为空的档位项保持原值）
     if !ai.active_profile.trim().is_empty() {
         if let Some(p) = ai
@@ -1138,17 +1154,26 @@ mod tests {
     #[test]
     fn parse_sse_single_delta_line() {
         let line = r#"data: {"choices":[{"delta":{"content":"你好"}}]}"#;
-        assert_eq!(parse_sse_line(line), vec![SseParse::Delta("你好".to_string())]);
+        assert_eq!(
+            parse_sse_line(line),
+            vec![SseParse::Delta("你好".to_string())]
+        );
     }
 
     #[test]
     fn parse_sse_reasoning_line() {
         // 推理型模型：content 为空、reasoning_content 有内容 → 归为 Reasoning
         let line = r#"data: {"choices":[{"delta":{"content":"","reasoning_content":"思考中"}}]}"#;
-        assert_eq!(parse_sse_line(line), vec![SseParse::Reasoning("思考中".to_string())]);
+        assert_eq!(
+            parse_sse_line(line),
+            vec![SseParse::Reasoning("思考中".to_string())]
+        );
         // 两者都有时 content 优先
         let line = r#"data: {"choices":[{"delta":{"content":"答案","reasoning_content":"思考"}}]}"#;
-        assert_eq!(parse_sse_line(line), vec![SseParse::Delta("答案".to_string())]);
+        assert_eq!(
+            parse_sse_line(line),
+            vec![SseParse::Delta("答案".to_string())]
+        );
     }
 
     #[test]
@@ -1298,7 +1323,10 @@ data: [DONE]
     fn parse_sse_null_usage_is_ignored() {
         // 每帧都带 usage:null 的服务商：不能把内容帧吞掉，也不产生用量事件
         let line = r#"data: {"choices":[{"delta":{"content":"好"}}],"usage":null}"#;
-        assert_eq!(parse_sse_line(line), vec![SseParse::Delta("好".to_string())]);
+        assert_eq!(
+            parse_sse_line(line),
+            vec![SseParse::Delta("好".to_string())]
+        );
         assert!(parse_sse_line(r#"data: {"choices":[],"usage":null}"#).is_empty());
     }
 

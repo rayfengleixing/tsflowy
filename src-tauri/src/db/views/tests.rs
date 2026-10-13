@@ -16,7 +16,15 @@ fn create(
 ) -> Result<ViewRow, String> {
     super::create(
         conn,
-        NewView { id, workspace_id, parent_id, name, layout, extra, source_id },
+        NewView {
+            id,
+            workspace_id,
+            parent_id,
+            name,
+            layout,
+            extra,
+            source_id,
+        },
     )
 }
 

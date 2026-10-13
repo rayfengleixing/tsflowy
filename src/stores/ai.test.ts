@@ -814,13 +814,13 @@ describe("ai store：消息级操作", () => {
     const store = await loadConfiguredStore();
     await completeTurn(store, "第一问", "第一答");
     const userId = store.getState().messages[0].id;
-    store.getState().regenerate(userId);
+    void store.getState().regenerate(userId);
     expect(streamHandlers).toHaveLength(1);
     expect(store.getState().messages.map((m) => m.content)).toEqual(["第一问", "第一答"]);
 
     const p = store.getState().send("进行中");
     await vi.waitFor(() => expect(streamHandlers.length).toBe(2));
-    store.getState().regenerate(store.getState().messages[1].id);
+    void store.getState().regenerate(store.getState().messages[1].id);
     expect(store.getState().streaming).toBe(true);
     pump([{ type: "done", full: "ok" }]);
     await p;

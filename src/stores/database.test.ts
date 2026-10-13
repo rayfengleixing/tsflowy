@@ -150,6 +150,30 @@ describe("database store 字段改名", () => {
     expect(api.updateFieldOptions).not.toHaveBeenCalled();
     expect(store.getState().fields.map((f) => f.name)).toEqual(["甲改", "乙"]);
   });
+
+  it("空白名不落库；带空格的名字去空格后再写入与改写公式", async () => {
+    const store = useDatabaseStore;
+    store.setState({
+      viewId: "v1",
+      fields: [
+        field("f-a", "甲", "text"),
+        field("f-c", "丙", "formula", JSON.stringify({ kind: "formula", formula: "{甲} + 1" })),
+      ],
+    });
+    api.renameField.mockResolvedValue(undefined);
+    api.updateFieldOptions.mockResolvedValue(undefined);
+
+    // 纯空白：直接丢弃，持久层入口校验会拒空，不该把报错抛到 UI
+    await store.getState().renameField("f-a", "   ");
+    expect(api.renameField).not.toHaveBeenCalled();
+    expect(store.getState().fields[0].name).toBe("甲");
+
+    await store.getState().renameField("f-a", "  甲改  ");
+    expect(api.renameField).toHaveBeenCalledWith("f-a", "甲改");
+    expect(store.getState().fields[0].name).toBe("甲改");
+    const [, opts] = api.updateFieldOptions.mock.calls[0] as [string, { formula: string }];
+    expect(opts.formula).toBe("{甲改} + 1");
+  });
 });
 
 describe("数据库 store 多选行操作", () => {

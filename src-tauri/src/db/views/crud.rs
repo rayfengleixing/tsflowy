@@ -145,7 +145,15 @@ pub struct NewView<'a> {
 }
 
 pub fn create(conn: &Connection, nv: NewView<'_>) -> Result<ViewRow, String> {
-    let NewView { id, workspace_id, parent_id, name, layout, extra, source_id } = nv;
+    let NewView {
+        id,
+        workspace_id,
+        parent_id,
+        name,
+        layout,
+        extra,
+        source_id,
+    } = nv;
     if source_id.is_some() && layout == "document" {
         return Err("a derived view of a database cannot use the document layout".to_string());
     }

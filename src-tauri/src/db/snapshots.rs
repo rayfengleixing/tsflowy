@@ -197,7 +197,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(n <= PRE_RESTORE_KEEP, "pre_restore 备份上限 {PRE_RESTORE_KEEP}，实际 {n}");
+        assert!(
+            n <= PRE_RESTORE_KEEP,
+            "pre_restore 备份上限 {PRE_RESTORE_KEEP}，实际 {n}"
+        );
     }
 
     #[test]

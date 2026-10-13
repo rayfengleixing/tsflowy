@@ -186,7 +186,9 @@ function App() {
           .then(setDbHealth)
           .catch((e: unknown) => logger.error("App.dbHealth", "db_health failed", e))
           .finally(() => setDbChecked(true));
-      });
+      })
+      // 链路末端兜底：then/finally 回调里的同步异常不该悬空抛掉
+      .catch((e: unknown) => logger.error("App.init", "startup chain failed", e));
   }, []);
 
   // Phase 2.1：应用启动 + 数据库就绪后，若 mentions 表为空（旧库升级），异步回填一次。
@@ -315,46 +317,54 @@ function App() {
   const view = currentViewId ? findNode(tree, currentViewId) : null;
   const splitView = splitViewId ? findNode(tree, splitViewId) : null;
 
+  // 外壳级兜底：内容区有 RouteErrorBoundary（切页自动重置），Sidebar/AiPanel/浮层在其覆盖之外——
+  // 这里再包一层，任何一处渲染崩溃都显示可重试的兜底 UI，而不是整窗白屏（App 本体不卸载，快捷键/关窗落盘仍生效）
   return (
-    <div className="flex h-screen overflow-hidden">
-      <Sidebar />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <RouteErrorBoundary resetKey={`${route}:${currentViewId ?? ""}:${splitViewId ?? ""}`}>
-          <Suspense
-            fallback={
-              <div className="flex h-full items-center justify-center text-sm text-neutral-500">{t("app.loading")}</div>
-            }
-          >
-            {route === "trash" ? (
-              <TrashPage />
-            ) : route === "search" ? (
-              <SearchResultsPage />
-            ) : route === "settings" ? (
-              <SettingsPage />
-            ) : (
-              <>
-                <TabBar />
-                {splitView ? <SplitView left={view} right={splitView} /> : renderView(view)}
-              </>
-            )}
-          </Suspense>
-        </RouteErrorBoundary>
-      </div>
-      <AiPanel />
-      <CommandPalette />
-      <DatabaseViewPicker />
-      <EmojiPickerDialog />
-      <ConfirmDialog
-        open={closeBlocked}
-        onOpenChange={(open) => {
-          if (!open) resolveClose(false);
-        }}
-        title={t("close.failedTitle")}
-        description={t("close.failedDesc")}
-        confirmLabel={t("close.failedConfirm")}
-        onConfirm={() => resolveClose(true)}
-      />
-      <Toaster />
+    <div className="h-screen">
+      <RouteErrorBoundary resetKey="app-shell">
+        <div className="flex h-full overflow-hidden">
+          <Sidebar />
+          <div className="flex min-w-0 flex-1 flex-col">
+            <RouteErrorBoundary resetKey={`${route}:${currentViewId ?? ""}:${splitViewId ?? ""}`}>
+              <Suspense
+                fallback={
+                  <div className="flex h-full items-center justify-center text-sm text-neutral-500">
+                    {t("app.loading")}
+                  </div>
+                }
+              >
+                {route === "trash" ? (
+                  <TrashPage />
+                ) : route === "search" ? (
+                  <SearchResultsPage />
+                ) : route === "settings" ? (
+                  <SettingsPage />
+                ) : (
+                  <>
+                    <TabBar />
+                    {splitView ? <SplitView left={view} right={splitView} /> : renderView(view)}
+                  </>
+                )}
+              </Suspense>
+            </RouteErrorBoundary>
+          </div>
+          <AiPanel />
+          <CommandPalette />
+          <DatabaseViewPicker />
+          <EmojiPickerDialog />
+          <ConfirmDialog
+            open={closeBlocked}
+            onOpenChange={(open) => {
+              if (!open) resolveClose(false);
+            }}
+            title={t("close.failedTitle")}
+            description={t("close.failedDesc")}
+            confirmLabel={t("close.failedConfirm")}
+            onConfirm={() => resolveClose(true)}
+          />
+          <Toaster />
+        </div>
+      </RouteErrorBoundary>
     </div>
   );
 }

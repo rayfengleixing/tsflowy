@@ -228,7 +228,7 @@ export function PageTreeItem({ node, depth, draggingId, dropHint, onRowMouseDown
             onChange={(e) => setEditName(e.target.value)}
             onBlur={commitRename}
             onKeyDown={(e) => {
-              if (e.key === "Enter") commitRename();
+              if (e.key === "Enter") void commitRename();
               if (e.key === "Escape") setEditing(false);
             }}
             onClick={(e) => e.stopPropagation()}
