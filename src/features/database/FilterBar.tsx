@@ -1,15 +1,198 @@
 import { useState } from "react";
-import { Plus, Trash2, X } from "lucide-react";
+import { Check, Plus, Search, Trash2, X } from "lucide-react";
 import type { CellValue, DatabaseField } from "@/types/database";
-import { defaultOperand, opsForType, type FilterMode, type FilterOp, type FilterSpec } from "@/lib/database-query";
+import {
+  RELATIVE_DATE_PREFIX,
+  defaultOperand,
+  isRelativeDateOperand,
+  makeRelativeOperand,
+  opsForType,
+  relativeDayCount,
+  type FilterMode,
+  type FilterOp,
+  type FilterSpec,
+  type RelativeDateKey,
+} from "@/lib/database-query";
 import { parseFieldOptions, ratingMax } from "@/lib/database-values";
+import { relationRowLabel, relationTarget, searchRelationRows, type RelationDb } from "@/lib/relation";
+import { useRelationDbs } from "./use-database-data";
+import { RelationChip } from "./cell-display";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 
+const RELATIVE_PRESETS: RelativeDateKey[] = [
+  "today",
+  "yesterday",
+  "tomorrow",
+  "this_week",
+  "last_week",
+  "next_week",
+  "this_month",
+  "last_month",
+  "next_month",
+  "past_days",
+  "next_days",
+];
+
+/** 日期操作数：绝对日期（YYYY-MM-DD，旧值原样可用）或 "@rel:…" 相对区间 */
+function DateOperandInput({ value, onChange }: { value: CellValue; onChange: (v: CellValue) => void }) {
+  const isRel = isRelativeDateOperand(value);
+  const relKey = isRelativeDateOperand(value)
+    ? (value.slice(RELATIVE_DATE_PREFIX.length).split(":")[0] as RelativeDateKey)
+    : "today";
+  const days = relativeDayCount(typeof value === "string" ? value : "") ?? 7;
+  const needsCount = relKey === "past_days" || relKey === "next_days";
+  const absText = typeof value === "string" && !value.startsWith(RELATIVE_DATE_PREFIX) ? value.slice(0, 10) : "";
+  const selectCls =
+    "h-7 rounded-md border border-neutral-300 bg-white px-2 text-[12px] outline-none focus:border-brand-500";
+  return (
+    <>
+      <select
+        className={selectCls}
+        value={isRel ? "rel" : "abs"}
+        onChange={(e) => onChange(e.target.value === "rel" ? makeRelativeOperand("today") : null)}
+      >
+        <option value="abs">{t("filter.date.absolute")}</option>
+        <option value="rel">{t("filter.date.relative")}</option>
+      </select>
+      {isRel && (
+        <>
+          <select
+            className={selectCls}
+            value={relKey}
+            onChange={(e) => onChange(makeRelativeOperand(e.target.value as RelativeDateKey, days))}
+          >
+            {RELATIVE_PRESETS.map((p) => (
+              <option key={p} value={p}>
+                {t(`filter.date.${p}`, p === "past_days" || p === "next_days" ? { n: days } : undefined)}
+              </option>
+            ))}
+          </select>
+          {needsCount && (
+            <input
+              type="number"
+              min={1}
+              max={3650}
+              className="h-7 w-16 rounded-md border border-neutral-300 px-2 text-[12px] outline-none focus:border-brand-500"
+              value={days}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                onChange(makeRelativeOperand(relKey, Number.isInteger(n) && n >= 1 ? Math.min(3650, n) : 7));
+              }}
+            />
+          )}
+        </>
+      )}
+      {!isRel && (
+        <input
+          type="date"
+          className="h-7 rounded-md border border-neutral-300 px-2 text-[12px] outline-none focus:border-brand-500"
+          value={absText}
+          onChange={(e) => onChange(e.target.value || null)}
+        />
+      )}
+    </>
+  );
+}
+
+/** relation 操作数：从目标库行里挑选（比较按行 id；旧裸文本值当作单 id 兼容） */
+function RelationOperandInput({
+  db,
+  targetSet,
+  value,
+  onChange,
+}: {
+  db: RelationDb | undefined;
+  targetSet: boolean;
+  value: CellValue;
+  onChange: (v: CellValue) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const ids = Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === "string")
+    : typeof value === "string" && value !== ""
+      ? [value]
+      : [];
+  const candidates = db ? searchRelationRows(db, query).slice(0, 50) : [];
+  const labelOf = (id: string) => (db ? relationRowLabel(db, id) : null) ?? id;
+  const toggle = (id: string) => onChange(ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]);
+
+  return (
+    <div className="relative flex max-w-[240px] flex-wrap items-center gap-1">
+      {ids.map((id) => (
+        <RelationChip key={id} label={labelOf(id)} compact onRemove={() => toggle(id)} />
+      ))}
+      <button
+        type="button"
+        className="h-7 rounded-md border border-neutral-300 bg-white px-2 text-[12px] text-neutral-500 outline-none hover:border-brand-500"
+        onClick={() => setOpen((o) => !o)}
+      >
+        {t("filter.relation.placeholder")}
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-30 mt-1 flex max-h-64 w-64 flex-col rounded-lg border border-neutral-300 bg-white p-1 shadow-lg">
+          {targetSet && (
+            <div className="relative mb-1 shrink-0">
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-neutral-400" />
+              <input
+                autoFocus
+                className="h-7 w-full rounded-md border border-neutral-200 pl-7 pr-2 text-[13px] outline-none placeholder:text-neutral-400 focus:border-brand-500"
+                placeholder={t("field.relationSearch")}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+          )}
+          <div className="min-h-0 flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
+            {!targetSet && <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.relationUnset")}</div>}
+            {targetSet && !db && <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("app.loading")}</div>}
+            {db && candidates.length === 0 && (
+              <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.relationEmpty")}</div>
+            )}
+            {candidates.map((row) => (
+              <button
+                key={row.id}
+                type="button"
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[13px] hover:bg-neutral-200/60",
+                  ids.includes(row.id) && "bg-brand-100",
+                )}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => toggle(row.id)}
+              >
+                <span className="min-w-0 flex-1 truncate">{labelOf(row.id)}</span>
+                {ids.includes(row.id) && <Check className="h-3.5 w-3.5 shrink-0 text-brand-600" />}
+              </button>
+            ))}
+          </div>
+          {ids.length > 0 && (
+            <button
+              type="button"
+              className="flex w-full shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-neutral-500 hover:bg-neutral-200/60"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => onChange([])}
+            >
+              <X className="h-3.5 w-3.5" />
+              {t("common.clearAll")}
+            </button>
+          )}
+        </div>
+      )}
+      {open && <div className="fixed inset-0 z-20" onMouseDown={() => setOpen(false)} />}
+    </div>
+  );
+}
+
 /** 筛选值输入（按字段类型） */
-function FilterValueInput(props: { field: DatabaseField; value: CellValue; onChange: (v: CellValue) => void }) {
-  const { field, value, onChange } = props;
+function FilterValueInput(props: {
+  field: DatabaseField;
+  value: CellValue;
+  getDb: ReturnType<typeof useRelationDbs>;
+  onChange: (v: CellValue) => void;
+}) {
+  const { field, value, getDb, onChange } = props;
   const opts = parseFieldOptions(field.options);
   const [draft, setDraft] = useState(typeof value === "string" ? value : "");
 
@@ -68,12 +251,16 @@ function FilterValueInput(props: { field: DatabaseField; value: CellValue; onCha
     );
   }
   if (field.field_type === "date" || field.field_type === "created_at" || field.field_type === "last_edited_at") {
+    return <DateOperandInput value={value} onChange={onChange} />;
+  }
+  if (field.field_type === "relation") {
+    const targetId = relationTarget(field);
     return (
-      <input
-        type="date"
-        className="h-7 rounded-md border border-neutral-300 px-2 text-[12px] outline-none focus:border-brand-500"
-        value={typeof value === "string" ? value.slice(0, 10) : ""}
-        onChange={(e) => onChange(e.target.value || null)}
+      <RelationOperandInput
+        db={targetId ? getDb(targetId) : undefined}
+        targetSet={!!targetId}
+        value={value}
+        onChange={onChange}
       />
     );
   }
@@ -99,6 +286,8 @@ export function FilterBar(props: {
 }) {
   const { fields, filters, mode, onChange, onClose } = props;
   const visibleFields = fields.filter((f) => f.is_hidden === 0);
+  // relation 筛选操作数需要目标库行数据：与表格同一份缓存通道（内部只发一次 IPC）
+  const getDb = useRelationDbs(visibleFields);
 
   const addFilter = () => {
     const field = visibleFields.length > 0 ? visibleFields[0] : undefined;
@@ -188,7 +377,12 @@ export function FilterBar(props: {
               ))}
             </select>
             {!["checked", "unchecked", "is_empty", "is_not_empty"].includes(f.op) && (
-              <FilterValueInput field={field} value={f.value} onChange={(v) => update(f.id, { value: v })} />
+              <FilterValueInput
+                field={field}
+                value={f.value}
+                getDb={getDb}
+                onChange={(v) => update(f.id, { value: v })}
+              />
             )}
             <button
               className="flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-red-500"

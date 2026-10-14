@@ -4,6 +4,7 @@ import type { DatabaseField, FieldOptions, SelectOption } from "@/types/database
 import type { AggregateFn } from "@/lib/database-aggregate";
 import { aggregateLabel } from "@/lib/database-aggregate";
 import { newSelectOption, parseFieldOptions } from "@/lib/database-values";
+import { validateFormula, type FormulaSyntaxIssue } from "@/lib/database-formula";
 import { buildRelationPickerFields, relationTarget, reverseRelationSourceFields, rollupFnsFor } from "@/lib/relation";
 import { flattenTree } from "@/lib/tree";
 import { useDbStore } from "@/stores/database-context";
@@ -27,6 +28,7 @@ export function FieldOptionsEditor(props: {
   const initial = parseFieldOptions(field.options);
   const [options, setOptions] = useState<FieldOptions>(initial);
   const [optionName, setOptionName] = useState("");
+  const [formulaError, setFormulaError] = useState<FormulaSyntaxIssue | undefined>(undefined);
   // 公式引用候选：同表其它字段名（数字/复选/文本均可引用，取值规则见 database-formula）
   // 注意：选择器必须返回稳定引用，派生数组一律在 useMemo 里做（每次返回新数组会触发无限重渲染导致白屏）
   const allFields = useDbStore((s) => s.fields);
@@ -69,11 +71,21 @@ export function FieldOptionsEditor(props: {
 
   // 每次打开时重置
   const handleOpenChange = (next: boolean) => {
-    if (next) setOptions(parseFieldOptions(field.options));
+    if (next) {
+      setOptions(parseFieldOptions(field.options));
+      setFormulaError(undefined);
+    }
     onOpenChange(next);
   };
 
   const save = () => {
+    if (options.kind === "formula" && options.formula.trim()) {
+      const issue = validateFormula(options.formula);
+      if (issue) {
+        setFormulaError(issue);
+        return;
+      }
+    }
     onSave(options);
     onOpenChange(false);
   };
@@ -263,9 +275,18 @@ export function FieldOptionsEditor(props: {
                 className="h-8 rounded-md border border-neutral-300 px-2 text-[13px] outline-none focus:border-brand-500"
                 placeholder={t("field.formulaPlaceholder")}
                 value={options.kind === "formula" ? options.formula : ""}
-                onChange={(e) => setOptions({ kind: "formula", formula: e.target.value })}
+                onChange={(e) => {
+                  setFormulaError(undefined);
+                  setOptions({ kind: "formula", formula: e.target.value });
+                }}
+                onBlur={(e) => setFormulaError(validateFormula(e.target.value))}
               />
             </label>
+            {formulaError && (
+              <p className="text-[11px] leading-5 text-red-500">
+                {t(formulaError === "lexer" ? "field.formulaErrorLexer" : "field.formulaErrorSyntax")}
+              </p>
+            )}
             <p className="text-[11px] leading-5 text-neutral-400">
               {t("field.formulaHint")}
               <br />
@@ -277,12 +298,13 @@ export function FieldOptionsEditor(props: {
                   <button
                     key={n}
                     className="rounded-full border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-500 hover:border-brand-500 hover:text-brand-600"
-                    onClick={() =>
+                    onClick={() => {
+                      setFormulaError(undefined);
                       setOptions({
                         kind: "formula",
                         formula: (options.kind === "formula" ? options.formula : "") + `{${n}}`,
-                      })
-                    }
+                      });
+                    }}
                   >
                     {`{${n}}`}
                   </button>

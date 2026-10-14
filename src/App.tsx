@@ -230,10 +230,34 @@ function App() {
         return;
       }
       if (comboEquals(combo, combos.commandPalette) || comboEquals(combo, combos.quickOpen)) {
+        // 两者是同义别名：quickOpen 走 commandPalette 的同一实现
         e.preventDefault();
         const s = useWorkspaceStore.getState();
         if (s.paletteOpen) s.closePalette();
         else s.openPalette();
+        return;
+      }
+      if (comboEquals(combo, combos.closeTab)) {
+        // 关闭当前标签：preventDefault 尽力拦下 WebView2 的窗口关闭；
+        // 若个别环境仍在 native 层先处理，App 的 onCloseRequested 兜底会走「冲刷+确认」而不是直接退出
+        e.preventDefault();
+        const s = useWorkspaceStore.getState();
+        if (s.currentViewId) s.closeTab(s.currentViewId);
+        return;
+      }
+      if (comboEquals(combo, combos.reopenClosedTab)) {
+        e.preventDefault();
+        useWorkspaceStore.getState().reopenLastClosed();
+        return;
+      }
+      if (comboEquals(combo, combos.goBack)) {
+        e.preventDefault();
+        useWorkspaceStore.getState().navigateBack();
+        return;
+      }
+      if (comboEquals(combo, combos.goForward)) {
+        e.preventDefault();
+        useWorkspaceStore.getState().navigateForward();
         return;
       }
       if (comboEquals(combo, combos.search)) {

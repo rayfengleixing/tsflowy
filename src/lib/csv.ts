@@ -127,7 +127,7 @@ export function toCsv(rows: string[][]): string {
   return rows.map((r) => r.map(esc).join(",")).join("\r\n") + "\r\n";
 }
 
-/** 从样例值推断字段类型（数字/日期/布尔 → 专用类型，否则文本） */
+/** 从样例值推断字段类型（数字/日期/布尔/URL/邮箱/电话 → 专用类型，否则文本） */
 export function inferFieldType(samples: string[]): FieldType {
   const nonEmpty = samples.filter((v) => String(v).trim() !== "");
   if (nonEmpty.length === 0) return "text";
@@ -136,6 +136,16 @@ export function inferFieldType(samples: string[]): FieldType {
   if (looksLike(/^[+-]?(?:0|[1-9]\d*)(?:\.\d+)?$/)) return "number";
   if (looksLike(/^(true|false|是|否|✓|✗)$/i)) return "checkbox";
   if (looksLike(/^\d{4}-\d{1,2}-\d{1,2}([ T]\d{1,2}:\d{2}(:\d{2})?)?$/)) return "date";
+  if (looksLike(/^https?:\/\/\S+$/i)) return "url";
+  if (looksLike(/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/)) return "email";
+  // 电话：整体像号码（可 + 开头、含分隔符），且至少 6 位数字；
+  // 纯数字串不认电话（已被 number 分支收走，带前导零的纯数字如 "021" 太短也进不来）
+  if (
+    looksLike(/^[+\d(][\d\-.()\s]{5,18}$/) &&
+    nonEmpty.every((v) => (v.match(/\d/g) ?? []).length >= 6) &&
+    nonEmpty.every((v) => /^[+(]/.test(v) || /[-.()\s]/.test(v))
+  )
+    return "phone";
   return "text";
 }
 
@@ -170,6 +180,11 @@ export function csvValueToCell(type: FieldType, raw: string): CellValue {
         .split(/[;|]/)
         .map((x) => x.trim())
         .filter(Boolean);
+    // url/email/phone 存的就是纯文本串（与 validateCellValue/formatCellValue 约定一致），去首尾空白后原样存
+    case "url":
+    case "email":
+    case "phone":
+      return v;
     default:
       return v;
   }

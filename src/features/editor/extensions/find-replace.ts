@@ -3,7 +3,8 @@
 // 纯逻辑放这里，UI 见 features/editor/FindReplaceBar.tsx：
 //   - 命中按块收集：把每个文本块的文本片段映射回文档位置，跨 mark 的命中也能整段选中；
 //   - 高亮走 decoration（不改文档），活动项单独上色；
-//   - 替换/全部替换用一条事务从后往前落，位置不互相污染。
+//   - 替换/全部替换用一条事务从后往前落，位置不互相污染；
+//   - 支持「区分大小写」「全词匹配」两个开关（见 FindOptions，默认关闭时行为与旧版一致）。
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import type { Transaction } from "@tiptap/pm/state";
@@ -26,8 +27,19 @@ export interface FindMatch {
   to: number;
 }
 
+/** 匹配选项；不传时保持旧默认（忽略大小写、不做全词） */
+export interface FindOptions {
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+}
+
+type ResolvedFindOptions = Required<FindOptions>;
+
+const NO_OPTIONS: ResolvedFindOptions = { caseSensitive: false, wholeWord: false };
+
 export interface FindState {
   query: string;
+  options: ResolvedFindOptions;
   matches: FindMatch[];
   /** 当前命中下标；无命中为 -1 */
   active: number;
@@ -36,7 +48,7 @@ export interface FindState {
 }
 
 type FindMeta =
-  | { type: "setQuery"; query: string }
+  | { type: "setQuery"; query: string; options: ResolvedFindOptions }
   | { type: "setActive"; index: number }
   | { type: "clear" }
   | { type: "recompute" };
@@ -96,23 +108,48 @@ export interface FindScan {
   truncated: boolean;
 }
 
+/**
+ * 全词边界字符类：仅拉丁字母（含常见带变音的扩展区）、数字、下划线算「词字符」。
+ * 中日韩等书写系统不使用词间空格，一律视为「非词字符」——因此「全词匹配」对
+ * 纯中文/日文查询等价于不限制（如「测试」仍能命中「这是一个测试文本」），
+ * 它只约束拉丁词/数字：查 "the" 不再命中 "there"，查 "123" 不命中 "a123"。
+ */
+const WORD_CHAR = /[A-Za-z0-9_\u00C0-\u00FF\u0100-\u024F\u1E00-\u1EFF]/;
+
+function isWholeWordAt(text: string, idx: number, len: number): boolean {
+  const before = idx > 0 ? text[idx - 1] : "";
+  const after = text[idx + len] ?? "";
+  return !(before && WORD_CHAR.test(before)) && !(after && WORD_CHAR.test(after));
+}
+
 /** 全档扫描：块内/跨块/跨 atom 的映射统一走拼接索引，命中超 MAX_MATCHES 提前止损 */
-export function scanMatches(doc: ProseMirrorNode, query: string): FindScan {
+export function scanMatches(doc: ProseMirrorNode, query: string, options: FindOptions = {}): FindScan {
   if (!query) return { matches: [], truncated: false };
+  const caseSensitive = options.caseSensitive === true;
+  const wholeWord = options.wholeWord === true;
   const { text, posMap } = buildTextIndex(doc);
-  let hay = text.toLowerCase();
-  let needle = query.toLowerCase();
-  // toLowerCase 偶尔改变长度（如 İ→i̇，两字符）导致字符↔位置错位：
-  // 长度不一致时退回大小写敏感匹配，保证位置映射可靠
-  if (hay.length !== text.length) {
-    hay = text;
-    needle = query;
+  let hay = text;
+  let needle = query;
+  if (!caseSensitive) {
+    hay = text.toLowerCase();
+    needle = query.toLowerCase();
+    // toLowerCase 偶尔改变长度（如 İ→i̇，两字符）导致字符↔位置错位：
+    // 长度不一致时退回大小写敏感匹配，保证位置映射可靠
+    if (hay.length !== text.length) {
+      hay = text;
+      needle = query;
+    }
   }
   const matches: FindMatch[] = [];
   let count = 0;
   let truncated = false;
   let idx = hay.indexOf(needle);
   while (idx !== -1) {
+    // 全词不成立时从下一字符继续找（词边界不满足的候选可能内嵌更长候选的开头）
+    if (wholeWord && !isWholeWordAt(text, idx, needle.length)) {
+      idx = hay.indexOf(needle, idx + 1);
+      continue;
+    }
     count++;
     if (count > MAX_MATCHES) {
       truncated = true;
@@ -133,10 +170,16 @@ export function getFindState(editor: Editor): FindState | null {
   return findReplaceKey.getState(editor.state) ?? null;
 }
 
-/** 设置查询词并自动跳到首个命中 */
-export function setFindQuery(editor: Editor, query: string) {
+/** 设置查询词与匹配选项并自动跳到首个命中 */
+export function setFindQuery(editor: Editor, query: string, options: FindOptions = {}) {
   if (editor.isDestroyed) return;
-  editor.view.dispatch(editor.state.tr.setMeta(findReplaceKey, { type: "setQuery", query } satisfies FindMeta));
+  const resolved: ResolvedFindOptions = {
+    caseSensitive: options.caseSensitive === true,
+    wholeWord: options.wholeWord === true,
+  };
+  editor.view.dispatch(
+    editor.state.tr.setMeta(findReplaceKey, { type: "setQuery", query, options: resolved } satisfies FindMeta),
+  );
   gotoFindMatch(editor, 0);
 }
 
@@ -159,7 +202,7 @@ function replaceable(st: FindState | null): st is FindState {
 
 /** 文档编辑后的重算：命中数变化时把活动项夹回范围内 */
 function recomputeMatches(state: FindState, doc: ProseMirrorNode): FindState {
-  const scan = scanMatches(doc, state.query);
+  const scan = scanMatches(doc, state.query, state.options);
   const active = scan.matches.length === 0 ? -1 : Math.min(Math.max(state.active, 0), scan.matches.length - 1);
   return { ...state, matches: scan.matches, active, truncated: scan.truncated };
 }
@@ -213,11 +256,12 @@ export function clearFind(editor: Editor) {
 }
 
 function applyMeta(state: FindState, tr: Transaction, meta: FindMeta): FindState {
-  if (meta.type === "clear") return { query: "", matches: [], active: -1, truncated: false };
+  if (meta.type === "clear") return { query: "", options: NO_OPTIONS, matches: [], active: -1, truncated: false };
   if (meta.type === "setQuery") {
-    const scan = scanMatches(tr.doc, meta.query);
+    const scan = scanMatches(tr.doc, meta.query, meta.options);
     return {
       query: meta.query,
+      options: meta.options,
       matches: scan.matches,
       active: scan.matches.length > 0 ? 0 : -1,
       truncated: scan.truncated,
@@ -257,7 +301,7 @@ export const FindReplace = Extension.create({
       new Plugin<FindState>({
         key: findReplaceKey,
         state: {
-          init: () => ({ query: "", matches: [], active: -1, truncated: false }),
+          init: () => ({ query: "", options: NO_OPTIONS, matches: [], active: -1, truncated: false }),
           apply(tr, prev) {
             const meta = tr.getMeta(findReplaceKey) as FindMeta | undefined;
             if (meta) {

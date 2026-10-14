@@ -1,8 +1,9 @@
 import { invoke } from "@/lib/invoke";
 import { newId } from "./db";
+import { findNode } from "./tree";
 import type { JSONContent } from "@tiptap/core";
 import { logger } from "./logger";
-import type { View } from "@/types/models";
+import type { View, ViewNode } from "@/types/models";
 
 // 双链反链索引表（migrations 003_mentions.sql）：保存文档时把所有 mention 节点落库，
 // 反链查询从 EditorPage.tsx 的"N 次 DB 查询 + 递归 JSON"优化为单条 SQL。
@@ -89,6 +90,13 @@ function collectText(node: JSONContent): string {
   if (typeof node.text === "string") return node.text;
   if (!node.content) return "";
   return node.content.map(collectText).join("");
+}
+
+/** 渲染态 mention 显示名：页面树里的当前名称优先，树中查不到（已删除页面）回落插入时快照 label */
+export function resolveMentionName(tree: ViewNode[], id: string, snapshotLabel: string, untitledLabel: string): string {
+  const node = id ? findNode(tree, id) : null;
+  if (!node) return snapshotLabel;
+  return node.name.trim() ? node.name : untitledLabel;
 }
 
 export const mentionsApi = {

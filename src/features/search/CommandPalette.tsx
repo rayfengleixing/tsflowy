@@ -21,7 +21,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { useAiStore } from "@/stores/ai";
 import { useRowFocusStore } from "@/stores/row-focus";
 import { useSettingsStore } from "@/stores/settings";
-import { searchApi, titleTier, TIER_BODY_ONLY, type SearchHit } from "@/lib/search";
+import { parseSearchQuery, searchApi, titleExcluded, titleTierFor, TIER_BODY_ONLY, type SearchHit } from "@/lib/search";
 import { clearSearchHistory, loadSearchHistory, pushSearchHistory } from "@/lib/search-history";
 import { viewApi } from "@/lib/db";
 import { flattenTree } from "@/lib/tree";
@@ -127,13 +127,16 @@ export function CommandPalette() {
     [createView, openDailyNote, setRoute],
   );
 
+  const trimmed = query.trim();
+  const parsedQuery = useMemo(() => parseSearchQuery(trimmed), [trimmed]);
+
   // 输入即过滤动作；空查询时动作就是主内容（面板即启动器）
   const actionMatches = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return q ? actions.filter((a) => titleTier(a.label, q) < TIER_BODY_ONLY) : actions;
-  }, [actions, query]);
-
-  const trimmed = query.trim();
+    if (!trimmed) return actions;
+    return actions.filter(
+      (a) => titleTierFor(a.label, parsedQuery.terms) < TIER_BODY_ONLY && !titleExcluded(a.label, parsedQuery.exclude),
+    );
+  }, [actions, parsedQuery, trimmed]);
 
   // 动作在前、搜索结果在后；空查询时补上「最近搜索 / 最近访问」——启动器不再是一张白纸
   const rows = useMemo<Row[]>(() => {
@@ -366,7 +369,7 @@ export function CommandPalette() {
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-[13px] font-medium text-neutral-800">
-                        <HighlightedTitle title={row.hit.title} query={trimmed} />
+                        <HighlightedTitle title={row.hit.title} terms={parsedQuery.terms} />
                       </span>
                       {row.hit.snippet && (
                         <span

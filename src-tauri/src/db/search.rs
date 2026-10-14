@@ -1,14 +1,96 @@
 use std::collections::HashSet;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, types::ToSql, Connection};
 
 use super::dberr;
 use super::models::SearchRowOut;
 
-/// FTS5 查询转义：整体包成短语查询，内部双引号翻倍转义，杜绝语法错误/注入
+/// 单个词/精确短语的 FTS5 转义：包成短语查询，内部双引号翻倍，杜绝语法错误/注入，
+/// 也让 `AND`/`NOT`/`*` 这类操作符按字面匹配（多词 AND 与排除由 parse_query_terms 表达）。
 /// （原 search.ts escapeFts，下沉到 Rust——JS 侧不再持有）。
 pub fn escape_fts(input: &str) -> String {
     format!("\"{}\"", input.replace('"', "\"\""))
+}
+
+/// 解析后的一个检索项：`text` 是去引号的词或短语，`excluded` 来自 `-` 前缀。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct QueryTerm {
+    pub text: String,
+    pub excluded: bool,
+}
+
+/// 把关键词串切成检索项：空白分词，`"..."` 为精确短语，`-` 前缀为排除项。
+///
+/// 每个词独立成项（拼起来由 fts_expr 用 AND 连接），否则「项目 计划」会被当成一个短语，
+/// 命中不了两词分散的文档。引号内不再嵌套引号：遇到下一个 `"` 即结束（未闭合则到结尾），
+/// 与 JS 侧 parseSearchQuery 的切分规则一致。
+pub(crate) fn parse_query_terms(input: &str) -> Vec<QueryTerm> {
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        while i < chars.len() && chars[i].is_whitespace() {
+            i += 1;
+        }
+        if i >= chars.len() {
+            break;
+        }
+        // `-词` / `-"短语"`：单独一个 `-`（后面紧跟空白）不是项，直接丢弃
+        let excluded = chars[i] == '-';
+        if excluded {
+            i += 1;
+        }
+        let quoted = i < chars.len() && chars[i] == '"';
+        if quoted {
+            i += 1;
+        }
+        let start = i;
+        while i < chars.len() {
+            let c = chars[i];
+            if quoted {
+                if c == '"' {
+                    break;
+                }
+            } else if c.is_whitespace() || c == '"' {
+                break;
+            }
+            i += 1;
+        }
+        let text: String = chars[start..i].iter().collect();
+        if quoted && i < chars.len() {
+            i += 1; // 跳过闭合引号
+        }
+        if !text.is_empty() {
+            out.push(QueryTerm { text, excluded });
+        }
+    }
+    out
+}
+
+/// 检索项里的正向词（排除项之外的部分），供兜底与短路判断复用。
+pub(crate) fn positive_terms(terms: &[QueryTerm]) -> Vec<&str> {
+    terms
+        .iter()
+        .filter(|t| !t.excluded)
+        .map(|t| t.text.as_str())
+        .collect()
+}
+
+/// 由检索项拼 FTS5 的 MATCH 表达式：正向项 AND 组合，排除项逐个 NOT 上去。
+///
+/// 括号是必须的：FTS5 的 `NOT` 右结合，`a AND b NOT c` 会被解析成 `a AND (b NOT c)`，
+/// 与「先求交再排除」的意图不同。
+/// 返回 None 表示没有正向项——FTS5 不接受整条查询只有排除项（裸 NOT 是语法错误）。
+pub(crate) fn fts_expr(terms: &[QueryTerm]) -> Option<String> {
+    let positive: Vec<String> = positive_terms(terms).into_iter().map(escape_fts).collect();
+    if positive.is_empty() {
+        return None;
+    }
+    let mut expr = positive.join(" AND ");
+    for t in terms.iter().filter(|t| t.excluded) {
+        expr = format!("({expr}) NOT ({})", escape_fts(&t.text));
+    }
+    Some(expr)
 }
 
 /// SQL LIKE 模式转义（配合 ESCAPE '\'）
@@ -27,7 +109,7 @@ pub fn like_pattern(input: &str) -> String {
     format!("%{escaped}%")
 }
 
-/// 对某张 FTS5 表跑一次短语匹配。table/snippet_col/row_id_expr 只接受调用方写死的常量，
+/// 对某张 FTS5 表跑一次检索。table/snippet_col/row_id_expr 只接受调用方写死的常量，
 /// 不来自用户输入（FTS5 表不能加别名，所以表名要拼进 SQL）。
 fn fts_rows(
     conn: &Connection,
@@ -35,7 +117,7 @@ fn fts_rows(
     snippet_col: i32,
     row_id_expr: &str,
     workspace_id: &str,
-    q: &str,
+    match_expr: &str,
 ) -> Result<Vec<SearchRowOut>, String> {
     let sql = format!(
         "SELECT {table}.view_id, v.name AS title, v.icon, v.layout,
@@ -49,7 +131,26 @@ fn fts_rows(
         col = snippet_col,
         row_id = row_id_expr
     );
-    query_rows(conn, &sql, workspace_id, &escape_fts(q), "search fts")
+    query_rows(
+        conn,
+        &sql,
+        workspace_id,
+        &[match_expr.to_string()],
+        "search fts",
+    )
+}
+
+/// 兜底 LIKE 的过滤条件：正向项 AND，排除项 NOT LIKE，与 fts_expr 的语义对齐。
+/// 返回 (SQL 片段, 与片段里 ?N 同序的模式串)；?1 留给 workspace_id，条件从 ?2 起编号。
+fn like_filters(text_expr: &str, terms: &[QueryTerm]) -> (String, Vec<String>) {
+    let mut sql = String::new();
+    let mut patterns = Vec::new();
+    for (i, t) in terms.iter().enumerate() {
+        let op = if t.excluded { "NOT LIKE" } else { "LIKE" };
+        sql.push_str(&format!(" AND ({text_expr}) {op} ?{} ESCAPE '\\'", i + 2));
+        patterns.push(like_pattern(&t.text));
+    }
+    (sql, patterns)
 }
 
 /// LIKE 兜底通用形态：snippet 空、rank 固定 1e9（排序交给 JS，兜底只保证"能搜到"）。
@@ -61,32 +162,36 @@ fn like_rows(
     text_expr: &str,
     row_id_expr: &str,
     workspace_id: &str,
-    like: &str,
+    terms: &[QueryTerm],
 ) -> Result<Vec<SearchRowOut>, String> {
+    let (filter, patterns) = like_filters(text_expr, terms);
     let sql = format!(
         "SELECT {id_expr} AS view_id, v.name AS title, v.icon, v.layout,
                 '' AS snippet, {row_id} AS row_id, 1e9 AS rank
          FROM {from}
          JOIN views v ON v.id = {id_expr}
-         WHERE v.is_trash = 0 AND v.workspace_id = ?1
-           AND {text_expr} LIKE ?2 ESCAPE '\\'
+         WHERE v.is_trash = 0 AND v.workspace_id = ?1{filter}
          LIMIT 50",
         row_id = row_id_expr
     );
-    query_rows(conn, &sql, workspace_id, like, "search fallback")
+    query_rows(conn, &sql, workspace_id, &patterns, "search fallback")
 }
 
 /// 命中行按固定列序取：0 view_id / 1 title / 2 icon / 3 layout / 4 snippet / 5 row_id / 6 rank
+/// patterns 依次绑定 SQL 里的 ?2、?3……（多词兜底的项数随查询变化，占位符只能动态生成）
 fn query_rows(
     conn: &Connection,
     sql: &str,
     workspace_id: &str,
-    pattern: &str,
+    patterns: &[String],
     what: &'static str,
 ) -> Result<Vec<SearchRowOut>, String> {
     let mut stmt = conn.prepare(sql).map_err(dberr(what))?;
+    let args: Vec<&dyn ToSql> = std::iter::once(&workspace_id as &dyn ToSql)
+        .chain(patterns.iter().map(|p| p as &dyn ToSql))
+        .collect();
     let rows = stmt
-        .query_map(params![workspace_id, pattern], |r| {
+        .query_map(rusqlite::params_from_iter(args), |r| {
             Ok(SearchRowOut {
                 view_id: r.get(0)?,
                 title: r.get(1)?,
@@ -104,7 +209,8 @@ fn query_rows(
 }
 
 /// 搜索当前空间，四路合并：文档 FTS（正文/标题）→ 数据库单元格 FTS → 无索引行的视图标题
-/// LIKE 兜底 → 短查询（<3 字，trigram 必空）的文档正文与单元格文本 LIKE 兜底。
+/// LIKE 兜底 → 短查询（有词不足 3 字，trigram 必空）的文档正文与单元格文本 LIKE 兜底。
+/// 关键词按「每词独立、AND 组合」检索，`"..."` 为精确短语，`-` 前缀排除，四路都遵守。
 /// 返回按"FTS 在前、兜底在后"的原始序列；跨路去重按 view_id 保留首条（rank 更小的那条），
 /// 标题分层排序与 <em> 清洗仍在 JS（search.ts）。
 ///
@@ -115,38 +221,41 @@ pub fn search(
     workspace_id: &str,
     raw_query: &str,
 ) -> Result<Vec<SearchRowOut>, String> {
-    let q = raw_query.trim();
-    if q.is_empty() {
+    let terms = parse_query_terms(raw_query);
+    // 只有排除项时 FTS5 无法表达（不支持裸 NOT），兜底 LIKE 也没有正向词可依：给空结果
+    let Some(expr) = fts_expr(&terms) else {
         return Ok(Vec::new());
-    }
-    let like = like_pattern(q);
+    };
+    let positive = positive_terms(&terms);
+    let (title_filter, title_patterns) = like_filters("v.name", &terms);
 
-    let mut rows = fts_rows(conn, "documents_fts", 2, "NULL", workspace_id, q)?;
+    let mut rows = fts_rows(conn, "documents_fts", 2, "NULL", workspace_id, &expr)?;
     rows.extend(fts_rows(
         conn,
         "database_fts",
         3,
         "database_fts.row_id",
         workspace_id,
-        q,
+        &expr,
     )?);
 
     // 标题兜底只服务"完全没有索引行"的视图（空文件夹、空表）
     rows.extend(query_rows(
         conn,
-        "SELECT v.id AS view_id, v.name AS title, v.icon, v.layout,
-                '' AS snippet, NULL AS row_id, 1e9 AS rank
-         FROM views v
-         WHERE v.is_trash = 0 AND v.workspace_id = ?1 AND v.source_id IS NULL
-           AND v.name LIKE ?2 ESCAPE '\\'
-           AND NOT EXISTS (SELECT 1 FROM documents_fts f WHERE f.view_id = v.id)
-         LIMIT 50",
+        &format!(
+            "SELECT v.id AS view_id, v.name AS title, v.icon, v.layout,
+                    '' AS snippet, NULL AS row_id, 1e9 AS rank
+             FROM views v
+             WHERE v.is_trash = 0 AND v.workspace_id = ?1 AND v.source_id IS NULL{title_filter}
+               AND NOT EXISTS (SELECT 1 FROM documents_fts f WHERE f.view_id = v.id)
+             LIMIT 50"
+        ),
         workspace_id,
-        &like,
+        &title_patterns,
         "search title fallback",
     )?);
 
-    if q.chars().count() < 3 {
+    if positive.iter().any(|t| t.chars().count() < 3) {
         // 纯文本走 document_text 派生视图（与 FTS 索引同源），不用 documents.content 原文，
         // 否则 JSON 结构字符（`{"type":` 等）也会参与 LIKE 命中
         rows.extend(like_rows(
@@ -156,7 +265,7 @@ pub fn search(
             "dt.txt",
             "NULL",
             workspace_id,
-            &like,
+            &terms,
         )?);
         // 走视图现算而非 database_fts：兜底要的是解析后的显示文本，且不受索引滞后影响
         rows.extend(like_rows(
@@ -166,7 +275,7 @@ pub fn search(
             "t.txt",
             "t.row_id",
             workspace_id,
-            &like,
+            &terms,
         )?);
     }
 
@@ -326,6 +435,104 @@ mod tests {
         assert_eq!(escape_fts("foo* -bar"), "\"foo* -bar\"");
     }
 
+    // --- 关键词切分与 MATCH 表达式构造 ---
+
+    #[test]
+    fn parse_terms_splits_words_into_separate_terms() {
+        // 多词不再拼成一个短语：每个词独立成项，由 fts_expr 用 AND 连接
+        let t = parse_query_terms("项目 计划");
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0].text, "项目");
+        assert!(!t[0].excluded);
+        assert_eq!(t[1].text, "计划");
+    }
+
+    #[test]
+    fn parse_terms_keeps_quoted_phrase_as_one_term() {
+        let t = parse_query_terms("\"项目 计划\" 笔记");
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0].text, "项目 计划");
+        assert_eq!(t[1].text, "笔记");
+    }
+
+    #[test]
+    fn parse_terms_marks_minus_prefixed_as_excluded() {
+        let t = parse_query_terms("项目 -计划 -\"营收 报告\"");
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[0].text, "项目");
+        assert!(!t[0].excluded);
+        assert_eq!(t[1].text, "计划");
+        assert!(t[1].excluded);
+        assert_eq!(t[2].text, "营收 报告");
+        assert!(t[2].excluded);
+    }
+
+    #[test]
+    fn parse_terms_tolerates_unbalanced_quote_and_stray_minus() {
+        // 未闭合引号读到结尾，仍是一个短语项（与 JS 侧同一套切分规则）
+        let t = parse_query_terms("\"笔记");
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].text, "笔记");
+        // 单独一个减号后面紧跟空白：不是排除项，后面的词照旧正向
+        let t = parse_query_terms("- 笔记");
+        assert_eq!(t.len(), 1);
+        assert!(!t[0].excluded);
+        assert!(parse_query_terms("\"\" -").is_empty());
+        assert!(parse_query_terms("   ").is_empty());
+    }
+
+    #[test]
+    fn fts_expr_ands_positive_terms() {
+        assert_eq!(
+            fts_expr(&parse_query_terms("项目 计划")).unwrap(),
+            "\"项目\" AND \"计划\""
+        );
+        assert_eq!(fts_expr(&parse_query_terms("项目")).unwrap(), "\"项目\"");
+    }
+
+    #[test]
+    fn fts_expr_excludes_with_parenthesized_not() {
+        // 括号防 FTS5 的 NOT 右结合把 `a AND b NOT c` 变成 `a AND (b NOT c)`
+        assert_eq!(
+            fts_expr(&parse_query_terms("项目 -营收")).unwrap(),
+            "(\"项目\") NOT (\"营收\")"
+        );
+        assert_eq!(
+            fts_expr(&parse_query_terms("甲 乙 -丙 -\"丁 戊\"")).unwrap(),
+            "((\"甲\" AND \"乙\") NOT (\"丙\")) NOT (\"丁 戊\")"
+        );
+    }
+
+    #[test]
+    fn fts_expr_refuses_bare_exclusion() {
+        // FTS5 没有裸 NOT：只有排除项时表达式无从构造，由调用方给空结果
+        assert!(fts_expr(&parse_query_terms("-笔记")).is_none());
+        assert!(fts_expr(&[]).is_none());
+        assert!(positive_terms(&parse_query_terms("-笔记")).is_empty());
+    }
+
+    #[test]
+    fn fts_expr_escapes_quotes_inside_term() {
+        let terms = vec![QueryTerm {
+            text: r#"带"引号 的短语"#.to_string(),
+            excluded: false,
+        }];
+        assert_eq!(fts_expr(&terms).unwrap(), "\"带\"\"引号 的短语\"");
+    }
+
+    #[test]
+    fn like_filters_ands_terms_and_excludes() {
+        let (sql, pats) = like_filters("dt.txt", &parse_query_terms("项目 -营收"));
+        assert_eq!(
+            sql,
+            " AND (dt.txt) LIKE ?2 ESCAPE '\\' AND (dt.txt) NOT LIKE ?3 ESCAPE '\\'"
+        );
+        assert_eq!(pats, vec!["%项目%".to_string(), "%营收%".to_string()]);
+        // 通配符照旧转义成字面量
+        let (_, pats) = like_filters("v.name", &parse_query_terms("50%"));
+        assert_eq!(pats, vec!["%50\\%%".to_string()]);
+    }
+
     #[test]
     fn like_pattern_escapes_wildcards() {
         assert_eq!(like_pattern("50%"), "%50\\%%");
@@ -435,7 +642,114 @@ mod tests {
     }
 
     #[test]
-    fn operator_looking_query_matched_literally() {
+    fn multi_word_query_matches_documents_with_words_apart() {
+        let conn = setup();
+        // 原缺陷：整句包成一个 FTS 短语，两个词分散在正文不同位置就什么都搜不到
+        seed_doc_view(
+            &conn,
+            "v1",
+            "标题A",
+            r#"{"text":"这里写着项目计划四个字，另有营收报告一段"}"#,
+        );
+        seed_doc_view(
+            &conn,
+            "v2",
+            "标题B",
+            r#"{"text":"只有项目计划，别的一样没有"}"#,
+        );
+        let hits = search(&conn, "w1", "项目计划 营收报告").unwrap();
+        assert_eq!(hits.len(), 1, "多词是 AND：两个词都在的文档才命中");
+        assert_eq!(hits[0].view_id, "v1");
+    }
+
+    #[test]
+    fn quoted_phrase_requires_the_words_to_be_adjacent() {
+        let conn = setup();
+        seed_doc_view(
+            &conn,
+            "v1",
+            "标题A",
+            r#"{"text":"讨论 项目计划 营收报告 的细节"}"#,
+        );
+        seed_doc_view(
+            &conn,
+            "v2",
+            "标题B",
+            r#"{"text":"项目计划写在前面，营收报告附在后面"}"#,
+        );
+        let loose = search(&conn, "w1", "项目计划 营收报告").unwrap();
+        assert_eq!(loose.len(), 2, "不加引号：两词分散也命中");
+        let strict = search(&conn, "w1", r#""项目计划 营收报告""#).unwrap();
+        assert_eq!(strict.len(), 1, "加引号：必须按精确短语匹配");
+        assert_eq!(strict[0].view_id, "v1");
+    }
+
+    #[test]
+    fn excluded_term_drops_documents_containing_it() {
+        let conn = setup();
+        seed_doc_view(
+            &conn,
+            "v1",
+            "标题A",
+            r#"{"text":"项目计划里包含营收报告的截图"}"#,
+        );
+        seed_doc_view(
+            &conn,
+            "v2",
+            "标题B",
+            r#"{"text":"项目计划只有一份，其余都是空白"}"#,
+        );
+        let hits = search(&conn, "w1", "项目计划 -营收报告").unwrap();
+        assert_eq!(hits.len(), 1, "排除项命中即出局");
+        assert_eq!(hits[0].view_id, "v2");
+    }
+
+    #[test]
+    fn exclusion_only_query_returns_no_rows() {
+        let conn = setup();
+        seed_doc_view(&conn, "v1", "标题A", r#"{"text":"项目计划的内容"}"#);
+        seed_bare_view(&conn, "v2", "项目计划表");
+        // FTS5 不接受裸 NOT，兜底 LIKE 也没有正向词可依：空结果，不能退化成全库
+        assert!(search(&conn, "w1", "-项目计划").unwrap().is_empty());
+        assert!(search(&conn, "w1", r#"-"项目 计划""#).unwrap().is_empty());
+    }
+
+    #[test]
+    fn title_fallback_requires_every_positive_term() {
+        let conn = setup();
+        seed_bare_view(&conn, "v1", "项目计划营收报告汇总");
+        seed_bare_view(&conn, "v2", "项目计划表");
+        let hits = search(&conn, "w1", "项目计划 营收报告").unwrap();
+        assert_eq!(hits.len(), 1, "标题兜底也要按 AND 过滤");
+        assert_eq!(hits[0].view_id, "v1");
+    }
+
+    #[test]
+    fn title_fallback_honours_excluded_term() {
+        let conn = setup();
+        seed_bare_view(&conn, "v1", "项目计划含营收报告");
+        seed_bare_view(&conn, "v2", "项目计划不含别的");
+        let hits = search(&conn, "w1", "项目计划 -营收报告").unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].view_id, "v2");
+    }
+
+    #[test]
+    fn short_query_content_fallback_ands_every_term() {
+        let conn = setup();
+        seed_doc_view(&conn, "v1", "标题A", r#"{"text":"今天天气不错"}"#);
+        seed_doc_view(&conn, "v2", "标题B", r#"{"text":"下雪之前天气转凉"}"#);
+        let hits = search(&conn, "w1", "天气 雪").unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "短查询兜底同样按 AND：只有一词的文档不算命中"
+        );
+        assert_eq!(hits[0].view_id, "v2");
+    }
+
+    #[test]
+    fn quoted_phrase_with_operator_looking_text_matched_literally() {
         let conn = setup();
         seed_doc_view(
             &conn,
@@ -444,7 +758,23 @@ mod tests {
             r#"{"text":"a OR b 真的出现在内容里"}"#,
         );
         seed_doc_view(&conn, "v2", "标题B", r#"{"text":"完全无关的另一段文字"}"#);
-        // 未转义时 "a OR b" 会被 FTS 解析为布尔表达式；包成短语后按字面子串匹配
+        // 引号里的 OR 是字面量：整个短语按子串匹配
+        let hits = search(&conn, "w1", r#""a OR b""#).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].view_id, "v1");
+    }
+
+    #[test]
+    fn operator_looking_words_without_quotes_are_anded() {
+        let conn = setup();
+        seed_doc_view(
+            &conn,
+            "v1",
+            "标题A",
+            r#"{"text":"a OR b 真的出现在内容里"}"#,
+        );
+        seed_doc_view(&conn, "v2", "标题B", r#"{"text":"完全无关的另一段文字"}"#);
+        // 不带引号时不再是「整串子串」也不是布尔表达式，而是 a AND OR AND b（短词走 LIKE 兜底）
         let hits = search(&conn, "w1", "a OR b").unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].view_id, "v1");

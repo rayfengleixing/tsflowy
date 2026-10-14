@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { DatabaseField } from "@/types/database";
-import { computeFormula, computeRowFormulas, evalFormula, FORMULA_CYCLE, renameFormulaRef } from "./database-formula";
+import {
+  computeFormula,
+  computeRowFormulas,
+  evalFormula,
+  FORMULA_CYCLE,
+  renameFormulaRef,
+  validateFormula,
+} from "./database-formula";
 
 describe("evalFormula", () => {
   const ref = (n: string) => ({ a: 2, b: 3, empty: null })[n] ?? null;
@@ -96,7 +103,8 @@ describe("evalFormula 函数", () => {
     expect(evalFormula("YEAR({date})", ref)).toBe(2026);
     expect(evalFormula("MONTH({date})", ref)).toBe(10);
     expect(evalFormula("DAY({date})", ref)).toBe(8);
-    expect(evalFormula("YEAR({a})", ref)).toBeNull();
+    expect(evalFormula("YEAR({name})", ref)).toBeNull();
+    expect(evalFormula("YEAR({empty})", ref)).toBeNull();
     expect(evalFormula("TODAY()", ref)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
@@ -178,5 +186,202 @@ describe("computeRowFormulas 依赖图求值", () => {
   it("computeFormula 走同一套依赖求值", () => {
     const fields = [mk("qty", "数量"), mk("total", "金额", "{数量} * 2"), mk("shown", "展示", "{金额} + 1")];
     expect(computeFormula(fields[2], { qty: 20 }, fields)).toBe(41);
+  });
+});
+
+describe("evalFormula 取模与幂", () => {
+  const ref = (_n: string) => null;
+
+  it("% 与 / 同优先级、除零返回 null", () => {
+    expect(evalFormula("7 % 3", ref)).toBe(1);
+    expect(evalFormula("7 % 2.5", ref)).toBe(2);
+    expect(evalFormula("1 + 2 % 2", ref)).toBe(1);
+    expect(evalFormula("(1 + 2) % 2", ref)).toBe(1);
+    expect(evalFormula("7 % 0", ref)).toBeNull();
+    expect(evalFormula("6 / 2 % 4", ref)).toBe(3);
+  });
+
+  it("^ 右结合、优先于一元负号", () => {
+    expect(evalFormula("2 ^ 3", ref)).toBe(8);
+    expect(evalFormula("2 ^ 3 ^ 2", ref)).toBe(512);
+    expect(evalFormula("-2 ^ 2", ref)).toBe(-4);
+    expect(evalFormula("2 ^ -2", ref)).toBe(0.25);
+    expect(evalFormula("1 + 2 * 3 ^ 2", ref)).toBe(19);
+    expect(evalFormula("4 ^ 0.5", ref)).toBe(2);
+  });
+
+  it("^ 结果非有限数 → null", () => {
+    expect(evalFormula("10 ^ 1000", ref)).toBeNull();
+    expect(evalFormula("0 ^ -1", ref)).toBeNull();
+  });
+});
+
+describe("evalFormula 文本函数", () => {
+  const ref = (n: string) => ({ name: "x", empty: null })[n] ?? null;
+
+  it("UPPER / LOWER / TRIM / LENGTH", () => {
+    expect(evalFormula('UPPER("aBc")', ref)).toBe("ABC");
+    expect(evalFormula("UPPER({name})", ref)).toBe("X");
+    expect(evalFormula('LOWER("aBc")', ref)).toBe("abc");
+    expect(evalFormula('TRIM("  hi  ")', ref)).toBe("hi");
+    expect(evalFormula('LENGTH("hello")', ref)).toBe(5);
+    expect(evalFormula('LENGTH("中文")', ref)).toBe(2);
+  });
+
+  it("CONTAINS 返回布尔且与 IF 真假语义对齐", () => {
+    expect(evalFormula('CONTAINS("hello", "ell")', ref)).toBe(true);
+    expect(evalFormula('CONTAINS("hello", "xyz")', ref)).toBe(false);
+    expect(evalFormula('IF(CONTAINS("hello", "ell"), "y", "n")', ref)).toBe("y");
+    expect(evalFormula('IF(NOT CONTAINS("hello", "xyz"), "y", "n")', ref)).toBe("y");
+  });
+
+  it("LEFT / RIGHT / MID 截取（越界钳制、n 非法为 null）", () => {
+    expect(evalFormula('LEFT("hello", 2)', ref)).toBe("he");
+    expect(evalFormula('LEFT("hello")', ref)).toBe("h");
+    expect(evalFormula('RIGHT("hello", 2)', ref)).toBe("lo");
+    expect(evalFormula('LEFT("hello", 99)', ref)).toBe("hello");
+    expect(evalFormula('LEFT("hello", 0 - 1)', ref)).toBe("");
+    expect(evalFormula('MID("hello", 2, 3)', ref)).toBe("ell");
+    expect(evalFormula('MID("hello", 2)', ref)).toBe("ello");
+    expect(evalFormula('MID("hello", 0, 2)', ref)).toBe("he");
+    expect(evalFormula("LEFT({empty}, 2)", ref)).toBe("");
+    expect(evalFormula('LEFT("abc", {empty})', ref)).toBeNull();
+  });
+
+  it("参数个数不对 → null", () => {
+    expect(evalFormula('UPPER("a", "b")', ref)).toBeNull();
+    expect(evalFormula("CONTAINS(1)", ref)).toBeNull();
+    expect(evalFormula("MID(1)", ref)).toBeNull();
+  });
+});
+
+describe("evalFormula 日期扩展（NOW / DAYS / 日期加减）", () => {
+  // 本地正午构造：任何时区下日历日都稳定
+  const ms = new Date(2026, 9, 8, 12, 0, 0).getTime();
+  const secs = Math.floor(ms / 1000);
+  const ref = (n: string) =>
+    ({ date: "2026-10-08", dt: "2026-10-08T14:30:00", ms, secs, a: 2, empty: null })[n] ?? null;
+
+  it("NOW() 为本地 YYYY-MM-DDTHH:mm:ss，且可被 YEAR/MONTH/DAY 消费", () => {
+    const now = new Date();
+    const v = evalFormula("NOW()", ref);
+    expect(typeof v).toBe("string");
+    expect(String(v)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/);
+    expect(evalFormula("YEAR(NOW())", ref)).toBe(now.getFullYear());
+    expect(evalFormula("MONTH(NOW())", ref)).toBe(now.getMonth() + 1);
+  });
+
+  it("DAYS 按本地日历日求差（d1 - d2），忽略时分秒", () => {
+    expect(evalFormula('DAYS("2026-10-08", "2026-10-01")', ref)).toBe(7);
+    expect(evalFormula('DAYS("2026-10-01", "2026-10-08")', ref)).toBe(-7);
+    expect(evalFormula('DAYS("2026-10-08", "2026-10-08")', ref)).toBe(0);
+    expect(evalFormula('DAYS("2026-01-01", "2025-12-31")', ref)).toBe(1);
+  });
+
+  it("DAYS 容忍 epoch 数字（秒/毫秒）与字符串混用", () => {
+    expect(evalFormula("DAYS({ms}, {date})", ref)).toBe(0);
+    expect(evalFormula("DAYS({secs}, {date})", ref)).toBe(0);
+    expect(evalFormula("DAYS({ms}, {secs})", ref)).toBe(0);
+    expect(evalFormula('DAYS({ms}, "2026-10-01")', ref)).toBe(7);
+  });
+
+  it("DAYS 非法输入/参数数 → null", () => {
+    expect(evalFormula("DAYS({empty}, {date})", ref)).toBeNull();
+    expect(evalFormula('DAYS("xyz", {date})', ref)).toBeNull();
+    expect(evalFormula("DAYS({date})", ref)).toBeNull();
+  });
+
+  it("日期 ± 数字 = 按天平移，数字 + 日期亦可", () => {
+    expect(evalFormula("{date} + 1", ref)).toBe("2026-10-09");
+    expect(evalFormula("1 + {date}", ref)).toBe("2026-10-09");
+    expect(evalFormula("{date} - 1", ref)).toBe("2026-10-07");
+    expect(evalFormula("{date} + {a}", ref)).toBe("2026-10-10");
+    expect(evalFormula('"2026-12-31" + 1', ref)).toBe("2027-01-01");
+    expect(evalFormula('"2026-01-01" - 1', ref)).toBe("2025-12-31");
+    expect(evalFormula("TODAY() + 0", ref)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("数值串仍优先按算术处理；日期串与文本运算无效", () => {
+    expect(evalFormula('"5" + 2', ref)).toBe(7);
+    expect(evalFormula('{date} + "x"', ref)).toBeNull();
+    expect(evalFormula("{empty} + 1", ref)).toBeNull();
+  });
+
+  it("含时间的日期串平移保留时分秒", () => {
+    expect(evalFormula("{dt} + 1", ref)).toBe("2026-10-09T14:30:00");
+  });
+});
+
+describe("evalFormula epoch 数字日期（created_at 回归）", () => {
+  const ms = new Date(2026, 9, 8, 12, 0, 0).getTime();
+  const ref = (n: string) => ({ t: ms, s: Math.floor(ms / 1000) })[n] ?? null;
+
+  it("数字按 <1e11 秒、否则毫秒解析（旧实现只收字符串 → 恒空）", () => {
+    expect(evalFormula("YEAR({t})", ref)).toBe(2026);
+    expect(evalFormula("MONTH({t})", ref)).toBe(10);
+    expect(evalFormula("DAY({t})", ref)).toBe(8);
+    expect(evalFormula("YEAR({s})", ref)).toBe(2026);
+    expect(evalFormula("DAY({s})", ref)).toBe(8);
+  });
+
+  it("computeRowFormulas 直读 created_at 单元格的 epoch 数字", () => {
+    const fields = [
+      {
+        id: "f1",
+        database_view_id: "v1",
+        name: "创建时间",
+        field_type: "created_at",
+        options: JSON.stringify({ kind: "none" }),
+        width: 120,
+        is_hidden: 0,
+        position: 0,
+      },
+      {
+        id: "f2",
+        database_view_id: "v1",
+        name: "年份",
+        field_type: "formula",
+        options: JSON.stringify({ kind: "formula", formula: "YEAR({创建时间})" }),
+        width: 120,
+        is_hidden: 0,
+        position: 1,
+      },
+    ] as unknown as import("@/types/database").DatabaseField[];
+    expect(computeRowFormulas({ f1: ms }, fields).get("f2")).toBe(2026);
+  });
+});
+
+describe("validateFormula", () => {
+  it("合法表达式（含新运算符/新函数）→ undefined", () => {
+    expect(validateFormula("{a} + 1 * 2")).toBeUndefined();
+    expect(validateFormula("7 % 3")).toBeUndefined();
+    expect(validateFormula("2 ^ 3 ^ 2")).toBeUndefined();
+    expect(validateFormula('IF(CONTAINS({name}, "x"), UPPER({name}), LENGTH({name}))')).toBeUndefined();
+    expect(validateFormula("DAYS({创建时间}, TODAY())")).toBeUndefined();
+  });
+
+  it("空表达式不报错（视为未填写）", () => {
+    expect(validateFormula("")).toBeUndefined();
+    expect(validateFormula("   ")).toBeUndefined();
+  });
+
+  it("非法字符/未闭合引号或大括号 → lexer", () => {
+    expect(validateFormula("1 + @")).toBe("lexer");
+    expect(validateFormula('MID("abc", 1, 2) & 3')).toBe("lexer");
+    expect(validateFormula('"abc')).toBe("lexer");
+    expect(validateFormula("{a")).toBe("lexer");
+  });
+
+  it("结构不合法 → syntax", () => {
+    expect(validateFormula("1 +")).toBe("syntax");
+    expect(validateFormula("(1 + 2")).toBe("syntax");
+    expect(validateFormula("IF(1,")).toBe("syntax");
+    expect(validateFormula("1 2")).toBe("syntax");
+    expect(validateFormula("a + 1")).toBe("syntax"); // 裸标识符
+  });
+
+  it("未知函数名不在语法层拦截（求值时才为 null）", () => {
+    expect(validateFormula("FOO(1)")).toBeUndefined();
+    expect(evalFormula("FOO(1)", () => null)).toBeNull();
   });
 });

@@ -1,48 +1,56 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, Table2 } from "lucide-react";
 import { NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
-import type { DatabaseField, DatabaseRow, CellValue } from "@/types/database";
-import { databaseApi } from "@/lib/database";
+import type { DatabaseField } from "@/types/database";
+import type { RelationDb } from "@/lib/relation";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { relationCellText, relationTarget } from "@/lib/relation";
 import { useRelationStore } from "@/stores/relation";
-import { logger } from "@/lib/logger";
+import { EMBED_MAX_ROWS, resolveDatabaseViewName } from "@/lib/database-view";
 import { t } from "@/lib/i18n";
 import { useWorkspaceStore } from "@/stores/workspace";
 
-// databaseView 只读渲染：加载目标视图的字段/行/单元格，展示前若干行
+// 快照被 invalidate 后的重拉防抖：数据库页连续写入（批量粘贴等）会连发失效，
+// 合并成一次 IPC，而不是每条变更都全量重拉。
+const REFETCH_DEBOUNCE_MS = 300;
+
+// databaseView 只读渲染：目标库数据走 relation 全局缓存（ensure/revision 失效机制），
+// 字段/行/单元格变化与目标页改名都会实时反映；展示前 EMBED_MAX_ROWS 行，
+// 完整数据经头部「打开」跳转（openView 支持数据库视图标签页）。
 export function DatabaseViewNodeView(props: ReactNodeViewProps<HTMLElement>) {
   const { node, selected } = props;
   const openView = useWorkspaceStore((s) => s.openView);
+  const tree = useWorkspaceStore((s) => s.tree);
   const viewId = node.attrs.viewId as string | null;
-  const [fields, setFields] = useState<DatabaseField[]>([]);
-  const [rows, setRows] = useState<DatabaseRow[]>([]);
-  const [cells, setCells] = useState<Record<string, Record<string, CellValue>>>({});
+  const cached = useRelationStore((s) => (viewId ? s.data[viewId] : undefined));
   // 关联列要解析目标行标题：复用全局关联缓存（与表格/看板同一份）
   const relationData = useRelationStore((s) => s.data);
+  const revision = useRelationStore((s) => s.revision);
   const ensureRelationDbs = useRelationStore((s) => s.ensure);
+  // invalidate 清缓存到重拉完成之间保留旧快照展示，避免表格闪空
+  const [data, setData] = useState<RelationDb | undefined>(cached);
+
+  // 挂载 / 嵌入目标变化：立即拉取（缓存已有条目或在途时 ensure 自动去重，不重复发 IPC）
+  useEffect(() => {
+    if (viewId) ensureRelationDbs([viewId]);
+  }, [viewId, ensureRelationDbs]);
+
+  // 外部写入使本视图快照失效（revision 递增）：防抖后重新 ensure
+  const seenRevision = useRef(revision);
+  useEffect(() => {
+    if (!viewId || revision === seenRevision.current) return;
+    seenRevision.current = revision;
+    const timer = window.setTimeout(() => ensureRelationDbs([viewId]), REFETCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [revision, viewId, ensureRelationDbs]);
 
   useEffect(() => {
-    let alive = true;
-    if (!viewId) {
-      setFields([]);
-      setRows([]);
-      setCells({});
-      return;
-    }
-    Promise.all([databaseApi.listFields(viewId), databaseApi.listRows(viewId), databaseApi.loadCells(viewId)])
-      .then(([f, r, c]) => {
-        if (alive) {
-          setFields(f.filter((x) => x.is_hidden === 0));
-          setRows(r.slice(0, 8));
-          setCells(c);
-        }
-      })
-      .catch((e: unknown) => logger.error("load embedded db failed", viewId, e));
-    return () => {
-      alive = false;
-    };
-  }, [viewId]);
+    if (cached) setData(cached);
+  }, [cached]);
+
+  const fields = useMemo(() => (data ? data.fields.filter((x) => x.is_hidden === 0) : []), [data]);
+  const rows = useMemo(() => (data ? data.rows.slice(0, EMBED_MAX_ROWS) : []), [data]);
+  const cells = data?.cells ?? {};
 
   // 字段就绪后把关联字段的目标视图拉进缓存（同一目标库只请求一次）
   useEffect(() => {
@@ -89,7 +97,12 @@ export function DatabaseViewNodeView(props: ReactNodeViewProps<HTMLElement>) {
       <div className="flex items-center gap-2 border-b border-neutral-200 bg-neutral-100/70 px-3 py-2">
         <Table2 className="h-4 w-4 text-neutral-500" />
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-neutral-800">
-          {(node.attrs.name as string | undefined) ?? t("databaseView.defaultName")}
+          {resolveDatabaseViewName(
+            tree,
+            viewId,
+            (node.attrs.name as string | undefined) ?? "",
+            t("databaseView.defaultName"),
+          )}
         </span>
         <button
           className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[12px] text-brand-600 hover:bg-brand-100"

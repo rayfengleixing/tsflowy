@@ -56,7 +56,7 @@ import { Outline } from "./extensions/outline/node";
 import { Subpages } from "./extensions/subpages/node";
 import { Columns, Column } from "./extensions/columns/node";
 import { ImageGallery } from "./extensions/image-gallery/node";
-import Mention from "@tiptap/extension-mention";
+import { LiveMention } from "./extensions/mention/node";
 import { buildMentionSuggestion } from "./extensions/mention/suggestion";
 // — M3 高级块结束 —
 import "highlight.js/styles/github.css";
@@ -255,7 +255,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       Columns,
       Column,
       ImageGallery,
-      Mention.configure({
+      LiveMention.configure({
         HTMLAttributes: {
           class:
             "mention cursor-pointer underline decoration-dotted underline-offset-2 text-brand-600 hover:text-brand-700",

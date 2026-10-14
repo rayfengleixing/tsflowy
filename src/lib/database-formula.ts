@@ -5,12 +5,18 @@ import { parseFieldOptions } from "./database-values";
 // 表达式语法：
 //   - 字面量：数字、字符串（"..." 或 '...'）、true / false
 //   - 字段引用：{字段名}
-//   - 算术：+ - * /（一元负号），任一操作数非数值 → 该子式无效
+//   - 算术：+ - * / %（取模，除零→空），任一操作数非数值 → 该子式无效
+//   - 幂：^（右结合，优先级高于一元负号：-2^2 = -4）
 //   - 比较：= == != <> < <= > >=（两值可数值化则按数值比，否则按字符串比）→ 布尔
 //   - 逻辑：AND OR NOT → 布尔（null 视为 false）
 //   - 函数：IF(条件, 真值, 假值) 惰性求值；SUM/AVG/MIN/MAX(数值…) 忽略空值；
-//           ROUND(x[, 位数])、ABS(x)；CONCAT(文本…)；TODAY()；YEAR/MONTH/DAY(日期)
-//   - 括号分组，优先级：OR < AND < NOT < 比较 < 加减 < 乘除 < 一元 < 调用/原子
+//           ROUND(x[, 位数])、ABS(x)；CONCAT(文本…)；
+//           UPPER/LOWER/TRIM/LENGTH/CONTAINS/LEFT/RIGHT/MID(文本，CONTAINS 返回布尔)；
+//           TODAY()、NOW()（本地 "YYYY-MM-DDTHH:mm:ss"）；YEAR/MONTH/DAY(日期)、
+//           DAYS(d1, d2) = d1-d2 的整天数（按本地日历日，忽略时分秒）
+//   - 日期值：接受 "YYYY-MM-DD"/ISO 字符串与 epoch 数字（|v|<1e11 按秒、否则按毫秒，同 database-query）
+//   - 日期算术：日期字符串 ± 数字 = 按天平移（date+num 与 num+date 均可；纯日期串回写日期串，含时间的保留时分）
+//   - 括号分组，优先级：OR < AND < NOT < 比较 < 加减 < 乘/除/模 < 一元负号 < 幂 < 调用/原子
 // 无法反推/非法/除零/引用为空 → 返回 null（显示为空）。
 
 /** 求值结果类型（number / string / boolean / null）——与 CellValue 的标量部分一致 */
@@ -81,7 +87,7 @@ function tokenize(expr: string): Token[] | null {
       i += 2;
       continue;
     }
-    if ("+-*/()<>=".includes(ch)) {
+    if ("+-*/%^()<>=".includes(ch)) {
       tokens.push({ k: "op", v: ch });
       i++;
       continue;
@@ -173,7 +179,7 @@ function parse(tokens: Token[]): Node | null {
     let left = parseUnary();
     while (left) {
       const tok = peek();
-      if (tok?.k === "op" && (tok.v === "*" || tok.v === "/")) {
+      if (tok?.k === "op" && (tok.v === "*" || tok.v === "/" || tok.v === "%")) {
         eat();
         const right = parseUnary();
         if (!right) return null;
@@ -181,6 +187,19 @@ function parse(tokens: Token[]): Node | null {
       } else break;
     }
     return left;
+  };
+
+  // ^ 高于一元负号且右结合：-2^2 = -(2^2)，2^3^2 = 2^(3^2)
+  const parsePow = (): Node | null => {
+    const base = parsePrimary();
+    if (!base) return null;
+    if (isOpTok("^")) {
+      eat();
+      const exp = parseUnary();
+      if (!exp) return null;
+      return { t: "bin", op: "^", l: base, r: exp };
+    }
+    return base;
   };
 
   const parseUnary = (): Node | null => {
@@ -191,7 +210,7 @@ function parse(tokens: Token[]): Node | null {
       if (!arg) return null;
       return { t: "neg", arg };
     }
-    return parsePrimary();
+    return parsePow();
   };
 
   const isOpTok = (v: string): boolean => {
@@ -285,14 +304,61 @@ function toBool(v: FormulaValue): boolean {
   return false;
 }
 
-/** 日期值解析：优先 "YYYY-MM-DD" 前缀（本地），否则退化为 Date 构造 */
-function toDateParts(v: FormulaValue): { y: number; mo: number; d: number } | null {
+/** 日期值 → Date：epoch 数字（|v|<1e11 按秒、否则按毫秒，同 database-query dayMs）、
+ *  "YYYY-MM-DD" 前缀按本地日、其余字符串退化为 Date 构造；非法 → null */
+function toDateValue(v: FormulaValue): Date | null {
+  if (typeof v === "number") {
+    if (!Number.isFinite(v)) return null;
+    const d = new Date(Math.abs(v) < 1e11 ? v * 1000 : v);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
   if (typeof v !== "string") return null;
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v);
-  if (m) return { y: Number(m[1]), mo: Number(m[2]), d: Number(m[3]) };
-  const dt = new Date(v);
-  if (Number.isNaN(dt.getTime())) return null;
+  const s = v.trim();
+  if (!s) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(s);
+  if (m)
+    return new Date(
+      Number(m[1]),
+      Number(m[2]) - 1,
+      Number(m[3]),
+      Number(m[4] || 0),
+      Number(m[5] || 0),
+      Number(m[6] || 0),
+    );
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** 日期值解析：字符串与 epoch 数字都接受，返回本地日历日分量 */
+function toDateParts(v: FormulaValue): { y: number; mo: number; d: number } | null {
+  const dt = toDateValue(v);
+  if (!dt) return null;
   return { y: dt.getFullYear(), mo: dt.getMonth() + 1, d: dt.getDate() };
+}
+
+/** 可参与日期平移的字符串：本身不是数值串（"5" + 2 仍按算术）且可按日期解析 */
+function isDateLikeString(v: FormulaValue): v is string {
+  return typeof v === "string" && toNum(v) === null && toDateValue(v) !== null;
+}
+
+/** 日期字符串 ± N 天：纯日期串回写 "YYYY-MM-DD"，含时间的保留时分秒 */
+function shiftDate(s: string, days: number): string | null {
+  const dt = toDateValue(s);
+  if (!dt) return null;
+  const n = Math.trunc(days);
+  const out = new Date(
+    dt.getFullYear(),
+    dt.getMonth(),
+    dt.getDate() + n,
+    dt.getHours(),
+    dt.getMinutes(),
+    dt.getSeconds(),
+  );
+  if (Number.isNaN(out.getTime())) return null;
+  const dateStr = `${out.getFullYear()}-${pad2(out.getMonth() + 1)}-${pad2(out.getDate())}`;
+  return /\dT\d{2}/.test(s)
+    ? `${dateStr}T${pad2(out.getHours())}:${pad2(out.getMinutes())}:${pad2(out.getSeconds())}`
+    : dateStr;
 }
 
 function pad2(n: number): string {
@@ -363,9 +429,60 @@ function callFn(name: string, evalArg: (n: Node) => FormulaValue, args: Node[]):
     }
     case "CONCAT":
       return args.map(evalArg).map(toStr).join("");
+    case "UPPER":
+    case "LOWER":
+    case "TRIM":
+    case "LENGTH": {
+      if (args.length !== 1) return null;
+      const s = toStr(evalArg(args[0]));
+      if (name === "UPPER") return s.toUpperCase();
+      if (name === "LOWER") return s.toLowerCase();
+      if (name === "TRIM") return s.trim();
+      return s.length;
+    }
+    case "CONTAINS": {
+      if (args.length !== 2) return null;
+      return toStr(evalArg(args[0])).includes(toStr(evalArg(args[1])));
+    }
+    case "LEFT":
+    case "RIGHT": {
+      if (args.length < 1 || args.length > 2) return null;
+      const s = toStr(evalArg(args[0]));
+      const n = args.length === 2 ? toNum(evalArg(args[1])) : 1;
+      if (n === null) return null;
+      const k = Math.min(Math.max(0, Math.trunc(n)), s.length);
+      return name === "LEFT" ? s.slice(0, k) : s.slice(s.length - k);
+    }
+    case "MID": {
+      if (args.length < 2 || args.length > 3) return null;
+      const s = toStr(evalArg(args[0]));
+      const start = toNum(evalArg(args[1]));
+      if (start === null) return null;
+      const from = Math.max(0, Math.trunc(start) - 1);
+      if (args.length === 2) return s.slice(from);
+      const len = toNum(evalArg(args[2]));
+      if (len === null) return null;
+      return s.slice(from, from + Math.max(0, Math.trunc(len)));
+    }
     case "TODAY": {
       const now = new Date();
       return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+    }
+    case "NOW": {
+      const now = new Date();
+      return (
+        `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}` +
+        `T${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`
+      );
+    }
+    case "DAYS": {
+      if (args.length !== 2) return null;
+      const a = toDateValue(evalArg(args[0]));
+      const b = toDateValue(evalArg(args[1]));
+      if (!a || !b) return null;
+      const da = new Date(a.getFullYear(), a.getMonth(), a.getDate()).getTime();
+      const db = new Date(b.getFullYear(), b.getMonth(), b.getDate()).getTime();
+      return Math.round((da - db) / 86400000);
     }
     case "YEAR":
     case "MONTH":
@@ -405,6 +522,11 @@ function evalNode(node: Node, resolveRef: (name: string) => FormulaValue): Formu
       if (["=", "==", "!=", "<>", "<", ">", "<=", ">="].includes(op)) return compare(l, r, op);
       const nl = toNum(l);
       const nr = toNum(r);
+      // 日期平移：日期串 ± 数字（数字侧 + 日期串仅限 +）
+      if (op === "+" || op === "-") {
+        if (nl === null && nr !== null && isDateLikeString(l)) return shiftDate(l, op === "+" ? nr : -nr);
+        if (op === "+" && nl !== null && nr === null && isDateLikeString(r)) return shiftDate(r, nl);
+      }
       if (nl === null || nr === null) return null;
       switch (op) {
         case "+":
@@ -415,6 +537,12 @@ function evalNode(node: Node, resolveRef: (name: string) => FormulaValue): Formu
           return nl * nr;
         case "/":
           return nr === 0 ? null : nl / nr;
+        case "%":
+          return nr === 0 ? null : nl % nr;
+        case "^": {
+          const v = Math.pow(nl, nr);
+          return Number.isFinite(v) ? v : null;
+        }
         default:
           return null;
       }
@@ -443,6 +571,18 @@ function parseCached(expr: string): Node | null {
   if (astCache.size > 256) astCache.clear();
   astCache.set(expr, ast);
   return ast;
+}
+
+/** 语法校验结果：undefined=合法；"lexer"=非法字符/未闭合的引号或大括号；"syntax"=结构不合法 */
+export type FormulaSyntaxIssue = "lexer" | "syntax";
+
+/** 保存前/失焦时的公式语法校验（只查语法，函数名/参数错误要到求值才暴露）。
+ *  空表达式返回 undefined（视为未填写，不报错）。 */
+export function validateFormula(expr: string): FormulaSyntaxIssue | undefined {
+  if (!expr.trim()) return undefined;
+  const tokens = tokenize(expr);
+  if (!tokens || tokens.length === 0) return "lexer";
+  return parse(tokens) ? undefined : "syntax";
 }
 
 /** 单元格值 → 公式里的引用值：数组（多选/关联/附件）转文本串参与字符串运算，

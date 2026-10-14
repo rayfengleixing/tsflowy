@@ -14,6 +14,10 @@ export type ShortcutId =
   | "quickOpen"
   | "search"
   | "switchTab"
+  | "closeTab"
+  | "reopenClosedTab"
+  | "goBack"
+  | "goForward"
   | "newPage"
   | "openSettings"
   | "toggleTheme"
@@ -44,6 +48,10 @@ export const DEFAULT_SHORTCUTS: Record<ShortcutId, Combo> = {
   quickOpen: c("p"),
   search: c("f", { shift: true }),
   switchTab: c("tab"),
+  closeTab: c("w"),
+  reopenClosedTab: c("t", { shift: true }),
+  goBack: { ctrl: false, shift: false, alt: true, key: "arrowleft" },
+  goForward: { ctrl: false, shift: false, alt: true, key: "arrowright" },
   newPage: c("n"),
   openSettings: c(","),
   toggleTheme: c("d", { shift: true }),
@@ -63,6 +71,10 @@ export const GLOBAL_SHORTCUT_IDS: ShortcutId[] = [
   "quickOpen",
   "search",
   "switchTab",
+  "closeTab",
+  "reopenClosedTab",
+  "goBack",
+  "goForward",
   "newPage",
   "openSettings",
   "toggleTheme",
@@ -93,6 +105,10 @@ export const CUSTOMIZABLE_SHORTCUTS: { id: ShortcutId; labelKey: string }[] = [
   { id: "quickOpen", labelKey: "settings.shortcuts.quickOpen" },
   { id: "search", labelKey: "settings.shortcuts.search" },
   { id: "switchTab", labelKey: "settings.shortcuts.switchTab" },
+  { id: "closeTab", labelKey: "settings.shortcuts.closeTab" },
+  { id: "reopenClosedTab", labelKey: "settings.shortcuts.reopenClosedTab" },
+  { id: "goBack", labelKey: "settings.shortcuts.goBack" },
+  { id: "goForward", labelKey: "settings.shortcuts.goForward" },
   { id: "newPage", labelKey: "settings.shortcuts.newPage" },
   { id: "openSettings", labelKey: "settings.shortcuts.openSettings" },
   { id: "toggleTheme", labelKey: "settings.shortcuts.toggleTheme" },

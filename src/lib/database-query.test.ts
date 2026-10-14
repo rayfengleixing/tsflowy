@@ -7,7 +7,9 @@ import {
   evaluateFilter,
   groupRowsForGrid,
   isCellEmpty,
+  makeRelativeOperand,
   opsForType,
+  relativeDayRange,
   sortRows,
   type FilterSpec,
   type GridGroup,
@@ -144,6 +146,92 @@ describe("evaluateFilter", () => {
 
   it("evaluates multi_select contains", () => {
     expect(evaluateFilter("multi_select", ["opt_1"], "contains", "opt_1")).toBe(true);
+  });
+
+  it("compares relation operands by row id (array or legacy single string)", () => {
+    expect(evaluateFilter("relation", ["r1", "r2"], "contains", ["r2"])).toBe(true);
+    expect(evaluateFilter("relation", ["r1"], "contains", ["r2", "r3"])).toBe(false);
+    expect(evaluateFilter("relation", ["r1"], "contains", "r1")).toBe(true);
+    expect(evaluateFilter("relation", ["r1"], "contains", "手填标题")).toBe(false);
+    expect(evaluateFilter("relation", ["r1", "r2"], "not_contains", ["r3"])).toBe(true);
+    expect(evaluateFilter("relation", ["r1"], "not_contains", ["r1"])).toBe(false);
+    // 操作数未填：沿用旧行为（非空单元格恒判"不包含"）
+    expect(evaluateFilter("relation", ["r1"], "not_contains", [])).toBe(true);
+    expect(evaluateFilter("relation", ["r1"], "not_contains", null)).toBe(true);
+  });
+
+  it("compares epoch-number timestamps by calendar day", () => {
+    const noonMs = new Date(2026, 9, 13, 12, 0, 0).getTime();
+    expect(evaluateFilter("created_at", noonMs, "equals", "2026-10-13")).toBe(true);
+    expect(evaluateFilter("created_at", Math.floor(noonMs / 1000), "equals", "2026-10-13")).toBe(true);
+    expect(evaluateFilter("last_edited_at", noonMs, "lt", "2026-10-14")).toBe(true);
+    expect(evaluateFilter("created_at", noonMs, "gt", "2026-10-13")).toBe(false);
+  });
+
+  it("evaluates relative date operands against current time", () => {
+    const now = new Date();
+    const localDay = (offset: number) => {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    expect(evaluateFilter("date", localDay(0), "equals", makeRelativeOperand("today"))).toBe(true);
+    expect(evaluateFilter("date", localDay(-1), "equals", makeRelativeOperand("today"))).toBe(false);
+    expect(evaluateFilter("date", localDay(-1), "equals", makeRelativeOperand("yesterday"))).toBe(true);
+    expect(evaluateFilter("date", localDay(1), "equals", makeRelativeOperand("tomorrow"))).toBe(true);
+    expect(evaluateFilter("date", localDay(-3), "equals", makeRelativeOperand("past_days", 7))).toBe(true);
+    expect(evaluateFilter("date", localDay(-9), "equals", makeRelativeOperand("past_days", 7))).toBe(false);
+    expect(evaluateFilter("date", localDay(2), "equals", makeRelativeOperand("next_days", 7))).toBe(true);
+    expect(evaluateFilter("date", localDay(0), "lt", makeRelativeOperand("tomorrow"))).toBe(true);
+    expect(evaluateFilter("date", localDay(0), "gte", makeRelativeOperand("today"))).toBe(true);
+    expect(evaluateFilter("date", localDay(0), "gt", makeRelativeOperand("today"))).toBe(false);
+    expect(evaluateFilter("date", localDay(9), "not_equals", makeRelativeOperand("past_days", 7))).toBe(true);
+    // 非法/未识别 token 一律不命中
+    expect(evaluateFilter("date", localDay(0), "equals", "@rel:nonexistent")).toBe(false);
+    expect(evaluateFilter("date", localDay(0), "not_equals", "@rel:nonexistent")).toBe(false);
+  });
+
+  it("maps relative tokens to inclusive calendar-day ranges", () => {
+    const now = new Date(2026, 9, 15); // 2026-10-15 周四
+    const ms = (y: number, m: number, d: number) => new Date(y, m, d).getTime();
+    expect(relativeDayRange(makeRelativeOperand("today"), now)).toEqual({
+      start: ms(2026, 9, 15),
+      end: ms(2026, 9, 15),
+    });
+    expect(relativeDayRange(makeRelativeOperand("yesterday"), now)).toEqual({
+      start: ms(2026, 9, 14),
+      end: ms(2026, 9, 14),
+    });
+    expect(relativeDayRange(makeRelativeOperand("this_week"), now)).toEqual({
+      start: ms(2026, 9, 12),
+      end: ms(2026, 9, 18),
+    });
+    expect(relativeDayRange(makeRelativeOperand("last_week"), now)).toEqual({
+      start: ms(2026, 9, 5),
+      end: ms(2026, 9, 11),
+    });
+    expect(relativeDayRange(makeRelativeOperand("next_week"), now)).toEqual({
+      start: ms(2026, 9, 19),
+      end: ms(2026, 9, 25),
+    });
+    expect(relativeDayRange(makeRelativeOperand("this_month"), now)).toEqual({
+      start: ms(2026, 9, 1),
+      end: ms(2026, 9, 31),
+    });
+    expect(relativeDayRange(makeRelativeOperand("next_month"), now)).toEqual({
+      start: ms(2026, 10, 1),
+      end: ms(2026, 10, 30),
+    });
+    expect(relativeDayRange(makeRelativeOperand("past_days", 7), now)).toEqual({
+      start: ms(2026, 9, 9),
+      end: ms(2026, 9, 15),
+    });
+    expect(relativeDayRange(makeRelativeOperand("next_days", 7), now)).toEqual({
+      start: ms(2026, 9, 15),
+      end: ms(2026, 9, 21),
+    });
+    expect(relativeDayRange("@rel:past_days:0", now)).toBeNull();
+    expect(relativeDayRange("@rel:past_days", now)).toBeNull();
+    expect(relativeDayRange("2026-10-15", now)).toBeNull();
   });
 });
 

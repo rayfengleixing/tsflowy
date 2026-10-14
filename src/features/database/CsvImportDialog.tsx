@@ -27,6 +27,9 @@ import { logger } from "@/lib/logger";
  *  在类型下拉里以禁用项呈现，说明原因。 */
 const IMPORT_TYPES: FieldType[] = [
   "text",
+  "url",
+  "email",
+  "phone",
   "number",
   "progress",
   "rating",

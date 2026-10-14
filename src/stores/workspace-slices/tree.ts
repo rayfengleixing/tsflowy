@@ -90,7 +90,13 @@ async function patchTree(set: WorkspaceSet, get: WorkspaceGet): Promise<void> {
   // 副视图（并排对照）对应的页面若已被删/移走，一并取消并排
   let splitViewId = get().splitViewId;
   if (splitViewId && !byId.has(splitViewId)) splitViewId = null;
-  set({ tree, trash, tabs, currentViewId, splitViewId });
+  // expanded / pinned 同步清理已删节点：避免持久层里堆积不存在的 id
+  const expanded = new Set<string>();
+  for (const id of get().expanded) if (byId.has(id)) expanded.add(id);
+  const pinnedTabIds = new Set<string>();
+  const tabIdSet = new Set(tabs.map((v) => v.id));
+  for (const id of get().pinnedTabIds) if (tabIdSet.has(id)) pinnedTabIds.add(id);
+  set({ tree, trash, tabs, currentViewId, splitViewId, expanded, pinnedTabIds });
   persistNow(get);
   void backfillSubpages(get, currentWorkspaceId);
 }
@@ -105,9 +111,19 @@ export async function patchTreeAndRestoreTabs(set: WorkspaceSet, get: WorkspaceG
     viewApi.listTrash(currentWorkspaceId),
   ]);
   const tree = buildTree(views);
-  const { tabs, currentViewId, splitViewId } = await loadTabsForWs(currentWorkspaceId, tree);
+  const restored = await loadTabsForWs(currentWorkspaceId, tree);
   if (seq !== treeSeq || get().currentWorkspaceId !== currentWorkspaceId) return;
-  set({ tree, trash, tabs, currentViewId, splitViewId });
+  // expanded=null 表示从未持久化（首次升级/新空间）：默认展开根级带子页的节点
+  const expanded = restored.expanded ?? new Set(tree.filter((n) => n.children.length > 0).map((n) => n.id));
+  set({
+    tree,
+    trash,
+    tabs: restored.tabs,
+    currentViewId: restored.currentViewId,
+    splitViewId: restored.splitViewId,
+    expanded,
+    pinnedTabIds: restored.pinned,
+  });
   persistNow(get);
   void backfillSubpages(get, currentWorkspaceId);
 }

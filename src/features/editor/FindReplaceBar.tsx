@@ -19,6 +19,8 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [replacement, setReplacement] = useState("");
   const [showReplace, setShowReplace] = useState(false);
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
   const [info, setInfo] = useState<{ total: number; active: number; truncated: boolean }>({
     total: 0,
     active: -1,
@@ -31,10 +33,10 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
     inputRef.current?.select();
   }, []);
 
-  // 查询词变化 → 交给插件重算并跳到首个命中
+  // 查询词/匹配选项变化 → 交给插件重算并跳到首个命中
   useEffect(() => {
-    setFindQuery(editor, query);
-  }, [editor, query]);
+    setFindQuery(editor, query, { caseSensitive, wholeWord });
+  }, [editor, query, caseSensitive, wholeWord]);
 
   // 事务驱动计数：编辑文档/移动活动项都会刷新 n/m
   useEffect(() => {
@@ -140,6 +142,27 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
         >
           <X className="h-3.5 w-3.5" />
         </button>
+      </div>
+
+      <div className="flex items-center gap-3 border-t border-neutral-100 px-2.5 py-1 dark:border-neutral-800">
+        <label className="flex cursor-pointer items-center gap-1 text-[11px] text-neutral-500">
+          <input
+            type="checkbox"
+            className="h-3 w-3 accent-brand-600"
+            checked={caseSensitive}
+            onChange={(e) => setCaseSensitive(e.target.checked)}
+          />
+          {t("find.caseSensitive")}
+        </label>
+        <label className="flex cursor-pointer items-center gap-1 text-[11px] text-neutral-500">
+          <input
+            type="checkbox"
+            className="h-3 w-3 accent-brand-600"
+            checked={wholeWord}
+            onChange={(e) => setWholeWord(e.target.checked)}
+          />
+          {t("find.wholeWord")}
+        </label>
       </div>
 
       {info.truncated && (

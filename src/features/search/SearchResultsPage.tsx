@@ -104,8 +104,8 @@ export function SearchResultsPage() {
     setRoute("workspace");
   };
 
-  // 高亮只用关键词部分，避免把 `type:page` 这类限定符喂给标题高亮
-  const highlightQuery = parseSearchQuery(searchQuery).text;
+  // 高亮只用解析出的关键词，避免把 `type:page` 这类限定符与 `-`/引号符号喂给标题高亮
+  const highlightTerms = parseSearchQuery(searchQuery).terms;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -189,7 +189,7 @@ export function SearchResultsPage() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[14px] font-medium text-neutral-800">
-                      <HighlightedTitle title={hit.title} query={highlightQuery} />
+                      <HighlightedTitle title={hit.title} terms={highlightTerms} />
                     </span>
                     {hit.snippet && (
                       <span

@@ -8,12 +8,14 @@ import {
   AlignLeft,
   AlignRight,
   CheckSquare,
+  ChevronDown,
   Code2,
   Copy,
   Heading1,
   Heading2,
   Heading3,
   Highlighter,
+  Lightbulb,
   List,
   ListOrdered,
   Palette,
@@ -25,6 +27,7 @@ import {
 import { cn } from "@/lib/utils";
 import { t, type MessageKey } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
+import { expandContainerToTextBlocks } from "./block-convert";
 import { TEXT_COLORS, HIGHLIGHT_COLORS, SwatchPalette, IconBtn } from "./floating-menu";
 import { clampXToEditor } from "./float-clamp";
 
@@ -170,6 +173,28 @@ const CONVERT_ITEMS: ConvertItem[] = [
         .toggleTaskList()
         .run(),
   },
+  {
+    key: "callout",
+    icon: <Lightbulb className="h-4 w-4" />,
+    run: (e, p) =>
+      e
+        .chain()
+        .focus()
+        .setTextSelection(p + 1)
+        .toggleWrap("callout")
+        .run(),
+  },
+  {
+    key: "toggle",
+    icon: <ChevronDown className="h-4 w-4" />,
+    run: (e, p) =>
+      e
+        .chain()
+        .focus()
+        .setTextSelection(p + 1)
+        .toggleWrap("toggle")
+        .run(),
+  },
 ];
 
 /** 全选整块文本（颜色/对齐/复制用） */
@@ -247,19 +272,9 @@ export function BlockMenu() {
     try {
       const node = editor.state.doc.nodeAt(pos);
       if (!node) return;
-      // 提取容器内所有文本块文本，重建为若干段落（clearNodes 解包会产生多余空段落，故手动重建）
-      const texts: string[] = [];
-      node.descendants((child) => {
-        if (child.isTextblock) {
-          texts.push(child.textContent);
-          return false;
-        }
-        return true;
-      });
-      const blocks = texts.map((text) =>
-        text ? { type: "paragraph", content: [{ type: "text", text }] } : { type: "paragraph" },
-      );
-      if (blocks.length === 0) blocks.push({ type: "paragraph" });
+      // 容器解包为顶层块：文本块整体保留（行内 marks/硬换行/原子 inline 不丢失），
+      // 列表/表格/栏等外壳递归展开，见 block-convert.ts
+      const blocks = expandContainerToTextBlocks(node);
       editor
         .chain()
         .focus()

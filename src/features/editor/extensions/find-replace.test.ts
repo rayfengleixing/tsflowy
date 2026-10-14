@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Schema, Node as PMNode } from "@tiptap/pm/model";
-import { collectMatches } from "./find-replace";
+import { collectMatches, scanMatches } from "./find-replace";
 
 // 位置映射是这块逻辑唯一容易出错的地方：跨 mark、原子 inline 节点、多块文档
 const schema = new Schema({
@@ -85,5 +85,49 @@ describe("collectMatches", () => {
     const d = doc([{ type: "paragraph", content: [text("abc")] }]);
     expect(collectMatches(d, "")).toEqual([]);
     expect(collectMatches(d, "zzz")).toEqual([]);
+  });
+});
+
+describe("scanMatches 匹配选项（区分大小写 / 全词）", () => {
+  it("caseSensitive：只有大小写完全一致才命中，默认仍不敏感", () => {
+    const d = doc([{ type: "paragraph", content: [text("Hello HELLO hello")] }]);
+    expect(scanMatches(d, "hello", { caseSensitive: true }).matches).toEqual([{ from: 13, to: 18 }]);
+    expect(scanMatches(d, "hello").matches).toHaveLength(3);
+  });
+
+  it("wholeWord：拉丁词/数字受边界约束", () => {
+    const d = doc([{ type: "paragraph", content: [text("the there other 123 a123")] }]);
+    // "the" 独立命中；"there"（后接词字符）与 "other"（前接词字符）不算全词
+    expect(scanMatches(d, "the", { wholeWord: true }).matches).toEqual([{ from: 1, to: 4 }]);
+    // "123" 独立命中；"a123" 中前接 a 不命中
+    expect(scanMatches(d, "123", { wholeWord: true }).matches).toEqual([{ from: 17, to: 20 }]);
+  });
+
+  it("wholeWord 对中日韩文本不生效：CJK 视为非词字符", () => {
+    const d = doc([{ type: "paragraph", content: [text("这是一个测试文本")] }]);
+    expect(scanMatches(d, "测试", { wholeWord: true }).matches).toEqual([{ from: 5, to: 7 }]);
+    // 汉字紧邻的拉丁词同样命中：全词只按拉丁词字符判边界
+    const d2 = doc([{ type: "paragraph", content: [text("测试test中文")] }]);
+    expect(scanMatches(d2, "test", { wholeWord: true }).matches).toEqual([{ from: 3, to: 7 }]);
+  });
+
+  it("wholeWord + caseSensitive 组合", () => {
+    const d = doc([{ type: "paragraph", content: [text("The THE then")] }]);
+    expect(scanMatches(d, "THE", { caseSensitive: true, wholeWord: true }).matches).toEqual([{ from: 5, to: 8 }]);
+  });
+
+  it("wholeWord 边界跨 mark 仍按拼接文本判定", () => {
+    const d = doc([{ type: "paragraph", content: [text("hel", [{ type: "bold" }]), text("lo world")] }]);
+    // "hel" 后接词字符 l → 不构成全词；"hello" 整体后接空格 → 命中
+    expect(scanMatches(d, "hel", { wholeWord: true }).matches).toEqual([]);
+    expect(scanMatches(d, "hello", { wholeWord: true }).matches).toEqual([{ from: 1, to: 6 }]);
+  });
+
+  it("wholeWord 下块边界（拼接分隔符 \\n）不阻断命中", () => {
+    const d = doc([
+      { type: "paragraph", content: [text("the")] },
+      { type: "paragraph", content: [text("them")] },
+    ]);
+    expect(scanMatches(d, "the", { wholeWord: true }).matches).toEqual([{ from: 1, to: 4 }]);
   });
 });

@@ -67,6 +67,17 @@ describe("inferFieldType", () => {
     expect(inferFieldType(["010-6666", "021"])).toBe("text");
     expect(inferFieldType(["0", "0.5", "-1"])).toBe("number");
   });
+
+  it("detects url / email / phone columns", () => {
+    expect(inferFieldType(["https://example.com/a", "http://b.cn/"])).toBe("url");
+    expect(inferFieldType(["a@b.com", "x.y+z@mail.example.org"])).toBe("email");
+    expect(inferFieldType(["+86 138 0013 8000", "010-66668888"])).toBe("phone");
+    expect(inferFieldType(["(021) 555-8888"])).toBe("phone");
+    // 干扰项不误判
+    expect(inferFieldType(["hello a@b"])).toBe("text");
+    expect(inferFieldType(["1234567"])).toBe("number"); // 纯数字串仍走 number
+    expect(inferFieldType(["https://a.com", "note"])).toBe("text");
+  });
 });
 
 describe("csvValueToCell", () => {
@@ -86,6 +97,11 @@ describe("csvValueToCell", () => {
     expect(csvValueToCell("rating", "4")).toBe(4);
     expect(csvValueToCell("rating", "-1")).toBe(0);
     expect(csvValueToCell("currency", "12.5")).toBe(12.5);
+    // url/email/phone 存纯文本串（与存储格式一致），只做 trim
+    expect(csvValueToCell("url", " https://a.com/x ")).toBe("https://a.com/x");
+    expect(csvValueToCell("email", "a@b.com")).toBe("a@b.com");
+    expect(csvValueToCell("phone", "+86 138 0013 8000")).toBe("+86 138 0013 8000");
+    expect(csvValueToCell("url", "")).toBeNull();
   });
 });
 
@@ -294,6 +310,15 @@ describe("planImport", () => {
     const plan = planImport(parsed);
     expect(plan.headers).toEqual(["姓名", "字段 2", "数量"]);
     expect(plan.types).toEqual(["text", "text", "number"]);
+  });
+
+  it("infers url / email / phone columns for new-table import", () => {
+    const plan = planImport([
+      ["官网", "联系邮箱", "电话", "备注"],
+      ["https://a.com", "x@y.com", "+86-10-66668888", "hi"],
+      ["https://b.cn", "z@y.com", "021-5558888", "ok"],
+    ]);
+    expect(plan.types).toEqual(["url", "email", "phone", "text"]);
   });
 
   it("returns empty for empty input", () => {

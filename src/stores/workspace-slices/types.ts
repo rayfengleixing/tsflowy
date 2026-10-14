@@ -16,6 +16,14 @@ export interface WorkspaceState {
   splitViewId: string | null;
   /** 并排左右宽度比例：左栏占比（0.25~0.75） */
   splitRatio: number;
+  /** 固定标签集合：closeAll / closeOthers 等批量关闭时跳过 */
+  pinnedTabIds: Set<string>;
+  /** 最近关闭栈（Ctrl+Shift+T 回溯），最多 CLOSED_STACK_LIMIT 项，仅内存 */
+  closedStack: string[];
+  /** 视图访问历史（Alt+← / → 前进后退），仅内存 */
+  navHistory: string[];
+  /** navHistory 当前指针（-1 表示无历史） */
+  navPointer: number;
   route: Route;
   /** 搜索结果页当前查询词 */
   searchQuery: string;
@@ -62,10 +70,18 @@ export interface WorkspaceState {
 
   openView: (id: string) => void;
   closeTab: (id: string) => void;
-  /** 关闭所有标签页 */
+  /** 关闭所有标签页（pinned 标签跳过） */
   closeAllTabs: () => void;
-  /** 关闭除指定标签外的其它标签页（保留的标签置为当前页） */
+  /** 关闭除指定标签外的其它标签页（保留的标签置为当前页；pinned 一并保留） */
   closeOtherTabs: (id: string) => void;
+  /** 固定/取消固定标签（右键菜单入口） */
+  togglePinTab: (id: string) => void;
+  /** Ctrl+Shift+T 重开最近一次关闭的标签（跳过已删除的项） */
+  reopenLastClosed: () => void;
+  /** Alt+← 后退到历史里的上一个视图 */
+  navigateBack: () => void;
+  /** Alt+→ 前进到历史里的下一个视图 */
+  navigateForward: () => void;
   /** 在右侧分栏打开（并排对照）；已在并排时替换右侧 */
   openInSplit: (id: string) => void;
   closeSplit: () => void;

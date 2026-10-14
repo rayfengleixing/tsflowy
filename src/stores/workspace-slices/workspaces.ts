@@ -89,14 +89,6 @@ export const createWorkspacesSlice: WorkspaceSliceCreator<Partial<WorkspaceState
         await patchTreeAndRestoreTabs(set, get);
         await get().loadTagMeta();
         await refreshWelcomeDoc(current);
-        // 首次启动展开根级页面
-        set({
-          expanded: new Set(
-            get()
-              .tree.filter((n) => n.children.length > 0)
-              .map((n) => n.id),
-          ),
-        });
         // 回收站自动清空：启动立即扫一次，然后每小时轮询
         if (autoPurgeTimer === null) {
           void purgeAllExpiredTrash(get);
@@ -123,17 +115,18 @@ export const createWorkspacesSlice: WorkspaceSliceCreator<Partial<WorkspaceState
     // 切换前立即把旧空间的 tabs 持久化（不等 300ms，避免丢失）
     await flushPendingUiPersist();
 
-    set({ currentWorkspaceId: id, tabs: [], currentViewId: null, splitViewId: null });
+    set({
+      currentWorkspaceId: id,
+      tabs: [],
+      currentViewId: null,
+      splitViewId: null,
+      pinnedTabIds: new Set<string>(),
+      closedStack: [],
+      navHistory: [],
+      navPointer: -1,
+    });
     await viewApi.setSetting("last_workspace_id", id);
     await patchTreeAndRestoreTabs(set, get);
-    // 展开新空间根级页面
-    set({
-      expanded: new Set(
-        get()
-          .tree.filter((n) => n.children.length > 0)
-          .map((n) => n.id),
-      ),
-    });
   },
 
   createWorkspace: async (name: string) => {
@@ -161,7 +154,16 @@ export const createWorkspacesSlice: WorkspaceSliceCreator<Partial<WorkspaceState
     set({ workspaces });
     if (get().currentWorkspaceId === id) {
       const next = workspaces.length > 0 ? workspaces[0] : null;
-      set({ currentWorkspaceId: next ? next.id : null, tabs: [], currentViewId: null, splitViewId: null });
+      set({
+        currentWorkspaceId: next ? next.id : null,
+        tabs: [],
+        currentViewId: null,
+        splitViewId: null,
+        pinnedTabIds: new Set<string>(),
+        closedStack: [],
+        navHistory: [],
+        navPointer: -1,
+      });
       if (next) {
         await viewApi.setSetting("last_workspace_id", next.id);
         await get().reload();

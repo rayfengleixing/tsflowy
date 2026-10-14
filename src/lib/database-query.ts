@@ -27,7 +27,7 @@ export interface FilterSpec {
   id: string;
   field_id: string;
   op: FilterOp;
-  /** 比较操作数（按字段类型：text=字符串、number=数字、select=选项id、date=ISO 字符串） */
+  /** 比较操作数（按字段类型：text=字符串、number=数字、select=选项id、date=ISO 字符串或 "@rel:…" 相对 token、relation=行 id 数组） */
   value: CellValue;
 }
 
@@ -83,8 +83,14 @@ export function sortRows(
   return out;
 }
 
-/** 日期单元格 → 本地日历日毫秒：date-only "YYYY-MM-DD" 与含时间 ISO（同 formatCellValue 的 +Z 约定）都归到同日 */
+/** 日期单元格 → 本地日历日毫秒：date-only "YYYY-MM-DD"、含时间 ISO（同 formatCellValue 的 +Z 约定）、epoch 数字（秒/毫秒）都归到同日 */
 function dayMs(value: CellValue): number | null {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return null;
+    const d = new Date(Math.abs(value) < 1e11 ? value * 1000 : value);
+    if (Number.isNaN(d.getTime())) return null;
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  }
   if (typeof value !== "string") return null;
   const s = value.trim();
   if (!s) return null;
@@ -94,6 +100,111 @@ function dayMs(value: CellValue): number | null {
 }
 
 const DATE_FIELD_TYPES: ReadonlySet<FieldType> = new Set<FieldType>(["date", "created_at", "last_edited_at"]);
+
+// ---------- 相对日期操作数 ----------
+
+/** 相对日期操作数的持久化前缀（绝对日期恒为 "YYYY-MM-DD"，两者不冲突，JSON 原样往返） */
+export const RELATIVE_DATE_PREFIX = "@rel:";
+
+export type RelativeDateKey =
+  | "today"
+  | "yesterday"
+  | "tomorrow"
+  | "this_week"
+  | "last_week"
+  | "next_week"
+  | "this_month"
+  | "last_month"
+  | "next_month"
+  | "past_days"
+  | "next_days";
+
+export function isRelativeDateOperand(operand: CellValue): operand is string {
+  return typeof operand === "string" && operand.startsWith(RELATIVE_DATE_PREFIX);
+}
+
+/** "过去/未来 N 天" 的 N 取值范围 */
+export function relativeDayCount(operand: string): number | null {
+  if (!isRelativeDateOperand(operand)) return null;
+  const rest = operand.slice(RELATIVE_DATE_PREFIX.length);
+  const idx = rest.indexOf(":");
+  if (idx === -1) return null;
+  const n = Number(rest.slice(idx + 1));
+  return Number.isInteger(n) && n >= 1 && n <= 3650 ? n : null;
+}
+
+export function makeRelativeOperand(key: RelativeDateKey, days?: number): string {
+  return key === "past_days" || key === "next_days"
+    ? `${RELATIVE_DATE_PREFIX}${key}:${days ?? 7}`
+    : `${RELATIVE_DATE_PREFIX}${key}`;
+}
+
+function dayStartMs(d: Date): number {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+/** 相对操作数 → 按 now 换算出的日历日区间 [start, end]（本地日、含首含尾）；无法识别的 token 返回 null */
+export function relativeDayRange(operand: string, now: Date = new Date()): { start: number; end: number } | null {
+  if (!isRelativeDateOperand(operand)) return null;
+  const key = operand.slice(RELATIVE_DATE_PREFIX.length).split(":")[0] as RelativeDateKey;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  switch (key) {
+    case "today":
+      return { start: dayStartMs(today), end: dayStartMs(today) };
+    case "yesterday":
+    case "tomorrow": {
+      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + (key === "yesterday" ? -1 : 1));
+      return { start: dayStartMs(d), end: dayStartMs(d) };
+    }
+    case "this_week":
+    case "last_week":
+    case "next_week": {
+      const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - ((today.getDay() + 6) % 7));
+      const shift = key === "last_week" ? -7 : key === "next_week" ? 7 : 0;
+      const start = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + shift);
+      const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+      return { start: dayStartMs(start), end: dayStartMs(end) };
+    }
+    case "this_month":
+    case "last_month":
+    case "next_month": {
+      const shift = key === "last_month" ? -1 : key === "next_month" ? 1 : 0;
+      const start = new Date(today.getFullYear(), today.getMonth() + shift, 1);
+      const end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+      return { start: dayStartMs(start), end: dayStartMs(end) };
+    }
+    case "past_days":
+    case "next_days": {
+      const n = relativeDayCount(operand);
+      if (n === null) return null;
+      if (key === "past_days") {
+        const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (n - 1));
+        return { start: dayStartMs(start), end: dayStartMs(today) };
+      }
+      const end = new Date(today.getFullYear(), today.getMonth(), today.getDate() + (n - 1));
+      return { start: dayStartMs(today), end: dayStartMs(end) };
+    }
+    default:
+      return null;
+  }
+}
+
+/** relation 单元格 → 对端行 id 数组 */
+function relationCellIds(value: CellValue): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+/** relation 筛选操作数 → 行 id 数组（新值存 id 数组；旧值裸字符串按单 id 兼容） */
+function relationOperandIds(operand: CellValue): string[] {
+  if (typeof operand === "string") return operand === "" ? [] : [operand];
+  if (Array.isArray(operand)) return operand.filter((v): v is string => typeof v === "string");
+  return [];
+}
+
+function relationContains(value: CellValue, operand: CellValue): boolean {
+  const cellIds = relationCellIds(value);
+  return relationOperandIds(operand).some((id) => cellIds.includes(id));
+}
 
 /**
  * 单条筛选求值。
@@ -120,6 +231,24 @@ export function evaluateFilter(fieldType: FieldType, value: CellValue, op: Filte
   ) {
     if (isCellEmpty(operand)) return op === "not_equals"; // 操作数未填：与旧的字符串比较行为一致（不改变命中集）
     const a = dayMs(value);
+    if (isRelativeDateOperand(operand)) {
+      const range = relativeDayRange(operand);
+      if (a === null || range === null) return false;
+      switch (op) {
+        case "equals":
+          return a >= range.start && a <= range.end;
+        case "not_equals":
+          return a < range.start || a > range.end;
+        case "gt":
+          return a > range.end;
+        case "gte":
+          return a >= range.start;
+        case "lt":
+          return a < range.start;
+        default:
+          return a <= range.end;
+      }
+    }
     const b = dayMs(operand);
     if (a === null || b === null) return false;
     switch (op) {
@@ -139,7 +268,8 @@ export function evaluateFilter(fieldType: FieldType, value: CellValue, op: Filte
   }
   switch (op) {
     case "contains": {
-      if (fieldType === "multi_select" || fieldType === "relation") {
+      if (fieldType === "relation") return relationContains(value, operand);
+      if (fieldType === "multi_select") {
         return Array.isArray(value) && typeof operand === "string" && value.includes(operand);
       }
       if (typeof value === "string")
@@ -147,7 +277,8 @@ export function evaluateFilter(fieldType: FieldType, value: CellValue, op: Filte
       return false;
     }
     case "not_contains": {
-      if (fieldType === "multi_select" || fieldType === "relation") {
+      if (fieldType === "relation") return Array.isArray(value) && !relationContains(value, operand);
+      if (fieldType === "multi_select") {
         return Array.isArray(value) && (!value.includes(cellToCompareText(operand ?? "")) || operand === null);
       }
       if (typeof value === "string")

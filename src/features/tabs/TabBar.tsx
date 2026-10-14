@@ -5,10 +5,12 @@ import {
   Download,
   FileText,
   Image as ImageIcon,
+  Lock,
   Plus,
   Printer,
   Sparkles,
   SquareX,
+  Unlock,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -39,10 +41,12 @@ import type { View } from "@/types/models";
 export function TabBar() {
   const tabs = useWorkspaceStore((s) => s.tabs);
   const currentViewId = useWorkspaceStore((s) => s.currentViewId);
+  const pinnedTabIds = useWorkspaceStore((s) => s.pinnedTabIds);
   const openView = useWorkspaceStore((s) => s.openView);
   const closeTab = useWorkspaceStore((s) => s.closeTab);
   const closeAllTabs = useWorkspaceStore((s) => s.closeAllTabs);
   const closeOtherTabs = useWorkspaceStore((s) => s.closeOtherTabs);
+  const togglePinTab = useWorkspaceStore((s) => s.togglePinTab);
   const newTab = useWorkspaceStore((s) => s.newTab);
   const reorderTabs = useWorkspaceStore((s) => s.reorderTabs);
   const splitViewId = useWorkspaceStore((s) => s.splitViewId);
@@ -105,6 +109,7 @@ export function TabBar() {
     <div className="flex h-9 shrink-0 items-stretch border-b border-neutral-300 bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-800">
       {tabs.map((v: View, index: number) => {
         const active = v.id === currentViewId;
+        const pinned = pinnedTabIds.has(v.id);
         return (
           <ContextMenu key={v.id}>
             <ContextMenuTrigger asChild>
@@ -122,6 +127,13 @@ export function TabBar() {
                 {active && <div className="absolute inset-x-0 top-0 h-[2px] bg-brand-500" />}
                 <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">{viewIcon(v)}</span>
                 <span className="min-w-0 flex-1 truncate">{v.name}</span>
+                {pinned ? (
+                  <Lock
+                    data-testid="tab-pin-indicator"
+                    className="h-3 w-3 shrink-0 text-neutral-500"
+                    aria-label={t("tabs.pinned")}
+                  />
+                ) : null}
                 <button
                   data-testid="tab-close"
                   className="hidden h-4 w-4 shrink-0 items-center justify-center rounded text-neutral-500 hover:bg-neutral-300 group-hover:flex"
@@ -136,6 +148,11 @@ export function TabBar() {
               </div>
             </ContextMenuTrigger>
             <ContextMenuContent className="w-44">
+              <ContextMenuItem onSelect={() => togglePinTab(v.id)}>
+                {pinned ? <Unlock className="mr-2 h-3.5 w-3.5" /> : <Lock className="mr-2 h-3.5 w-3.5" />}
+                {pinned ? t("tabs.unpin") : t("tabs.pin")}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
               <ContextMenuItem onSelect={() => closeTab(v.id)}>
                 <X className="mr-2 h-3.5 w-3.5" />
                 {t("tabs.close")}

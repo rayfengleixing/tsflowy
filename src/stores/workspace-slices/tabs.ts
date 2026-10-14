@@ -13,17 +13,38 @@ import {
 } from "@/lib/daily-notes";
 import type { View } from "@/types/models";
 import { findInTree, syncSubpages } from "./tree";
-import { persistNow } from "./persistence";
+import { persistNow, pushClosedId, popReopenable } from "./persistence";
 import type { WorkspaceSliceCreator, WorkspaceState } from "./types";
 
 /** 每日笔记打开串行队列：并发触发（连点、多入口同时调）会各自走一遍「查或建目录」，撞出重复目录页 */
 let dailyNoteQueue: Promise<void> = Promise.resolve();
+
+/** 访问历史上限（超过丢最旧，保留最近 50 条） */
+const NAV_HISTORY_LIMIT = 50;
+
+/** 记录一次访问到历史栈：截断指针之后的分支，追加当前 id（若与栈顶相同则跳过） */
+function recordNav(history: string[], pointer: number, nextId: string): { history: string[]; pointer: number } {
+  if (history.length === 0) {
+    return { history: [nextId], pointer: 0 };
+  }
+  const truncated = history.slice(0, pointer + 1);
+  if (truncated[truncated.length - 1] === nextId) {
+    return { history: truncated, pointer: truncated.length - 1 };
+  }
+  const next = [...truncated, nextId];
+  const drop = Math.max(0, next.length - NAV_HISTORY_LIMIT);
+  return { history: next.slice(drop), pointer: next.length - 1 - drop };
+}
 
 export const createTabsSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (set, get) => ({
   tabs: [],
   currentViewId: null,
   splitViewId: null,
   splitRatio: 0.5,
+  pinnedTabIds: new Set<string>(),
+  closedStack: [],
+  navHistory: [],
+  navPointer: -1,
 
   openView: (id: string) => {
     const { tree, tabs } = get();
@@ -37,7 +58,8 @@ export const createTabsSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (
     }
     const cur = get().currentViewId;
     if (changed || cur !== id) {
-      set({ tabs: nextTabs, currentViewId: id, route: "workspace" });
+      const { history, pointer } = recordNav(get().navHistory, get().navPointer, id);
+      set({ tabs: nextTabs, currentViewId: id, route: "workspace", navHistory: history, navPointer: pointer });
       persistNow(get);
     } else {
       set({ route: "workspace" });
@@ -47,6 +69,7 @@ export const createTabsSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (
   },
 
   closeTab: (id: string) => {
+    const closing = get().tabs.find((v) => v.id === id);
     const tabs = get().tabs.filter((v) => v.id !== id);
     let currentViewId = get().currentViewId;
     if (currentViewId === id) {
@@ -55,20 +78,96 @@ export const createTabsSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (
     }
     // 关掉的是副视图则取消并排
     const splitViewId = get().splitViewId === id ? null : get().splitViewId;
-    set({ tabs, currentViewId, splitViewId });
+    const pinnedTabIds = new Set(get().pinnedTabIds);
+    pinnedTabIds.delete(id);
+    const closedStack = closing ? pushClosedId(get().closedStack, id) : get().closedStack;
+    set({ tabs, currentViewId, splitViewId, pinnedTabIds, closedStack });
     persistNow(get);
   },
 
   closeAllTabs: () => {
-    set({ tabs: [], currentViewId: null, splitViewId: null });
+    const pinned = get().pinnedTabIds;
+    const kept = get().tabs.filter((v) => pinned.has(v.id));
+    let closedStack = get().closedStack;
+    for (const v of get().tabs) {
+      if (!pinned.has(v.id)) closedStack = pushClosedId(closedStack, v.id);
+    }
+    const cur = get().currentViewId;
+    const stillThere = cur !== null && kept.some((v) => v.id === cur);
+    const nextCurrent = stillThere ? cur : (kept[0]?.id ?? null);
+    const split = get().splitViewId;
+    const nextSplit = split !== null && kept.some((v) => v.id === split) ? split : null;
+    set({ tabs: kept, currentViewId: nextCurrent, splitViewId: nextSplit, closedStack });
     persistNow(get);
   },
 
   closeOtherTabs: (id) => {
     const keep = get().tabs.find((v) => v.id === id);
     if (!keep) return;
-    // 保留的标签可能是右栏（副视图）：收敛为唯一标签并置为当前页
-    set({ tabs: [keep], currentViewId: id, splitViewId: null });
+    const pinned = get().pinnedTabIds;
+    const nextTabs = get().tabs.filter((v) => v.id === id || pinned.has(v.id));
+    let closedStack = get().closedStack;
+    for (const v of get().tabs) {
+      if (v.id !== id && !pinned.has(v.id)) closedStack = pushClosedId(closedStack, v.id);
+    }
+    const nextSplit = nextTabs.some((v) => v.id === get().splitViewId) ? get().splitViewId : null;
+    set({ tabs: nextTabs, currentViewId: id, splitViewId: nextSplit, closedStack });
+    persistNow(get);
+  },
+
+  togglePinTab: (id) => {
+    if (!get().tabs.some((v) => v.id === id)) return;
+    const pinned = new Set(get().pinnedTabIds);
+    if (pinned.has(id)) pinned.delete(id);
+    else pinned.add(id);
+    set({ pinnedTabIds: pinned });
+    persistNow(get);
+  },
+
+  reopenLastClosed: () => {
+    const tree = get().tree;
+    const stack = get().closedStack;
+    const validIds = new Set<string>();
+    for (const id of stack) {
+      if (findInTree(tree, id)) validIds.add(id);
+    }
+    const { id, stack: nextStack } = popReopenable(stack, validIds);
+    if (!id) {
+      set({ closedStack: nextStack });
+      return;
+    }
+    set({ closedStack: nextStack });
+    get().openView(id);
+  },
+
+  navigateBack: () => {
+    const { navHistory, navPointer } = get();
+    if (navPointer <= 0 || navHistory.length === 0) return;
+    const nextPointer = navPointer - 1;
+    const targetId = navHistory[nextPointer];
+    const node = findInTree(get().tree, targetId);
+    if (!node) {
+      // 目标已删：截断到指针之前，让下一次后退落到可用项
+      set({ navHistory: navHistory.slice(0, nextPointer), navPointer: nextPointer - 1 });
+      return;
+    }
+    const tabs = get().tabs.some((v) => v.id === targetId) ? get().tabs : [...get().tabs, node];
+    set({ navPointer: nextPointer, tabs, currentViewId: targetId, route: "workspace" });
+    persistNow(get);
+  },
+
+  navigateForward: () => {
+    const { navHistory, navPointer } = get();
+    if (navPointer < 0 || navPointer >= navHistory.length - 1) return;
+    const nextPointer = navPointer + 1;
+    const targetId = navHistory[nextPointer];
+    const node = findInTree(get().tree, targetId);
+    if (!node) {
+      set({ navHistory: navHistory.slice(0, nextPointer), navPointer: nextPointer - 1 });
+      return;
+    }
+    const tabs = get().tabs.some((v) => v.id === targetId) ? get().tabs : [...get().tabs, node];
+    set({ navPointer: nextPointer, tabs, currentViewId: targetId, route: "workspace" });
     persistNow(get);
   },
 
@@ -126,10 +225,8 @@ export const createTabsSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (
       const dateKey = toDateKey(date ?? new Date());
       // 目录按 年/月 分级：<目录页>/<YYYY>/<MM>/<YYYY-MM-DD>，全部是普通文档页，
       // 无需额外标记：搜索/标签/导出/备份/同步一律按普通页面生效
-      // （listByWorkspace 已排除行详情文档与派生视图，返回的都是树里的页面）
       const views = await viewApi.listByWorkspace(ws);
 
-      // 找/建同名文档子页；新建时 seed 成「H1 + 分割线」的目录页文档（结构锁定要求首行 H1）
       const ensureFolder = async (parentId: string | null, name: string, intro = ""): Promise<View> => {
         const existing = views.find((v) => v.parent_id === parentId && v.layout === "document" && v.name === name);
         if (existing) return existing;
@@ -138,7 +235,6 @@ export const createTabsSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (
         try {
           await documentApi.save(created.id, JSON.stringify(buildDailyFolderDoc(name, intro)));
         } catch (e) {
-          // 正文种子失败不阻断：页面已建好，用户可直接写
           logger.warn("WorkspaceStore.openDailyNote", "seed folder doc failed", created.id, e);
         }
         return created;
@@ -147,8 +243,6 @@ export const createTabsSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (
       const root = await ensureFolder(null, cfg.folderName, t("daily.folderIntro"));
       const year = await ensureFolder(root.id, dateKey.slice(0, 4));
       const month = await ensureFolder(year.id, dateKey.slice(5, 7));
-      // 页面名形如「10-02 周五」：用「月-日」前缀 + 边界匹配，可跨语言切换复用同一天笔记
-      // （旧命名 YYYY-MM-DD 前缀是年份不会命中；"10-025" 这类更长数字也不会误匹配）
       let note = views.find(
         (v) => v.parent_id === month.id && v.layout === "document" && dailyNoteNameMatches(v.name, dateKey),
       );
@@ -168,18 +262,15 @@ export const createTabsSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (
       }
       const noteId = note.id;
       await get().reload();
-      // 目录页与普通文档一样带「子页面」双链列表：每日笔记页列年份、年份页列月份、月份页列当月笔记。
-      // 每次都按最新页面树整体重写，所以历史遗留的目录页也会被补齐。
       syncSubpages(get, root.id);
       syncSubpages(get, year.id);
       syncSubpages(get, month.id);
-      // 展开要在同步之后：目录页若正开着，先就地改编辑器再打开笔记，避免卸载时把新列表覆盖掉
-      // 逐级展开，保证当天笔记在树里可见
       const expanded = new Set(get().expanded);
       expanded.add(root.id);
       expanded.add(year.id);
       expanded.add(month.id);
       set({ expanded });
+      persistNow(get);
       get().openView(noteId);
     } finally {
       release();
