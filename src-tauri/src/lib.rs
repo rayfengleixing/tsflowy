@@ -1,11 +1,13 @@
 mod commands;
 mod db;
+mod desktop;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_window_state::StateFlags;
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -206,8 +208,14 @@ pub fn run() {
     // 在 DB 打开之前，确定数据落点：自定义目录优先，否则默认落到系统「文档」目录下的 TsFlowy，
     // 并把默认 app_data_dir 建为指向它的 junction（老版本的旧数据自动迁移过去）。
     let result = tauri::Builder::default()
-        // 单实例必须第一个注册：第二次启动时回调里把已有窗口带到前台，新进程随即退出
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        // 单实例必须第一个注册：第二次启动时回调里把已有窗口带到前台，新进程随即退出。
+        // Windows 深链协议触发的新进程同样走这里：argv 里的 tsflowy:// URL 转发为
+        // deep-link 插件的标准事件，前端 onOpenUrl 无感知冷/热启动差异。
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            let urls = desktop::deep_link_urls_from_argv(&argv);
+            if !urls.is_empty() {
+                let _ = app.emit("deep-link://new-url", urls);
+            }
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.unminimize();
                 let _ = win.show();
@@ -225,6 +233,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             // 先把数据落点确定好（默认即 app_data_dir，设置自定义目录时建联接），再打开数据库；
             // junction 机制让 app_data_dir 透明落到自定义目录。
@@ -244,6 +254,15 @@ pub fn run() {
             // Db::open 永不 panic：失败进 init_error，各 DB 命令返回该错误
             app.manage(db::Db::open(path));
             spawn_auto_backup_loop(app.handle().clone());
+            // tsflowy:// 协议注册（写 HKCU，NSIS 安装器之外的 dev/绿色版也能触发深链）；
+            // 失败只告警，不影响启动
+            if let Err(e) = app.deep_link().register_all() {
+                tracing::warn!(error = %e, "deep-link: register configured schemes failed");
+            }
+            // 托盘 + 原生菜单栏 + 全局快捷键
+            if let Err(e) = desktop::setup(app.handle()) {
+                tracing::warn!(error = %e, "desktop shell setup (tray/menu/shortcut) failed");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

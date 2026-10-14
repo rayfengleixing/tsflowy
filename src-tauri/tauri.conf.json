@@ -55,6 +55,13 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "tsflowy"
+        ]
+      }
+    },
     "updater": {
       "endpoints": [
         "https://github.com/rayfengleixing/tsflowy/releases/latest/download/latest.json"
