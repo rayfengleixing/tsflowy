@@ -1,6 +1,6 @@
 [package]
 name = "tsflowy"
-version = "0.8.26"
+version = "0.8.27"
 description = "TsFlowy - 本地优先的笔记与知识管理应用"
 authors = ["you"]
 edition = "2021"
