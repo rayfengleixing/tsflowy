@@ -1,0 +1,10 @@
+# .prettierrc 是 endOfLine=lf，但 Windows 上 core.autocrlf 会把工作区转成 CRLF，
+# CI（Windows runner）的 format:check 因此把每个文件都报脏。这里固定 LF，不随本地配置变。
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
