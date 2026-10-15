@@ -128,7 +128,7 @@ npm run tauri:build
 D:\Code\rust-target\release\bundle\nsis\TsFlowy_<版本号>_x64-setup.exe
 ```
 
-例如当前版本：`TsFlowy_0.8.15_x64-setup.exe`。
+例如当前版本：`TsFlowy_0.8.28_x64-setup.exe`。
 
 > 打包前必须设置自动更新的签名私钥，否则构建会失败（`createUpdaterArtifacts` 已开启）：
 >
@@ -137,17 +137,27 @@ D:\Code\rust-target\release\bundle\nsis\TsFlowy_<版本号>_x64-setup.exe
 > npm run tauri:build
 > ```
 >
+> 若私钥是空密码（`tauri signer generate --ci` 生成的即是），Windows 上把密码环境变量设成空串等于没设，构建会退回读控制台等待输入、在后台永久挂住。此时安装包照常产出，改用命令行参数显式传空密码单独补签：
+>
+> ```powershell
+> node node_modules/@tauri-apps/cli/tauri.js signer sign `
+>   D:/Code/rust-target/release/bundle/nsis/TsFlowy_<版本号>_x64-setup.exe `
+>   -f D:/Code/.tauri/tsflowy.key --password=
+> ```
+>
 > 构建完成后 bundle 目录会产出安装包及其 `.sig` 签名文件。再用下面的命令生成更新清单 `latest.json`：
 >
 > ```powershell
-> npm run release:manifest -- --version 0.8.14 --notes "本次更新说明"
+> npm run release:manifest -- --version 0.8.28
 > ```
 >
-> 将安装包、`.sig`、`latest.json` 三者一并上传到 GitHub Release（tag 形如 `v0.8.9`），应用内「设置 → 软件更新」即可检测到新版本。私钥务必妥善保管、不要提交到仓库。
+> 将安装包、`.sig`、`latest.json` 三者一并上传到 GitHub Release（tag 形如 `v0.8.28`），应用内「设置 → 软件更新」即可检测到新版本。私钥务必妥善保管、不要提交到仓库。
 
 ### 开发者提示
 
 - SQL 迁移文件在 `migrations/`，按序号递增；已发布过的迁移禁止修改，只能新增。
+- 数据库字段类型的判定（可分组、是否带选项、筛选比较符、粘贴文本解读、默认配置）集中在 `src/lib/field-kinds.ts` 注册表；新增一种字段类型只需在注册表补一条，编译会指出漏写的地方。
+- Rust 与前端共用的字段类型知识写在 `contracts/field_type_contract.json`，两端各有一个测试读同一份文件核对；改了类型默认值要同步这份契约。
 - 如本机磁盘空间紧张，可在 `.cargo/config.toml` 中把 `build.target-dir` 指到仓库外目录，或设置环境变量 `CARGO_TARGET_DIR`（该文件默认不入库）。
 
 ## 使用指南
