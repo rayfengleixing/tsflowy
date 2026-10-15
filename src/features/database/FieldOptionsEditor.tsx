@@ -3,7 +3,7 @@ import { Plus, Trash2 } from "lucide-react";
 import type { DatabaseField, FieldOptions, SelectOption } from "@/types/database";
 import type { AggregateFn } from "@/lib/database-aggregate";
 import { aggregateLabel } from "@/lib/database-aggregate";
-import { newSelectOption, parseFieldOptions } from "@/lib/database-values";
+import { isOptionBearing, newSelectOption, parseFieldOptions } from "@/lib/database-values";
 import { validateFormula, type FormulaSyntaxIssue } from "@/lib/database-formula";
 import { buildRelationPickerFields, relationTarget, reverseRelationSourceFields, rollupFnsFor } from "@/lib/relation";
 import { flattenTree } from "@/lib/tree";
@@ -115,7 +115,7 @@ export function FieldOptionsEditor(props: {
           <DialogTitle>{t("field.optionsTitle", { name: field.name })}</DialogTitle>
         </DialogHeader>
 
-        {field.field_type === "single_select" || field.field_type === "multi_select" ? (
+        {isOptionBearing(field.field_type) ? (
           <div className="flex flex-col gap-2">
             <div className="flex max-h-64 flex-col gap-1 overflow-y-auto">
               {options.kind === "select" && options.options.length === 0 && (

@@ -1,4 +1,5 @@
 import type { AttachmentRef, CellValue, DatabaseField, DatabaseRow, FieldType, SelectOption } from "@/types/database";
+import { fieldKind, isOptionBearing } from "./field-kinds";
 import { newSelectOption, parseFieldOptions } from "./database-values";
 import { t } from "./i18n";
 
@@ -149,45 +150,63 @@ export function inferFieldType(samples: string[]): FieldType {
   return "text";
 }
 
-/** 按字段类型把 CSV 字符串值转成 CellValue（与说明书 7.2 编码一致） */
+/** 按字段类型把 CSV 字符串值转成 CellValue（与说明书 7.2 编码一致）。
+ *  逐类型的解读在 field-kinds 注册表的 paste 里；选择类这里只交出名→值的直译，
+ *  要「按名解析成 id 并补建缺失选项」走 pasteCell。 */
 export function csvValueToCell(type: FieldType, raw: string): CellValue {
-  const v = raw.trim();
-  if (v === "") return null;
-  switch (type) {
-    case "number":
-    case "currency": {
-      const n = Number(v);
-      return Number.isFinite(n) ? n : null;
-    }
-    case "progress": {
-      const n = Number(v.replace(/%$/, ""));
-      return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : null;
-    }
-    case "rating": {
-      const n = Number(v);
-      return Number.isFinite(n) ? Math.max(0, n) : null;
-    }
-    case "checkbox":
-      return /^(true|是|✓|1)$/i.test(v);
-    case "date": {
-      // 统一存 ISO 日期字符串（不带时间则纯日期）
-      if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(v)) return v;
-      const d = new Date(v);
-      return Number.isNaN(d.getTime()) ? v : d.toISOString();
-    }
-    case "multi_select":
-      return v
-        .split(/[;|]/)
-        .map((x) => x.trim())
-        .filter(Boolean);
-    // url/email/phone 存的就是纯文本串（与 validateCellValue/formatCellValue 约定一致），去首尾空白后原样存
-    case "url":
-    case "email":
-    case "phone":
-      return v;
-    default:
-      return v;
+  const outcome = fieldKind(type).paste(raw);
+  if (outcome.kind === "value") return outcome.value;
+  if (outcome.kind === "option_names") {
+    return type === "multi_select" ? outcome.names : (outcome.names[0] ?? null);
   }
+  return null; // skip：一段文本给不出该类型的合法值
+}
+
+/** 一格文本要写进单元格的结果；pasteCell 返回 null 表示这格不该写 */
+export interface PastedCell {
+  value: CellValue;
+  /** 选择类有名字补建选项失败：写出去的值不完整，由调用方决定是否提示 */
+  degraded: boolean;
+}
+
+export interface PasteDeps {
+  /** 取字段此刻的最新定义：上一格补建的选项要参与下一格的解析，避免同名重复建 */
+  latestField(fieldId: string): DatabaseField | undefined;
+  /** 补建缺失选项，返回新选项 id；失败返回 null */
+  createOption(fieldId: string, name: string): Promise<string | null>;
+}
+
+/**
+ * 粘贴/CSV 落地一格文本 → 待写值（TSV 粘贴与「追加到当前表」共用，原先两条路径各写一遍分派）。
+ * 返回 null = 这格跳过：只读/计算字段、关联与附件（文本给不出行 id 和文件）、选择类字段没配选项。
+ */
+export async function pasteCell(field: DatabaseField, raw: string, deps: PasteDeps): Promise<PastedCell | null> {
+  const target = deps.latestField(field.id) ?? field;
+  const outcome = fieldKind(target.field_type).paste(raw);
+  if (outcome.kind === "skip") return null;
+  if (outcome.kind === "value") return { value: outcome.value, degraded: false };
+
+  const options = parseFieldOptions(target.options);
+  if (options.kind !== "select") return null;
+  const idByName = new Map(options.options.map((o) => [o.name, o.id]));
+  const ids: string[] = [];
+  const missing: string[] = [];
+  for (const name of outcome.names) {
+    const id = idByName.get(name);
+    if (id !== undefined) {
+      if (!ids.includes(id)) ids.push(id);
+    } else if (!missing.includes(name)) {
+      missing.push(name);
+    }
+  }
+  // 先落已认识的、再逐个建缺的：保持改造前「已知 id 在前、新建 id 在后」的顺序
+  let degraded = false;
+  for (const name of missing) {
+    const created = await deps.createOption(target.id, name);
+    if (created === null) degraded = true;
+    else ids.push(created);
+  }
+  return { value: target.field_type === "multi_select" ? ids : (ids[0] ?? null), degraded };
 }
 
 /** 单元格值 → CSV 字符串（导出用） */
@@ -212,36 +231,6 @@ function selectCellToText(value: CellValue, options: SelectOption[]): string {
   return typeof value === "string" ? one(value) : String(value);
 }
 
-/** 文本 → 选择类字段的选项 id：单选取整串，多选按 ; | 分列。
- *  未匹配的名字进 missing，由调用方决定新建（TSV 粘贴路径会补建选项）。 */
-export function resolveSelectRefs(
-  type: FieldType,
-  raw: string,
-  options: SelectOption[],
-): { ids: string[]; missing: string[] } {
-  const names =
-    type === "multi_select"
-      ? raw
-          .split(/[;|]/)
-          .map((x) => x.trim())
-          .filter(Boolean)
-      : raw.trim() === ""
-        ? []
-        : [raw.trim()];
-  const byName = new Map(options.map((o) => [o.name, o.id]));
-  const ids: string[] = [];
-  const missing: string[] = [];
-  for (const name of names) {
-    const id = byName.get(name);
-    if (id !== undefined) {
-      if (!ids.includes(id)) ids.push(id);
-    } else if (!missing.includes(name)) {
-      missing.push(name);
-    }
-  }
-  return { ids, missing };
-}
-
 /** 选择类列：从整列原始文本收集去重后的选项名（单选取整串、多选按 ; | 拆分），供预置 options */
 export function collectSelectNames(type: FieldType, rawColumn: string[]): string[] {
   const out: string[] = [];
@@ -252,18 +241,11 @@ export function collectSelectNames(type: FieldType, rawColumn: string[]): string
   return out;
 }
 
-/** 拆分选择类单元格文本为选项名数组（单选整串、多选 ; | 分列；trim 去空） */
+/** 拆分选择类单元格文本为选项名数组（单选整串、多选 ; | 分列；trim 去空）。
+ *  分隔规则取自 field-kinds 的 paste，与粘贴/导入路径同一份知识。 */
 function splitSelectNames(type: FieldType, raw: string): { names: string[] } {
-  if (type === "multi_select") {
-    return {
-      names: raw
-        .split(/[;|]/)
-        .map((x) => x.trim())
-        .filter(Boolean),
-    };
-  }
-  const v = raw.trim();
-  return { names: v === "" ? [] : [v] };
+  const outcome = fieldKind(type).paste(raw);
+  return { names: outcome.kind === "option_names" ? outcome.names : [] };
 }
 
 /** 为选择类列生成 options（按名去重，复用 newSelectOption 的随机配色），并返回「名 → id」表 */
@@ -291,6 +273,17 @@ export function selectCellToIds(type: FieldType, raw: string, idByName: Map<stri
   }
   if (type === "multi_select") return ids.length > 0 ? ids : null;
   return ids[0] ?? null;
+}
+
+/** 「新建表导入」一格文本 → 存库值（与粘贴是两条链路，别混用）：
+ *  - 选项列：字段此刻还没落库，整列选项名已在建字段时预建成 id（buildSelectOptions），
+ *    所以按名直译，不走 pasteCell 的「缺选项就补建」异步副作用路径；
+ *  - 其余类型：走注册表 paste，与粘贴/追加 CSV 同一份「文本怎么读」的知识；
+ *  - 附件列：文本给不出文件，由调用方先按「文件名 → assets 复制」处理，不会走到这里。
+ *  返回 null = 这格不写。 */
+export function importCell(type: FieldType, raw: string, optionIdsByName?: Map<string, string>): CellValue {
+  if (isOptionBearing(type)) return selectCellToIds(type, raw, optionIdsByName ?? new Map<string, string>());
+  return csvValueToCell(type, raw);
 }
 
 /** CSV 附件列原始值 → 候选文件名（`[;|]` 分隔、trim、去空、按小写去重）。
@@ -331,7 +324,7 @@ export function buildCsvExport(
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
       const value = cells[r.id]?.[f.id] ?? null;
       const opts = parseFieldOptions(f.options);
-      if (opts.kind === "select" && (f.field_type === "single_select" || f.field_type === "multi_select")) {
+      if (opts.kind === "select" && isOptionBearing(f.field_type)) {
         return selectCellToText(value, opts.options);
       }
       return cellToCsv(f.field_type, value);

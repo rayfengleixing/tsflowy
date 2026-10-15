@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   ArrowUpDown,
   CheckSquare,
@@ -19,25 +19,25 @@ import { isReadonlyType } from "@/types/database";
 import { useDbStore, useDbStoreApi } from "@/stores/database-context";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { viewApi, newId } from "@/lib/db";
-import { parseFieldOptions } from "@/lib/database-values";
-import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
-import { UNGROUPED, applyFilters, canGroupBy, groupRowsForGrid, sortRows, type SortSpec } from "@/lib/database-query";
-import { normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
+import { isOptionBearing, parseFieldOptions } from "@/lib/database-values";
+import type { SortSpec } from "@/lib/database-query";
+import type { AggregateFn } from "@/lib/database-aggregate";
 import {
   buildCsvExport,
   buildSelectOptions,
   collectSelectNames,
-  csvValueToCell,
+  importCell,
   parseCsv,
+  pasteCell,
   planImport,
   parseTsv,
   resolveAttachmentNames,
-  resolveSelectRefs,
-  selectCellToIds,
+  type PasteDeps,
 } from "@/lib/csv";
 import { CsvImportDialog } from "./CsvImportDialog";
 import { relationRowIds, relationRowLabel, relationTarget } from "@/lib/relation";
-import { useRelationDbs } from "./use-database-data";
+import { useGridViewModel } from "./use-grid-view-model";
+import { toggleRowChecked as updateRowChecked, toggleAllRowsChecked as updateAllRowsChecked } from "./grid-view-model";
 import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
 import { FilterBar } from "./FilterBar";
@@ -155,114 +155,38 @@ export function GridView({
     window.addEventListener("mouseup", onUp);
   };
 
-  const visibleFields = useMemo(() => fields.filter((f) => f.is_hidden === 0), [fields]);
-  // 名称列（主列）：position 最小且不可隐藏，作为行详情入口
-  const primaryField: DatabaseField | null = visibleFields.length > 0 ? visibleFields[0] : null;
-
-  // 关联/汇总要读目标库：把本表所有关联字段的目标视图拉进缓存（同一目标库只请求一次）
-  const relationDbOf = useRelationDbs(fields);
-
-  // 公式/汇总字段没有存储值：把求值结果提前算进"有效单元格"图。
-  // sortable 给排序/筛选/汇总（rollup 转数值），display 给行渲染（rollup 保留展示格式）。
-  const evaluated = useMemo(
-    () => computeEvaluatedCells(rows, cells, fields, relationDbOf),
-    [rows, cells, fields, relationDbOf],
-  );
-  const sortableCells = evaluated.sortable;
-  const displayCells = evaluated.display;
-
-  const displayRows = useMemo(() => {
-    // 筛选也走求值后的单元格：否则按公式/汇总列筛选恒不命中（raw 值永远是空）
-    const filtered = applyFilters(rows, sortableCells, filters, fields, filterMode);
-    return sortRows(filtered, sortableCells, sorts);
-  }, [rows, sortableCells, filters, fields, filterMode, sorts]);
-
-  // 底部汇总菜单的 rowIds：每次渲染都新建数组会让菜单里的 useMemo 全部失效
-  const displayRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
-
-  // 多选：只认当前可见（筛选 + 排序后）且仍存在的行
-  const selectedIds = useMemo(
-    () => displayRows.filter((r) => checkedRows.has(r.id)).map((r) => r.id),
-    [displayRows, checkedRows],
-  );
-  const allSelected = displayRows.length > 0 && selectedIds.length === displayRows.length;
+  // 视图状态与批量行命令由 MVVM 层算好：这里只留本地 UI 状态与渲染接线
+  const { model, displayCells, sortableCells, relationDbOf, runDeleteCheckedRows, runDuplicateCheckedRows } =
+    useGridViewModel({
+      groupFieldId,
+      collapsedGroups,
+      checkedRows,
+      aggregates,
+      setCheckedRows,
+    });
+  const {
+    visibleFields,
+    primaryField,
+    displayRows,
+    displayRowIds,
+    selectedIds,
+    allSelected,
+    groupableFields,
+    groups,
+    hasAggregates,
+    aggregateOf,
+    flatLines,
+    collapsedKey,
+  } = model;
 
   const toggleRowChecked = (rowId: string) => {
-    setCheckedRows((prev) => {
-      const next = new Set(prev);
-      if (next.has(rowId)) next.delete(rowId);
-      else next.add(rowId);
-      return next;
-    });
+    // 用上回调形式：连点同一行时不能都基于同一份旧集合
+    setCheckedRows((prev) => updateRowChecked(prev, rowId));
   };
 
-  const toggleSelectAll = () => {
-    setCheckedRows(allSelected ? new Set() : new Set(displayRows.map((r) => r.id)));
-  };
-
-  const deleteSelected = async () => {
-    const ids = selectedIds;
-    if (ids.length === 0) return;
-    try {
-      const n = await store.removeRows(ids);
-      setCheckedRows(new Set());
-      toast.success(t("row.deletedMany", { count: String(n) }));
-    } catch (e) {
-      logger.error("delete rows failed", e);
-      toast.error(t("error.db", { message: String(e) }));
-    }
-  };
-
-  const duplicateSelected = async () => {
-    const ids = selectedIds;
-    if (ids.length === 0) return;
-    try {
-      const created = await store.duplicateRows(ids);
-      setCheckedRows(new Set());
-      toast.success(t("row.duplicated", { count: String(created.length) }));
-    } catch (e) {
-      logger.error("duplicate rows failed", e);
-      toast.error(t("error.db", { message: String(e) }));
-    }
-  };
-
-  // 分组字段被删除或改成不可分组的类型时，自动回落成不分组（配置留着，改回来还在）
-  const groupField = useMemo(
-    () => fields.find((f) => f.id === groupFieldId && canGroupBy(f)) ?? null,
-    [fields, groupFieldId],
-  );
-  const groupableFields = useMemo(() => visibleFields.filter(canGroupBy), [visibleFields]);
-  const groups = useMemo(
-    () => (groupField ? groupRowsForGrid(displayRows, cells, groupField) : null),
-    [groupField, displayRows, cells],
-  );
-
-  // 字段类型可能已经变了：历史选择不在候选里就回落成计数
-  const aggregateOf = (field: DatabaseField) => normalizeAggregate(field.field_type, aggregates[field.id]);
-  const hasAggregates = visibleFields.some((f) => aggregateOf(f));
-
-  // 分组模式摊平成线性条目（组头 / 数据行 / 组小计），窗口化与非分组共用一套条目序号逻辑
-  const flatLines = useMemo<GridFlatLine[]>(() => {
-    if (!groups) return displayRows.map((row) => ({ kind: "row", row }));
-    const out: GridFlatLine[] = [];
-    for (const g of groups) {
-      const collapsed = collapsedGroups.has(g.key);
-      out.push({
-        kind: "header",
-        key: g.key,
-        label: g.key === UNGROUPED || !g.label ? t("grid.ungrouped") : g.label,
-        count: g.rows.length,
-        collapsed,
-      });
-      if (collapsed) continue;
-      for (const r of g.rows) out.push({ kind: "row", row: r });
-      if (hasAggregates) out.push({ kind: "subtotal", key: g.key, rowIds: g.rows.map((r) => r.id) });
-    }
-    return out;
-  }, [groups, collapsedGroups, hasAggregates, displayRows]);
+  const toggleSelectAll = () => setCheckedRows(updateAllRowsChecked(displayRows, allSelected));
 
   // 搜索命中定位：折叠键作 revision，命中行所在分组一展开就能重新定位
-  const collapsedKey = groups ? [...collapsedGroups].join("|") : "";
   const { scrollerRef, focusRowId } = useRowFocus(collapsedKey);
 
   // ---------- 大表窗口化（分组模式同样生效） ----------
@@ -628,6 +552,10 @@ export function GridView({
         rowQueue.push(...created.map((r) => r.id));
       }
       // 单元格写入先攒后写：一次 cell_set_many 落整片粘贴（选项补建仍逐条，但那是低频路径）
+      const pasteDeps: PasteDeps = {
+        latestField: (fieldId) => storeApi.getState().fields.find((f) => f.id === fieldId),
+        createOption: (fieldId, name) => store.addSelectOption(fieldId, name),
+      };
       const updates: { rowId: string; fieldId: string; value: CellValue }[] = [];
       for (let i = 0; i < grid.length; i++) {
         for (let j = 0; j < grid[i].length; j++) {
@@ -637,41 +565,14 @@ export function GridView({
             skipped++; // 超出最右列
             continue;
           }
-          if (
-            isReadonlyType(field.field_type) ||
-            field.field_type === "relation" ||
-            field.field_type === "attachment"
-          ) {
-            skipped++; // 公式/汇总/系统字段、关联字段与附件字段跳过（粘贴的文本无法直接对应行 id / 文件）
+          // 类型怎么读这段文本、缺的选项怎么补，都在 pasteCell 里（与 CSV 追加同一条路径）
+          const pasted = await pasteCell(field, grid[i][j], pasteDeps);
+          if (!pasted) {
+            skipped++; // 只读/关联/附件与未配选项的选择列：文本给不出合法值
             continue;
           }
-          if (field.field_type === "single_select" || field.field_type === "multi_select") {
-            // 选择类单元格存选项 id：按名字解析，缺的选项就地补建（导出侧把 id 翻回名字，两边闭环）
-            // 每格都取 store 最新字段：上一格补建的选项要参与下一格的解析，避免同名重复建选项
-            const fresh = storeApi.getState().fields.find((f) => f.id === field.id) ?? field;
-            const opts = parseFieldOptions(fresh.options);
-            if (opts.kind !== "select") {
-              skipped++;
-              continue;
-            }
-            const { ids, missing } = resolveSelectRefs(field.field_type, grid[i][j], opts.options);
-            for (const name of missing) {
-              const created = await store.addSelectOption(field.id, name);
-              if (created) ids.push(created);
-              else skipped++;
-            }
-            updates.push({
-              rowId: rowQueue[i],
-              fieldId: field.id,
-              value: field.field_type === "multi_select" ? ids : (ids[0] ?? null),
-            });
-            continue;
-          }
-          updates.push({
-            rowId: rowQueue[i],
-            fieldId: field.id,
-            value: csvValueToCell(field.field_type, grid[i][j]),
-          });
+          if (pasted.degraded) skipped++; // 选项补建失败，写出去的值不完整
+          updates.push({ rowId: rowQueue[i], fieldId: field.id, value: pasted.value });
         }
       }
       // 选择类补建过选项时会刷新 fields，但 cells 只在这里写一次，顺序上不冲突
@@ -757,6 +658,10 @@ export function GridView({
       });
 
       const created = await store.addRows(plan.dataRows.length);
+      const pasteDeps: PasteDeps = {
+        latestField: (fieldId) => storeApi.getState().fields.find((f) => f.id === fieldId),
+        createOption: (fieldId, name) => store.addSelectOption(fieldId, name),
+      };
       const updates: { rowId: string; fieldId: string; value: CellValue }[] = [];
       const missingNames = new Set<string>();
       for (let ri = 0; ri < plan.dataRows.length; ri++) {
@@ -779,24 +684,8 @@ export function GridView({
             if (refs.length > 0) updates.push({ rowId, fieldId: field.id, value: refs });
             continue;
           }
-          if (field.field_type === "single_select" || field.field_type === "multi_select") {
-            // 每格取 store 最新字段：上一格补建的选项要参与下一格解析，避免同名重复建
-            const fresh = storeApi.getState().fields.find((x) => x.id === field.id) ?? field;
-            const opts = parseFieldOptions(fresh.options);
-            if (opts.kind !== "select") continue;
-            const { ids, missing } = resolveSelectRefs(field.field_type, raw, opts.options);
-            for (const name of missing) {
-              const createdOpt = await store.addSelectOption(field.id, name);
-              if (createdOpt) ids.push(createdOpt);
-            }
-            updates.push({
-              rowId,
-              fieldId: field.id,
-              value: field.field_type === "multi_select" ? ids : (ids[0] ?? null),
-            });
-            continue;
-          }
-          updates.push({ rowId, fieldId: field.id, value: csvValueToCell(field.field_type, raw) });
+          const pasted = await pasteCell(field, raw, pasteDeps);
+          if (pasted) updates.push({ rowId, fieldId: field.id, value: pasted.value });
         }
       }
       await store.setCellsMany(updates);
@@ -845,7 +734,7 @@ export function GridView({
         let name = header;
         while (used.has(name)) name = name + " 2";
         used.add(name);
-        if (types[i] === "single_select" || types[i] === "multi_select") {
+        if (isOptionBearing(types[i])) {
           const names = collectSelectNames(
             types[i],
             plan.dataRows.map((r) => r[i] ?? ""),
@@ -902,12 +791,7 @@ export function GridView({
             cells.push({ field_id: fields[i].id, value: JSON.stringify(refs) });
             continue;
           }
-          if (fields[i].field_type === "single_select" || fields[i].field_type === "multi_select") {
-            const cell = selectCellToIds(fields[i].field_type, raw, selectIdMaps[i]);
-            if (cell !== null) cells.push({ field_id: fields[i].id, value: JSON.stringify(cell) });
-            continue;
-          }
-          const cell = csvValueToCell(fields[i].field_type, raw);
+          const cell = importCell(fields[i].field_type, raw, selectIdMaps[i]);
           if (cell !== null) cells.push({ field_id: fields[i].id, value: JSON.stringify(cell) });
         }
         return { id: newId(), cells };
@@ -997,7 +881,7 @@ export function GridView({
           {selectedIds.length > 0 && (
             <div className="mr-1 flex items-center gap-1 rounded-md border border-brand-200 bg-brand-50 px-2 py-0.5 text-xs text-brand-700 dark:border-brand-500/40 dark:bg-brand-500/10 dark:text-brand-300">
               <span data-testid="selected-count">{t("row.selected", { count: String(selectedIds.length) })}</span>
-              <Button variant="ghost" size="sm" onClick={duplicateSelected}>
+              <Button variant="ghost" size="sm" onClick={runDuplicateCheckedRows}>
                 <Copy className="h-3.5 w-3.5" />
                 {t("row.duplicateSelected")}
               </Button>
@@ -1311,7 +1195,7 @@ export function GridView({
         title={t("row.deleteSelectedConfirmTitle")}
         description={t("row.deleteSelectedConfirmDesc", { count: String(selectedIds.length) })}
         confirmLabel={t("common.delete")}
-        onConfirm={() => void deleteSelected()}
+        onConfirm={() => void runDeleteCheckedRows()}
       />
 
       {/* CSV 导入确认：逐列选类型 + 附件列选文件夹（取消则不建视图）；可选追加到当前表 */}

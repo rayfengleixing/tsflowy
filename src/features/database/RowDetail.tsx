@@ -3,21 +3,14 @@ import { Maximize2, Minimize2, Plus, X } from "lucide-react";
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { FIELD_TYPES, isReadonlyType, type FieldType } from "@/types/database";
 import { useDbStore } from "@/stores/database-context";
-import { formatCellValue, parseFieldOptions, ratingMax } from "@/lib/database-values";
+import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
 import { useRelationStore } from "@/stores/relation";
 import { cn } from "@/lib/utils";
 import type { View } from "@/types/models";
 import { EditorPage } from "@/features/editor/EditorPage";
-import {
-  AttachmentChips,
-  CellEditorSlot,
-  ProgressCell,
-  RatingCell,
-  RelationChips,
-  ReverseRelationChips,
-  SelectChips,
-} from "./editors";
+import { CellEditorSlot } from "./editors";
+import { cellDisplayContent } from "./cell-display";
 import { fieldIcon } from "./field-icon";
 import { FieldTypeMenu } from "./FieldTypeMenu";
 import { t } from "@/lib/i18n";
@@ -71,32 +64,9 @@ function RowPropertyField({
   };
 
   const display = (() => {
-    if (field.field_type === "progress") {
-      return <ProgressCell value={value} />;
-    }
-    if (field.field_type === "rating") {
-      return <RatingCell value={value} max={ratingMax(parseFieldOptions(field.options))} />;
-    }
-    if (field.field_type === "single_select" || field.field_type === "multi_select") {
-      return <SelectChips field={field} value={value} />;
-    }
-    if (field.field_type === "relation") {
-      return <RelationChips field={field} value={value} />;
-    }
-    if (field.field_type === "reverse_relation") {
-      return Array.isArray(value) && value.length > 0 ? (
-        <ReverseRelationChips field={field} value={value} />
-      ) : (
-        <span className="text-neutral-300">{t("rowDetail.empty")}</span>
-      );
-    }
-    if (field.field_type === "attachment") {
-      return Array.isArray(value) && value.length > 0 ? (
-        <AttachmentChips value={value} />
-      ) : (
-        <span className="text-neutral-300">{t("rowDetail.empty")}</span>
-      );
-    }
+    // 类型 → 专用部件的分派与表格共用 cell-display 那张表；这里只补行详情自己的文本兜底
+    const custom = cellDisplayContent({ field, value, variant: "detail" });
+    if (custom) return custom.node;
     const text = formatCellValue(field.field_type, value, parseFieldOptions(field.options));
     return (
       <span

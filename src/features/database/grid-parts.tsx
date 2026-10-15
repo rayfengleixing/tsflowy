@@ -4,12 +4,12 @@ import { toast } from "sonner";
 import type { CellValue, DatabaseField } from "@/types/database";
 import { isReadonlyType, type FieldType } from "@/types/database";
 import { useDbStore } from "@/stores/database-context";
-import { formatCellValue, parseFieldOptions, ratingMax } from "@/lib/database-values";
+import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { NewFieldDialog } from "./NewFieldDialog";
-import { AttachmentChips, ProgressCell, RatingCell, RelationChips, ReverseRelationChips, SelectChips } from "./editors";
+import { cellDisplayContent } from "./cell-display";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -103,7 +103,8 @@ export function AddFieldButton(props: { onConfigure: (field: DatabaseField) => v
   );
 }
 
-/** 单元格显示（非编辑态） */
+/** 单元格显示（非编辑态）：各类型的专用部件由 cell-display 的展示臂给出，
+ *  这里只剩表格特有的文本渲染（主列字号 + 打开行详情按钮）。 */
 export function CellDisplay({
   field,
   value,
@@ -117,77 +118,11 @@ export function CellDisplay({
   onChipRemove?: (newValue: CellValue) => void;
   onOpenRowDetail?: () => void;
 }) {
-  const opts = parseFieldOptions(field.options);
-  if (field.field_type === "checkbox") {
-    return (
-      <div className="flex h-full items-center justify-center text-[13px] text-brand-600">
-        {value === true ? "✓" : ""}
-      </div>
-    );
+  const custom = cellDisplayContent({ field, value, variant: "grid", onChipRemove });
+  if (custom) {
+    return custom.wrapClass ? <div className={custom.wrapClass}>{custom.node}</div> : <>{custom.node}</>;
   }
-  // 进度列：整格进度条 + 百分比
-  if (field.field_type === "progress") {
-    return (
-      <div className="flex h-full w-full items-center px-2">
-        <ProgressCell value={value} />
-      </div>
-    );
-  }
-  // 评分列：星级
-  if (field.field_type === "rating") {
-    return (
-      <div className="flex h-full w-full items-center px-2">
-        <RatingCell value={value} max={ratingMax(opts)} />
-      </div>
-    );
-  }
-  if (field.field_type === "single_select" || field.field_type === "multi_select") {
-    return (
-      <div className="flex h-full w-full items-center truncate px-2">
-        {Array.isArray(value) && value.length === 0 ? (
-          <span className="text-neutral-300" />
-        ) : (
-          <SelectChips field={field} value={value} onRemove={onChipRemove} />
-        )}
-      </div>
-    );
-  }
-  if (field.field_type === "relation") {
-    return (
-      <div className="flex h-full w-full items-center truncate px-2">
-        {Array.isArray(value) && value.length === 0 ? (
-          <span className="text-neutral-300" />
-        ) : (
-          <RelationChips field={field} value={value} />
-        )}
-      </div>
-    );
-  }
-  // 反向关系只读虚拟列：value 由调用方实时反查（来源行 id 数组），这里解析成来源行标题
-  if (field.field_type === "reverse_relation") {
-    return (
-      <div className="flex h-full w-full items-center truncate px-2">
-        {Array.isArray(value) && value.length > 0 ? (
-          <ReverseRelationChips field={field} value={value} />
-        ) : (
-          <span className="text-neutral-300" />
-        )}
-      </div>
-    );
-  }
-  // 附件列：value 为 [{name,path}] 数组，用可点击的胶囊展示文件名
-  if (field.field_type === "attachment") {
-    return (
-      <div className="flex h-full w-full items-center truncate px-2">
-        {Array.isArray(value) && value.length > 0 ? (
-          <AttachmentChips value={value} />
-        ) : (
-          <span className="text-neutral-300" />
-        )}
-      </div>
-    );
-  }
-  const text = formatCellValue(field.field_type, value, opts);
+  const text = formatCellValue(field.field_type, value, parseFieldOptions(field.options));
   return (
     <div
       className={cn(

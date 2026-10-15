@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
 import {
   ArrowRightLeft,
   Banknote,
@@ -23,46 +24,29 @@ import {
 import type { FieldType } from "@/types/database";
 
 /** 字段类型 → 图标（对齐 AppFlowy 行详情的属性图标；RowDetail 使用） */
+const FIELD_ICONS: Record<FieldType, LucideIcon> = {
+  text: TypeIcon,
+  number: Hash,
+  progress: Gauge,
+  rating: Star,
+  currency: Banknote,
+  formula: Sigma,
+  date: Calendar,
+  single_select: CircleDot,
+  multi_select: ListChecks,
+  checkbox: CheckSquare,
+  url: LinkIcon,
+  phone: Phone,
+  email: Mail,
+  created_at: Clock,
+  last_edited_at: History,
+  relation: Link2,
+  rollup: Combine,
+  reverse_relation: ArrowRightLeft,
+  attachment: Paperclip,
+};
+
 export function fieldIcon(type: FieldType): ReactNode {
-  const cls = "h-3.5 w-3.5 shrink-0 text-neutral-400";
-  switch (type) {
-    case "text":
-      return <TypeIcon className={cls} />;
-    case "number":
-      return <Hash className={cls} />;
-    case "progress":
-      return <Gauge className={cls} />;
-    case "rating":
-      return <Star className={cls} />;
-    case "currency":
-      return <Banknote className={cls} />;
-    case "formula":
-      return <Sigma className={cls} />;
-    case "date":
-      return <Calendar className={cls} />;
-    case "single_select":
-      return <CircleDot className={cls} />;
-    case "multi_select":
-      return <ListChecks className={cls} />;
-    case "checkbox":
-      return <CheckSquare className={cls} />;
-    case "url":
-      return <LinkIcon className={cls} />;
-    case "phone":
-      return <Phone className={cls} />;
-    case "email":
-      return <Mail className={cls} />;
-    case "created_at":
-      return <Clock className={cls} />;
-    case "last_edited_at":
-      return <History className={cls} />;
-    case "relation":
-      return <Link2 className={cls} />;
-    case "rollup":
-      return <Combine className={cls} />;
-    case "reverse_relation":
-      return <ArrowRightLeft className={cls} />;
-    case "attachment":
-      return <Paperclip className={cls} />;
-  }
+  const Icon = FIELD_ICONS[type];
+  return <Icon className="h-3.5 w-3.5 shrink-0 text-neutral-400" />;
 }

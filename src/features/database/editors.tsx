@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentType } from "react";
 import { Check, ChevronDown, Plus, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
-import type { AttachmentRef, CellValue, DatabaseField, SelectOption } from "@/types/database";
+import type { AttachmentRef, CellValue, DatabaseField, FieldType, SelectOption } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { attachmentRefs, parseFieldOptions, ratingMax } from "@/lib/database-values";
 import { filesFromDataTransfer, openAttachment, pickAttachment, saveAttachmentFile } from "@/lib/assets";
@@ -737,52 +737,29 @@ export function RelationCellEditor({ field, value, onCommit, onCancel }: CellEdi
   );
 }
 
-/** 按字段类型分派编辑器（GridView 单元格 + 行详情属性区共用） */
+/**
+ * 按字段类型分派编辑器（GridView 单元格 + 行详情属性区共用）。
+ * 与 field-kinds.ts 的 spec 同属 Strategy 的「视图臂」：新增类型时在这里补一行映射，
+ * 未映射的类型（文本族与只读的计算字段）落到 TextCellEditor 兜底，与原 switch 的 default 一致。
+ */
+const CELL_EDITORS: Partial<Record<FieldType, ComponentType<CellEditorProps>>> = {
+  number: NumberCellEditor,
+  currency: NumberCellEditor,
+  progress: ProgressCellEditor,
+  rating: RatingCellEditor,
+  date: DateCellEditor,
+  created_at: DateCellEditor,
+  last_edited_at: DateCellEditor,
+  checkbox: CheckboxCellEditor,
+  single_select: SelectCellEditor,
+  multi_select: MultiSelectCellEditor,
+  relation: RelationCellEditor,
+  attachment: AttachmentCellEditor,
+};
+
 export function CellEditorSlot(props: CellEditorProps) {
-  const { field, value, onCommit, onCancel, onAddOption, onDeleteOption } = props;
-  switch (field.field_type) {
-    case "number":
-    case "currency":
-      return <NumberCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
-    case "progress":
-      return <ProgressCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
-    case "rating":
-      return <RatingCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
-    case "date":
-    case "created_at":
-    case "last_edited_at":
-      return <DateCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
-    case "checkbox":
-      return <CheckboxCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
-    case "single_select":
-      return (
-        <SelectCellEditor
-          field={field}
-          value={value}
-          onCommit={onCommit}
-          onCancel={onCancel}
-          onAddOption={onAddOption}
-          onDeleteOption={onDeleteOption}
-        />
-      );
-    case "multi_select":
-      return (
-        <MultiSelectCellEditor
-          field={field}
-          value={value}
-          onCommit={onCommit}
-          onCancel={onCancel}
-          onAddOption={onAddOption}
-          onDeleteOption={onDeleteOption}
-        />
-      );
-    case "relation":
-      return <RelationCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
-    case "attachment":
-      return <AttachmentCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
-    default:
-      return <TextCellEditor field={field} value={value} onCommit={onCommit} onCancel={onCancel} />;
-  }
+  const Editor = CELL_EDITORS[props.field.field_type] ?? TextCellEditor;
+  return <Editor {...props} />;
 }
 
 /** 只读时间（created_at / last_edited_at）显示用，无编辑器 */

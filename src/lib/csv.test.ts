@@ -6,14 +6,16 @@ import {
   collectSelectNames,
   csvValueToCell,
   inferFieldType,
+  importCell,
   parseCsv,
+  pasteCell,
   planImport,
   resolveAttachmentNames,
-  resolveSelectRefs,
   selectCellToIds,
   toCsv,
 } from "./csv";
-import type { DatabaseField, DatabaseRow, SelectOption } from "@/types/database";
+import type { DatabaseField, DatabaseRow, FieldType, SelectOption } from "@/types/database";
+import type { PasteDeps } from "./csv";
 
 describe("parseCsv", () => {
   it("parses simple rows", () => {
@@ -176,22 +178,117 @@ describe("cellToCsv / buildCsvExport", () => {
   });
 });
 
-describe("resolveSelectRefs / 选择类导出", () => {
+describe("pasteCell 粘贴/导入一格文本", () => {
   const options: SelectOption[] = [
     { id: "o1", name: "水果", color: "green" },
     { id: "o2", name: "蔬菜", color: "blue" },
   ];
+  const mkField = (field_type: FieldType, opts: unknown = { kind: "select", options }): DatabaseField => ({
+    id: "f_" + field_type,
+    database_view_id: "v",
+    name: field_type,
+    field_type,
+    options: JSON.stringify(opts),
+    width: 180,
+    is_hidden: 0,
+    position: 0,
+  });
+  /** 建不成的选项补建：等价于改造前「store 拒绝新建」的情形 */
+  const failCreate = () => Promise.resolve(null);
+  /** 不补建选项、也看不到新字段的极简 deps：等价于改造前「选项已齐全」的情形 */
+  const staticDeps: PasteDeps = {
+    latestField: () => undefined,
+    createOption: failCreate,
+  };
 
-  it("maps single select name to option id", () => {
-    expect(resolveSelectRefs("single_select", "蔬菜", options)).toEqual({ ids: ["o2"], missing: [] });
-    expect(resolveSelectRefs("single_select", "   ", options)).toEqual({ ids: [], missing: [] });
-    expect(resolveSelectRefs("single_select", "新品类", options)).toEqual({ ids: [], missing: ["新品类"] });
+  it("值类按类型转成 CellValue", async () => {
+    const num = { kind: "number", format: "decimal", precision: 2, currency: "CNY" };
+    expect(await pasteCell(mkField("number", num), " 12.5 ", staticDeps)).toEqual({ value: 12.5, degraded: false });
+    expect(await pasteCell(mkField("number", num), "abc", staticDeps)).toEqual({ value: null, degraded: false });
+    expect(await pasteCell(mkField("progress", num), "65%", staticDeps)).toEqual({ value: 65, degraded: false });
+    expect(await pasteCell(mkField("checkbox", { kind: "none" }), "是", staticDeps)).toEqual({
+      value: true,
+      degraded: false,
+    });
+    expect(await pasteCell(mkField("checkbox", { kind: "none" }), "", staticDeps)).toEqual({
+      value: null,
+      degraded: false,
+    });
+    expect(await pasteCell(mkField("date", { kind: "date", include_time: false }), "2026-08-31", staticDeps)).toEqual({
+      value: "2026-08-31",
+      degraded: false,
+    });
   });
 
-  it("splits multi select, dedupes ids and reports unknown names", () => {
-    expect(resolveSelectRefs("multi_select", "水果; 蔬菜|水果", options)).toEqual({ ids: ["o1", "o2"], missing: [] });
-    expect(resolveSelectRefs("multi_select", "水果; 新品类", options)).toEqual({ ids: ["o1"], missing: ["新品类"] });
+  it("单选命中已有选项写 id，空串写 null", async () => {
+    expect(await pasteCell(mkField("single_select"), "蔬菜", staticDeps)).toEqual({ value: "o2", degraded: false });
+    expect(await pasteCell(mkField("single_select"), "   ", staticDeps)).toEqual({ value: null, degraded: false });
   });
+
+  it("多选分列去重：已认识的排前面，新建的按创建顺序追加", async () => {
+    const created: string[] = [];
+    const deps: PasteDeps = {
+      latestField: () => undefined,
+      createOption: (_fieldId, name) => {
+        const id = "new_" + name;
+        created.push(id);
+        return Promise.resolve(id);
+      },
+    };
+    expect(await pasteCell(mkField("multi_select"), "水果; 新品类|水果", deps)).toEqual({
+      value: ["o1", "new_新品类"],
+      degraded: false,
+    });
+    expect(created).toEqual(["new_新品类"]);
+  });
+
+  it("补建失败的格：值不完整但照常写入，degraded 交调用方提示", async () => {
+    expect(await pasteCell(mkField("single_select"), "新品类", staticDeps)).toEqual({ value: null, degraded: true });
+  });
+
+  it("选择类字段没配 options 则整格跳过", async () => {
+    expect(await pasteCell(mkField("single_select", { kind: "none" }), "蔬菜", staticDeps)).toBeNull();
+  });
+
+  it("文本给不出合法值的类型整格跳过：关联、附件、计算字段、最后编辑时间", async () => {
+    const skipTypes: FieldType[] = [
+      "relation",
+      "attachment",
+      "formula",
+      "rollup",
+      "reverse_relation",
+      "last_edited_at",
+    ];
+    for (const type of skipTypes) {
+      expect(await pasteCell(mkField(type, { kind: "none" }), "随便什么", staticDeps), type).toBeNull();
+    }
+  });
+
+  it("latestField 参与下一格解析：上一格补建的选项不会被重复创建", async () => {
+    let live: SelectOption[] = [...options];
+    const createdNames: string[] = [];
+    const field = mkField("multi_select");
+    const deps: PasteDeps = {
+      latestField: (id) =>
+        id === field.id ? { ...field, options: JSON.stringify({ kind: "select", options: live }) } : undefined,
+      createOption: (_fieldId, name) => {
+        createdNames.push(name);
+        const opt = { id: "opt_" + name, name, color: "gray" };
+        live = [...live, opt];
+        return Promise.resolve(opt.id);
+      },
+    };
+    expect(await pasteCell(field, "水果; 新品类", deps)).toEqual({ value: ["o1", "opt_新品类"], degraded: false });
+    expect(await pasteCell(field, "新品类", deps)).toEqual({ value: ["opt_新品类"], degraded: false });
+    expect(createdNames).toEqual(["新品类"]);
+  });
+});
+
+describe("选择类导出", () => {
+  const options: SelectOption[] = [
+    { id: "o1", name: "水果", color: "green" },
+    { id: "o2", name: "蔬菜", color: "blue" },
+  ];
 
   it("exports select cells as option names (ids translated back)", () => {
     const selectFields: DatabaseField[] = [
@@ -259,6 +356,17 @@ describe("CSV 导入选择列（收集名 → 建选项 → 名转 id）", () =>
     const column = ["水果", "蔬菜; 水果", ""];
     const { idByName } = buildSelectOptions(collectSelectNames("multi_select", column));
     expect(selectCellToIds("multi_select", column[1], idByName)).toEqual([idByName.get("蔬菜"), idByName.get("水果")]);
+  });
+
+  it("importCell：选择列按预建名表直译，其余类型走注册表 paste", () => {
+    const { idByName } = buildSelectOptions(["水果", "蔬菜"]);
+    expect(importCell("single_select", "蔬菜", idByName)).toBe(idByName.get("蔬菜"));
+    expect(importCell("multi_select", "水果; 蔬菜", idByName)).toEqual([idByName.get("水果"), idByName.get("蔬菜")]);
+    // 非选择列不碰选项表，直接走注册表的文本解读
+    expect(importCell("number", "12.5")).toBe(12.5);
+    expect(importCell("checkbox", "是")).toBe(true);
+    // 附件走「文件名 → assets 复制」另一条链路，纯文本在这里给不出值
+    expect(importCell("attachment", "a.png")).toBeNull();
   });
 });
 

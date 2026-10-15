@@ -1,5 +1,6 @@
 import type { CellValue, DatabaseField, DatabaseRow, FieldType, SelectOption } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
+import { canGroupByKind, fieldKind, isDateKind, isOptionBearing } from "./field-kinds";
 import { formatCellValue, parseFieldOptions } from "./database-values";
 
 // Grid 排序/筛选纯逻辑（项目说明书 11 节：筛选器求值需单测）
@@ -99,7 +100,7 @@ function dayMs(value: CellValue): number | null {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
-const DATE_FIELD_TYPES: ReadonlySet<FieldType> = new Set<FieldType>(["date", "created_at", "last_edited_at"]);
+// 日期语义判定已收进 field-kinds 注册表（domain === "date"），见 isDateKind
 
 // ---------- 相对日期操作数 ----------
 
@@ -226,7 +227,7 @@ export function evaluateFilter(fieldType: FieldType, value: CellValue, op: Filte
   }
   if (empty) return false; // 需要比较的运算符对空值一律不命中
   if (
-    DATE_FIELD_TYPES.has(fieldType) &&
+    isDateKind(fieldType) &&
     (op === "equals" || op === "not_equals" || op === "gt" || op === "gte" || op === "lt" || op === "lte")
   ) {
     if (isCellEmpty(operand)) return op === "not_equals"; // 操作数未填：与旧的字符串比较行为一致（不改变命中集）
@@ -321,25 +322,15 @@ export function applyFilters(
   });
 }
 
-/** 字段类型支持的比较符（筛选器 UI 用） */
+/** 字段类型支持的比较符（筛选器 UI 用）：取自 field-kinds 注册表 */
 export function opsForType(type: FieldType): FilterOp[] {
-  if (type === "checkbox") return ["checked", "unchecked"];
-  if (type === "multi_select" || type === "relation") return ["is_empty", "is_not_empty", "contains", "not_contains"];
-  if (type === "number" || type === "progress" || type === "rating" || type === "currency")
-    return ["is_empty", "is_not_empty", "equals", "not_equals", "gt", "gte", "lt", "lte"];
-  if (type === "date" || type === "created_at" || type === "last_edited_at")
-    return ["is_empty", "is_not_empty", "equals", "not_equals", "gt", "gte", "lt", "lte"];
-  if (type === "single_select") return ["is_empty", "is_not_empty", "equals", "not_equals"];
-  return ["is_empty", "is_not_empty", "contains", "not_contains", "equals", "not_equals"];
+  return fieldKind(type).filterOps;
 }
 
-/** 单字段默认筛选操作数（select 取第一个选项 id；date/number 取空由 UI 填） */
+/** 单字段默认筛选操作数（选择类取第一个选项 id；其余留空由 UI 填） */
 export function defaultOperand(field: DatabaseField): CellValue {
   const opts = parseFieldOptions(field.options);
-  if (field.field_type === "single_select" && opts.kind === "select" && opts.options.length > 0) {
-    return opts.options[0].id;
-  }
-  if (field.field_type === "multi_select" && opts.kind === "select" && opts.options.length > 0) {
+  if (isOptionBearing(field.field_type) && opts.kind === "select" && opts.options.length > 0) {
     return opts.options[0].id;
   }
   return null;
@@ -359,23 +350,9 @@ export interface GridGroup {
   rows: DatabaseRow[];
 }
 
-/** 复选框只有两个桶没有分组价值，last_edited_at 每行都在变是噪音 —— 都不给分组 */
+/** 复选框只有两个桶没有分组价值，无存储值的计算字段是噪音 —— 能力位由 field-kinds 声明 */
 export function canGroupBy(field: DatabaseField): boolean {
-  if (field.field_type === "checkbox" || isReadonlyType(field.field_type)) return false;
-  return [
-    "text",
-    "number",
-    "progress",
-    "rating",
-    "currency",
-    "date",
-    "single_select",
-    "multi_select",
-    "url",
-    "phone",
-    "email",
-    "created_at",
-  ].includes(field.field_type);
+  return canGroupByKind(field.field_type);
 }
 
 interface Bucket extends GridGroup {

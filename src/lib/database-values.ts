@@ -1,7 +1,11 @@
-import type { AttachmentRef, CellValue, FieldOptions, FieldType, SelectOption } from "@/types/database";
+import { fieldKind } from "./field-kinds";
+import type { CellValue, FieldOptions, FieldType, SelectOption } from "@/types/database";
 
 // 字段值序列化/展示（项目说明书 7.2 / 11 节：纯逻辑，Vitest 单测）
 // database_cells.value 统一存 JSON 字符串；空单元格为 "null"
+// 逐类型的语义已收进 field-kinds.ts 注册表，这里只保留与类型无关的编解码和稳定导出面。
+
+export { attachmentRefs, formatNumber, isOptionBearing, ratingMax } from "./field-kinds";
 
 export function serializeValue(_type: FieldType, value: CellValue): string {
   return JSON.stringify(value);
@@ -17,193 +21,19 @@ export function deserializeValue(_type: FieldType, raw: string): CellValue {
 
 /** 新建单元格的默认值 */
 export function defaultValue(type: FieldType): CellValue {
-  switch (type) {
-    case "checkbox":
-      return false;
-    case "multi_select":
-    case "relation":
-    case "attachment":
-      return [];
-    default:
-      return null;
-  }
+  return fieldKind(type).emptyValue();
 }
 
 /** 类型校验：值与字段类型匹配（空值恒合法） */
 export function validateCellValue(type: FieldType, value: CellValue): boolean {
   if (value === null) return true;
-  switch (type) {
-    case "text":
-    case "url":
-    case "phone":
-    case "email":
-    case "date":
-    case "single_select":
-    case "created_at":
-    case "last_edited_at":
-      return typeof value === "string";
-    case "number":
-    case "progress":
-    case "rating":
-    case "currency":
-      return typeof value === "number" && Number.isFinite(value);
-    case "formula":
-      // 公式字段无存储值（展示时实时计算），此处仅防御性放行
-      return typeof value === "number" && Number.isFinite(value);
-    case "rollup":
-      // 汇总字段同样无存储值；聚合结果按字符串展示，防御性放行
-      return typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
-    case "reverse_relation":
-      // 反向关系无存储值，渲染时实时反查；防御性放行（值为对端行 id 数组）
-      return Array.isArray(value) && value.every((v) => typeof v === "string");
-    case "attachment":
-      // 附件单元格存 [{name,path}]；老数据或脏数据里可能有裸字符串，一律判为非法
-      return (
-        Array.isArray(value) &&
-        value.every(
-          (v) =>
-            typeof v === "object" &&
-            typeof (v as { name?: unknown }).name === "string" &&
-            typeof (v as { path?: unknown }).path === "string",
-        )
-      );
-    case "checkbox":
-      return typeof value === "boolean";
-    case "multi_select":
-    case "relation":
-      return Array.isArray(value) && value.every((v) => typeof v === "string");
-  }
-}
-
-/** 从单元格值里挑出合法的附件引用（容忍脏数据：非对象项直接丢弃） */
-export function attachmentRefs(value: CellValue): AttachmentRef[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(
-    (v): v is AttachmentRef => typeof v === "object" && typeof v.name === "string" && typeof v.path === "string",
-  );
-}
-
-/** rating 字段的满星数（options 缺省或非法时回落 5） */
-export function ratingMax(options?: FieldOptions): number {
-  if (options?.kind === "rating" && Number.isFinite(options.max) && options.max >= 1) {
-    return Math.min(10, Math.round(options.max));
-  }
-  return 5;
-}
-
-/** 数字按格式展示（说明书 5.1：整数/小数/百分比/货币） */
-export function formatNumber(value: number, opts: Extract<FieldOptions, { kind: "number" }>): string {
-  const { format, precision, currency } = opts;
-  switch (format) {
-    case "integer":
-      return String(Math.round(value));
-    case "percent":
-      return value.toFixed(Math.max(0, precision)) + "%";
-    case "currency":
-      return new Intl.NumberFormat(undefined, {
-        style: "currency",
-        currency,
-        maximumFractionDigits: Math.max(0, precision),
-      }).format(value);
-    case "decimal":
-    default:
-      return value.toFixed(Math.max(0, precision));
-  }
+  return fieldKind(type).validate(value);
 }
 
 /** 展示用文本：不同类型不同格式（只读时间字段做本地化） */
 export function formatCellValue(type: FieldType, value: CellValue, options?: FieldOptions): string {
   if (value === null || value === "") return "";
-  switch (type) {
-    case "number":
-      if (typeof value !== "number") return "";
-      return formatNumber(
-        value,
-        options?.kind === "number" ? options : { kind: "number", format: "decimal", precision: 2, currency: "CNY" },
-      );
-    case "progress": {
-      // 0-100 进度：静态展示（导出/看板卡片等无进度条组件时）给整数百分比
-      if (typeof value !== "number") return "";
-      return Math.round(Math.min(100, Math.max(0, value))) + "%";
-    }
-    case "rating": {
-      // 星级：静态展示用实心/空心星；四舍五入（与 RatingCell 一致）
-      if (typeof value !== "number") return "";
-      const max = ratingMax(options);
-      const filled = Math.min(max, Math.max(0, Math.round(value)));
-      return "★".repeat(filled) + "☆".repeat(max - filled);
-    }
-    case "currency": {
-      // 货币：固定 currency 格式，币种/精度沿用 number options（缺省 CNY 两位小数）
-      if (typeof value !== "number") return "";
-      const numOpts = options?.kind === "number" ? options : undefined;
-      const cur = numOpts?.currency.trim();
-      return formatNumber(value, {
-        kind: "number",
-        format: "currency",
-        precision: numOpts?.precision ?? 2,
-        currency: cur === undefined || cur === "" ? "CNY" : cur,
-      });
-    }
-    case "formula": {
-      // 公式值由 computeFormula 算好传入，可能是数值/文本/布尔（IF/CONCAT/比较等）
-      if (typeof value === "number") {
-        return formatNumber(
-          value,
-          options?.kind === "number" ? options : { kind: "number", format: "decimal", precision: 2, currency: "CNY" },
-        );
-      }
-      if (typeof value === "boolean") return value ? "✓" : "";
-      if (typeof value === "string") return value;
-      return ""; // 数组等非标量（公式不会产生）→ 空
-    }
-    case "checkbox":
-      return value ? "✓" : "";
-    case "multi_select": {
-      // 选项 id → 名称（导出、看板卡片、内嵌表格等静态展示没有 SelectChips 可用）；
-      // 选项已删或字段未配置时降级显示原始 id
-      if (!Array.isArray(value)) return "";
-      const ids = value.filter((v): v is string => typeof v === "string");
-      if (options?.kind === "select") {
-        return ids.map((id) => options.options.find((o) => o.id === id)?.name ?? id).join(", ");
-      }
-      return ids.join(", ");
-    }
-    // 关联单元格存的是对端行 id，真正展示要解析成行标题 —— 由 RelationChips 负责渲染，
-    // 这里只给一个不带解析的兜底文本（例如导出、无目标库缓存时的降级）。
-    // 反向关系同理：单元格无存储值，真正展示由 ReverseRelationChips 解析来源行标题。
-    case "relation":
-    case "reverse_relation":
-      return Array.isArray(value) ? (value as string[]).join(", ") : "";
-    // 汇总值由 computeRollup 算好传入，已经是展示文本
-    case "rollup":
-      return Array.isArray(value) ? (value as string[]).join(",") : String(value);
-    // 附件单元格存 [{name,path}]：静态展示只给文件名串（导出/看板卡片等无 AttachmentChips 时）
-    case "attachment":
-      return attachmentRefs(value)
-        .map((a) => a.name)
-        .join(", ");
-    case "date":
-    case "created_at":
-    case "last_edited_at": {
-      if (typeof value !== "string") return "";
-      const d = new Date(value.endsWith("Z") ? value : value + "Z");
-      if (Number.isNaN(d.getTime())) return value;
-      const includeTime =
-        type !== "created_at" && type !== "last_edited_at" && options?.kind === "date" && options.include_time;
-      return includeTime ? d.toLocaleString() : d.toLocaleDateString();
-    }
-    case "single_select": {
-      // 选项 id → 名称
-      if (typeof value !== "string") return "";
-      if (options?.kind === "select") {
-        return options.options.find((o) => o.id === value)?.name ?? value;
-      }
-      return value;
-    }
-    default:
-      return Array.isArray(value) ? (value as string[]).join(",") : String(value);
-  }
+  return fieldKind(type).format(value, options ?? { kind: "none" });
 }
 
 // ---------- 字段 options 解析（database_fields.options JSON） ----------

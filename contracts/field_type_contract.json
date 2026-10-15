@@ -1,0 +1,39 @@
+{
+  "_说明": "跨语言契约：TS 的 FieldType 全集 ↔ Rust db::database::default_options_json 写进 database_fields.options 的默认值。两边各一条测试读这同一份文件（TS: src/lib/field-type-contract.test.ts，Rust: src-tauri/src/db/database.rs 的 default_options_json 契约测试）。新增字段类型只改一边，另一边就会红。",
+  "_改默认值的规矩": "这里是「Rust 此刻写出的值」的快照，不是愿望清单。要改默认值就同时改 Rust 与本文件；若该默认值承载前端依赖的语义（例如 select 分支决定胶囊渲染），语义由 field-kinds 注册表的能力位校验。",
+  "triggerManagedTimestampTypes": ["created_at", "last_edited_at"],
+  "_triggerManagedTimestampTypes": "由 002 迁移触发器维护的单元格（插行/改值时自动写时间）。Rust 复制视图时不搬这几类的源值（db/views/crud.rs），前端据此决定「粘贴能否写入、能否在 UI 改」。",
+  "types": [
+    { "type": "text", "defaultOptions": { "kind": "none" } },
+    {
+      "type": "number",
+      "defaultOptions": { "kind": "number", "format": "decimal", "precision": 2, "currency": "CNY" }
+    },
+    { "type": "progress", "defaultOptions": { "kind": "none" } },
+    { "type": "rating", "defaultOptions": { "kind": "rating", "max": 5 } },
+    {
+      "type": "currency",
+      "defaultOptions": { "kind": "number", "format": "currency", "precision": 2, "currency": "CNY" }
+    },
+    { "type": "date", "defaultOptions": { "kind": "date", "include_time": false } },
+    { "type": "single_select", "defaultOptions": { "kind": "select", "options": [] } },
+    { "type": "multi_select", "defaultOptions": { "kind": "select", "options": [] } },
+    { "type": "checkbox", "defaultOptions": { "kind": "none" } },
+    { "type": "url", "defaultOptions": { "kind": "none" } },
+    { "type": "phone", "defaultOptions": { "kind": "none" } },
+    { "type": "email", "defaultOptions": { "kind": "none" } },
+    { "type": "created_at", "defaultOptions": { "kind": "none" } },
+    { "type": "last_edited_at", "defaultOptions": { "kind": "none" } },
+    { "type": "formula", "defaultOptions": { "kind": "none" } },
+    { "type": "relation", "defaultOptions": { "kind": "relation", "target_view_id": "" } },
+    {
+      "type": "rollup",
+      "defaultOptions": { "kind": "rollup", "relation_field_id": "", "target_field_id": "", "fn": "count" }
+    },
+    {
+      "type": "reverse_relation",
+      "defaultOptions": { "kind": "reverse_relation", "source_view_id": "", "source_field_id": "" }
+    },
+    { "type": "attachment", "defaultOptions": { "kind": "none" } }
+  ]
+}

@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, type ComponentType } from "react";
 import { Check, Plus, Search, Trash2, X } from "lucide-react";
-import type { CellValue, DatabaseField } from "@/types/database";
+import type { CellValue, DatabaseField, FieldOptions, FieldType } from "@/types/database";
 import {
   RELATIVE_DATE_PREFIX,
   defaultOperand,
@@ -14,7 +14,7 @@ import {
   type RelativeDateKey,
 } from "@/lib/database-query";
 import { parseFieldOptions, ratingMax } from "@/lib/database-values";
-import { relationRowLabel, relationTarget, searchRelationRows, type RelationDb } from "@/lib/relation";
+import { relationRowLabel, relationTarget, searchRelationRows } from "@/lib/relation";
 import { useRelationDbs } from "./use-database-data";
 import { RelationChip } from "./cell-display";
 import { Button } from "@/components/ui/button";
@@ -35,8 +35,23 @@ const RELATIVE_PRESETS: RelativeDateKey[] = [
   "next_days",
 ];
 
+const SELECT_CLS =
+  "h-7 rounded-md border border-neutral-300 bg-white px-2 text-[12px] outline-none focus:border-brand-500";
+
+/** 操作数录入控件的公共入参：控件按字段类型分派（见 FILTER_OPERANDS） */
+interface FilterOperandProps {
+  field: DatabaseField;
+  value: CellValue;
+  options: FieldOptions;
+  /** 文本/数字输入的草稿。留在分派层，切换字段类型时不会重置——与改造前一致 */
+  draft: string;
+  onDraft: (text: string) => void;
+  getDb: ReturnType<typeof useRelationDbs>;
+  onChange: (v: CellValue) => void;
+}
+
 /** 日期操作数：绝对日期（YYYY-MM-DD，旧值原样可用）或 "@rel:…" 相对区间 */
-function DateOperandInput({ value, onChange }: { value: CellValue; onChange: (v: CellValue) => void }) {
+function DateOperandInput({ value, onChange }: FilterOperandProps) {
   const isRel = isRelativeDateOperand(value);
   const relKey = isRelativeDateOperand(value)
     ? (value.slice(RELATIVE_DATE_PREFIX.length).split(":")[0] as RelativeDateKey)
@@ -44,12 +59,10 @@ function DateOperandInput({ value, onChange }: { value: CellValue; onChange: (v:
   const days = relativeDayCount(typeof value === "string" ? value : "") ?? 7;
   const needsCount = relKey === "past_days" || relKey === "next_days";
   const absText = typeof value === "string" && !value.startsWith(RELATIVE_DATE_PREFIX) ? value.slice(0, 10) : "";
-  const selectCls =
-    "h-7 rounded-md border border-neutral-300 bg-white px-2 text-[12px] outline-none focus:border-brand-500";
   return (
     <>
       <select
-        className={selectCls}
+        className={SELECT_CLS}
         value={isRel ? "rel" : "abs"}
         onChange={(e) => onChange(e.target.value === "rel" ? makeRelativeOperand("today") : null)}
       >
@@ -59,7 +72,7 @@ function DateOperandInput({ value, onChange }: { value: CellValue; onChange: (v:
       {isRel && (
         <>
           <select
-            className={selectCls}
+            className={SELECT_CLS}
             value={relKey}
             onChange={(e) => onChange(makeRelativeOperand(e.target.value as RelativeDateKey, days))}
           >
@@ -97,19 +110,11 @@ function DateOperandInput({ value, onChange }: { value: CellValue; onChange: (v:
 }
 
 /** relation 操作数：从目标库行里挑选（比较按行 id；旧裸文本值当作单 id 兼容） */
-function RelationOperandInput({
-  db,
-  targetSet,
-  value,
-  onChange,
-}: {
-  db: RelationDb | undefined;
-  targetSet: boolean;
-  value: CellValue;
-  onChange: (v: CellValue) => void;
-}) {
+function RelationOperandInput({ field, value, getDb, onChange }: FilterOperandProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const targetId = relationTarget(field);
+  const db = targetId ? getDb(targetId) : undefined;
   const ids = Array.isArray(value)
     ? value.filter((v): v is string => typeof v === "string")
     : typeof value === "string" && value !== ""
@@ -133,7 +138,7 @@ function RelationOperandInput({
       </button>
       {open && (
         <div className="absolute left-0 top-full z-30 mt-1 flex max-h-64 w-64 flex-col rounded-lg border border-neutral-300 bg-white p-1 shadow-lg">
-          {targetSet && (
+          {!!targetId && (
             <div className="relative mb-1 shrink-0">
               <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-neutral-400" />
               <input
@@ -146,8 +151,8 @@ function RelationOperandInput({
             </div>
           )}
           <div className="min-h-0 flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden [scrollbar-width:none]">
-            {!targetSet && <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.relationUnset")}</div>}
-            {targetSet && !db && <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("app.loading")}</div>}
+            {!targetId && <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.relationUnset")}</div>}
+            {!!targetId && !db && <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("app.loading")}</div>}
             {db && candidates.length === 0 && (
               <div className="px-2 py-1.5 text-[12px] text-neutral-400">{t("field.relationEmpty")}</div>
             )}
@@ -185,95 +190,101 @@ function RelationOperandInput({
   );
 }
 
-/** 筛选值输入（按字段类型） */
-function FilterValueInput(props: {
-  field: DatabaseField;
-  value: CellValue;
-  getDb: ReturnType<typeof useRelationDbs>;
-  onChange: (v: CellValue) => void;
-}) {
-  const { field, value, getDb, onChange } = props;
-  const opts = parseFieldOptions(field.options);
-  const [draft, setDraft] = useState(typeof value === "string" ? value : "");
+/** 选择类：按选项列表下拉（筛选值恒为单个选项 id，与改造前一致） */
+function SelectOperand({ options, value, onChange }: FilterOperandProps) {
+  const items = options.kind === "select" ? options.options : [];
+  return (
+    <select
+      className={SELECT_CLS}
+      value={typeof value === "string" ? value : ""}
+      onChange={(e) => onChange(e.target.value || null)}
+    >
+      <option value="">—</option>
+      {items.map((o) => (
+        <option key={o.id} value={o.id}>
+          {o.name}
+        </option>
+      ))}
+    </select>
+  );
+}
 
-  if (field.field_type === "single_select" || field.field_type === "multi_select") {
-    const options = opts.kind === "select" ? opts.options : [];
-    return (
-      <select
-        className="h-7 rounded-md border border-neutral-300 bg-white px-2 text-[12px] outline-none focus:border-brand-500"
-        value={typeof value === "string" ? value : ""}
-        onChange={(e) => onChange(e.target.value || null)}
-      >
-        <option value="">—</option>
-        {options.map((o) => (
-          <option key={o.id} value={o.id}>
-            {o.name}
-          </option>
-        ))}
-      </select>
-    );
-  }
-  if (field.field_type === "number" || field.field_type === "currency" || field.field_type === "progress") {
-    return (
-      <input
-        type="number"
-        step="any"
-        className="h-7 w-28 rounded-md border border-neutral-300 px-2 text-[12px] outline-none focus:border-brand-500"
-        value={draft}
-        onChange={(e) => {
-          setDraft(e.target.value);
-          // 清空输入框时 Number("") === 0，会把筛选条件变成"等于 0"
-          if (e.target.value.trim() === "") {
-            onChange(null);
-            return;
-          }
-          const n = Number(e.target.value);
-          onChange(Number.isFinite(n) ? n : null);
-        }}
-      />
-    );
-  }
-  if (field.field_type === "rating") {
-    const max = ratingMax(opts);
-    return (
-      <select
-        className="h-7 rounded-md border border-neutral-300 bg-white px-2 text-[12px] outline-none focus:border-brand-500"
-        value={typeof value === "number" ? String(value) : ""}
-        onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
-      >
-        <option value="">—</option>
-        {Array.from({ length: max }, (_, i) => i + 1).map((n) => (
-          <option key={n} value={n}>
-            {"★".repeat(n)}
-          </option>
-        ))}
-      </select>
-    );
-  }
-  if (field.field_type === "date" || field.field_type === "created_at" || field.field_type === "last_edited_at") {
-    return <DateOperandInput value={value} onChange={onChange} />;
-  }
-  if (field.field_type === "relation") {
-    const targetId = relationTarget(field);
-    return (
-      <RelationOperandInput
-        db={targetId ? getDb(targetId) : undefined}
-        targetSet={!!targetId}
-        value={value}
-        onChange={onChange}
-      />
-    );
-  }
+/** 数字族（number / currency / progress）：数值输入，草稿由分派层持有 */
+function NumberOperand({ draft, onDraft, onChange }: FilterOperandProps) {
+  return (
+    <input
+      type="number"
+      step="any"
+      className="h-7 w-28 rounded-md border border-neutral-300 px-2 text-[12px] outline-none focus:border-brand-500"
+      value={draft}
+      onChange={(e) => {
+        onDraft(e.target.value);
+        // 清空输入框时 Number("") === 0，会把筛选条件变成"等于 0"
+        if (e.target.value.trim() === "") {
+          onChange(null);
+          return;
+        }
+        const n = Number(e.target.value);
+        onChange(Number.isFinite(n) ? n : null);
+      }}
+    />
+  );
+}
+
+/** 评分：按满星数给下拉 */
+function RatingOperand({ options, value, onChange }: FilterOperandProps) {
+  const max = ratingMax(options);
+  return (
+    <select
+      className={SELECT_CLS}
+      value={typeof value === "number" ? String(value) : ""}
+      onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
+    >
+      <option value="">—</option>
+      {Array.from({ length: max }, (_, i) => i + 1).map((n) => (
+        <option key={n} value={n}>
+          {"★".repeat(n)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/** 兜底：文本 / 链接 / 电话 / 邮箱，以及公式、汇总等只读计算列 */
+function TextOperand({ draft, onDraft, onChange }: FilterOperandProps) {
   return (
     <input
       className="h-7 w-36 rounded-md border border-neutral-300 px-2 text-[12px] outline-none focus:border-brand-500"
       value={draft}
       onChange={(e) => {
-        setDraft(e.target.value);
+        onDraft(e.target.value);
         onChange(e.target.value || null);
       }}
     />
   );
+}
+
+/** 类型 → 操作数控件。新增字段类型只需在这里补一行，不必再加一层 if */
+const FILTER_OPERANDS: Partial<Record<FieldType, ComponentType<FilterOperandProps>>> = {
+  single_select: SelectOperand,
+  multi_select: SelectOperand,
+  number: NumberOperand,
+  currency: NumberOperand,
+  progress: NumberOperand,
+  rating: RatingOperand,
+  date: DateOperandInput,
+  created_at: DateOperandInput,
+  last_edited_at: DateOperandInput,
+  relation: RelationOperandInput,
+};
+
+/** 筛选值输入（按字段类型） */
+function FilterValueInput(props: Omit<FilterOperandProps, "options" | "draft" | "onDraft">) {
+  const { field, value } = props;
+  const options = parseFieldOptions(field.options);
+  const [draft, setDraft] = useState(typeof value === "string" ? value : "");
+  const Operand = FILTER_OPERANDS[field.field_type] ?? TextOperand;
+  return <Operand {...props} options={options} draft={draft} onDraft={setDraft} />;
 }
 
 /** 筛选条（说明书 10-M4：多条件 AND/OR + 类型化比较符） */

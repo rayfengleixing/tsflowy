@@ -5,7 +5,7 @@ import { useDbStore } from "@/stores/database-context";
 import { applyFilters, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
 import { buildCalendarMonth, cellValueForDate, defaultCalendarField, rowDateKey } from "@/lib/board-calendar";
-import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
+import { formatCellValue, isOptionBearing, parseFieldOptions } from "@/lib/database-values";
 import { useRelationDbs } from "./use-database-data";
 import { Button } from "@/components/ui/button";
 import { SelectChips } from "./editors";
@@ -392,8 +392,7 @@ function CalCard(props: {
   // 副信息：只取前 1 个可见单/多选/数字（紧凑）
   const subField = visibleFields.slice(1, 3).find(
     (f) =>
-      f.field_type === "single_select" ||
-      f.field_type === "multi_select" ||
+      isOptionBearing(f.field_type) ||
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
       (f.field_type === "checkbox" && cells[row.id]?.[f.id] === true) ||
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- 同上
@@ -443,7 +442,7 @@ function CalCard(props: {
 }
 
 function CalSub({ field, value }: { field: DatabaseField; value: CellValue }) {
-  if (field.field_type === "single_select" || field.field_type === "multi_select") {
+  if (isOptionBearing(field.field_type)) {
     return <SelectChips field={field} value={value} compact />;
   }
   if (field.field_type === "checkbox") {

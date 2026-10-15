@@ -16,6 +16,11 @@ use super::{dberr, now_ms};
 // 因此所有以 view_id 为入参的函数先过一遍 data_view_id 折算成宿主 id 再执行；
 // 返回行里的 database_view_id 是宿主 id（前端不读该列做等值比较，仅类型保留）。
 
+/// 由 002 迁移的两个触发器维护单元格值的字段：插行写 created_at、改值刷 last_edited_at。
+/// 复制视图时这几类的源单元格不搬（见 views::crud），前端也据此判定「不能在 UI 改」。
+/// 取值与 contracts/field_type_contract.json 的 triggerManagedTimestampTypes 由契约测试核对。
+pub const TRIGGER_MANAGED_TIMESTAMPS: [&str; 2] = ["created_at", "last_edited_at"];
+
 /// 镜像前端 database-values.ts defaultOptionsFor：新字段/改类型写入的默认 options JSON。
 /// 键序由 serde_json 字典序决定，消费方 parseFieldOptions 按键名读取，无顺序依赖。
 pub fn default_options_json(field_type: &str) -> String {
@@ -621,6 +626,57 @@ mod tests {
             r#"{"kind":"reverse_relation","source_field_id":"","source_view_id":""}"#
         );
         assert_eq!(default_options_json("attachment"), r#"{"kind":"none"}"#);
+    }
+
+    /// 读契约文件（前端测试读同一份），返回 types 数组与触发器时间戳列表
+    fn read_contract() -> (Vec<serde_json::Value>, Vec<String>) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../contracts/field_type_contract.json");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("读不到契约文件 {}: {e}", path.display()));
+        let doc: serde_json::Value = serde_json::from_str(&raw).expect("契约文件应是合法 JSON");
+        let types = doc["types"]
+            .as_array()
+            .expect("契约的 types 应是数组")
+            .clone();
+        let timestamps = doc["triggerManagedTimestampTypes"]
+            .as_array()
+            .expect("契约的 triggerManagedTimestampTypes 应是数组")
+            .iter()
+            .map(|v| v.as_str().expect("每项应是字符串").to_string())
+            .collect();
+        (types, timestamps)
+    }
+
+    #[test]
+    fn default_options_match_shared_contract() {
+        let (entries, _) = read_contract();
+        assert!(!entries.is_empty(), "契约里一个类型都没有，测试就形同虚设");
+        for entry in &entries {
+            let field_type = entry["type"].as_str().expect("每项要有 type");
+            let want = &entry["defaultOptions"];
+            let got: serde_json::Value = serde_json::from_str(&default_options_json(field_type))
+                .expect("默认 options 应是合法 JSON");
+            assert_eq!(
+                got,
+                want.clone(),
+                "{field_type} 的默认 options 与契约不一致"
+            );
+        }
+    }
+
+    /// 复制视图时跳过源单元格的类型清单，必须与契约（及前端认知）一致
+    #[test]
+    fn trigger_managed_timestamps_match_shared_contract() {
+        let (_, timestamps) = read_contract();
+        let expected: Vec<String> = TRIGGER_MANAGED_TIMESTAMPS
+            .iter()
+            .map(|t| t.to_string())
+            .collect();
+        assert_eq!(
+            timestamps, expected,
+            "views::crud 跳过的时间戳列与契约不一致"
+        );
     }
 
     #[test]

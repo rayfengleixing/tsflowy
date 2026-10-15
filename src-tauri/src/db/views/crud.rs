@@ -1,5 +1,6 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
+use super::super::database::TRIGGER_MANAGED_TIMESTAMPS;
 use super::super::models::{DatabaseFieldRow, DatabaseRowRow, DocRowOut, ViewRow};
 use super::super::{dberr, now_ms};
 
@@ -397,7 +398,7 @@ pub fn duplicate(
             )
             .map_err(dberr("duplicate view fields"))?;
             // 时间戳字段的单元格交给触发器写成新时间，不搬源值
-            if f.field_type != "created_at" && f.field_type != "last_edited_at" {
+            if !TRIGGER_MANAGED_TIMESTAMPS.contains(&f.field_type.as_str()) {
                 field_map.push((f.id.clone(), new_fid));
             }
         }

@@ -5,7 +5,7 @@ import { useDbStore } from "@/stores/database-context";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
 import { NO_GROUP, cellValueForGroup, defaultBoardField, groupRowsForBoard } from "@/lib/board-calendar";
-import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
+import { formatCellValue, isOptionBearing, parseFieldOptions } from "@/lib/database-values";
 import { relationCellText, relationTarget, type RelationDb } from "@/lib/relation";
 import { useRelationDbs } from "./use-database-data";
 import { Button } from "@/components/ui/button";
@@ -483,7 +483,7 @@ function CardSub({
   value: CellValue;
   relationDbOf: (viewId: string) => RelationDb | undefined;
 }) {
-  if (field.field_type === "single_select" || field.field_type === "multi_select") {
+  if (isOptionBearing(field.field_type)) {
     return (
       <div className="max-w-full min-h-[1rem]">
         <SelectChips field={field} value={value} compact />

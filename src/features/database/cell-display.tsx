@@ -1,10 +1,10 @@
 // 数据库单元格的只读展示部件（选项 / 关联 / 附件胶囊与缩略图）。
 // 从 editors.tsx 原样搬出（无逻辑/样式改动），editors.tsx 再统一转出以保持对外导出 API 不变。
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { File as FileIcon, Link2, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
-import type { CellValue, DatabaseField, SelectOption } from "@/types/database";
-import { attachmentRefs, parseFieldOptions } from "@/lib/database-values";
+import type { CellValue, DatabaseField, FieldType, SelectOption } from "@/types/database";
+import { attachmentRefs, parseFieldOptions, ratingMax } from "@/lib/database-values";
 import { isImageFile, openAttachment, resolveAssetUrl } from "@/lib/assets";
 import { relationRowIds, relationRowLabel, relationTarget, reverseRelationConfig } from "@/lib/relation";
 import { useRelationStore } from "@/stores/relation";
@@ -347,4 +347,79 @@ export function RatingCell({ value, max, compact = false }: { value: CellValue; 
       ))}
     </span>
   );
+}
+
+// ---------- 展示臂（Strategy 的视图侧） ----------
+// 类型 → 专用部件的分派原来在 grid-parts.CellDisplay 与 RowDetail 各写了一份（七处 / 六处
+// field_type 判断，样式还容易一边改一边漏）。收成下面这张表：两条路径只差 variant，
+// 表格带列内包裹层，行详情裸渲染。新增类型只需在 DEDICATED_DISPLAYS 补一行。
+
+export interface CellDisplayProps {
+  field: DatabaseField;
+  value: CellValue;
+  /** grid = 表格单元格（带列内边距/裁剪包裹层）；detail = 行详情属性区（裸渲染） */
+  variant: "grid" | "detail";
+  /** 胶囊上的 × 删除入口，仅表格/编辑态传 */
+  onChipRemove?: (newValue: CellValue) => void;
+}
+
+export interface CellDisplayContent {
+  node: ReactNode;
+  /** grid 变体的包裹层 class；detail 变体恒 null */
+  wrapClass: string | null;
+}
+
+const GRID_BAR = "flex h-full w-full items-center px-2";
+const GRID_TRUNCATE = "flex h-full w-full items-center truncate px-2";
+const gridEmpty = <span className="text-neutral-300" />;
+const detailEmpty = <span className="text-neutral-300">{t("rowDetail.empty")}</span>;
+
+const isEmptyArray = (value: CellValue): boolean => Array.isArray(value) && value.length === 0;
+const hasItems = (value: CellValue): boolean => Array.isArray(value) && value.length > 0;
+
+const selectDisplay = ({ field, value, onChipRemove }: CellDisplayProps, grid: boolean): CellDisplayContent => ({
+  node: grid && isEmptyArray(value) ? gridEmpty : <SelectChips field={field} value={value} onRemove={onChipRemove} />,
+  wrapClass: grid ? GRID_TRUNCATE : null,
+});
+
+const relationDisplay = ({ field, value }: CellDisplayProps, grid: boolean): CellDisplayContent => ({
+  node: grid && isEmptyArray(value) ? gridEmpty : <RelationChips field={field} value={value} />,
+  wrapClass: grid ? GRID_TRUNCATE : null,
+});
+
+/** 有专用部件的类型；返回 null 表示该变体按普通文本渲染（由调用方兜底）。
+ *  新增类型只需在这里补一行，表格与行详情两条路径同时生效。 */
+const DEDICATED_DISPLAYS: Partial<
+  Record<FieldType, (p: CellDisplayProps, grid: boolean) => CellDisplayContent | null>
+> = {
+  // 复选框没有部件，居中打个勾；行详情面板沿用文本（"是"），保持原样
+  checkbox: ({ value }, grid) =>
+    grid
+      ? {
+          node: value === true ? "✓" : "",
+          wrapClass: "flex h-full items-center justify-center text-[13px] text-brand-600",
+        }
+      : null,
+  progress: ({ value }, grid) => ({ node: <ProgressCell value={value} />, wrapClass: grid ? GRID_BAR : null }),
+  rating: ({ value, field }, grid) => ({
+    node: <RatingCell value={value} max={ratingMax(parseFieldOptions(field.options))} />,
+    wrapClass: grid ? GRID_BAR : null,
+  }),
+  single_select: selectDisplay,
+  multi_select: selectDisplay,
+  relation: relationDisplay,
+  // 反向关系是只读虚拟列：value 由调用方实时反查（来源行 id 数组），这里解析成来源行标题
+  reverse_relation: ({ field, value }, grid) => ({
+    node: hasItems(value) ? <ReverseRelationChips field={field} value={value} /> : grid ? gridEmpty : detailEmpty,
+    wrapClass: grid ? GRID_TRUNCATE : null,
+  }),
+  attachment: ({ value }, grid) => ({
+    node: hasItems(value) ? <AttachmentChips value={value} /> : grid ? gridEmpty : detailEmpty,
+    wrapClass: grid ? GRID_TRUNCATE : null,
+  }),
+};
+
+export function cellDisplayContent(p: CellDisplayProps): CellDisplayContent | null {
+  const entry = DEDICATED_DISPLAYS[p.field.field_type];
+  return entry ? entry(p, p.variant === "grid") : null;
 }
