@@ -1,5 +1,5 @@
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
-import { parseFieldOptions } from "./database-values";
+import { isSingleOptionKind, parseFieldOptions } from "./database-values";
 import type { SelectOptionLike } from "./database-values";
 
 // 看板/日历视图纯逻辑（项目说明书 11 节：分组求值需单测）
@@ -50,9 +50,9 @@ export function cellValueForGroup(groupKey: string): CellValue {
   return groupKey === NO_GROUP ? null : groupKey;
 }
 
-/** 默认看板分组字段：第一个单选字段；没有则 null（UI 提示先建单选字段） */
+/** 默认看板分组字段：第一个「一格一选项」的字段（单选 / 状态）；没有则 null（UI 提示先建这类字段） */
 export function defaultBoardField(fields: DatabaseField[]): DatabaseField | null {
-  return fields.find((f) => f.field_type === "single_select") ?? null;
+  return fields.find((f) => isSingleOptionKind(f.field_type)) ?? null;
 }
 
 // ---------- 日历 ----------

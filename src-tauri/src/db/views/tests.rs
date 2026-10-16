@@ -702,6 +702,54 @@ fn duplicate_copies_database_fields_rows_cells_and_row_documents() {
     assert_eq!(src_cells, 2);
 }
 
+/// 复制视图要连父子行层级一起搬：parent_id 重映射到副本里的新行；
+/// 指向回收站行（不随副本带走）的引用降级成顶层行，不能留一个跨表的幽灵父 id。
+#[test]
+fn duplicate_remaps_row_parent_links() {
+    let conn = setup();
+    create(&conn, "g1", "w1", None, "表", "grid", "{}", None).unwrap();
+    conn.execute(
+        "INSERT INTO database_rows(id, database_view_id, position, parent_id, is_trash, created_at, updated_at)
+         VALUES ('p1','g1',0,NULL,0,1,1),
+                ('c1','g1',1,'p1',0,1,1),
+                ('c2','g1',2,'t1',0,1,1),
+                ('t1','g1',3,NULL,1,1,1)",
+        [],
+    )
+    .unwrap();
+
+    duplicate(&conn, "g1", "g1copy", "表 副本").unwrap();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, parent_id FROM database_rows WHERE database_view_id = 'g1copy' ORDER BY position",
+        )
+        .unwrap();
+    let copied: Vec<(String, Option<String>)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        copied,
+        vec![
+            ("g1copy_r0".into(), None),
+            ("g1copy_r1".into(), Some("g1copy_r0".into())),
+            ("g1copy_r2".into(), None),
+        ],
+        "层级要跟着搬，父行没被带走的要回落成顶层"
+    );
+    // 源表原样不动
+    let src_parent: Option<String> = conn
+        .query_row(
+            "SELECT parent_id FROM database_rows WHERE id = 'c1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(src_parent.as_deref(), Some("p1"));
+}
+
 #[test]
 fn duplicate_missing_source_and_derived_view_are_rejected() {
     let conn = setup();

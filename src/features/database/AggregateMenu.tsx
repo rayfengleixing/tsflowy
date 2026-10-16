@@ -62,6 +62,12 @@ export function AggregateMenu(props: {
             {candidate === fn && <span className="text-brand-600">✓</span>}
           </DropdownMenuItem>
         ))}
+        {fn === "share" && (
+          <>
+            <DropdownMenuSeparator />
+            <p className="px-2 py-1 text-[11px] leading-4 text-neutral-400">{t("aggregate.shareScope")}</p>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

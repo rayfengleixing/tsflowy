@@ -3,10 +3,13 @@ import type { CellValue, DatabaseField, DatabaseRow, FieldType } from "@/types/d
 import { UNGROUPED } from "@/lib/database-query";
 import { t } from "@/lib/i18n";
 import {
+  collapsedAncestorsOfRow,
   deriveGridCore,
   deriveGridModel,
   deleteCheckedRows,
   duplicateCheckedRows,
+  groupPathOfRow,
+  planRowDrop,
   toggleAllRowsChecked,
   toggleRowChecked,
   type BulkRowEffects,
@@ -14,12 +17,19 @@ import {
   type GridDataInput,
   type GridModel,
   type GridUiInput,
+  type RowDropMode,
 } from "./grid-view-model";
+import type { GridFlatLine } from "./grid-view-helpers";
+
+type HeaderLine = Extract<GridFlatLine, { kind: "header" }>;
+type SubtotalLine = Extract<GridFlatLine, { kind: "subtotal" }>;
+type RowLine = Extract<GridFlatLine, { kind: "row" }>;
 
 const field = (id: string, field_type: FieldType, extra: Partial<DatabaseField> = {}): DatabaseField =>
   ({ id, field_type, is_hidden: 0, options: "{}", ...extra }) as DatabaseField;
 const row = (id: string): DatabaseRow => ({ id }) as DatabaseRow;
 const graph = (entries: [string, Record<string, CellValue>][]): CellGraph => Object.fromEntries(entries);
+const tagOptions = JSON.stringify({ kind: "select", options: [{ id: "t1", name: "甲" }] });
 
 type Input = GridDataInput & GridUiInput;
 
@@ -32,8 +42,9 @@ function input(over: Partial<Input> = {}): Input {
     filters: [],
     filterMode: "and",
     sorts: [],
-    groupFieldId: null,
+    groupFieldIds: [],
     collapsedGroups: new Set<string>(),
+    collapsedRows: new Set<string>(),
     checkedRows: new Set<string>(),
     aggregates: {},
     ...over,
@@ -43,8 +54,8 @@ function input(over: Partial<Input> = {}): Input {
 /** 测试里数据与交互状态一把给全；正式代码由适配层分两段 memo（见下面的引用稳定性用例） */
 const model = (over: Partial<Input> = {}): GridModel => {
   const i = input(over);
-  const { checkedRows, collapsedGroups, aggregates } = i;
-  return deriveGridModel(deriveGridCore(i), { checkedRows, collapsedGroups, aggregates });
+  const { checkedRows, collapsedGroups, collapsedRows, aggregates } = i;
+  return deriveGridModel(deriveGridCore(i), { checkedRows, collapsedGroups, collapsedRows, aggregates });
 };
 
 describe("派生：可见列与行序", () => {
@@ -89,12 +100,12 @@ describe("派生：可见列与行序", () => {
   });
 
   it("分组字段被删除或改成不可分组的类型时回落成不分组", () => {
-    expect(model({ fields: [field("name", "text")], groupFieldId: "not-exist" }).groupField).toBeNull();
+    expect(model({ fields: [field("name", "text")], groupFieldIds: ["not-exist"] }).groupFields).toEqual([]);
     const changed = model({
       fields: [field("name", "text"), field("tag", "attachment")],
-      groupFieldId: "tag",
+      groupFieldIds: ["tag"],
     });
-    expect(changed.groupField).toBeNull();
+    expect(changed.groupFields).toEqual([]);
     expect(changed.groups).toBeNull();
     expect(changed.flatLines.map((l) => l.kind)).toEqual(["row", "row"]);
   });
@@ -103,10 +114,10 @@ describe("派生：可见列与行序", () => {
     const i = input({
       fields: [field("name", "text"), field("tag", "single_select")],
       sorts: [{ field_id: "name", dir: "asc" }],
-      groupFieldId: "tag",
+      groupFieldIds: ["tag"],
     });
     const core = deriveGridCore(i);
-    const base = { collapsedGroups: new Set<string>(), aggregates: {} };
+    const base = { collapsedGroups: new Set<string>(), collapsedRows: new Set<string>(), aggregates: {} };
     const a = deriveGridModel(core, { ...base, checkedRows: new Set(["r1"]) });
     const b = deriveGridModel(core, { ...base, checkedRows: new Set(["r1", "r2"]), collapsedGroups: new Set(["x"]) });
     // 同一引用才说明适配层的 useMemo 边界没被打穿
@@ -156,7 +167,7 @@ describe("派生：分组摊平", () => {
       ["r2", { tag: "t1" }],
       ["r3", { tag: null }],
     ]),
-    groupFieldId: "tag",
+    groupFieldIds: ["tag"],
   };
 
   it("桶按选项定义顺序、空值桶恒最后；组标题用选项名", () => {
@@ -204,6 +215,87 @@ describe("派生：分组摊平", () => {
     expect(model({ ...grouped, collapsedGroups: new Set(["t2", "t1"]) }).collapsedKey).toBe("t2|t1");
   });
 
+  describe("多级分组摊平", () => {
+    const owner = JSON.stringify({
+      kind: "select",
+      options: [
+        { id: "u1", name: "张三" },
+        { id: "u2", name: "李四" },
+      ],
+    });
+    const nested: Partial<Input> = {
+      fields: [
+        field("name", "text"),
+        field("tag", "single_select", { options }),
+        field("owner", "single_select", { options: owner }),
+      ],
+      rows: [row("r1"), row("r2"), row("r3"), row("r4")],
+      cells: graph([
+        ["r1", { tag: "t1", owner: "u2" }],
+        ["r2", { tag: "t1", owner: "u1" }],
+        ["r3", { tag: "t2", owner: "u1" }],
+        ["r4", { tag: "t1", owner: "u1" }],
+      ]),
+      groupFieldIds: ["tag", "owner"],
+    };
+    const kinds = (m: GridModel) => m.flatLines.map((l) => l.kind);
+
+    it("组头按层级带 depth，小计在整棵子树末尾", () => {
+      const m = model(nested);
+      // 甲(t1) → 张三(u1){r2,r4} → 李四(u2){r1} → 乙(t2) → 张三(u1){r3}
+      expect(kinds(m)).toEqual(["header", "header", "row", "row", "header", "row", "header", "header", "row"]);
+      const heads = m.flatLines.filter((l): l is HeaderLine => l.kind === "header");
+      expect(heads.map((l) => [l.key, l.depth, l.label, l.count])).toEqual([
+        ["t1", 0, "甲", 3],
+        ["t1/u1", 1, "张三", 2],
+        ["t1/u2", 1, "李四", 1],
+        ["t2", 0, "乙", 1],
+        ["t2/u1", 1, "张三", 1],
+      ]);
+    });
+
+    it("每层都出小计：父层小计覆盖其全部下层行", () => {
+      const m = model({ ...nested, aggregates: { name: "count" } });
+      const subs = m.flatLines.filter((l): l is SubtotalLine => l.kind === "subtotal");
+      expect(subs.map((l) => [l.key, l.rowIds])).toEqual([
+        ["t1/u1", ["r2", "r4"]],
+        ["t1/u2", ["r1"]],
+        ["t1", ["r1", "r2", "r4"]],
+        ["t2/u1", ["r3"]],
+        ["t2", ["r3"]],
+      ]);
+    });
+
+    it("折叠按 path 记账：折父层收掉整棵子树，折子层只收自己", () => {
+      // 折 t1：只剩 t1 组头 + t2 的子树
+      expect(kinds(model({ ...nested, collapsedGroups: new Set(["t1"]) }))).toEqual([
+        "header",
+        "header",
+        "header",
+        "row",
+      ]);
+      expect(kinds(model({ ...nested, collapsedGroups: new Set(["t1/u1"]) }))).toEqual([
+        "header",
+        "header",
+        "header",
+        "row",
+        "header",
+        "header",
+        "row",
+      ]);
+    });
+
+    it("groupPathOfRow 给出从顶层到叶子的折叠链，行不在组里则为空", () => {
+      const m = model(nested);
+      expect(m.groups ? groupPathOfRow(m.groups, "r1") : null).toEqual(["t1", "t1/u2"]);
+      expect(m.groups ? groupPathOfRow(m.groups, "r3") : null).toEqual(["t2", "t2/u1"]);
+      expect(m.groups ? groupPathOfRow(m.groups, "ghost") : null).toEqual([]);
+      // 单层分组时链就是那一层的 key（与折叠集里存的键一致）
+      const one = model(grouped);
+      expect(one.groups ? groupPathOfRow(one.groups, "r1") : null).toEqual(["t2"]);
+    });
+  });
+
   it("字段类型变了：不在候选里的历史汇总回落成计数", () => {
     const m = model({ fields: [field("name", "text"), field("n", "number")], aggregates: { name: "sum" } });
     expect(m.aggregateOf(field("name", "text"))).toBe("count");
@@ -215,6 +307,78 @@ describe("派生：分组摊平", () => {
   it("可分组候选只来自可见列", () => {
     const m = model({ fields: [field("tag", "single_select"), field("hidden", "text", { is_hidden: 1 })] });
     expect(m.groupableFields.map((f) => f.id)).toEqual(["tag"]);
+  });
+});
+
+describe("父子行层级摊平", () => {
+  const prow = (id: string, parent_id: string | null = null): DatabaseRow => ({ id, parent_id }) as DatabaseRow;
+  // 树形：t1 → c1 → g1，t1 → c2，t2 独立
+  const tree: Partial<Input> = {
+    fields: [field("name", "text")],
+    rows: [prow("t1"), prow("c1", "t1"), prow("g1", "c1"), prow("c2", "t1"), prow("t2")],
+  };
+  const tag: Partial<Input> = {
+    fields: [field("name", "text"), field("tag", "single_select", { options: tagOptions })],
+    rows: tree.rows,
+    cells: graph([
+      ["t1", { tag: "t1" }],
+      ["c1", { tag: "t1" }],
+    ]),
+    groupFieldIds: ["tag"],
+  };
+  const rowLines = (m: GridModel) => m.flatLines.filter((l): l is RowLine => l.kind === "row");
+  const shape = (m: GridModel) => rowLines(m).map((l) => [l.row.id, l.depth, l.hasChildren, l.collapsed]);
+
+  it("一张表没有任何父子关系时行序与条目形状保持原样", () => {
+    const m = model({ ...tree, rows: [prow("r1"), prow("r2")] });
+    expect(m.flatLines).toEqual([
+      { kind: "row", row: prow("r1") },
+      { kind: "row", row: prow("r2") },
+    ]);
+  });
+
+  it("深度优先：父行紧跟它的子树，兄弟行沿用行序", () => {
+    expect(shape(model(tree))).toEqual([
+      ["t1", 1, true, false],
+      ["c1", 2, true, false],
+      ["g1", 3, false, false],
+      ["c2", 2, false, false],
+      ["t2", 1, false, false],
+    ]);
+  });
+
+  it("折叠父行收掉整棵子树，父行自身仍占一行并标 collapsed", () => {
+    expect(shape(model({ ...tree, collapsedRows: new Set(["t1"]) }))).toEqual([
+      ["t1", 1, true, true],
+      ["t2", 1, false, false],
+    ]);
+    // 折叠中间层只收它自己下面的子树
+    expect(shape(model({ ...tree, collapsedRows: new Set(["c1"]) }))).toEqual([
+      ["t1", 1, true, false],
+      ["c1", 2, true, true],
+      ["c2", 2, false, false],
+      ["t2", 1, false, false],
+    ]);
+  });
+
+  it("折叠键：分组模式记组，未分组模式记折叠的父行", () => {
+    expect(model({ ...tree, collapsedRows: new Set(["c1", "t1"]) }).collapsedKey).toBe("c1|t1");
+    expect(model({ ...tag, collapsedGroups: new Set(["t1"]) }).collapsedKey).toBe("t1");
+  });
+
+  it("分组模式下不按行层级展开（组内顺序沿用行序，条目不带 depth）", () => {
+    // 折叠的父行在分组模式里不生效：行的父子关系只用于未分组的树形展开
+    const m = model({ ...tag, collapsedRows: new Set(["t1"]) });
+    expect(rowLines(m).map((l) => l.row.id)).toEqual(["t1", "c1", "g1", "c2", "t2"]);
+    expect(rowLines(m).every((l) => l.depth === undefined)).toBe(true);
+  });
+
+  it("collapsedAncestorsOfRow 给出被折叠的祖先链，行不在集合里为空", () => {
+    const rows = [prow("t1"), prow("c1", "t1"), prow("g1", "c1")];
+    expect(collapsedAncestorsOfRow(rows, new Set(["t1", "c1"]), "g1")).toEqual(["t1", "c1"]);
+    expect(collapsedAncestorsOfRow(rows, new Set(["c1"]), "g1")).toEqual(["c1"]);
+    expect(collapsedAncestorsOfRow(rows, new Set(["t1"]), "t1")).toEqual([]);
+    expect(collapsedAncestorsOfRow(rows, new Set(), "ghost")).toEqual([]);
   });
 });
 
@@ -284,5 +448,39 @@ describe("批量行命令", () => {
     const failedDup = effects({ duplicateRows: vi.fn(() => Promise.reject(boom)) });
     await duplicateCheckedRows(["r1"], failedDup);
     expect(failedDup.calls).toEqual(["log", `err:${t("error.db", { message: String(boom) })}`]);
+  });
+});
+
+describe("拖拽落点意图", () => {
+  const prow = (id: string, parent_id: string | null = null): DatabaseRow => ({ id, parent_id }) as DatabaseRow;
+  const tree = [prow("t1"), prow("c1", "t1"), prow("g1", "c1"), prow("c2", "t1"), prow("t2")];
+  const drop = (draggingId: string, targetId: string, mode: RowDropMode, rows = tree) =>
+    planRowDrop({ rows, draggingId, targetId, mode });
+
+  it("普通拖拽沿用行序搬运：落到目标行当前那个位置", () => {
+    expect(drop("t2", "c1", "move")).toEqual({ kind: "reorder", ids: ["t1", "t2", "c1", "g1", "c2"] });
+  });
+
+  it("Alt 拖到可当父行的行上 → 改挂父级，行序不动", () => {
+    expect(drop("t2", "c1", "nest")).toEqual({ kind: "reparent", rowId: "t2", parentId: "c1" });
+  });
+
+  it("Alt 拖到自己的后代上不算嵌套，回落成普通改顺序", () => {
+    // t1 的后代是 c1/g1/c2：把它们当父行会成环，此时宁可只做一次 reorder
+    expect(drop("t1", "g1", "nest")).toEqual({ kind: "reorder", ids: ["c1", "g1", "t1", "c2", "t2"] });
+  });
+
+  it("Alt 拖到会挤爆四层限额的行上同样回落成改顺序", () => {
+    const chain = [prow("l1"), prow("l2", "l1"), prow("l3", "l2"), prow("l4", "l3")];
+    // l1 下面已经挂满三层，任何行都不能再当它的父行
+    expect(drop("l1", "l4", "nest", chain)?.kind).toBe("reorder");
+    // 叶子行 l4 往上挂是合法的
+    expect(drop("l4", "l2", "nest", chain)).toEqual({ kind: "reparent", rowId: "l4", parentId: "l2" });
+  });
+
+  it("拖到自己或不在行集里的行：什么都不做", () => {
+    expect(drop("t1", "t1", "move")).toBeNull();
+    expect(drop("ghost", "t1", "nest")).toBeNull();
+    expect(drop("t1", "ghost", "nest")).toBeNull();
   });
 });

@@ -15,7 +15,8 @@ import { useRelationStore } from "@/stores/relation";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
-import type { FilterMode, FilterSpec, SortSpec } from "@/lib/database-query";
+import { pruneFiltersByFields, type FilterMode, type FilterNode, type SortSpec } from "@/lib/database-query";
+import { duplicateParentMap } from "@/lib/database-hierarchy";
 import { patchViewConfig, readViewConfig } from "@/lib/view-config";
 import type { View } from "@/types/models";
 
@@ -42,10 +43,10 @@ export interface DatabaseState {
 
   // 排序/筛选（持久化到 views.extra）
   sorts: SortSpec[];
-  filters: FilterSpec[];
+  filters: FilterNode[];
   filterMode: FilterMode;
   setSorts: (sorts: SortSpec[]) => void;
-  setFilters: (filters: FilterSpec[], mode: FilterMode) => void;
+  setFilters: (filters: FilterNode[], mode: FilterMode) => void;
 
   load: (view: View) => Promise<void>;
   reload: () => Promise<void>;
@@ -63,7 +64,8 @@ export interface DatabaseState {
   removeSelectOption: (id: string, optionId: string) => Promise<void>;
 
   // 行
-  addRow: () => Promise<DatabaseRow | null>;
+  /** 新建行；parentId 非空即建在该行之下（表格层级，超深/成环由 Rust 侧拒绝） */
+  addRow: (parentId?: string | null) => Promise<DatabaseRow | null>;
   /** 批量建行（TSV 粘贴）：一次 IPC 一个事务 */
   addRows: (count: number) => Promise<DatabaseRow[]>;
   /** 删一行 = 进回收站（可在「已删除的行」里恢复） */
@@ -82,6 +84,8 @@ export interface DatabaseState {
   /** 复制所选行：新建行并复制其单元格值（含公式引用之外的存储值），返回新行 */
   duplicateRows: (ids: string[]) => Promise<DatabaseRow[]>;
   reorderRows: (orderedIds: string[]) => Promise<void>;
+  /** 改父行（null = 升到顶层）：层级是行的结构属性，不进单元格 */
+  setRowParent: (rowId: string, parentId: string | null) => Promise<void>;
 
   // 单元格
   setCell: (rowId: string, fieldId: string, value: CellValue) => Promise<void>;
@@ -211,7 +215,7 @@ export function createDatabaseStore() {
           const ids = new Set(fields.map((f) => f.id));
           const cur = get();
           const nextSorts = cur.sorts.filter((s) => ids.has(s.field_id));
-          const nextFilters = cur.filters.filter((f) => ids.has(f.field_id));
+          const nextFilters = pruneFiltersByFields(cur.filters, ids);
           if (nextSorts.length !== cur.sorts.length || nextFilters.length !== cur.filters.length) {
             set({ sorts: nextSorts, filters: nextFilters });
             patchViewConfig(view, { sorts: nextSorts, filters: nextFilters });
@@ -293,7 +297,7 @@ export function createDatabaseStore() {
           cells[rowId] = rest;
         }
         const sorts = get().sorts.filter((s) => s.field_id !== id);
-        const filters = get().filters.filter((f) => f.field_id !== id);
+        const filters = pruneFiltersByFields(get().filters, new Set(get().fields.map((f) => f.id)));
         set({ cells, sorts, filters });
         // 必须同步回写 extra：只改内存的话，重开页面仍会读回已删字段的排序/筛选（悬空引用）
         const view = get().view;
@@ -342,7 +346,8 @@ export function createDatabaseStore() {
         if (!field) return null;
         const opts = parseFieldOptions(field.options);
         if (opts.kind !== "select") return null;
-        const option = newSelectOption(name);
+        // 状态字段新建的选项（粘贴 / 筛选输入等）默认落在「待办」阶段
+        const option = newSelectOption(name, field.field_type === "status" ? "todo" : undefined);
         const next: FieldOptions = { ...opts, options: [...opts.options, option] };
         await databaseApi.updateFieldOptions(id, next);
         set({ fields: get().fields.map((f) => (f.id === id ? { ...f, options: JSON.stringify(next) } : f)) });
@@ -358,10 +363,10 @@ export function createDatabaseStore() {
         await get().updateFieldOptions(id, { ...opts, options: opts.options.filter((o) => o.id !== optionId) });
       },
 
-      addRow: async () => {
+      addRow: async (parentId) => {
         const viewId = get().viewId;
         if (!viewId) return null;
-        const row = await databaseApi.createRow(viewId);
+        const row = await databaseApi.createRow(viewId, parentId ?? null);
         set({ rows: [...get().rows, row] });
         return row;
       },
@@ -436,11 +441,28 @@ export function createDatabaseStore() {
           for (const u of updates) {
             cells[u.rowId] = { ...(cells[u.rowId] ?? {}), [u.fieldId]: u.value };
           }
-          set({ rows: [...get().rows, ...created], cells });
-        } else {
-          set({ rows: [...get().rows, ...created] });
+          set({ cells });
         }
-        return created;
+        // 父子关系跟着复制走：同批里复制出来的父行换成新父行，父行没被勾选的仍挂原父行下。
+        // 单条挂接失败只让那一个副本留在顶层，不该毁掉整次复制（值已经搬完了）
+        const parents = duplicateParentMap(
+          get().rows,
+          ordered.map((r) => r.id),
+          created.map((r) => r.id),
+        );
+        const newRows = [...created];
+        for (let i = 0; i < newRows.length; i++) {
+          const parentId = parents[i];
+          if (!parentId) continue;
+          try {
+            await databaseApi.setRowParent(newRows[i].id, parentId);
+            newRows[i] = { ...newRows[i], parent_id: parentId };
+          } catch (e) {
+            logger.error("duplicate row parent failed", e);
+          }
+        }
+        set({ rows: [...get().rows, ...newRows] });
+        return newRows;
       },
 
       reorderRows: async (orderedIds) => {
@@ -453,6 +475,19 @@ export function createDatabaseStore() {
             const row = byId.get(id);
             return row ? [{ ...row, position: i }] : [];
           }),
+        });
+      },
+
+      setRowParent: async (rowId, parentId) => {
+        await databaseApi.setRowParent(rowId, parentId);
+        // 行映射整体换新：原地改旧 state 的行对象会让按引用比较的记忆化消费方漏掉更新
+        const rows = get().rows.map((r) => (r.id === rowId ? { ...r, parent_id: parentId } : r));
+        const detail = get().rowDetail;
+        const updated = rows.find((r) => r.id === rowId);
+        set({
+          rows,
+          // 详情面板读的是 rowDetail.row，这份也要跟着换，否则改完父行面板上还挂着旧的
+          rowDetail: detail && updated && detail.row.id === rowId ? { ...detail, row: updated } : detail,
         });
       },
 

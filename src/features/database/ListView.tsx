@@ -3,8 +3,8 @@ import { ExternalLink, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
-import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
-import { formatCellValue, parseFieldOptions, sparseGet } from "@/lib/database-values";
+import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
+import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { useRelationDbs } from "./use-database-data";
 import { Button } from "@/components/ui/button";
 import { CellReadValue } from "./cell-display";
@@ -105,7 +105,7 @@ export function ListView({
                 row={row}
                 primaryField={primaryField}
                 propFields={propFields}
-                rowCells={sparseGet(evaluated, row.id) ?? sparseGet(cells, row.id) ?? {}}
+                rowCells={rowCellsOf(evaluated, cells, row.id)}
                 focused={focusRowId === row.id}
                 onOpenDetail={() => void openRowDetail(row, source)}
               />

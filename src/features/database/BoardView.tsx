@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Plus, ExternalLink, LayoutList } from "lucide-react";
+import { ChevronDown, ChevronRight, Check, Plus, ExternalLink, LayoutList } from "lucide-react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
 import { NO_GROUP, cellValueForGroup, defaultBoardField, groupRowsForBoard } from "@/lib/board-calendar";
-import { formatCellValue, isOptionBearing, parseFieldOptions } from "@/lib/database-values";
+import { formatCellValue, isOptionBearing, isSingleOptionKind, parseFieldOptions } from "@/lib/database-values";
 import { relationCellText, relationTarget, type RelationDb } from "@/lib/relation";
 import { useRelationDbs } from "./use-database-data";
 import { Button } from "@/components/ui/button";
@@ -70,7 +70,7 @@ export function BoardView({
   useEffect(() => {
     if (fields.length === 0) return;
     const def = defaultBoardField(fields);
-    if (groupFieldId && fields.some((f) => f.id === groupFieldId && f.field_type === "single_select")) {
+    if (groupFieldId && fields.some((f) => f.id === groupFieldId && isSingleOptionKind(f.field_type))) {
       return;
     }
     setGroupFieldId(def?.id ?? null);
@@ -79,7 +79,7 @@ export function BoardView({
   const visibleFields = useMemo(() => fields.filter((f) => f.is_hidden === 0), [fields]);
   const primaryField = visibleFields[0] ?? null;
   const groupField = fields.find((f) => f.id === groupFieldId) ?? null;
-  const selectFields = useMemo(() => fields.filter((f) => f.field_type === "single_select"), [fields]);
+  const selectFields = useMemo(() => fields.filter((f) => isSingleOptionKind(f.field_type)), [fields]);
 
   const cardCandidates = useMemo(() => visibleFields.slice(1), [visibleFields]);
   const defaultCardFieldIds = useMemo(() => cardCandidates.slice(0, 3).map((f) => f.id), [cardCandidates]);
@@ -301,6 +301,8 @@ export function BoardView({
                     ) : null}
                     <div className="min-w-0 flex-1 text-xs font-medium text-neutral-800">
                       {isUngrouped ? t("board.ungrouped") : (group.option?.name ?? group.key)}
+                      {/* 状态字段的「已完成」阶段：列头打勾，一眼看出哪列是收尾列 */}
+                      {group.option?.tone === "done" && <Check className="ml-1 inline h-3 w-3 text-green-600" />}
                       <span className="ml-1.5 text-[10px] font-normal text-neutral-400">{group.rows.length}</span>
                     </div>
                     <button

@@ -141,7 +141,7 @@ describe("cellToCsv / buildCsvExport", () => {
     },
   ];
   const rows: DatabaseRow[] = [
-    { id: "r1", database_view_id: "v", position: 0, document_id: null, created_at: 0, updated_at: 0 },
+    { id: "r1", database_view_id: "v", position: 0, document_id: null, parent_id: null, created_at: 0, updated_at: 0 },
   ];
   const cells = { r1: { f1: "苹果", f2: 3, f3: ["水果", "红色"] } };
 
@@ -316,8 +316,24 @@ describe("选择类导出", () => {
     const out = buildCsvExport(
       selectFields,
       [
-        { id: "r1", database_view_id: "v", position: 0, document_id: null, created_at: 0, updated_at: 0 },
-        { id: "r2", database_view_id: "v", position: 1, document_id: null, created_at: 0, updated_at: 0 },
+        {
+          id: "r1",
+          database_view_id: "v",
+          position: 0,
+          document_id: null,
+          parent_id: null,
+          created_at: 0,
+          updated_at: 0,
+        },
+        {
+          id: "r2",
+          database_view_id: "v",
+          position: 1,
+          document_id: null,
+          parent_id: null,
+          created_at: 0,
+          updated_at: 0,
+        },
       ],
       { r1: { s1: "o2", m1: ["o1", "x9"] } },
     );

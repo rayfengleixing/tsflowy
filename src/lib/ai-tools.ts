@@ -264,12 +264,13 @@ async function coerceCell(field: DatabaseField, raw: unknown): Promise<CellValue
       const items = Array.isArray(raw) ? raw : text.split(/[,，、]/);
       return items.map((x) => optionId(cellText(x))).filter(Boolean);
     }
-    case "single_select": {
+    case "single_select":
+    case "status": {
       const name = text.trim();
       if (!name) return null;
       if (opts.kind === "select" && !opts.options.some((o) => o.name.toLowerCase() === name.toLowerCase())) {
         // 新选项：直接补进字段配置，否则模型每次写新值都会落成一个裸 id
-        const option = newSelectOption(name);
+        const option = newSelectOption(name, type === "status" ? "todo" : undefined);
         await databaseApi.updateFieldOptions(field.id, { kind: "select", options: [...opts.options, option] });
         return option.id;
       }

@@ -113,6 +113,16 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "views_layout_form",
         sql: include_str!("../../../migrations/021_views_layout_form.sql"),
     },
+    Migration {
+        version: 22,
+        description: "database_fields_check_status",
+        sql: include_str!("../../../migrations/022_database_fields_check_status.sql"),
+    },
+    Migration {
+        version: 23,
+        description: "database_rows_parent",
+        sql: include_str!("../../../migrations/023_database_rows_parent.sql"),
+    },
 ];
 
 /// 自带事务的迁移：重建表改 CHECK 约束需要两个连接级 PRAGMA，而它们在事务内是 no-op，
@@ -121,7 +131,7 @@ pub const MIGRATIONS: &[Migration] = &[
 ///     把子表数据一并清空；
 ///   - legacy_alter_table=ON：RENAME 默认会重解析整个 schema 以改写其它对象里的引用，
 ///     而此刻旧表已删、其它触发器仍引用它，重解析会报 "no such table"。
-const OWN_TRANSACTION_VERSIONS: &[i64] = &[12, 13, 14, 15, 20, 21];
+const OWN_TRANSACTION_VERSIONS: &[i64] = &[12, 13, 14, 15, 20, 21, 22];
 
 pub fn ensure_migrated(conn: &rusqlite::Connection) -> Result<(), String> {
     ensure_migrated_with(conn, MIGRATIONS)
@@ -1347,6 +1357,172 @@ mod tests {
             .query_row("PRAGMA legacy_alter_table", [], |r| r.get(0))
             .unwrap();
         assert_eq!(legacy, 0, "迁移后必须恢复 legacy_alter_table=OFF");
+    }
+
+    /// 022 扩展字段类型白名单加 'status'：存量库升级后既能建状态字段，又不能写白名单外的类型；
+    /// 重建字段表不得级联清掉单元格，索引与 FTS 重建触发器要原样回来。
+    #[test]
+    fn migration_022_extends_field_check_for_status() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_older_than(&conn, 22);
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute(
+            "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ('w1','W',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at)
+             VALUES ('v1','w1','任务表','grid','{}',0,1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO database_fields(id, database_view_id, name, field_type, options, width, is_hidden, position)
+             VALUES ('f1','v1','标题','text','{}',180,0,0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO database_fields(id, database_view_id, name, field_type, options, width, is_hidden, position)
+             VALUES ('f2','v1','优先级','single_select','{\"kind\":\"select\",\"options\":[]}',120,0,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO database_rows(id, database_view_id, position, created_at, updated_at) VALUES ('r1','v1',0,1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO database_cells(row_id, field_id, value) VALUES ('r1','f1','"甲"'),('r1','f2','"opt_1"')"#,
+            [],
+        )
+        .unwrap();
+
+        ensure_migrated(&conn).unwrap();
+
+        let cells: i64 = conn
+            .query_row("SELECT COUNT(*) FROM database_cells", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cells, 2, "重建字段表不能级联删除单元格");
+        let kept: String = conn
+            .query_row(
+                "SELECT field_type FROM database_fields WHERE id = 'f2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, "single_select", "存量字段的类型要在重建后原样保留");
+
+        // 新类型可写入
+        conn.execute(
+            "INSERT INTO database_fields(id, database_view_id, name, field_type, options, width, is_hidden, position)
+             VALUES ('f3','v1','状态','status','{\"kind\":\"select\",\"options\":[]}',120,0,2)",
+            [],
+        )
+        .unwrap_or_else(|e| panic!("status 应被 CHECK 接受: {e}"));
+        // 白名单外的类型仍被拒绝
+        let err = conn
+            .execute(
+                "INSERT INTO database_fields(id, database_view_id, name, field_type, options, width, is_hidden, position)
+                 VALUES ('f9','v1','x','ghost_type','{}',180,0,3)",
+                [],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("CHECK"), "{err}");
+
+        let fk: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk, 1, "迁移后必须恢复 foreign_keys=ON");
+        let legacy: i64 = conn
+            .query_row("PRAGMA legacy_alter_table", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(legacy, 0, "迁移后必须恢复 legacy_alter_table=OFF");
+
+        let objs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE tbl_name = 'database_fields'
+                   AND name IN ('idx_fields_db_view', 'trg_fields_fts_rebuild')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            objs, 2,
+            "idx_fields_db_view 与 trg_fields_fts_rebuild 都要重建"
+        );
+    }
+
+    /// 存量库（1–22 已应用、已有行）升到 023：给 database_rows 加自引用的 parent_id。
+    /// SQLite 只允许「默认值为 NULL」的 REFERENCES 新列，所以存量行必须原样保住并全部落在顶层，
+    /// 且新列立刻带上 FK 语义（幽灵父行被拒、父行彻底删除时子行脱钩）。
+    #[test]
+    fn migration_023_adds_row_parent_column_to_existing_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_older_than(&conn, 23);
+        // 模拟生产连接：迁移前 FK 已是开启状态
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute(
+            "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ('w1','W',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at)
+             VALUES ('v1','w1','任务表','grid','{}',0,1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO database_rows(id, database_view_id, position, created_at, updated_at)
+             VALUES ('r1','v1',0,1,1),('r2','v1',1,1,1)",
+            [],
+        )
+        .unwrap();
+
+        ensure_migrated(&conn).unwrap();
+
+        let parents: Vec<Option<String>> = {
+            let mut stmt = conn
+                .prepare("SELECT parent_id FROM database_rows ORDER BY id")
+                .unwrap();
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(parents.len(), 2, "加列不能动存量行");
+        assert!(
+            parents.iter().all(|p| p.is_none()),
+            "存量行应全部落在顶层: {parents:?}"
+        );
+
+        conn.execute(
+            "UPDATE database_rows SET parent_id = 'r1' WHERE id = 'r2'",
+            [],
+        )
+        .unwrap();
+        let err = conn
+            .execute(
+                "INSERT INTO database_rows(id, database_view_id, position, parent_id, created_at, updated_at)
+                 VALUES ('r3','v1',2,'ghost',1,1)",
+                [],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("FOREIGN KEY"), "{err}");
+
+        conn.execute("DELETE FROM database_rows WHERE id = 'r1'", [])
+            .unwrap();
+        let after: Option<String> = conn
+            .query_row(
+                "SELECT parent_id FROM database_rows WHERE id = 'r2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(after, None, "父行彻底删除时子行要按 SET NULL 脱钩");
     }
 
     /// 016 曾因未注册而从未执行：全新安装必须真的有 ai_sessions 表，

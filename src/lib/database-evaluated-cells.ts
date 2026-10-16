@@ -1,5 +1,7 @@
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { computeRowFormulas } from "@/lib/database-formula";
+import { isComputedKind } from "@/lib/field-kinds";
+import { sparseGet } from "@/lib/database-values";
 import { computeReverseRelation, computeRollup, type RelationDb } from "@/lib/relation";
 
 // 计算列求值的共享入口（原在 features/database/grid-view-helpers.ts，Grid 专用）：
@@ -19,9 +21,7 @@ export function computeEvaluatedCells(
   fields: DatabaseField[],
   relationDbOf: (viewId: string) => RelationDb | undefined,
 ): { sortable: Record<string, Record<string, CellValue>>; display: Record<string, Record<string, CellValue>> } {
-  const hasComputed = fields.some(
-    (f) => f.field_type === "formula" || f.field_type === "rollup" || f.field_type === "reverse_relation",
-  );
+  const hasComputed = fields.some((f) => isComputedKind(f.field_type));
   if (!hasComputed) return { sortable: cells, display: cells };
   const hasFormula = fields.some((f) => f.field_type === "formula");
   const sortable: Record<string, Record<string, CellValue>> = {};
@@ -59,4 +59,16 @@ export function computeEvaluatedCells(
     display[row.id] = displayCopy ?? rowCells;
   }
   return { sortable, display };
+}
+
+/**
+ * 单行有效单元格：先取求值图（含公式/汇总/反向关系），没有条目再回落到存储图。
+ * 各视图渲染一行都要这一步，散着写就成了四份 `sparseGet(..) ?? sparseGet(..) ?? {}`。
+ */
+export function rowCellsOf(
+  evaluated: Record<string, Record<string, CellValue>>,
+  cells: Record<string, Record<string, CellValue>>,
+  rowId: string,
+): Record<string, CellValue> {
+  return sparseGet(evaluated, rowId) ?? sparseGet(cells, rowId) ?? {};
 }

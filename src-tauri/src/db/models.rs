@@ -196,6 +196,8 @@ pub struct DatabaseRowRow {
     pub database_view_id: String,
     pub position: i64,
     pub document_id: Option<String>,
+    /// 父行 id（NULL=顶层）。层级是行的结构属性，不是某一格的值，故独立成列而非单元格。
+    pub parent_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }

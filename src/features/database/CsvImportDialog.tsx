@@ -35,6 +35,7 @@ const IMPORT_TYPES: FieldType[] = [
   "rating",
   "currency",
   "date",
+  "status",
   "single_select",
   "multi_select",
   "checkbox",

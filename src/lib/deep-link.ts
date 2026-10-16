@@ -3,42 +3,69 @@
 // （App 未运行时协议直接拉起本进程，argv 由 deep-link 插件解析；已运行时新进程被
 // single-instance 拦截，Rust 侧把 argv 里的 URL 转成同名 deep-link://new-url 事件，见 src-tauri/src/{lib,desktop}.rs）。
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useRowFocusStore } from "@/stores/row-focus";
 import { findNode } from "@/lib/tree";
 import { logger } from "@/lib/logger";
 
 /** 冷启动排队等待树加载的超时：超时后认定目标页不存在（已删除/ID 过时），放弃并记日志 */
 const PENDING_TIMEOUT_MS = 15000;
 
+export interface DeepLinkTarget {
+  viewId: string;
+  /** `?row=<行 id>` 带来的行级目标；null = 只定位到页 */
+  rowId: string | null;
+}
+
 /**
- * 解析 `tsflowy://page/<viewId>` 形式的深链，返回 viewId；无法解析返回 null。
- * 容忍大小写宿主、尾部斜杠与 query/hash（query 部分不参与视图定位）。
+ * 行 id 只认 uuid 形态：深链是从外部浏览器点进来的，脏值会拼坏 rowFocus 里的
+ * `[data-row-id="…"]` 选择器（属性值里的引号直接让 querySelector 抛错）。
  */
-export function parseDeepLinkViewId(raw: string): string | null {
-  const m = /^tsflowy:\/\/page\/([^/?#]+)(?:[/?#].*)?$/i.exec(raw.trim());
-  if (!m) return null;
+const ROW_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+const decode = (value: string): string => {
   try {
-    return decodeURIComponent(m[1]);
+    return decodeURIComponent(value);
   } catch {
-    return m[1];
+    return value;
   }
+};
+
+/**
+ * 解析 `tsflowy://page/<viewId>[?row=<rowId>]` 形式的深链；无法解析返回 null。
+ * 容忍大小写宿主与尾部斜杠；hash 整段忽略，query 里只认 row，其余键（如旧的 ?mode=edit）不参与定位。
+ */
+export function parseDeepLink(raw: string): DeepLinkTarget | null {
+  const m = /^tsflowy:\/\/page\/([^/?#]+)(?:([/?#])(.*))?$/i.exec(raw.trim());
+  if (!m) return null;
+  // 只有以 `?` 起头的那一段才是 query；紧跟 `#` 的整串是 hash，不参与定位
+  const query = m[2] === "?" ? (m[3] || "").split("#")[0] : "";
+  const rowId = new URLSearchParams(query).get("row");
+  return { viewId: decode(m[1]), rowId: rowId !== null && ROW_ID_RE.test(rowId) ? rowId : null };
+}
+
+/** 行级 permalink：外部程序点它即拉起本 App，两个 id 都按 URL 组件转义 */
+export function rowPermalink(viewId: string, rowId: string): string {
+  return `tsflowy://page/${encodeURIComponent(viewId)}?row=${encodeURIComponent(rowId)}`;
 }
 
 /** 深链可能在树加载完成前到达（冷启动）：排队，树里出现该页面即打开；返回取消函数 */
-function openViewWhenReady(viewId: string): () => void {
+function openViewWhenReady(target: DeepLinkTarget): () => void {
   let settled = false;
   const check = () => {
     if (settled) return;
     const s = useWorkspaceStore.getState();
-    if (findNode(s.tree, viewId)) {
+    if (findNode(s.tree, target.viewId)) {
       settle();
-      s.openView(viewId);
+      s.openView(target.viewId);
+      // 行级定位复用搜索命中那一套：视图侧已负责滚动到行、展开折叠的分组与短时高亮
+      if (target.rowId) useRowFocusStore.getState().setFocusRow(target.rowId);
     }
   };
   const unsubscribe = useWorkspaceStore.subscribe(check);
   const timer = setTimeout(() => {
     if (!settled) {
       settle();
-      logger.warn("deep-link", `view not found in tree, ignored`, viewId);
+      logger.warn("deep-link", `view not found in tree, ignored`, target.viewId);
     }
   }, PENDING_TIMEOUT_MS);
   function settle() {
@@ -62,8 +89,8 @@ export async function setupDeepLink(): Promise<() => void> {
     else disposers.push(dispose);
   };
   const open = (raw: string | undefined) => {
-    const viewId = parseDeepLinkViewId(raw ?? "");
-    if (viewId) register(openViewWhenReady(viewId));
+    const target = parseDeepLink(raw ?? "");
+    if (target) register(openViewWhenReady(target));
   };
   register(await onOpenUrl((urls) => open(urls[0])));
   getCurrent()

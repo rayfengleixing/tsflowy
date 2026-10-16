@@ -92,6 +92,8 @@ export interface AiProfilePublic {
   protocol: string;
   has_api_key: boolean;
   api_key_masked: string;
+  /** true = 该档 Key 明文存于 config.json（凭据库写入失败） */
+  api_key_plaintext?: boolean;
 }
 
 /**

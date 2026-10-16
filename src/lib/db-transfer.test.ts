@@ -14,11 +14,12 @@ const FIELD = (over: Partial<DatabaseField>): DatabaseField => ({
   ...over,
 });
 
-const ROW = (over: Partial<DatabaseRow>): DatabaseRow => ({
+const ROW = (over: Partial<Omit<DatabaseRow, "parent_id">>): DatabaseRow => ({
   id: "r1",
   database_view_id: "v1",
   position: 0,
   document_id: null,
+  parent_id: null,
   created_at: 0,
   updated_at: 0,
   ...over,

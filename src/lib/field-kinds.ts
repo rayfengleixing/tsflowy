@@ -6,7 +6,7 @@
 // 只读判定仍以 @/types/database 的 isReadonlyType 为准（无存储值的计算字段 + 触发器维护的时间戳）。
 import type { FilterOp } from "./database-query";
 import { isReadonlyType } from "@/types/database";
-import type { AttachmentRef, CellValue, FieldOptions, FieldType } from "@/types/database";
+import type { AttachmentRef, CellValue, FieldOptions, FieldType, SelectOption, StatusTone } from "@/types/database";
 
 /** 值的比较语义域：筛选/排序按域选路（日期按天聚拢、列表看包含、计算字段无存储值） */
 export type ValueDomain = "text" | "number" | "boolean" | "date" | "list" | "computed";
@@ -73,12 +73,26 @@ export function formatNumber(value: number, opts: Extract<FieldOptions, { kind: 
   }
 }
 
+/** 单个附件引用的结构判定：{name,path} 都是字符串才算（裸字符串、缺 path 的老数据都算脏） */
+function isAttachmentRef(value: unknown): value is AttachmentRef {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "name" in value &&
+    "path" in value &&
+    typeof value.name === "string" &&
+    typeof value.path === "string"
+  );
+}
+
+/** 附件单元格的结构判定：值必须是 [{name,path}]；老数据或脏数据里的裸字符串一律算非法 */
+export function isAttachmentList(value: CellValue): boolean {
+  return Array.isArray(value) && value.every(isAttachmentRef);
+}
+
 /** 从单元格值里挑出合法的附件引用（容忍脏数据：非对象项直接丢弃） */
 export function attachmentRefs(value: CellValue): AttachmentRef[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(
-    (v): v is AttachmentRef => typeof v === "object" && typeof v.name === "string" && typeof v.path === "string",
-  );
+  return Array.isArray(value) ? value.filter(isAttachmentRef) : [];
 }
 
 /** rating 字段的满星数（options 缺省或非法时回落 5） */
@@ -165,6 +179,50 @@ const DATE_LIKE: FieldKindSpec = {
 // 这里只给不带解析的兜底文本（导出、目标库缓存缺失时的降级）。
 const ID_LIST_FORMAT = (v: CellValue): string => (Array.isArray(v) ? (v as string[]).join(", ") : "");
 
+/** 单选语义（single_select 与 status 共用）：值 = 选项 id，展示取选项名 */
+const SINGLE_SELECT_LIKE: FieldKindSpec = {
+  validate: (v) => isStr(v),
+  emptyValue: () => null,
+  format: (v, options) => {
+    if (!isStr(v)) return "";
+    return options.kind === "select" ? (options.options.find((o) => o.id === v)?.name ?? v) : v;
+  },
+  paste: (raw) => {
+    const v = raw.trim();
+    return optionNamesOutcome(v === "" ? [] : [v]);
+  },
+  filterOps: ["is_empty", "is_not_empty", "equals", "not_equals"],
+  domain: "text",
+  groupable: true,
+  optionBearing: true,
+};
+
+/** status 阶段 → 建议配色（新建选项时用；用户之后仍可手动改色） */
+export const STATUS_TONE_COLOR: Record<StatusTone, string> = {
+  todo: "gray",
+  doing: "blue",
+  done: "green",
+};
+
+/** 阶段全集（选项编辑器的按钮顺序） */
+export const STATUS_TONES: StatusTone[] = ["todo", "doing", "done"];
+
+/** 选项是否属于「已完成」阶段（非 status 字段的选项没有 tone，恒 false） */
+export function isDoneOption(option: SelectOption): boolean {
+  return option.tone === "done";
+}
+
+/** 单元格值在 select 型 options 里对应的阶段；值为空、选项已删或非选择类时 null */
+export function statusToneOf(options: FieldOptions, value: CellValue): StatusTone | null {
+  if (options.kind !== "select" || typeof value !== "string") return null;
+  return options.options.find((o) => o.id === value)?.tone ?? null;
+}
+
+/** 一格只装一个选项的类型（single_select / status）：看板分列、单元格胶囊按它判定 */
+export function isSingleOptionKind(type: FieldType): boolean {
+  return type === "single_select" || type === "status";
+}
+
 /** FieldType → spec。写成全量 Record 是为了让「新类型没补 spec」在编译期暴露。 */
 export const FIELD_KINDS: Record<FieldType, FieldKindSpec> = {
   text: TEXT_LIKE,
@@ -217,22 +275,10 @@ export const FIELD_KINDS: Record<FieldType, FieldKindSpec> = {
     groupable: false,
     optionBearing: false,
   },
-  single_select: {
-    validate: (v) => isStr(v),
-    emptyValue: () => null,
-    format: (v, options) => {
-      if (!isStr(v)) return "";
-      return options.kind === "select" ? (options.options.find((o) => o.id === v)?.name ?? v) : v;
-    },
-    paste: (raw) => {
-      const v = raw.trim();
-      return optionNamesOutcome(v === "" ? [] : [v]);
-    },
-    filterOps: ["is_empty", "is_not_empty", "equals", "not_equals"],
-    domain: "text",
-    groupable: true,
-    optionBearing: true,
-  },
+  single_select: SINGLE_SELECT_LIKE,
+  // status 与 single_select 同值形态（单元格存选项 id 字符串），差别只在选项带阶段：
+  // 阶段决定默认配色与「已完成」勾选，看板列也可直接用它分组。
+  status: SINGLE_SELECT_LIKE,
   multi_select: {
     validate: (v) => isIdList(v),
     emptyValue: () => [],
@@ -322,14 +368,7 @@ export const FIELD_KINDS: Record<FieldType, FieldKindSpec> = {
   },
   attachment: {
     // 附件单元格存 [{name,path}]；老数据或脏数据里可能有裸字符串，一律判为非法
-    validate: (v) =>
-      Array.isArray(v) &&
-      v.every(
-        (x) =>
-          typeof x === "object" &&
-          typeof (x as { name?: unknown }).name === "string" &&
-          typeof (x as { path?: unknown }).path === "string",
-      ),
+    validate: isAttachmentList,
     emptyValue: () => [],
     format: (v) =>
       attachmentRefs(v)
@@ -362,4 +401,10 @@ export function isOptionBearing(type: FieldType): boolean {
 /** 日期语义（含系统时间戳）：筛选的比较符走「按天聚拢 + 相对日期」路径 */
 export function isDateKind(type: FieldType): boolean {
   return fieldKind(type).domain === "date";
+}
+
+/** 无存储值、每次渲染现算的类型（formula / rollup / reverse_relation）：
+ *  「这张表要不要客户端求值」「这格不能直接落库」两处判定都问这里，别再手抄类型名 */
+export function isComputedKind(type: FieldType): boolean {
+  return fieldKind(type).domain === "computed";
 }

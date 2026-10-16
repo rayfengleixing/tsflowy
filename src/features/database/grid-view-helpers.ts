@@ -13,10 +13,14 @@ export const GROUP_LINE_H_FALLBACK = 28;
 /** 视口上下各多渲染的行数：抵消快速滚动时的白屏 */
 export const VIRTUAL_OVERSCAN = 12;
 
-/** 分组模式把组头/数据行/小计摊平成一行行，窗口化按线性条目统一处理 */
+/**
+ * 分组模式把组头/数据行/小计摊平成一行行，窗口化按线性条目统一处理；组头带层级用于缩进。
+ * 数据行在未分组且本表存在父子层级时额外带上层深与折叠状态（见 lib/database-hierarchy.ts）；
+ * 没有层级关系时这三个字段缺省，渲染路径与改造前完全一致。
+ */
 export type GridFlatLine =
-  | { kind: "header"; key: string; label: string; count: number; collapsed: boolean }
-  | { kind: "row"; row: DatabaseRow }
+  | { kind: "header"; key: string; depth: number; label: string; count: number; collapsed: boolean }
+  | { kind: "row"; row: DatabaseRow; depth?: number; hasChildren?: boolean; collapsed?: boolean }
   | { kind: "subtotal"; key: string; rowIds: string[] };
 
 /** 每条线性条目的高度（组头/小计各自用实测值；非分组走均一数据行高的快路径） */
@@ -55,16 +59,6 @@ export function computeVirtualWindow(p: {
   const start = Math.max(0, Math.floor((p.scrollTop - p.dataTop) / p.rowHeight) - VIRTUAL_OVERSCAN);
   const end = Math.min(p.total, Math.ceil((p.scrollTop - p.dataTop + p.clientHeight) / p.rowHeight) + VIRTUAL_OVERSCAN);
   return { start, end: Math.max(end, Math.min(p.total, start + 1)) };
-}
-
-/** 把某一行滚动到视口中央所需的 scrollTop（虚拟窗口外的行先滚过去再聚焦） */
-export function rowCenterScrollTop(p: {
-  dataTop: number;
-  index: number;
-  rowHeight: number;
-  clientHeight: number;
-}): number {
-  return Math.max(0, p.dataTop + p.index * p.rowHeight - p.clientHeight / 2);
 }
 
 /**

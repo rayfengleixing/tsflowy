@@ -1,7 +1,7 @@
 import type { CellValue, DatabaseField, DatabaseRow, FieldType, SelectOption } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
-import { canGroupByKind, fieldKind, isDateKind, isOptionBearing } from "./field-kinds";
-import { formatCellValue, parseFieldOptions } from "./database-values";
+import { canGroupByKind, fieldKind, isDateKind, isOptionBearing, isSingleOptionKind } from "./field-kinds";
+import { formatCellValue, parseFieldOptions, sparseGet } from "./database-values";
 
 // Grid 排序/筛选纯逻辑（项目说明书 11 节：筛选器求值需单测）
 
@@ -24,6 +24,26 @@ export type FilterOp =
   | "checked"
   | "unchecked";
 
+/** 全量比较符的运行时清单：给持久化校验用（某类型能用哪些见 opsForType） */
+export const FILTER_OPS: FilterOp[] = [
+  "is_empty",
+  "is_not_empty",
+  "contains",
+  "not_contains",
+  "equals",
+  "not_equals",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "checked",
+  "unchecked",
+];
+
+export function isFilterOp(v: unknown): v is FilterOp {
+  return typeof v === "string" && (FILTER_OPS as string[]).includes(v);
+}
+
 export interface FilterSpec {
   id: string;
   field_id: string;
@@ -33,6 +53,95 @@ export interface FilterSpec {
 }
 
 export type FilterMode = "and" | "or";
+
+/** 条件组：组内子节点按自身 mode 组合，组本身作为父级的一个节点参与组合（可嵌套） */
+export interface FilterGroup {
+  id: string;
+  mode: FilterMode;
+  children: FilterNode[];
+}
+
+/** 筛选树上的一条：叶子条件或子组 */
+export type FilterNode = FilterSpec | FilterGroup;
+
+/** 组最多嵌到第几层（顶层数组算第 1 层）：UI 到此收口，解析超层的只摊平外壳不丢条件 */
+export const MAX_FILTER_DEPTH = 3;
+
+export function isFilterGroup(node: FilterNode): node is FilterGroup {
+  return "children" in node;
+}
+
+/** 叶子条件条数（徽标用）：嵌套后按「几条筛选」数叶子，不把组算进条数 */
+export function countFilterLeaves(nodes: FilterNode[]): number {
+  let n = 0;
+  for (const node of nodes) n += isFilterGroup(node) ? countFilterLeaves(node.children) : 1;
+  return n;
+}
+
+/** 按 id 在树上改一个叶子条件（不可变；没命中则结构不变） */
+export function patchFilterLeaf(nodes: FilterNode[], id: string, patch: Partial<FilterSpec>): FilterNode[] {
+  return nodes.map((node) =>
+    isFilterGroup(node)
+      ? { ...node, children: patchFilterLeaf(node.children, id, patch) }
+      : node.id === id
+        ? { ...node, ...patch }
+        : node,
+  );
+}
+
+/** 按 id 切换某个组的组合方式（顶层组合方式由调用方另存） */
+export function patchFilterGroupMode(nodes: FilterNode[], id: string, mode: FilterMode): FilterNode[] {
+  return nodes.map((node) =>
+    isFilterGroup(node)
+      ? node.id === id
+        ? { ...node, mode }
+        : { ...node, children: patchFilterGroupMode(node.children, id, mode) }
+      : node,
+  );
+}
+
+/** 按 id 删掉一个节点（叶子或整组） */
+export function removeFilterNode(nodes: FilterNode[], id: string): FilterNode[] {
+  return nodes
+    .filter((node) => node.id !== id)
+    .map((node) => (isFilterGroup(node) ? { ...node, children: removeFilterNode(node.children, id) } : node));
+}
+
+/** 往 parentId 那个组的末尾追加节点；parentId 为 null 即顶层。找不到父组（已删）时不改动 */
+export function insertFilterNode(nodes: FilterNode[], parentId: string | null, child: FilterNode): FilterNode[] {
+  if (parentId === null) return [...nodes, child];
+  return nodes.map((node) =>
+    isFilterGroup(node)
+      ? node.id === parentId
+        ? { ...node, children: [...node.children, child] }
+        : { ...node, children: insertFilterNode(node.children, parentId, child) }
+      : node,
+  );
+}
+
+/** 建一个空组：mode 给 and，与「加一条条件」的直觉一致 */
+export function newFilterGroup(id: string): FilterGroup {
+  return { id, mode: "and", children: [] };
+}
+
+/** 建一条叶子条件 */
+export function newFilterLeaf(id: string, field: DatabaseField): FilterSpec {
+  return { id, field_id: field.id, op: opsForType(field.field_type)[0], value: defaultOperand(field) };
+}
+
+/** 剔除引用了已删除字段的条件；组被掏空就整组去掉（空组不过滤任何行，留着只会被当成生效条件） */
+export function pruneFiltersByFields(nodes: FilterNode[], fieldIds: Set<string>): FilterNode[] {
+  const out: FilterNode[] = [];
+  for (const node of nodes) {
+    if (isFilterGroup(node)) {
+      const children = pruneFiltersByFields(node.children, fieldIds);
+      if (children.length > 0) out.push({ ...node, children });
+    } else if (fieldIds.has(node.field_id)) {
+      out.push(node);
+    }
+  }
+  return out;
+}
 
 /** 空值判断：null / undefined / 空串 / 空数组 均视为空 */
 export function isCellEmpty(value: CellValue): boolean {
@@ -301,25 +410,49 @@ export function evaluateFilter(fieldType: FieldType, value: CellValue, op: Filte
   }
 }
 
-/** 多条件组合过滤（AND/OR） */
+/** 多条件组合过滤：节点可以是叶子条件，也可以是嵌套的条件组 */
 export function applyFilters(
   rows: DatabaseRow[],
   cells: Record<string, Record<string, CellValue>>,
-  filters: FilterSpec[],
+  nodes: FilterNode[],
   fields: DatabaseField[],
   mode: FilterMode,
 ): DatabaseRow[] {
-  if (filters.length === 0) return rows;
+  if (nodes.length === 0) return rows;
   const fieldMap = new Map(fields.map((f) => [f.id, f]));
-  return rows.filter((row) => {
-    const results = filters.map((f) => {
-      const field = fieldMap.get(f.field_id);
-      if (!field) return true;
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
-      return evaluateFilter(field.field_type, cells[row.id]?.[f.field_id] ?? null, f.op, f.value);
-    });
-    return mode === "and" ? results.every(Boolean) : results.some(Boolean);
-  });
+  return rows.filter((row) => matchNodes(nodes, row, fieldMap, cells, mode));
+}
+
+/** 同一批节点按 mode 组合；字段已被删除的条件恒成立（不能因为配置里留了死条件就把行全筛掉） */
+function matchNodes(
+  nodes: FilterNode[],
+  row: DatabaseRow,
+  fieldMap: Map<string, DatabaseField>,
+  cells: Record<string, Record<string, CellValue>>,
+  mode: FilterMode,
+): boolean {
+  if (nodes.length === 0) return true;
+  const results = nodes.map((node) => matchNode(node, row, fieldMap, cells));
+  return mode === "and" ? results.every(Boolean) : results.some(Boolean);
+}
+
+function matchNode(
+  node: FilterNode,
+  row: DatabaseRow,
+  fieldMap: Map<string, DatabaseField>,
+  cells: Record<string, Record<string, CellValue>>,
+): boolean {
+  if (isFilterGroup(node)) return matchNodes(node.children, row, fieldMap, cells, node.mode);
+  const field = fieldMap.get(node.field_id);
+  if (!field) return true;
+  return evaluateFilter(field.field_type, cellAt(cells, row.id, node.field_id), node.op, node.value);
+}
+
+/** 稀疏映射取格值：没写过的行/格没有条目，缺格按空值参与比较（筛选/分组/条件格式/导出共用） */
+export function cellAt(cells: Record<string, Record<string, CellValue>>, rowId: string, fieldId: string): CellValue {
+  const rowCells = sparseGet(cells, rowId);
+  if (!rowCells) return null;
+  return sparseGet(rowCells, fieldId) ?? null;
 }
 
 /** 字段类型支持的比较符（筛选器 UI 用）：取自 field-kinds 注册表 */
@@ -364,7 +497,7 @@ function bucketOf(field: DatabaseField, options: SelectOption[], value: CellValu
   // 桶按"显示出来的值"分：created_at 因此按天聚拢，格式相同的两个数字同属一桶
   const label = formatCellValue(field.field_type, value, parseFieldOptions(field.options));
   const base = { label, rows: [] as DatabaseRow[], optionIndex: 0, numeric: null as number | null };
-  if (field.field_type === "single_select" && typeof value === "string") {
+  if (isSingleOptionKind(field.field_type) && typeof value === "string") {
     const idx = options.findIndex((o) => o.id === value);
     // 选项被删掉后残留的值自成一组，排在已知选项之后、未分组之前
     return {
@@ -405,8 +538,7 @@ export function groupRowsForGrid(
   const buckets = new Map<string, Bucket>();
   const ungrouped: DatabaseRow[] = [];
   for (const row of rows) {
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
-    const value = cells[row.id]?.[field.id] ?? null;
+    const value = cellAt(cells, row.id, field.id);
     if (isCellEmpty(value)) {
       ungrouped.push(row);
       continue;
@@ -428,4 +560,37 @@ export function groupRowsForGrid(
     .map(({ key, label, rows: grouped }) => ({ key, label, rows: grouped }));
   if (ungrouped.length > 0) groups.push({ key: UNGROUPED, label: "", rows: ungrouped });
   return groups;
+}
+
+/** 分组层数上限：再多一层只是把表格切成碎块，UI 与派生都到这一层收口 */
+export const MAX_GROUP_DEPTH = 3;
+
+/** 一级分组桶：rows 是该桶的全部行（含下层），subgroups 是在这些行上再分一层 */
+export interface GridGroupNode extends GridGroup {
+  subgroups: GridGroupNode[];
+  /** 从顶层到本桶的 key 路径：折叠状态按它记，同名桶落在不同父组里不冲突 */
+  path: string;
+  /** 0 = 顶层 */
+  depth: number;
+}
+
+/**
+ * 按 fields 给定顺序逐级下钻分组（最多 MAX_GROUP_DEPTH 层）。
+ * 每层沿用单层分桶的桶序与空值桶规则，下层不改变上层的桶顺序；
+ * 空值桶（UNGROUPED）照样参与下一层分组——这一格没填不代表所有格都没填。
+ */
+export function groupRowsNested(
+  rows: DatabaseRow[],
+  cells: Record<string, Record<string, CellValue>>,
+  fields: DatabaseField[],
+): GridGroupNode[] {
+  const at = (source: DatabaseRow[], level: number, parentPath: string): GridGroupNode[] => {
+    if (level >= MAX_GROUP_DEPTH || level >= fields.length) return [];
+    const field = fields[level];
+    return groupRowsForGrid(source, cells, field).map((g) => {
+      const path = parentPath ? parentPath + "/" + g.key : g.key;
+      return { ...g, path, depth: level, subgroups: at(g.rows, level + 1, path) };
+    });
+  };
+  return at(rows, 0, "");
 }

@@ -15,17 +15,19 @@ export function GridSpacerRow({ height, colSpan }: { height: number; colSpan: nu
   );
 }
 
-/** 分组标题行：折叠开关 + 组名 + 行数 */
+/** 分组标题行：折叠开关 + 组名 + 行数；depth 为层级（多级分组时逐层缩进） */
 export function GridGroupHeaderRow({
   label,
   count,
   collapsed,
+  depth,
   onToggle,
   colSpan,
 }: {
   label: string;
   count: number;
   collapsed: boolean;
+  depth: number;
   onToggle: () => void;
   colSpan: number;
 }) {
@@ -33,10 +35,14 @@ export function GridGroupHeaderRow({
     <tr data-group-header="1">
       <td
         colSpan={colSpan}
-        className="border-b border-neutral-200 bg-neutral-50 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900/40"
+        className={
+          "border-b border-neutral-200 px-2 py-1 dark:border-neutral-700" +
+          (depth === 0 ? " bg-neutral-50 dark:bg-neutral-900/40" : " bg-neutral-50/60 dark:bg-neutral-900/20")
+        }
       >
         <button
           className="flex items-center gap-1.5 text-[12px] font-medium text-neutral-700 dark:text-neutral-200"
+          style={{ paddingLeft: depth * 14 }}
           onClick={onToggle}
         >
           {collapsed ? (
@@ -55,11 +61,14 @@ export function GridGroupHeaderRow({
 /** 分组小计行：只铺已配置汇总的列，其余列留空 */
 export function GridSubtotalRow({
   rowIds,
+  scopeRowIds,
   visibleFields,
   aggregateOf,
   cells,
 }: {
   rowIds: string[];
+  /** 占比的分母范围：当前筛选下的全表行 */
+  scopeRowIds: string[];
   visibleFields: DatabaseField[];
   aggregateOf: (field: DatabaseField) => AggregateFn | undefined;
   cells: Record<string, Record<string, CellValue>>;
@@ -76,7 +85,7 @@ export function GridSubtotalRow({
             key={field.id}
             className="h-7 border-b border-r border-neutral-200 px-2 align-middle text-[11px] text-neutral-600 dark:border-neutral-700 dark:text-neutral-300"
           >
-            {fn ? aggregateValue(fn, field, rowIds, cells) : null}
+            {fn ? aggregateValue(fn, field, rowIds, cells, scopeRowIds) : null}
           </td>
         );
       })}

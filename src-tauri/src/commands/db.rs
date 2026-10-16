@@ -650,10 +650,22 @@ pub async fn row_create(
     db: State<'_, Db>,
     view_id: String,
     id: String,
+    parent_id: Option<String>,
 ) -> Result<DatabaseRowRow, String> {
     // id 由前端 newId() 生成
     let conn = db.write_conn()?;
-    db::database::create_row(&conn, &view_id, &id)
+    db::database::create_row(&conn, &view_id, &id, parent_id.as_deref())
+}
+
+/// 改父行（parent_id 传 null = 升到顶层）；环与超深由 db 层挡下并返回错误文案
+#[tauri::command]
+pub async fn row_set_parent(
+    db: State<'_, Db>,
+    row_id: String,
+    parent_id: Option<String>,
+) -> Result<(), String> {
+    let conn = db.write_conn()?;
+    db::database::set_row_parent(&conn, &row_id, parent_id.as_deref())
 }
 
 #[tauri::command]

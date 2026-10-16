@@ -26,7 +26,15 @@ function field(type: DatabaseField["field_type"], options?: string): DatabaseFie
 }
 
 function row(id: string, position = 0): DatabaseRow {
-  return { id, database_view_id: "v1", position, document_id: null, created_at: 0, updated_at: 0 };
+  return {
+    id,
+    database_view_id: "v1",
+    position,
+    document_id: null,
+    parent_id: null,
+    created_at: 0,
+    updated_at: 0,
+  };
 }
 
 const selectField = field(

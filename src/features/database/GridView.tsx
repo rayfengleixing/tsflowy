@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   Archive,
   ArrowUpDown,
@@ -6,8 +6,10 @@ import {
   Copy,
   Download,
   FileUp,
+  FileSpreadsheet,
   Filter,
   GripVertical,
+  Palette,
   Square,
   SquarePen,
   Trash2,
@@ -21,9 +23,10 @@ import { isReadonlyType } from "@/types/database";
 import { useDbStore, useDbStoreApi } from "@/stores/database-context";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { viewApi, newId } from "@/lib/db";
-import { isOptionBearing, parseFieldOptions, sparseGet } from "@/lib/database-values";
-import type { SortSpec } from "@/lib/database-query";
+import { isOptionBearing, formatCellValue, parseFieldOptions } from "@/lib/database-values";
+import { MAX_GROUP_DEPTH, cellAt, countFilterLeaves, type SortSpec } from "@/lib/database-query";
 import type { AggregateFn } from "@/lib/database-aggregate";
+import { buildCondIndex, type CondFormatRule } from "@/lib/database-cond-format";
 import {
   buildCsvExport,
   buildSelectOptions,
@@ -38,10 +41,20 @@ import {
 } from "@/lib/csv";
 import { CsvImportDialog } from "./CsvImportDialog";
 import { RowTrashDialog } from "./RowTrashDialog";
+import { RowParentDialog } from "./RowParentDialog";
 import { BulkEditDialog } from "./BulkEditDialog";
-import { relationRowIds, relationRowLabel, relationTarget } from "@/lib/relation";
+import { CondFormatDialog } from "./CondFormatDialog";
+import { buildXlsxSheet, exportFileName, resolveExportCells } from "@/lib/table-export";
 import { useGridViewModel } from "./use-grid-view-model";
-import { toggleRowChecked as updateRowChecked, toggleAllRowsChecked as updateAllRowsChecked } from "./grid-view-model";
+import {
+  collapsedAncestorsOfRow,
+  groupPathOfRow,
+  planRowDrop,
+  toggleRowChecked as updateRowChecked,
+  toggleAllRowsChecked as updateAllRowsChecked,
+  type RowDropMode,
+} from "./grid-view-model";
+import { hierarchyLines, parentCandidates } from "@/lib/database-hierarchy";
 import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
 import { FilterBar } from "./FilterBar";
@@ -50,7 +63,7 @@ import { AggregateMenu } from "./AggregateMenu";
 import { useRowFocus } from "./rowFocus";
 import { RowDetailPanel } from "./RowDetail";
 import { AddFieldButton, HiddenColumnsMenu, RenameInput, needsFieldSettings } from "./grid-parts";
-import { renderGridRow, type GridRowContext } from "./grid-row";
+import { renderGridRow, type GridRowContext, type GridRowHierarchy } from "./grid-row";
 import { GridAddRow, GridGroupHeaderRow, GridSpacerRow, GridSubtotalRow } from "./grid-rows";
 import {
   GROUP_LINE_H_FALLBACK,
@@ -110,13 +123,18 @@ export function GridView({
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const [draggingField, setDraggingField] = useState<string | null>(null);
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
-  const [groupFieldId, setGroupFieldId] = useState<string | null>(() => readViewConfig(view).groupFieldId ?? null);
+  const [groupFieldIds, setGroupFieldIds] = useState<string[]>(() => readViewConfig(view).groupFieldIds ?? []);
   // 键盘光标（↑↓←→/Tab 移动、Enter 编辑、Delete 清空、Esc 退出）
   const [cursor, setCursor] = useState<{ rowId: string; fieldId: string } | null>(null);
   const [aggregates, setAggregates] = useState<Record<string, AggregateFn>>(
     () => readViewConfig(view).aggregates ?? {},
   );
+  // 条件格式规则（表格视图独有）与规则编辑弹窗
+  const [condFormats, setCondFormats] = useState<CondFormatRule[]>(() => readViewConfig(view).condFormats ?? []);
+  const [condOpen, setCondOpen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  // 父子行层级里被折叠的父行（只在未分组时生效，与分组折叠各管一套）
+  const [collapsedRows, setCollapsedRows] = useState<Set<string>>(new Set());
   // CSV 导入：解析完成后先暂存，等用户在 CsvImportDialog 里确认各列类型再落库
   const [importPlan, setImportPlan] = useState<{
     fileName: string;
@@ -136,6 +154,7 @@ export function GridView({
   useEffect(() => {
     setCheckedRows(new Set());
     setCursor(null);
+    setCollapsedRows(new Set());
   }, [view.id]);
 
   // 列宽拖拽：拖拽期间直接改 <col> 宽度（纯 DOM，零重渲/零 IPC），mouseup 才落库一次
@@ -165,8 +184,9 @@ export function GridView({
   // 视图状态与批量行命令由 MVVM 层算好：这里只留本地 UI 状态与渲染接线
   const { model, displayCells, sortableCells, relationDbOf, runDeleteCheckedRows, runDuplicateCheckedRows } =
     useGridViewModel({
-      groupFieldId,
+      groupFieldIds,
       collapsedGroups,
+      collapsedRows,
       checkedRows,
       aggregates,
       setCheckedRows,
@@ -186,19 +206,24 @@ export function GridView({
     collapsedKey,
   } = model;
 
+  // 条件格式：整屏一次算出「行 × 列 → 颜色」索引，每格只做两次 Map 查（读的是求值后的展示图，公式列也能当条件）
+  const condToneIndex = useMemo(
+    () => buildCondIndex(condFormats, displayRowIds, displayCells, fields),
+    [condFormats, displayRowIds, displayCells, fields],
+  );
+
+  const changeCondFormats = (rules: CondFormatRule[]) => {
+    setCondFormats(rules);
+    patchViewConfig(view, { condFormats: rules });
+  };
+
   const toggleRowChecked = (rowId: string) => {
     // 用上回调形式：连点同一行时不能都基于同一份旧集合
     setCheckedRows((prev) => updateRowChecked(prev, rowId));
   };
 
-  // 批量改值读的是存储值（不是计算列的展示值）：cells 为按行稀疏映射，没写过的格子没有条目
-  const readStoredCell = useCallback(
-    (rowId: string, fieldId: string): CellValue | undefined => {
-      const rowCells = sparseGet(cells, rowId);
-      return rowCells ? sparseGet(rowCells, fieldId) : undefined;
-    },
-    [cells],
-  );
+  // 批量改值读的是存储值（不是计算列的展示值）：cells 为按行稀疏映射，没写过的格子按空值算
+  const readStoredCell = useCallback((rowId: string, fieldId: string) => cellAt(cells, rowId, fieldId), [cells]);
 
   const toggleSelectAll = () => setCheckedRows(updateAllRowsChecked(displayRows, allSelected));
 
@@ -246,11 +271,12 @@ export function GridView({
           scrollTop: el.scrollTop,
           dataTop,
           clientHeight: el.clientHeight,
-          total: displayRows.length,
+          // 层级模式折叠父行会让可见行数少于 displayRows，窗口化只看真正渲染的条目
+          total: flatLines.length,
           rowHeight: rowHeightRef.current,
         });
     setWin((prev) => (prev?.start === next.start && prev.end === next.end ? prev : next));
-  }, [scrollerRef, displayRows.length, groups, lineHeights]);
+  }, [scrollerRef, flatLines.length, groups, lineHeights]);
 
   useEffect(() => {
     if (!virtual) {
@@ -299,22 +325,42 @@ export function GridView({
 
   useEffect(() => {
     if (!focusRowId || !groups) return;
-    const hit = groups.find((g) => g.rows.some((r) => r.id === focusRowId));
-    if (!hit || !collapsedGroups.has(hit.key)) return;
+    // 命中行在多层组里：从顶层到叶子逐层展开，只解最内层会让它藏在折叠的父组下面
+    const chain = groupPathOfRow(groups, focusRowId).filter((path) => collapsedGroups.has(path));
+    if (chain.length === 0) return;
     setCollapsedGroups((prev) => {
       const next = new Set(prev);
-      next.delete(hit.key);
+      for (const path of chain) next.delete(path);
       return next;
     });
   }, [focusRowId, groups, collapsedGroups]);
 
+  // 未分组时命中行可能藏在折叠的父行下面：同样按祖先链逐层展开
+  useEffect(() => {
+    if (!focusRowId || groups) return;
+    const chain = collapsedAncestorsOfRow(displayRows, collapsedRows, focusRowId);
+    if (chain.length === 0) return;
+    setCollapsedRows((prev) => {
+      const next = new Set(prev);
+      for (const id of chain) next.delete(id);
+      return next;
+    });
+  }, [focusRowId, groups, displayRows, collapsedRows]);
+
   // ---------- 键盘导航 ----------
+  // 上下键沿屏幕上的视觉行序走：分组按组展开顺序、层级按树序，折叠掉的行不在其中
+  // （否则会跳到看不见的行，光标与滚动区脱节）
+  const navRows = useMemo(
+    () => flatLines.filter((l): l is Extract<GridFlatLine, { kind: "row" }> => l.kind === "row").map((l) => l.row),
+    [flatLines],
+  );
+
   /** 光标移动：越界即夹紧；虚拟窗口外的行先滚过去，渲染完成后再聚焦 */
   const moveCursorTo = (rowIndex: number, colIndex: number) => {
-    const ri = Math.max(0, Math.min(displayRows.length - 1, rowIndex));
+    const ri = Math.max(0, Math.min(navRows.length - 1, rowIndex));
     const ci = Math.max(0, Math.min(visibleFields.length - 1, colIndex));
-    if (displayRows.length === 0 || visibleFields.length === 0) return;
-    const row = displayRows[ri];
+    if (navRows.length === 0 || visibleFields.length === 0) return;
+    const row = navRows[ri];
     const field = visibleFields[ci];
     // 分组窗口化后行号与物理行不再一一对应：以"目标单元格是否在 DOM 里"决定要不要先滚过去
     if (virtual) {
@@ -356,15 +402,12 @@ export function GridView({
     if (editing || !cursor) return;
     const target = e.target;
     if (!(target instanceof HTMLElement) || !target.closest("td[data-cell-row]")) return;
-    const ri = displayRows.findIndex((r) => r.id === cursor.rowId);
+    const ri = navRows.findIndex((r) => r.id === cursor.rowId);
     const ci = visibleFields.findIndex((f) => f.id === cursor.fieldId);
     if (ri < 0 || ci < 0) return;
     const field = visibleFields.find((f) => f.id === cursor.fieldId);
-    // 空单元格在 cells 里没有键，取值可能是 undefined；断言让这里如实反映
-    const readCell = (rowId: string, fieldId: string): CellValue | undefined => {
-      const rowCells = cells[rowId] as Record<string, CellValue> | undefined;
-      return rowCells?.[fieldId];
-    };
+    // 空单元格在 cells 里没有键，按空值参与判定（cellAt 统一这份稀疏映射的读法）
+    const readCell = (rowId: string, fieldId: string) => cellAt(cells, rowId, fieldId);
     switch (e.key) {
       case "ArrowUp":
         e.preventDefault();
@@ -421,10 +464,11 @@ export function GridView({
     }
   };
 
-  const changeGroupField = (id: string | null) => {
-    setGroupFieldId(id);
+  /** 改分组层级（增/删/换某一层的字段）：组的 key 由字段值决定，层级一变旧的折叠状态就没意义了 */
+  const setGroupLevels = (ids: string[]) => {
+    setGroupFieldIds(ids);
     setCollapsedGroups(new Set());
-    patchViewConfig(view, { groupFieldId: id ?? "" });
+    patchViewConfig(view, { groupFieldIds: ids });
   };
 
   const changeAggregate = (fieldId: string, fn: AggregateFn | undefined) => {
@@ -469,6 +513,67 @@ export function GridView({
     }
   };
 
+  // ---------- 父子行层级：挂接动作（展开/折叠只在本地视图，见 collapsedRows） ----------
+  const [parentTarget, setParentTarget] = useState<DatabaseRow | null>(null);
+
+  // 分组的行不带树形层深（组优先铺行），行菜单仍要按真实层深判断能不能再往下挂
+  const rowDepthOf = useMemo(() => {
+    const map = new Map(hierarchyLines(rows).map((l) => [l.row.id, l.depth]));
+    return (rowId: string) => map.get(rowId) ?? 1;
+  }, [rows]);
+
+  /** 选父行列表与提示用的行标题：主列的显示值，空值兜底成「（空行）」 */
+  const rowLabelOf = useCallback(
+    (rowId: string) => {
+      if (!primaryField) return rowId;
+      // 计算列在存储图里没有值，取屏上算好的展示值；被筛掉（不在展示图里）的候选回落成存储值
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- 展示图只覆盖当前可见行
+      const value = displayCells[rowId]?.[primaryField.id] ?? cellAt(cells, rowId, primaryField.id);
+      const text = formatCellValue(primaryField.field_type, value, parseFieldOptions(primaryField.options)).trim();
+      return text || t("row.trashUntitled");
+    },
+    [primaryField, displayCells, cells],
+  );
+
+  const addChildRow = async (row: DatabaseRow) => {
+    try {
+      await store.addRow(row.id);
+      // 折叠中的父行下新建子行会看不见：顺手展开它
+      setCollapsedRows((prev) => {
+        if (!prev.has(row.id)) return prev;
+        const next = new Set(prev);
+        next.delete(row.id);
+        return next;
+      });
+      toast.success(t("row.childAdded", { name: rowLabelOf(row.id) }));
+    } catch (e) {
+      logger.error("add child row failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
+  };
+
+  const detachParent = async (row: DatabaseRow) => {
+    try {
+      await store.setRowParent(row.id, null);
+      toast.success(t("row.parentDetached"));
+    } catch (e) {
+      logger.error("detach row parent failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
+  };
+
+  const pickParent = async (row: DatabaseRow, parentId: string | null) => {
+    if ((row.parent_id ?? null) === parentId) return;
+    try {
+      await store.setRowParent(row.id, parentId);
+      toast.success(parentId ? t("row.parentSet", { name: rowLabelOf(parentId) }) : t("row.parentDetached"));
+    } catch (e) {
+      // 超深/成环在这里由 Rust 侧挡下（见 db::database::validate_parent），把原因原样递给用户
+      logger.error("set row parent failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
+  };
+
   // 字段拖拽排序（主列固定首位，只在其它列之间排序）
   const onFieldDrop = (targetId: string) => {
     if (!draggingField || draggingField === targetId) return;
@@ -483,52 +588,37 @@ export function GridView({
     setDraggingField(null);
   };
 
-  // 行拖拽排序
-  const onRowDrop = (targetId: string) => {
-    if (!draggingRow || draggingRow === targetId) return;
-    // 全量重排（store 顺序 = position 顺序）：传 displayRows 会把被筛选掉的行从 store.rows 里剔除
-    const ids = rows.map((r) => r.id);
-    const from = ids.indexOf(draggingRow);
-    const to = ids.indexOf(targetId);
-    if (from < 0 || to < 0) return;
-    ids.splice(to, 0, ids.splice(from, 1)[0]);
-    void store.reorderRows(ids);
+  // 行拖拽：默认改行序；按住 Alt 落到某个合法父行上 = 挂成它的子行（落点判定见 planRowDrop）
+  const [nestHint, setNestHint] = useState<string | null>(null);
+  const nestCandidates = useMemo(
+    () => new Set(draggingRow ? parentCandidates(rows, draggingRow).map((r) => r.id) : []),
+    [draggingRow, rows],
+  );
+  const onRowDrop = (targetId: string, mode: RowDropMode) => {
+    const draggingId = draggingRow;
     setDraggingRow(null);
+    setNestHint(null);
+    if (!draggingId) return;
+    // 全量重排（store 顺序 = position 顺序）：传 displayRows 会把被筛选掉的行从 store.rows 里剔除
+    const plan = planRowDrop({ rows, draggingId, targetId, mode });
+    if (!plan) return;
+    if (plan.kind === "reorder") {
+      void store.reorderRows(plan.ids);
+      return;
+    }
+    const row = rows.find((r) => r.id === plan.rowId);
+    if (row) void pickParent(row, plan.parentId);
   };
 
-  // CSV 导出（公式列在导出前注入算好的值；只导出当前筛选/排序后的可见行）
+  // CSV / xlsx 导出：计算列先折成可导出值（见 resolveExportCells），只导出当前筛选/排序后的可见行
+  const exportCells = () => resolveExportCells(fields, displayRows, cells, displayCells, relationDbOf);
+
   const exportCsv = async () => {
     try {
-      // 计算列直读展示图（渲染期已按行求值一次，不再为导出重算一遍）
-      const cellsWithFormula = { ...cells };
-      for (const row of displayRows) {
-        const rowCells = cells[row.id] ?? {};
-        const display = displayCells[row.id] ?? {};
-        for (const f of fields) {
-          if (f.field_type === "relation") {
-            // 导出成行标题而不是行 id：导出的 CSV 才对人可读
-            const db = relationDbOf(relationTarget(f) ?? "");
-            const text = relationRowIds(rowCells[f.id] ?? null)
-              .map((id) => (db ? relationRowLabel(db, id) : null) ?? id)
-              .join("; ");
-            cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: text };
-          } else if (f.field_type === "reverse_relation") {
-            // 反向关系无存储值：来源行 id 同样翻成标题
-            const ids = Array.isArray(display[f.id]) ? (display[f.id] as string[]) : [];
-            const cfg = parseFieldOptions(f.options);
-            const db = cfg.kind === "reverse_relation" ? relationDbOf(cfg.source_view_id) : undefined;
-            const text = ids.map((id) => (db ? relationRowLabel(db, id) : null) ?? id).join("; ");
-            if (text !== "") cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: text };
-          } else if (f.field_type === "formula" || f.field_type === "rollup") {
-            const v = display[f.id] ?? null;
-            if (v !== null) cellsWithFormula[row.id] = { ...(cellsWithFormula[row.id] ?? {}), [f.id]: v };
-          }
-        }
-      }
       // 前置 BOM：Excel 打开 UTF-8 CSV 才不会把中文显示成乱码
-      const content = "\uFEFF" + buildCsvExport(fields, displayRows, cellsWithFormula);
+      const content = "\uFEFF" + buildCsvExport(fields, displayRows, exportCells());
       const target = await save({
-        defaultPath: (source.name || "export").replace(/[\\/:*?"<>|]/g, "_") + ".csv",
+        defaultPath: exportFileName(source.name, "csv"),
         filters: [{ name: "CSV", extensions: ["csv"] }],
       });
       if (!target) return;
@@ -537,6 +627,23 @@ export function GridView({
     } catch (e) {
       logger.error("csv export failed", e);
       toast.error(t("error.csv", { message: String(e) }));
+    }
+  };
+
+  // xlsx 由 Rust 侧手写 OOXML 产出（见 commands/files/xlsx.rs）：前端只给列种类与值
+  const exportXlsx = async () => {
+    try {
+      const name = source.name || "export";
+      const target = await save({
+        defaultPath: exportFileName(name, "xlsx"),
+        filters: [{ name: "Excel", extensions: ["xlsx"] }],
+      });
+      if (!target) return;
+      await invoke("export_xlsx", { path: target, sheet: buildXlsxSheet(name, fields, displayRows, exportCells()) });
+      toast.success(t("xlsx.exported"));
+    } catch (e) {
+      logger.error("xlsx export failed", e);
+      toast.error(t("error.xlsx", { message: String(e) }));
     }
   };
 
@@ -841,18 +948,47 @@ export function GridView({
     draggingRow,
     setDraggingRow,
     onRowDrop,
+    nestCandidates,
+    nestHintRowId: nestHint,
+    setNestHint,
     toggleRowChecked,
     setDeleteRowTarget,
+    onAddChildRow: (row) => void addChildRow(row),
+    onPickParent: setParentTarget,
+    onDetachParent: (row) => void detachParent(row),
+    rowDepthOf,
     commitCell,
     setCursor,
     setEditing,
     pasteAnchorRef,
+    condToneIndex,
   };
-  const renderRow = (row: DatabaseRow) => renderGridRow(row, rowCtx);
+  /** 折叠/展开某父行的子树（只影响本地视图，不落库） */
+  const toggleRowCollapse = (rowId: string) => {
+    setCollapsedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  };
+
+  const renderRow = (row: DatabaseRow, hier?: GridRowHierarchy) => renderGridRow(row, rowCtx, hier);
 
   // 线性条目渲染：组头 / 数据行 / 组小计（窗口化切片直接 map 它）
   const renderLine = (line: GridFlatLine) => {
-    if (line.kind === "row") return renderRow(line.row);
+    if (line.kind === "row")
+      return renderRow(
+        line.row,
+        line.depth === undefined
+          ? undefined
+          : {
+              depth: line.depth,
+              hasChildren: line.hasChildren === true,
+              collapsed: line.collapsed === true,
+              onToggle: () => toggleRowCollapse(line.row.id),
+            },
+      );
     if (line.kind === "header")
       return (
         <GridGroupHeaderRow
@@ -860,6 +996,7 @@ export function GridView({
           label={line.label}
           count={line.count}
           collapsed={line.collapsed}
+          depth={line.depth}
           onToggle={() => toggleGroup(line.key)}
           colSpan={visibleFields.length + 2}
         />
@@ -868,6 +1005,7 @@ export function GridView({
       <GridSubtotalRow
         key={"sub_" + line.key}
         rowIds={line.rowIds}
+        scopeRowIds={displayRowIds}
         visibleFields={visibleFields}
         aggregateOf={aggregateOf}
         cells={sortableCells}
@@ -923,22 +1061,58 @@ export function GridView({
               </button>
             </div>
           )}
-          {/* 分组字段切换 */}
+          {/* 分组层级：按顺序逐层下钻，每层一个下拉 + 移除，末尾一个「再加一层」 */}
           {groupableFields.length > 0 && (
-            <div className="flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700">
-              <span className="text-neutral-500">{t("grid.groupBy")}:</span>
-              <select
-                className="bg-transparent text-xs outline-none"
-                value={groupFieldId ?? ""}
-                onChange={(e) => changeGroupField(e.target.value || null)}
-              >
-                <option value="">{t("grid.noGroup")}</option>
-                {groupableFields.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
+            <div className="flex items-center gap-1.5">
+              {groupFieldIds.map((id, level) => {
+                const field = groupableFields.find((f) => f.id === id);
+                if (!field) return null;
+                return (
+                  <div
+                    key={id}
+                    className="flex items-center gap-1 rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700"
+                  >
+                    <span className="text-neutral-500">{t(level === 0 ? "grid.groupBy" : "grid.thenBy")}:</span>
+                    <select
+                      className="bg-transparent text-xs outline-none"
+                      value={id}
+                      onChange={(e) => setGroupLevels(groupFieldIds.map((x, i) => (i === level ? e.target.value : x)))}
+                    >
+                      {groupableFields
+                        .filter((f) => f.id === id || !groupFieldIds.includes(f.id))
+                        .map((f) => (
+                          <option key={f.id} value={f.id}>
+                            {f.name}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      className="flex h-4 w-4 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-red-500"
+                      title={t("grid.removeGroup")}
+                      onClick={() => setGroupLevels(groupFieldIds.filter((_, i) => i !== level))}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                );
+              })}
+              {groupFieldIds.length < MAX_GROUP_DEPTH && (
+                <select
+                  className="h-6 rounded-md border border-dashed border-neutral-300 bg-transparent px-1.5 text-xs text-neutral-500 outline-none hover:border-brand-500"
+                  value=""
+                  title={t("grid.addGroup")}
+                  onChange={(e) => e.target.value && setGroupLevels([...groupFieldIds, e.target.value])}
+                >
+                  <option value="">{t("grid.groupBy")}</option>
+                  {groupableFields
+                    .filter((f) => !groupFieldIds.includes(f.id))
+                    .map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.name}
+                      </option>
+                    ))}
+                </select>
+              )}
             </div>
           )}
           <Button variant="ghost" size="sm" onClick={() => setRowTrashOpen(true)} title={t("row.trash")}>
@@ -949,13 +1123,28 @@ export function GridView({
           <Button
             variant="ghost"
             size="sm"
+            onClick={() => setCondOpen(true)}
+            title={t("cond.title")}
+            className={cn(condFormats.length > 0 && "bg-brand-100 text-brand-600")}
+          >
+            <Palette className="h-3.5 w-3.5" />
+            {t("cond.title")}
+            {condFormats.length > 0 && (
+              <span className="ml-1 rounded-full bg-brand-500 px-1.5 text-[10px] text-white">{condFormats.length}</span>
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setFilterOpen((v) => !v)}
             className={cn(filterOpen && "bg-brand-100 text-brand-600")}
           >
             <Filter className="h-3.5 w-3.5" />
             {t("filter.title")}
-            {filters.length > 0 && (
-              <span className="ml-1 rounded-full bg-brand-500 px-1.5 text-[10px] text-white">{filters.length}</span>
+            {countFilterLeaves(filters) > 0 && (
+              <span className="ml-1 rounded-full bg-brand-500 px-1.5 text-[10px] text-white">
+                {countFilterLeaves(filters)}
+              </span>
             )}
           </Button>
           <Button
@@ -977,6 +1166,10 @@ export function GridView({
           <Button variant="ghost" size="sm" onClick={exportCsv}>
             <Download className="h-3.5 w-3.5" />
             {t("csv.export")}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={exportXlsx}>
+            <FileSpreadsheet className="h-3.5 w-3.5" />
+            {t("xlsx.export")}
           </Button>
         </div>
       </div>
@@ -1183,6 +1376,13 @@ export function GridView({
         </table>
       </div>
 
+      {/* 拖行中才出现的落点说明：默认只改行序，按住 Alt 落到合法父行上才嵌套 */}
+      {draggingRow && (
+        <div className="pointer-events-none absolute bottom-4 left-6 z-20 rounded-md bg-neutral-900/85 px-3 py-1.5 text-[11px] text-white shadow-sm dark:bg-neutral-800/90">
+          {t("row.dragNestHint")}
+        </div>
+      )}
+
       {optionsEditorFor && (
         <FieldOptionsEditor
           field={optionsEditorFor}
@@ -1224,7 +1424,31 @@ export function GridView({
 
       <RowTrashDialog open={rowTrashOpen} onOpenChange={setRowTrashOpen} />
 
+      {/* 选父行：候选已滤掉自己/后代/会超深的行，选到的一定合法 */}
+      <RowParentDialog
+        open={parentTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) setParentTarget(null);
+        }}
+        rows={rows}
+        row={parentTarget}
+        labelOf={rowLabelOf}
+        onPick={(parentId) => {
+          const row = parentTarget;
+          setParentTarget(null);
+          if (row) void pickParent(row, parentId);
+        }}
+      />
+
       {/* 批量改值：改完清掉勾选，避免「刚改的行还挂着选」让人以为没生效 */}
+      <CondFormatDialog
+        open={condOpen}
+        onOpenChange={setCondOpen}
+        fields={fields}
+        rules={condFormats}
+        onChange={changeCondFormats}
+      />
+
       <BulkEditDialog
         open={bulkEditOpen}
         onOpenChange={setBulkEditOpen}

@@ -117,6 +117,7 @@ const WRITE_COMMANDS = new Set([
   "row_create",
   "row_create_many",
   "row_set_document_id",
+  "row_set_parent",
   "row_delete",
   "row_delete_many",
   "row_restore",

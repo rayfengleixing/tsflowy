@@ -200,6 +200,8 @@ pub struct AiProfilePublic {
     pub protocol: String,
     pub has_api_key: bool,
     pub api_key_masked: String,
+    /// true = 该档 Key 仍以明文存在 config.json（凭据库写入失败）
+    pub api_key_plaintext: bool,
 }
 
 /// 自定义快捷指令
@@ -276,7 +278,7 @@ pub struct AiQuickActionInput {
 pub fn ai_get_config(app: tauri::AppHandle) -> Result<AiConfigPublic, String> {
     let cfg = files::load_app_config(&app);
     let (key, plaintext) = effective_api_key(&app);
-    Ok(public_of(&cfg, &key, plaintext))
+    Ok(public_of(&app, &cfg, &key, plaintext))
 }
 
 /// 保存 AI 配置
@@ -312,19 +314,31 @@ pub fn ai_save_config(app: tauri::AppHandle, cfg: AiConfigInput) -> Result<(), S
     ai.max_tokens = cfg.max_tokens;
     ai.system_prompt = cfg.system_prompt;
     // 档位 Key 是逐档密文：入参 api_key=None 表示「不改该档 Key」，按 id 从旧配置带回。
-    // Key 明文存 config.json（系统凭据库只有单个账户位，装不下多档 Key）。
+    // 非空 Key 写进系统凭据库（账户名按档位 id 区分，一档一条）：写入成功则 config.json 不留明文，
+    // 失败则回退明文保证可用；Some("") 表示清空该档 Key（改为继承全局）。
     let old_profiles = std::mem::take(&mut ai.profiles);
     ai.profiles = cfg
         .profiles
         .into_iter()
         .map(|p| {
             let api_key = match p.api_key {
-                Some(key) => key.trim().to_string(),
                 None => old_profiles
                     .iter()
                     .find(|o| o.id == p.id)
                     .map(|o| o.api_key.clone())
                     .unwrap_or_default(),
+                Some(key) => {
+                    let key = key.trim().to_string();
+                    let account = secret::profile_account(&p.id);
+                    if key.is_empty() {
+                        secret::delete_key_for(&account);
+                        String::new()
+                    } else if secret::store_key_for(&account, &key) {
+                        String::new()
+                    } else {
+                        key
+                    }
+                }
             };
             files::AiProfile {
                 id: p.id,
@@ -337,6 +351,12 @@ pub fn ai_save_config(app: tauri::AppHandle, cfg: AiConfigInput) -> Result<(), S
             }
         })
         .collect();
+    // 被删掉的档位：连带清掉它在凭据库里的 Key，避免留下无主密文
+    for old in &old_profiles {
+        if !ai.profiles.iter().any(|p| p.id == old.id) {
+            secret::delete_key_for(&secret::profile_account(&old.id));
+        }
+    }
     ai.active_profile = cfg.active_profile;
     ai.quick_actions = cfg
         .quick_actions
@@ -749,6 +769,7 @@ fn cancelled(generation: u64) -> bool {
 /// （生效 key = 系统凭据库优先，回退 config.json 明文）。
 /// `api_key_plaintext` 为 true 时前端需明示明文落盘风险。
 fn public_of(
+    app: &tauri::AppHandle,
     cfg: &files::AppConfig,
     effective_key: &str,
     api_key_plaintext: bool,
@@ -771,15 +792,20 @@ fn public_of(
         profiles: ai
             .profiles
             .iter()
-            .map(|p| AiProfilePublic {
-                id: p.id.clone(),
-                name: p.name.clone(),
-                base_url: p.base_url.clone(),
-                model: p.model.clone(),
-                temperature: p.temperature,
-                protocol: p.protocol.clone(),
-                has_api_key: !p.api_key.trim().is_empty(),
-                api_key_masked: mask_api_key(&p.api_key),
+            .map(|p| {
+                // 档位 Key 存在凭据库里，config.json 通常为空：掩码按生效 Key 算
+                let (key, plaintext) = effective_profile_key(app, &p.id);
+                AiProfilePublic {
+                    id: p.id.clone(),
+                    name: p.name.clone(),
+                    base_url: p.base_url.clone(),
+                    model: p.model.clone(),
+                    temperature: p.temperature,
+                    protocol: p.protocol.clone(),
+                    has_api_key: !key.trim().is_empty(),
+                    api_key_masked: mask_api_key(&key),
+                    api_key_plaintext: plaintext,
+                }
             })
             .collect(),
         active_profile: ai.active_profile.clone(),
@@ -1106,8 +1132,48 @@ fn effective_api_key(app: &tauri::AppHandle) -> (String, bool) {
     }
 }
 
+/// 取「档位生效 key」：该档凭据库账户（`ai-api-key:profile:<id>`）优先；为空则回退
+/// config.json 里该档明文，并尝试一次性迁移（写凭据库成功后清空该档明文；失败保持明文回退）。
+/// 返回 (key, 是否仍明文落盘)。空串表示该档未设独立 Key，由调用方继承全局。
+fn effective_profile_key(app: &tauri::AppHandle, profile_id: &str) -> (String, bool) {
+    let account = secret::profile_account(profile_id);
+    if let Some(key) = secret::load_key_for(&account).filter(|k| !k.trim().is_empty()) {
+        return (key, false);
+    }
+    let mut app_cfg = files::load_app_config(app);
+    let plain = app_cfg
+        .ai
+        .as_ref()
+        .and_then(|a| a.profiles.iter().find(|p| p.id == profile_id))
+        .map(|p| p.api_key.clone())
+        .unwrap_or_default();
+    if plain.trim().is_empty() {
+        return (String::new(), false);
+    }
+    if secret::store_key_for(&account, &plain) {
+        if let Some(ai) = app_cfg.ai.as_mut() {
+            if let Some(p) = ai.profiles.iter_mut().find(|p| p.id == profile_id) {
+                p.api_key = String::new();
+            }
+        }
+        match files::save_app_config(app, &app_cfg) {
+            Ok(()) => {
+                tracing::info!("profile api key migrated out of config.json");
+                (plain, false)
+            }
+            Err(e) => {
+                tracing::warn!("clear plaintext profile api key in config failed: {e}");
+                (plain, true)
+            }
+        }
+    } else {
+        (plain, true)
+    }
+}
+
 /// 档位覆盖：非空的档位项优先，空项继承全局。temperature 无「未设置」语义，始终取档位值。
-fn apply_profile(ai: &mut AiConfig, p: &files::AiProfile) {
+/// `api_key` 为该档生效 Key（空串=继承全局），不直接取档位配置里的明文字段。
+fn apply_profile(ai: &mut AiConfig, p: &files::AiProfile, api_key: &str) {
     if !p.base_url.trim().is_empty() {
         ai.base_url = p.base_url.clone();
     }
@@ -1117,8 +1183,8 @@ fn apply_profile(ai: &mut AiConfig, p: &files::AiProfile) {
     if !p.protocol.trim().is_empty() {
         ai.protocol = p.protocol.clone();
     }
-    if !p.api_key.trim().is_empty() {
-        ai.api_key = p.api_key.clone();
+    if !api_key.trim().is_empty() {
+        ai.api_key = api_key.to_string();
     }
     ai.temperature = p.temperature;
 }
@@ -1140,7 +1206,8 @@ fn effective_ai(app: &tauri::AppHandle) -> Result<AiConfig, String> {
             .find(|p| p.id == ai.active_profile)
             .cloned()
         {
-            apply_profile(&mut ai, &p);
+            let (key, _) = effective_profile_key(app, &p.id);
+            apply_profile(&mut ai, &p, &key);
         }
     }
     if !request_ready(&ai) {
@@ -1525,7 +1592,7 @@ data: [DONE]
             protocol: String::new(),
             api_key: String::new(),
         };
-        apply_profile(&mut ai, &p);
+        apply_profile(&mut ai, &p, "");
         assert_eq!(ai.base_url, "http://localhost:11434/v1");
         assert_eq!(ai.model, "qwen2.5");
         assert_eq!(ai.temperature, 0.3);
@@ -1535,12 +1602,18 @@ data: [DONE]
         // 档位显式指定协议与 Key 时优先
         let p2 = files::AiProfile {
             protocol: "anthropic".to_string(),
-            api_key: "profile-key".to_string(),
             ..p
         };
-        apply_profile(&mut ai, &p2);
+        apply_profile(&mut ai, &p2, "profile-key");
         assert_eq!(ai.protocol, "anthropic");
         assert_eq!(ai.api_key, "profile-key");
+        // 生效 Key 为空时回到继承（此时全局 Key 已被上一行覆盖为档位 Key）
+        let mut ai2 = AiConfig {
+            api_key: "global-key".to_string(),
+            ..Default::default()
+        };
+        apply_profile(&mut ai2, &p2, "   ");
+        assert_eq!(ai2.api_key, "global-key");
     }
 
     #[test]

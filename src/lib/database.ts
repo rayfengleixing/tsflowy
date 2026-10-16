@@ -59,8 +59,13 @@ export const databaseApi = {
     return invoke<DatabaseRow[]>("row_list", { viewId });
   },
 
-  async createRow(viewId: string): Promise<DatabaseRow> {
-    return invoke<DatabaseRow>("row_create", { viewId, id: newId() });
+  async createRow(viewId: string, parentId?: string | null): Promise<DatabaseRow> {
+    return invoke<DatabaseRow>("row_create", { viewId, id: newId(), parentId: parentId ?? null });
+  },
+
+  /** 改父行（parentId 传 null 升到顶层）；成环/超深由 Rust 侧拒绝并返回错误文案 */
+  async setRowParent(rowId: string, parentId: string | null): Promise<void> {
+    return invoke("row_set_parent", { rowId, parentId });
   },
 
   /** 批量建行（TSV 粘贴补行）：一次 IPC 一个事务，返回按 position 顺序的新行 */

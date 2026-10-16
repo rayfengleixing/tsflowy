@@ -570,6 +570,10 @@ export function SettingsAi() {
                     {`${t("settings.aiApiKeySaved")}：${aiConfig.profiles.find((x) => x.id === p.id)?.api_key_masked ?? ""}`}
                   </p>
                 )}
+                {/* 档位 Key 未能写进凭据库时才会明文落 config.json：与全局 Key 同样明示 */}
+                {aiConfig?.profiles.some((x) => x.id === p.id && x.has_api_key && x.api_key_plaintext) && (
+                  <p className="mt-0.5 text-[11px] text-amber-600">{t("settings.aiApiKeyPlaintextWarn")}</p>
+                )}
               </div>
             ))}
           </div>

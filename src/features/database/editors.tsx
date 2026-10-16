@@ -752,6 +752,7 @@ const CELL_EDITORS: Partial<Record<FieldType, ComponentType<CellEditorProps>>> =
   last_edited_at: DateCellEditor,
   checkbox: CheckboxCellEditor,
   single_select: SelectCellEditor,
+  status: SelectCellEditor,
   multi_select: MultiSelectCellEditor,
   relation: RelationCellEditor,
   attachment: AttachmentCellEditor,

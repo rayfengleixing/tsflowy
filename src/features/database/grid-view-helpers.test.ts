@@ -9,9 +9,10 @@ import {
 import type { DatabaseRow } from "@/types/database";
 
 const rowLine = (id: string): GridFlatLine => ({ kind: "row", row: { id } as DatabaseRow });
-const headerLine = (key: string): GridFlatLine => ({
+const headerLine = (key: string, depth = 0): GridFlatLine => ({
   kind: "header",
   key,
+  depth,
   label: key,
   count: 2,
   collapsed: false,

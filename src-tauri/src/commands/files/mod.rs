@@ -63,6 +63,11 @@ pub use health::{
 pub mod orphan;
 pub use orphan::{purge_orphan_assets, scan_orphan_assets, OrphanAsset, OrphanPurge, OrphanScan};
 
+// —— xlsx 导出（手写 OOXML，不引表格依赖）——
+pub mod xlsx;
+pub use xlsx::export_xlsx;
+pub use xlsx::{XlsxCell, XlsxColumn, XlsxKind, XlsxSheet, XlsxValue};
+
 // —— 文件对话框路径白名单 ——
 /// 只放行用户在本机文件对话框中明确选择过的路径（目录含其子树）。
 ///
@@ -132,3 +137,5 @@ pub use orphan::{
     __cmd__purge_orphan_assets, __cmd__scan_orphan_assets,
     __tauri_command_name_purge_orphan_assets, __tauri_command_name_scan_orphan_assets,
 };
+#[doc(hidden)]
+pub use xlsx::{__cmd__export_xlsx, __tauri_command_name_export_xlsx};

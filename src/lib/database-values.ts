@@ -1,11 +1,21 @@
-import { fieldKind } from "./field-kinds";
-import type { CellValue, FieldOptions, FieldType, SelectOption } from "@/types/database";
+import { fieldKind, STATUS_TONE_COLOR } from "./field-kinds";
+import type { CellValue, FieldOptions, FieldType, SelectOption, StatusTone } from "@/types/database";
 
 // 字段值序列化/展示（项目说明书 7.2 / 11 节：纯逻辑，Vitest 单测）
 // database_cells.value 统一存 JSON 字符串；空单元格为 "null"
 // 逐类型的语义已收进 field-kinds.ts 注册表，这里只保留与类型无关的编解码和稳定导出面。
 
-export { attachmentRefs, formatNumber, isOptionBearing, ratingMax } from "./field-kinds";
+export {
+  attachmentRefs,
+  formatNumber,
+  isDoneOption,
+  isOptionBearing,
+  isSingleOptionKind,
+  ratingMax,
+  STATUS_TONE_COLOR,
+  STATUS_TONES,
+  statusToneOf,
+} from "./field-kinds";
 
 /** 稀疏映射取值：`Record<string, T>` 的索引签名看不出「这一行没有条目」，
  *  用 in 判定才能拿到真正的 undefined（项目未开 noUncheckedIndexedAccess）。 */
@@ -61,12 +71,15 @@ export function parseFieldOptions(raw: string | null | undefined): FieldOptions 
   return { kind: "none" };
 }
 
-export function newSelectOption(name: string): SelectOption {
+/** 新建选项：status 字段按阶段取固定配色，其余类型随机取色 */
+export function newSelectOption(name: string, tone?: StatusTone): SelectOption {
   const palette = ["blue", "green", "orange", "purple", "red", "yellow", "gray"];
   return {
     id: "opt_" + crypto.randomUUID().slice(0, 8),
     name,
-    color: palette[Math.floor(Math.random() * palette.length)],
+    color: tone ? STATUS_TONE_COLOR[tone] : palette[Math.floor(Math.random() * palette.length)],
+    // 非 status 字段不写 tone：JSON 序列化时 undefined 的键会被丢掉，不会污染选项数据
+    tone,
   };
 }
 

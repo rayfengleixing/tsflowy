@@ -45,6 +45,7 @@ export function bulkValueKind(field: DatabaseField, op: BulkOp): BulkValueKind {
     case "checkbox":
       return "bool";
     case "single_select":
+    case "status":
       return "single_option";
     case "multi_select":
       return "multi_option";
@@ -83,6 +84,7 @@ export function bulkTargetValue(field: DatabaseField, draft: BulkDraft): CellVal
     case "checkbox":
       return draft.bool;
     case "single_select":
+    case "status":
       return draft.option || null;
     case "multi_select":
       return draft.options;

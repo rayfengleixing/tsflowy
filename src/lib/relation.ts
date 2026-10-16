@@ -51,11 +51,12 @@ export function relationRowLabel(db: RelationDb, rowId: string): string | null {
   return formatCellValue(primary.field_type, value, parseFieldOptions(primary.options));
 }
 
-/** 关联单元格 → 纯文本（看板卡片、文档内嵌表格等静态只读展示；目标库未加载/行已删时降级显示原始 id） */
-export function relationCellText(value: CellValue, db: RelationDb | undefined): string {
+/** 关联单元格 → 纯文本（看板卡片、文档内嵌表格、CSV/xlsx 导出等静态只读展示；目标库未加载/行已删时降级显示原始 id）。
+ *  导出场景用 `"; "` 分隔，避免值里带逗号时与 CSV 分隔符混淆。 */
+export function relationCellText(value: CellValue, db: RelationDb | undefined, separator = ", "): string {
   return relationRowIds(value)
     .map((id) => (db ? relationRowLabel(db, id) : null) ?? id)
-    .join(", ");
+    .join(separator);
 }
 
 /** 关联选择器的候选行：按显示文本模糊匹配，空关键词返回全部（顺序沿用目标库行序） */
@@ -96,10 +97,11 @@ export function computeRollup(
   return aggregateValue(cfg.fn, targetField, relationRowIds(rowCells[relField.id] ?? null), db.cells);
 }
 
-/** rollup 的聚合函数候选：跟随被汇总字段的类型（数字列才有求和/平均）；字段未知时只给计数 */
+/** rollup 的聚合函数候选：跟随被汇总字段的类型（数字列才有求和/平均）；字段未知时只给计数。
+ *  排除 share：占比要拿全表当分母，而 rollup 的范围只有本行的关联行，算出来恒等 100%，不如不给。 */
 export function rollupFnsFor(db: RelationDb | undefined, targetFieldId: string): AggregateFn[] {
   const target = db?.fields.find((f) => f.id === targetFieldId);
-  return target ? aggregatesForType(target.field_type) : ["count"];
+  return target ? aggregatesForType(target.field_type).filter((fn) => fn !== "share") : ["count"];
 }
 
 /** 能作为关联目标的布局：数据库布局背后才有字段/行/单元格三表 */

@@ -3,8 +3,8 @@ import { ChevronDown, ImageOff, LayoutList, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
-import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
-import { attachmentRefs, formatCellValue, parseFieldOptions, sparseGet } from "@/lib/database-values";
+import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
+import { attachmentRefs, formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { isImageFile } from "@/lib/assets";
 import { useRelationDbs } from "./use-database-data";
 import { Button } from "@/components/ui/button";
@@ -202,7 +202,7 @@ export function GalleryView({
                   primaryField={primaryField}
                   coverField={coverField}
                   cardSubFields={cardSubFields}
-                  rowCells={sparseGet(evaluated, row.id) ?? sparseGet(cells, row.id) ?? {}}
+                  rowCells={rowCellsOf(evaluated, cells, row.id)}
                   focused={focusRowId === row.id}
                   onOpenDetail={() => void openRowDetail(row, source)}
                 />

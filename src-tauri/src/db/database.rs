@@ -26,7 +26,8 @@ pub const TRIGGER_MANAGED_TIMESTAMPS: [&str; 2] = ["created_at", "last_edited_at
 /// 键序由 serde_json 字典序决定，消费方 parseFieldOptions 按键名读取，无顺序依赖。
 pub fn default_options_json(field_type: &str) -> String {
     match field_type {
-        "single_select" | "multi_select" => {
+        // status（状态）与单选同值形态：单元格存选项 id，阶段信息在选项里由前端标注
+        "single_select" | "multi_select" | "status" => {
             serde_json::json!({ "kind": "select", "options": [] }).to_string()
         }
         "number" => serde_json::json!({
@@ -260,8 +261,9 @@ fn row_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DatabaseRowRow> {
         database_view_id: r.get(1)?,
         position: r.get(2)?,
         document_id: r.get(3)?,
-        created_at: r.get(4)?,
-        updated_at: r.get(5)?,
+        parent_id: r.get(4)?,
+        created_at: r.get(5)?,
+        updated_at: r.get(6)?,
     })
 }
 
@@ -270,7 +272,7 @@ pub fn list_rows(conn: &Connection, view_id: &str) -> Result<Vec<DatabaseRowRow>
     let view_id = host.as_str();
     let mut stmt = conn
         .prepare(
-            "SELECT id, database_view_id, position, document_id, created_at, updated_at
+            "SELECT id, database_view_id, position, document_id, parent_id, created_at, updated_at
              FROM database_rows WHERE database_view_id = ?1 AND is_trash = 0 ORDER BY position ASC",
         )
         .map_err(dberr("list rows"))?;
@@ -283,14 +285,23 @@ pub fn list_rows(conn: &Connection, view_id: &str) -> Result<Vec<DatabaseRowRow>
 }
 
 /// id 由前端 newId() 生成后传入；trg_cells_row_inserted 同事务补时间戳单元格。
-pub fn create_row(conn: &Connection, view_id: &str, id: &str) -> Result<DatabaseRowRow, String> {
+/// parent_id 指向本表另一行；父行由前端从已加载的行里选，这里只挡明显非法的引用。
+pub fn create_row(
+    conn: &Connection,
+    view_id: &str,
+    id: &str,
+    parent_id: Option<&str>,
+) -> Result<DatabaseRowRow, String> {
     let host = data_view_id(conn, view_id)?;
     let view_id = host.as_str();
     let position = next_position(conn, "database_rows", view_id)?;
     let t = now_ms();
+    if let Some(pid) = parent_id {
+        assert_parent_usable(conn, pid, None, view_id)?;
+    }
     conn.execute(
-        "INSERT INTO database_rows(id, database_view_id, position, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
-        params![id, view_id, position, t],
+        "INSERT INTO database_rows(id, database_view_id, position, parent_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+        params![id, view_id, position, parent_id, t],
     )
     .map_err(dberr("create row"))?;
     Ok(DatabaseRowRow {
@@ -298,6 +309,7 @@ pub fn create_row(conn: &Connection, view_id: &str, id: &str) -> Result<Database
         database_view_id: view_id.to_string(),
         position,
         document_id: None,
+        parent_id: parent_id.map(str::to_string),
         created_at: t,
         updated_at: t,
     })
@@ -307,7 +319,7 @@ pub fn create_row(conn: &Connection, view_id: &str, id: &str) -> Result<Database
 pub fn get_row(conn: &Connection, row_id: &str) -> Result<Option<DatabaseRowRow>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, database_view_id, position, document_id, created_at, updated_at
+            "SELECT id, database_view_id, position, document_id, parent_id, created_at, updated_at
              FROM database_rows WHERE id = ?1",
         )
         .map_err(dberr("get row"))?;
@@ -318,6 +330,131 @@ pub fn get_row(conn: &Connection, row_id: &str) -> Result<Option<DatabaseRowRow>
         Some(r) => r.map(Some).map_err(dberr("get row")),
         None => Ok(None),
     }
+}
+
+/// 行层级最深 4 层（顶层算第 1 层）。子树再深就只是把表格变成缩进迷宫。
+const MAX_ROW_LEVEL: i64 = 4;
+
+/// 从 row_id 往上数祖先层数（自身算 1）。
+/// UNION 去重让环也能终止，避免历史脏数据把递归 CTE 变成死循环。
+fn ancestor_level(conn: &Connection, row_id: &str) -> Result<i64, String> {
+    let level: i64 = conn
+        .query_row(
+            "WITH RECURSIVE up(id, lvl) AS (
+               SELECT ?1, 1
+               UNION
+               SELECT r.parent_id, up.lvl + 1 FROM database_rows r JOIN up ON r.id = up.id
+             )
+             SELECT MAX(lvl) FROM up WHERE id IS NOT NULL",
+            params![row_id],
+            |r| r.get(0),
+        )
+        .map_err(dberr("row ancestors"))?;
+    Ok(level)
+}
+
+/// 从 row_id 往下数的子树高度（自身算 0，无子行算 0）。
+fn subtree_height(conn: &Connection, row_id: &str) -> Result<i64, String> {
+    let height: i64 = conn
+        .query_row(
+            "WITH RECURSIVE down(id, lvl) AS (
+               SELECT ?1, 0
+               UNION
+               SELECT r.id, down.lvl + 1 FROM database_rows r JOIN down ON r.parent_id = down.id
+             )
+             SELECT MAX(lvl) FROM down",
+            params![row_id],
+            |r| r.get(0),
+        )
+        .map_err(dberr("row subtree"))?;
+    Ok(height)
+}
+
+/// 校验 parent_id 能不能作为 child_id（None=新建的行，还没有子树）的父行。
+/// 同一张表、父行存在且不在回收站、不成环、搬完后深度不超限。
+fn assert_parent_usable(
+    conn: &Connection,
+    parent_id: &str,
+    child_id: Option<&str>,
+    view_id: &str,
+) -> Result<(), String> {
+    if child_id == Some(parent_id) {
+        return Err("row cannot be its own parent".into());
+    }
+    let (parent_view, parent_trash): (String, i64) = conn
+        .query_row(
+            "SELECT database_view_id, is_trash FROM database_rows WHERE id = ?1",
+            params![parent_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(dberr("parent row"))?
+        .ok_or_else(|| "parent row not found".to_string())?;
+    if parent_trash != 0 {
+        return Err("parent row is in trash".into());
+    }
+    if parent_view != view_id {
+        return Err("parent row is in another table".into());
+    }
+    let parent_level = ancestor_level(conn, parent_id)?;
+    // 被搬的行下面还挂着整棵旧子树，最深的那条线也要一起算进限额
+    let below = match child_id {
+        Some(cid) => {
+            // 环：新父行不能落在被搬行的子树里（从被搬行往下找新父行）
+            let mut stmt = conn
+                .prepare(
+                    "WITH RECURSIVE down(id) AS (
+                       SELECT ?1
+                       UNION
+                       SELECT r.id FROM database_rows r JOIN down ON r.parent_id = down.id
+                     )
+                     SELECT 1 FROM down WHERE id = ?2 LIMIT 1",
+                )
+                .map_err(dberr("row descendants"))?;
+            let loops: Option<i64> = stmt
+                .query_row(params![cid, parent_id], |r| r.get(0))
+                .optional()
+                .map_err(dberr("row descendants"))?;
+            if loops.is_some() {
+                return Err("row cannot be its own descendant".into());
+            }
+            subtree_height(conn, cid)?
+        }
+        None => 0,
+    };
+    if parent_level + 1 + below > MAX_ROW_LEVEL {
+        return Err(format!("row depth exceeds limit of {MAX_ROW_LEVEL} levels"));
+    }
+    Ok(())
+}
+
+/// 改父行（None = 升到顶层）。层级限制在这里挡住环与超深，前端不必再猜。
+pub fn set_row_parent(
+    conn: &Connection,
+    row_id: &str,
+    parent_id: Option<&str>,
+) -> Result<(), String> {
+    let (view_id, old_parent): (String, Option<String>) = conn
+        .query_row(
+            "SELECT database_view_id, parent_id FROM database_rows WHERE id = ?1",
+            params![row_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(dberr("set row parent (row)"))?
+        .ok_or_else(|| "row not found".to_string())?;
+    if parent_id == old_parent.as_deref() {
+        return Ok(());
+    }
+    if let Some(pid) = parent_id {
+        assert_parent_usable(conn, pid, Some(row_id), &view_id)?;
+    }
+    conn.execute(
+        "UPDATE database_rows SET parent_id = ?1, updated_at = ?2 WHERE id = ?3",
+        params![parent_id, now_ms(), row_id],
+    )
+    .map_err(dberr("set row parent"))?;
+    Ok(())
 }
 
 /// 绑定行详情文档 view（首次打开行详情时创建）。
@@ -669,6 +806,7 @@ pub fn create_rows(
             database_view_id: view_id.to_string(),
             position,
             document_id: None,
+            parent_id: None,
             created_at: t,
             updated_at: t,
         });
@@ -898,7 +1036,7 @@ mod tests {
     fn change_field_type_resets_options_and_clears_cells() {
         let conn = setup();
         create_field(&conn, "v1", "f1", "text", None).unwrap();
-        create_row(&conn, "v1", "r1").unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
         set_cell(&conn, "r1", "f1", r#""hello""#).unwrap();
 
         change_field_type(&conn, "f1", "number").unwrap();
@@ -918,7 +1056,7 @@ mod tests {
     fn change_field_type_same_type_is_noop() {
         let conn = setup();
         create_field(&conn, "v1", "f1", "text", None).unwrap();
-        create_row(&conn, "v1", "r1").unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
         set_cell(&conn, "r1", "f1", r#""hello""#).unwrap();
         let options_before = list_fields(&conn, "v1").unwrap()[0].options.clone();
 
@@ -934,7 +1072,7 @@ mod tests {
     fn delete_field_cascades_cells() {
         let conn = setup();
         create_field(&conn, "v1", "f1", "text", None).unwrap();
-        create_row(&conn, "v1", "r1").unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
         set_cell(&conn, "r1", "f1", r#""x""#).unwrap();
 
         delete_field(&conn, "f1").unwrap();
@@ -947,12 +1085,12 @@ mod tests {
     #[test]
     fn row_crud_and_document_binding() {
         let conn = setup();
-        let r = create_row(&conn, "v1", "r1").unwrap();
+        let r = create_row(&conn, "v1", "r1", None).unwrap();
         assert_eq!(r.position, 0);
         assert_eq!(r.document_id, None);
         assert_eq!(r.created_at, r.updated_at);
 
-        create_row(&conn, "v1", "r2").unwrap();
+        create_row(&conn, "v1", "r2", None).unwrap();
 
         let got = get_row(&conn, "r1").unwrap().unwrap();
         assert_eq!(got.id, "r1");
@@ -974,6 +1112,111 @@ mod tests {
         assert_eq!(rows[0].id, "r1");
     }
 
+    /// 父子行层级：parent_id 随行模型读写，父行被彻底删除时子行脱钩回顶层（FK SET NULL）。
+    #[test]
+    fn row_parent_roundtrip_and_detach_on_purge() {
+        let conn = setup();
+        create_row(&conn, "v1", "r1", None).unwrap();
+        let child = create_row(&conn, "v1", "r2", Some("r1")).unwrap();
+        assert_eq!(child.parent_id.as_deref(), Some("r1"));
+        assert_eq!(
+            get_row(&conn, "r2").unwrap().unwrap().parent_id.as_deref(),
+            Some("r1")
+        );
+        let parents: Vec<Option<String>> = list_rows(&conn, "v1")
+            .unwrap()
+            .into_iter()
+            .map(|r| r.parent_id)
+            .collect();
+        assert_eq!(parents, vec![None, Some("r1".into())]);
+
+        purge_rows(&conn, &["r1".into()]).unwrap();
+        assert_eq!(
+            get_row(&conn, "r2").unwrap().unwrap().parent_id,
+            None,
+            "父行彻底删除后子行要回到顶层，而不是挂着幽灵父引用"
+        );
+
+        set_row_parent(&conn, "r2", None).unwrap();
+        assert_eq!(get_row(&conn, "r2").unwrap().unwrap().parent_id, None);
+    }
+
+    /// 非法父行一律拒绝：自己、后代（成环）、别的表、回收站里的行、不存在的 id。
+    #[test]
+    fn set_row_parent_rejects_invalid_parents() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at)
+             VALUES ('v2', 'w1', NULL, '第二张表', 'grid', '{}', 2, 1, 1)",
+            [],
+        )
+        .unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
+        create_row(&conn, "v1", "r2", Some("r1")).unwrap();
+        create_row(&conn, "v2", "r3", None).unwrap();
+
+        assert!(set_row_parent(&conn, "r1", Some("r1"))
+            .unwrap_err()
+            .contains("own parent"));
+        assert!(set_row_parent(&conn, "r1", Some("r2"))
+            .unwrap_err()
+            .contains("own descendant"));
+        assert!(set_row_parent(&conn, "r2", Some("r3"))
+            .unwrap_err()
+            .contains("another table"));
+        assert!(set_row_parent(&conn, "r2", Some("ghost"))
+            .unwrap_err()
+            .contains("not found"));
+
+        // 幂等：父行没变就直接返回，连校验和 updated_at 都不碰
+        let before = get_row(&conn, "r2").unwrap().unwrap().updated_at;
+        set_row_parent(&conn, "r2", Some("r1")).unwrap();
+        assert_eq!(get_row(&conn, "r2").unwrap().unwrap().updated_at, before);
+
+        // 父行进了回收站也不能再被选中（它已经不在可见行集合里）
+        create_row(&conn, "v1", "r4", None).unwrap();
+        soft_delete_rows(&conn, &["r1".into()]).unwrap();
+        assert!(set_row_parent(&conn, "r4", Some("r1"))
+            .unwrap_err()
+            .contains("in trash"));
+    }
+
+    /// 深度限额 4 层：新建第 5 层被挡，整棵子树搬深时被搬子树的最深一条线也要计入。
+    #[test]
+    fn row_hierarchy_stops_at_the_depth_limit() {
+        let conn = setup();
+        create_row(&conn, "v1", "l1", None).unwrap();
+        create_row(&conn, "v1", "l2", Some("l1")).unwrap();
+        create_row(&conn, "v1", "l3", Some("l2")).unwrap();
+        create_row(&conn, "v1", "l4", Some("l3")).unwrap();
+        assert!(create_row(&conn, "v1", "l5", Some("l4"))
+            .unwrap_err()
+            .contains("depth"));
+        assert!(set_row_parent(&conn, "l3", Some("l4"))
+            .unwrap_err()
+            .contains("descendant"));
+
+        // l2 下面挂着 l3、l4（子树高 2），搬到第 1 层行之下最深到第 4 行仍然允许
+        create_row(&conn, "v1", "x1", None).unwrap();
+        set_row_parent(&conn, "l2", Some("x1")).unwrap();
+        assert_eq!(
+            get_row(&conn, "l4").unwrap().unwrap().parent_id.as_deref(),
+            Some("l3"),
+            "改父行只动被搬那一行，子树跟着走是层级结构本身的语义"
+        );
+
+        // 同一棵子树搬到第 2 层行之下会最深到第 5 层：按深度拒绝，不是因为成环
+        create_row(&conn, "v1", "y1", None).unwrap();
+        create_row(&conn, "v1", "y2", Some("y1")).unwrap();
+        let err = set_row_parent(&conn, "l2", Some("y2")).unwrap_err();
+        assert!(err.contains("depth"), "{err}");
+        assert_eq!(
+            get_row(&conn, "l2").unwrap().unwrap().parent_id.as_deref(),
+            Some("x1"),
+            "被拒绝的改动不能留下半个层级"
+        );
+    }
+
     /// trg_cells_row_inserted：视图已有 created_at/last_edited_at 字段时，插行自动补时间戳单元格
     #[test]
     fn row_insert_trigger_fills_timestamp_cells() {
@@ -981,7 +1224,7 @@ mod tests {
         create_field(&conn, "v1", "f-created", "created_at", None).unwrap();
         create_field(&conn, "v1", "f-edited", "last_edited_at", None).unwrap();
 
-        create_row(&conn, "v1", "r1").unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
 
         let created = cells_of(&conn, "f-created");
         assert_eq!(created.len(), 1);
@@ -998,7 +1241,7 @@ mod tests {
     fn reorder_rows_assigns_final_positions() {
         let conn = setup();
         for id in ["r1", "r2", "r3"] {
-            create_row(&conn, "v1", id).unwrap();
+            create_row(&conn, "v1", id, None).unwrap();
         }
         reorder_rows(&conn, "v1", &["r2", "r3", "r1"]).unwrap();
         let rows = list_rows(&conn, "v1").unwrap();
@@ -1010,7 +1253,7 @@ mod tests {
     fn purge_row_cascades_cells() {
         let conn = setup();
         create_field(&conn, "v1", "f1", "text", None).unwrap();
-        create_row(&conn, "v1", "r1").unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
         set_cell(&conn, "r1", "f1", r#""x""#).unwrap();
 
         purge_rows(&conn, &["r1".into()]).unwrap();
@@ -1024,7 +1267,7 @@ mod tests {
     fn load_cells_empty_then_upsert() {
         let conn = setup();
         create_field(&conn, "v1", "f1", "text", None).unwrap();
-        create_row(&conn, "v1", "r1").unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
         assert!(load_cells(&conn, "v1").unwrap().is_empty());
 
         set_cell(&conn, "r1", "f1", r#""a""#).unwrap();
@@ -1044,7 +1287,7 @@ mod tests {
     fn cell_update_trigger_refreshes_row_timestamp() {
         let conn = setup();
         create_field(&conn, "v1", "f1", "text", None).unwrap();
-        create_row(&conn, "v1", "r1").unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
 
         // 手动把 updated_at 设到过去，观察触发器是否刷回当前时间
         conn.execute(
@@ -1093,7 +1336,7 @@ mod tests {
     fn set_cells_many_upserts_and_rolls_back_atomically() {
         let conn = setup();
         create_field(&conn, "v1", "f1", "text", None).unwrap();
-        create_row(&conn, "v1", "r1").unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
 
         let n = set_cells_many(
             &conn,
@@ -1122,7 +1365,7 @@ mod tests {
     #[test]
     fn create_rows_appends_positions_and_rolls_back_on_duplicate() {
         let conn = setup();
-        create_row(&conn, "v1", "r1").unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
 
         let made = create_rows(&conn, "v1", &["r2".into(), "r3".into()]).unwrap();
         assert_eq!(
@@ -1299,7 +1542,7 @@ mod tests {
         soft_delete_rows(&conn, &["r2".into()]).unwrap();
         // 回收站期间又删掉一行并新增一行，原 position 早已不属于它
         soft_delete_rows(&conn, &["r3".into()]).unwrap();
-        create_row(&conn, "v1", "r5").unwrap();
+        create_row(&conn, "v1", "r5", None).unwrap();
 
         restore_row(&conn, "r2").unwrap();
         let rows = list_rows(&conn, "v1").unwrap();
@@ -1323,7 +1566,7 @@ mod tests {
     #[test]
     fn row_document_follows_the_row_into_and_out_of_trash() {
         let conn = setup();
-        create_row(&conn, "v1", "r1").unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
         seed_doc_view(&conn, "d1");
         set_row_document_id(&conn, "r1", "d1").unwrap();
 
@@ -1370,8 +1613,8 @@ mod tests {
         .unwrap();
         create_field(&conn, "v1", "f1", "text", None).unwrap();
         create_field(&conn, "v2", "f2", "text", None).unwrap();
-        create_row(&conn, "v1", "r1").unwrap();
-        create_row(&conn, "v2", "r2").unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
+        create_row(&conn, "v2", "r2", None).unwrap();
         soft_delete_rows(&conn, &["r1".into(), "r2".into()]).unwrap();
 
         let n = purge_trash_rows(&conn, "v1").unwrap();
@@ -1561,7 +1804,7 @@ mod tests {
             "派生视图读得到宿主字段"
         );
 
-        let r = create_row(&conn, derived, "r1").unwrap();
+        let r = create_row(&conn, derived, "r1", None).unwrap();
         assert_eq!(r.database_view_id, "v1");
         set_cell(&conn, "r1", "f1", r#""x""#).unwrap();
         assert_eq!(load_cells(&conn, derived).unwrap().len(), 1);

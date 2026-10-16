@@ -1,10 +1,13 @@
 import { useMemo, useState } from "react";
-import { Maximize2, Minimize2, Plus, X } from "lucide-react";
+import { CornerDownRight, Indent, Link2, Maximize2, Minimize2, Outdent, Plus, X } from "lucide-react";
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { FIELD_TYPES, isReadonlyType, type FieldType } from "@/types/database";
 import { useDbStore } from "@/stores/database-context";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
-import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
+import { cellAt } from "@/lib/database-query";
+import { MAX_HIERARCHY_LEVEL, hierarchyDepthOf } from "@/lib/database-hierarchy";
+import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
+import { rowPermalink } from "@/lib/deep-link";
 import { useRelationStore } from "@/stores/relation";
 import { cn } from "@/lib/utils";
 import type { View } from "@/types/models";
@@ -13,6 +16,7 @@ import { CellEditorSlot } from "./editors";
 import { cellDisplayContent } from "./cell-display";
 import { fieldIcon } from "./field-icon";
 import { FieldTypeMenu } from "./FieldTypeMenu";
+import { RowParentDialog } from "./RowParentDialog";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
@@ -153,6 +157,103 @@ function RowPropertyField({
   );
 }
 
+/** 层级属性行：显示父行标题，就地换父级 / 升为顶层 / 在它下面补一条子行 */
+function RowHierarchyLine({ row }: { row: DatabaseRow }) {
+  const rows = useDbStore((s) => s.rows);
+  const fields = useDbStore((s) => s.fields);
+  const cells = useDbStore((s) => s.cells);
+  const setRowParent = useDbStore((s) => s.setRowParent);
+  const addRow = useDbStore((s) => s.addRow);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // 行标题取主列（第一个可见列），与表格视图同一口径
+  const primary = fields.find((f) => f.is_hidden === 0) ?? null;
+  const labelOf = (rowId: string) => {
+    if (!primary) return rowId;
+    const text = formatCellValue(
+      primary.field_type,
+      cellAt(cells, rowId, primary.id),
+      parseFieldOptions(primary.options),
+    ).trim();
+    return text || t("row.trashUntitled");
+  };
+  const parentId = row.parent_id ?? null;
+  // 满 4 层就不再让往下挂（与 Rust 侧 MAX_ROW_LEVEL 同值，见 lib/database-hierarchy）
+  const canAddChild = (hierarchyDepthOf(rows, row.id) ?? 1) < MAX_HIERARCHY_LEVEL;
+
+  const pick = async (nextParentId: string | null) => {
+    try {
+      await setRowParent(row.id, nextParentId);
+      toast.success(nextParentId ? t("row.parentSet", { name: labelOf(nextParentId) }) : t("row.parentDetached"));
+    } catch (e) {
+      logger.error("set row parent failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
+  };
+
+  const addChild = async () => {
+    try {
+      await addRow(row.id);
+      toast.success(t("row.childAdded", { name: labelOf(row.id) }));
+    } catch (e) {
+      logger.error("add child row failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
+  };
+
+  const btn =
+    "flex h-5 w-5 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-neutral-600 disabled:cursor-not-allowed disabled:opacity-40";
+  return (
+    <div data-testid="row-hierarchy" className="group/hierarchy flex items-center gap-2 px-3 py-1 text-[12px]">
+      <span className="flex h-4 w-4 shrink-0 items-center justify-center text-neutral-400">
+        <CornerDownRight className="h-3.5 w-3.5" />
+      </span>
+      <span className="w-20 shrink-0 truncate text-neutral-600">{t("row.parentLabel")}</span>
+      <div className="flex min-w-0 flex-1 items-center gap-1">
+        <span className={cn("min-w-0 flex-1 truncate", parentId ? "text-neutral-800" : "text-neutral-300")}>
+          {parentId ? labelOf(parentId) : t("row.parentUnset")}
+        </span>
+        <span className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover/hierarchy:opacity-100">
+          {parentId !== null && (
+            <button type="button" className={btn} title={t("row.detachParent")} onClick={() => void pick(null)}>
+              <Outdent className="h-3.5 w-3.5" />
+            </button>
+          )}
+          <button
+            type="button"
+            data-testid="row-pick-parent"
+            className={btn}
+            title={t("row.setParent")}
+            onClick={() => setPickerOpen(true)}
+          >
+            <Indent className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            data-testid="row-add-child"
+            className={btn}
+            title={t("row.addChild")}
+            disabled={!canAddChild}
+            onClick={() => void addChild()}
+          >
+            <CornerDownRight className="h-3.5 w-3.5" />
+          </button>
+        </span>
+      </div>
+      <RowParentDialog
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        rows={rows}
+        row={row}
+        labelOf={labelOf}
+        onPick={(nextParentId) => {
+          setPickerOpen(false);
+          void pick(nextParentId);
+        }}
+      />
+    </div>
+  );
+}
+
 /** 行详情右侧滑出面板（说明书 6.1：宽 400px，右侧滑入 + 遮罩 + 滑入动画），复用 M3 编辑器 */
 export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view: View; onClose: () => void }) {
   const fields = useDbStore((s) => s.fields);
@@ -163,11 +264,21 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
   // 与 GridView 同源：公式/汇总/反向关系提前算进有效单元格图，字段组件只读值不算式
   const rowValues = useMemo(() => {
     const evaluated = computeEvaluatedCells([row], cells, fields, (id) => relationData[id]);
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- 两张图都按行稀疏存储，本行没有条目时运行时 undefined
-    return evaluated.display[row.id] ?? cells[row.id] ?? {};
+    return rowCellsOf(evaluated.display, cells, row.id);
   }, [row, cells, fields, relationData]);
   // 放大态：居中大尺寸面板（配合头部放大/缩小按钮切换）
   const [enlarged, setEnlarged] = useState(false);
+
+  // 行级 permalink：贴到剪贴板后可在别处粘贴、或从浏览器点开拉起本 App（见 lib/deep-link.ts）
+  const copyPermalink = async () => {
+    try {
+      await navigator.clipboard.writeText(rowPermalink(view.id, row.id));
+      toast.success(t("rowDetail.linkCopied"));
+    } catch (e) {
+      logger.error("row permalink copy failed", e);
+      toast.error(t("error.copy", { message: String(e) }));
+    }
+  };
 
   const addTextField = async () => {
     const name = uniqueName(
@@ -203,6 +314,13 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-neutral-200 px-4 dark:border-neutral-700">
           <span className="min-w-0 flex-1 truncate text-[16px] font-medium text-neutral-900">{view.name}</span>
           <button
+            className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200"
+            title={t("rowDetail.copyLink")}
+            onClick={() => void copyPermalink()}
+          >
+            <Link2 className="h-4 w-4" />
+          </button>
+          <button
             data-testid="enlarge-row-detail"
             className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200"
             title={enlarged ? t("rowDetail.shrink") : t("rowDetail.enlarge")}
@@ -220,6 +338,7 @@ export function RowDetailPanel({ row, view, onClose }: { row: DatabaseRow; view:
         </div>
         {/* 属性区 */}
         <div className="flex flex-col gap-0.5 border-b border-neutral-200 px-4 pb-2">
+          <RowHierarchyLine row={row} />
           {visibleFields.map((f) => (
             <RowPropertyField
               key={f.id}

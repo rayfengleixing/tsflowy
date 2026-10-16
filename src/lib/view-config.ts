@@ -1,7 +1,16 @@
 import { invoke } from "@/lib/invoke";
 import { toast } from "sonner";
-import type { FilterMode, FilterSpec, SortSpec } from "@/lib/database-query";
+import {
+  MAX_FILTER_DEPTH,
+  MAX_GROUP_DEPTH,
+  type FilterGroup,
+  type FilterMode,
+  type FilterNode,
+  type FilterSpec,
+  type SortSpec,
+} from "@/lib/database-query";
 import { isAggregateFn, type AggregateFn } from "@/lib/database-aggregate";
+import { parseCondFormats, type CondFormatRule } from "@/lib/database-cond-format";
 import { registerCloseFlush } from "@/lib/close-flush";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
@@ -13,7 +22,9 @@ import type { View } from "@/types/models";
 // extra 同时承载 row_detail 等既有标记，所以写入一律"读改写整份 JSON"，未知键原样保留。
 
 export interface ViewConfig {
-  filters?: FilterSpec[];
+  /** 顶层节点：叶子条件或嵌套条件组（组内再按组自己的 mode 组合） */
+  filters?: FilterNode[];
+  /** 顶层节点的组合方式 */
   filterMode?: FilterMode;
   sorts?: SortSpec[];
   boardFieldId?: string;
@@ -21,10 +32,13 @@ export interface ViewConfig {
   /** 时间线视图：开始/结束日期字段（结束为空则只画点） */
   timelineStartFieldId?: string;
   timelineEndFieldId?: string;
-  /** 表格分组字段（Grid 独有；看板分组字段是 boardFieldId） */
-  groupFieldId?: string;
+  /** 表格分组字段（按层级顺序，最多 MAX_GROUP_DEPTH 层；Grid 独有，看板分组是 boardFieldId）。
+   *  写入时顺带清掉旧版单层键 groupFieldId，读旧库时它仍会并进本字段。 */
+  groupFieldIds?: string[];
   /** 列汇总：field_id → 汇总函数；缺省即该列不显示汇总 */
   aggregates?: Record<string, AggregateFn>;
+  /** 条件格式规则（按顺序判定，先到先得）；表格视图独有 */
+  condFormats?: CondFormatRule[];
   /** 看板卡片上额外展示的字段 id（按此顺序）；未配置沿用"前 3 个可见字段"启发式，空数组=只显示标题 */
   cardFieldIds?: string[];
   /** 画廊视图：封面图取自哪个附件字段 */
@@ -53,6 +67,54 @@ const specArray = <T>(v: unknown, keep: (item: unknown) => boolean = isFieldSpec
 
 const isString = (v: unknown): v is string => typeof v === "string";
 
+const isFilterMode = (v: unknown): v is FilterMode => v === "and" || v === "or";
+
+/** 组看形状就认得出来：有 children 数组且 mode 合法 */
+const isFilterGroupShape = (v: unknown): v is { mode: FilterMode; children: unknown; id?: unknown } =>
+  !!v &&
+  typeof v === "object" &&
+  Array.isArray((v as { children?: unknown }).children) &&
+  isFilterMode((v as { mode?: unknown }).mode);
+
+/**
+ * 筛选树校验（depth = 这批节点所处的层号，顶层为 1）：
+ * 叶子仍按 field_id 认，组缺 id（没法定位编辑）或超出层深上限时只摊平外壳，条件不丢。
+ */
+function parseFilterNodes(value: unknown, depth: number): FilterNode[] {
+  if (!Array.isArray(value)) return [];
+  const out: FilterNode[] = [];
+  for (const item of value) {
+    if (isFilterGroupShape(item)) {
+      const children = parseFilterNodes(item.children, depth + 1);
+      if (children.length === 0) continue;
+      if (depth > MAX_FILTER_DEPTH || !isString(item.id) || !item.id) {
+        out.push(...children);
+        continue;
+      }
+      const group: FilterGroup = { id: item.id, mode: item.mode, children };
+      out.push(group);
+    } else if (isFieldSpec(item)) {
+      out.push(item as FilterSpec);
+    }
+  }
+  return out;
+}
+
+/** 分组字段序列：去重、按序、截到层数上限（历史脏配置不该把表格切成无数碎块） */
+function parseGroupFieldIds(v: unknown, legacy: unknown): string[] | undefined {
+  const ids: string[] = [];
+  const push = (id: unknown) => {
+    if (isString(id) && id && !ids.includes(id) && ids.length < MAX_GROUP_DEPTH) ids.push(id);
+  };
+  if (Array.isArray(v)) {
+    for (const id of v) push(id);
+    return ids;
+  }
+  // 旧配置只有 groupFieldId 一个键
+  if (isString(legacy) && legacy) return [legacy];
+  return undefined;
+}
+
 /** 列汇总：只收 field_id → 已知函数名，其余条目整条丢弃 */
 function parseAggregates(v: unknown): Record<string, AggregateFn> | undefined {
   if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
@@ -67,7 +129,7 @@ function parseAggregates(v: unknown): Record<string, AggregateFn> | undefined {
 export function parseViewConfig(text: string | null | undefined): ViewConfig {
   const o = asObject(text);
   const out: ViewConfig = {};
-  const filters = specArray<FilterSpec>(o.filters);
+  const filters = Array.isArray(o.filters) ? parseFilterNodes(o.filters, 1) : undefined;
   if (filters) out.filters = filters;
   if (o.filterMode === "and" || o.filterMode === "or") out.filterMode = o.filterMode;
   const sorts = specArray<SortSpec>(o.sorts, isSortSpec);
@@ -78,10 +140,13 @@ export function parseViewConfig(text: string | null | undefined): ViewConfig {
   if (typeof o.timelineStartFieldId === "string" && o.timelineStartFieldId)
     out.timelineStartFieldId = o.timelineStartFieldId;
   if (typeof o.timelineEndFieldId === "string" && o.timelineEndFieldId) out.timelineEndFieldId = o.timelineEndFieldId;
-  if (typeof o.groupFieldId === "string" && o.groupFieldId) out.groupFieldId = o.groupFieldId;
+  const groupFieldIds = parseGroupFieldIds(o.groupFieldIds, o.groupFieldId);
+  if (groupFieldIds) out.groupFieldIds = groupFieldIds;
   if (typeof o.galleryFieldId === "string" && o.galleryFieldId) out.galleryFieldId = o.galleryFieldId;
   const aggregates = parseAggregates(o.aggregates);
   if (aggregates) out.aggregates = aggregates;
+  const condFormats = parseCondFormats(o.condFormats);
+  if (condFormats) out.condFormats = condFormats;
   const cardFieldIds = specArray<string>(o.cardFieldIds, isString);
   if (cardFieldIds) out.cardFieldIds = cardFieldIds;
   if (typeof o.activeViewId === "string" && o.activeViewId) out.activeViewId = o.activeViewId;
@@ -98,9 +163,14 @@ export function mergeViewConfig(text: string | null | undefined, patch: Partial<
   if (patch.calendarFieldId !== undefined) next.calendarFieldId = patch.calendarFieldId;
   if (patch.timelineStartFieldId !== undefined) next.timelineStartFieldId = patch.timelineStartFieldId;
   if (patch.timelineEndFieldId !== undefined) next.timelineEndFieldId = patch.timelineEndFieldId;
-  if (patch.groupFieldId !== undefined) next.groupFieldId = patch.groupFieldId;
+  if (patch.groupFieldIds !== undefined) {
+    next.groupFieldIds = patch.groupFieldIds;
+    // 单层分组键已被取代：留着会让下次读取时两个键同时存在（本函数只在有 patch 时才动它）
+    delete next.groupFieldId;
+  }
   if (patch.galleryFieldId !== undefined) next.galleryFieldId = patch.galleryFieldId;
   if (patch.aggregates !== undefined) next.aggregates = patch.aggregates;
+  if (patch.condFormats !== undefined) next.condFormats = patch.condFormats;
   if (patch.cardFieldIds !== undefined) next.cardFieldIds = patch.cardFieldIds;
   if (patch.activeViewId !== undefined) next.activeViewId = patch.activeViewId;
   return JSON.stringify(next);

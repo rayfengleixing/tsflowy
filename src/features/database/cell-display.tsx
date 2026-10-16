@@ -1,11 +1,17 @@
 // 数据库单元格的只读展示部件（选项 / 关联 / 附件胶囊与缩略图）。
 // 从 editors.tsx 原样搬出（无逻辑/样式改动），editors.tsx 再统一转出以保持对外导出 API 不变。
 import { useEffect, useState, type ReactNode } from "react";
-import { File as FileIcon, Link2, Paperclip, X } from "lucide-react";
+import { Check, File as FileIcon, Link2, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
 import type { CellValue, DatabaseField, FieldType, SelectOption } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
-import { attachmentRefs, formatCellValue, parseFieldOptions, ratingMax } from "@/lib/database-values";
+import {
+  attachmentRefs,
+  formatCellValue,
+  isSingleOptionKind,
+  parseFieldOptions,
+  ratingMax,
+} from "@/lib/database-values";
 import { isImageFile, openAttachment, resolveAssetUrl } from "@/lib/assets";
 import { relationRowIds, relationRowLabel, relationTarget, reverseRelationConfig } from "@/lib/relation";
 import { useRelationStore } from "@/stores/relation";
@@ -56,6 +62,7 @@ export function OptionChip({
         colors[option.color] ?? "bg-neutral-200 text-neutral-600",
       )}
     >
+      {option.tone === "done" && <Check className="h-3 w-3 shrink-0" />}
       <span className="max-w-[180px] truncate">{option.name}</span>
       {onRemove && (
         <button
@@ -89,7 +96,7 @@ export function SelectChips({
 }) {
   const opts = parseFieldOptions(field.options);
   if (opts.kind !== "select") return null;
-  if (field.field_type === "single_select") {
+  if (isSingleOptionKind(field.field_type)) {
     if (typeof value !== "string") return null;
     return (
       <OptionChip
@@ -407,6 +414,7 @@ const DEDICATED_DISPLAYS: Partial<
     wrapClass: grid ? GRID_BAR : null,
   }),
   single_select: selectDisplay,
+  status: selectDisplay,
   multi_select: selectDisplay,
   relation: relationDisplay,
   // 反向关系是只读虚拟列：value 由调用方实时反查（来源行 id 数组），这里解析成来源行标题

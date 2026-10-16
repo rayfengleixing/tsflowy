@@ -1,14 +1,25 @@
 import { useState, type ComponentType } from "react";
-import { Check, Plus, Search, Trash2, X } from "lucide-react";
+import { Check, FolderPlus, Plus, Search, Trash2, X } from "lucide-react";
 import type { CellValue, DatabaseField, FieldOptions, FieldType } from "@/types/database";
 import {
+  MAX_FILTER_DEPTH,
   RELATIVE_DATE_PREFIX,
+  countFilterLeaves,
   defaultOperand,
+  insertFilterNode,
+  isFilterGroup,
   isRelativeDateOperand,
   makeRelativeOperand,
+  newFilterGroup,
+  newFilterLeaf,
   opsForType,
+  patchFilterGroupMode,
+  patchFilterLeaf,
   relativeDayCount,
+  removeFilterNode,
+  type FilterGroup,
   type FilterMode,
+  type FilterNode,
   type FilterOp,
   type FilterSpec,
   type RelativeDateKey,
@@ -39,7 +50,8 @@ const SELECT_CLS =
   "h-7 rounded-md border border-neutral-300 bg-white px-2 text-[12px] outline-none focus:border-brand-500";
 
 /** 操作数录入控件的公共入参：控件按字段类型分派（见 FILTER_OPERANDS） */
-interface FilterOperandProps {
+/** 条件值的输入契约（条件格式对话框也复用同一套操作数编辑器） */
+export interface FilterOperandProps {
   field: DatabaseField;
   value: CellValue;
   options: FieldOptions;
@@ -267,6 +279,7 @@ function TextOperand({ draft, onDraft, onChange }: FilterOperandProps) {
 /** 类型 → 操作数控件。新增字段类型只需在这里补一行，不必再加一层 if */
 const FILTER_OPERANDS: Partial<Record<FieldType, ComponentType<FilterOperandProps>>> = {
   single_select: SelectOperand,
+  status: SelectOperand,
   multi_select: SelectOperand,
   number: NumberOperand,
   currency: NumberOperand,
@@ -278,8 +291,8 @@ const FILTER_OPERANDS: Partial<Record<FieldType, ComponentType<FilterOperandProp
   relation: RelationOperandInput,
 };
 
-/** 筛选值输入（按字段类型） */
-function FilterValueInput(props: Omit<FilterOperandProps, "options" | "draft" | "onDraft">) {
+/** 筛选值输入（按字段类型）；条件格式的操作数复用同一套编辑器 */
+export function FilterValueInput(props: Omit<FilterOperandProps, "options" | "draft" | "onDraft">) {
   const { field, value } = props;
   const options = parseFieldOptions(field.options);
   const [draft, setDraft] = useState(typeof value === "string" ? value : "");
@@ -287,127 +300,210 @@ function FilterValueInput(props: Omit<FilterOperandProps, "options" | "draft" | 
   return <Operand {...props} options={options} draft={draft} onDraft={setDraft} />;
 }
 
-/** 筛选条（说明书 10-M4：多条件 AND/OR + 类型化比较符） */
+/** 无需操作数的比较符：给了比较符就不用再填值 */
+export const NO_OPERAND_OPS: FilterOp[] = ["checked", "unchecked", "is_empty", "is_not_empty"];
+
+const leafId = () => "flt_" + crypto.randomUUID().slice(0, 8);
+const groupId = () => "grp_" + crypto.randomUUID().slice(0, 8);
+
+function ModeToggle({ mode, onChange }: { mode: FilterMode; onChange: (m: FilterMode) => void }) {
+  const btn = (m: FilterMode) =>
+    cn(
+      "rounded px-1.5 py-0.5 text-[11px] font-medium",
+      mode === m ? "bg-brand-500 text-white" : "text-neutral-500 hover:bg-neutral-200",
+    );
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      <button className={btn("and")} onClick={() => onChange("and")}>
+        AND
+      </button>
+      <button className={btn("or")} onClick={() => onChange("or")}>
+        OR
+      </button>
+    </div>
+  );
+}
+
+/** 一条叶子条件：字段 + 比较符 + 操作数 + 删除 */
+function FilterLeafRow({
+  spec,
+  fields,
+  getDb,
+  onPatch,
+  onRemove,
+}: {
+  spec: FilterSpec;
+  fields: DatabaseField[];
+  getDb: ReturnType<typeof useRelationDbs>;
+  onPatch: (patch: Partial<FilterSpec>) => void;
+  onRemove: () => void;
+}) {
+  const field = fields.find((f) => f.id === spec.field_id);
+  // 字段被删掉的条件不显示，但配置里留着（把字段加回来条件就恢复生效）
+  if (!field) return null;
+  return (
+    <div className="flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-2 py-1">
+      <select
+        className="h-7 max-w-36 rounded border-none bg-transparent text-[12px] outline-none"
+        value={spec.field_id}
+        onChange={(e) => {
+          const nf = fields.find((f) => f.id === e.target.value);
+          if (!nf) return;
+          onPatch({ field_id: nf.id, op: opsForType(nf.field_type)[0], value: defaultOperand(nf) });
+        }}
+      >
+        {fields.map((vf) => (
+          <option key={vf.id} value={vf.id}>
+            {vf.name}
+          </option>
+        ))}
+      </select>
+      <select
+        className="h-7 rounded border border-neutral-200 bg-white px-1.5 text-[12px] outline-none focus:border-brand-500"
+        value={spec.op}
+        onChange={(e) => onPatch({ op: e.target.value as FilterOp })}
+      >
+        {opsForType(field.field_type).map((op) => (
+          <option key={op} value={op}>
+            {t(`filter.op.${op}` as never)}
+          </option>
+        ))}
+      </select>
+      {!NO_OPERAND_OPS.includes(spec.op) && (
+        <FilterValueInput field={field} value={spec.value} getDb={getDb} onChange={(v) => onPatch({ value: v })} />
+      )}
+      <button
+        className="flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-red-500"
+        onClick={onRemove}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
+/** 递归渲染要用的操作集合（parentId 为 null 即顶层） */
+interface FilterActions {
+  fields: DatabaseField[];
+  getDb: ReturnType<typeof useRelationDbs>;
+  patchLeaf: (id: string, patch: Partial<FilterSpec>) => void;
+  setGroupMode: (id: string, mode: FilterMode) => void;
+  removeNode: (id: string) => void;
+  addLeaf: (parentId: string | null) => void;
+  addGroup: (parentId: string | null) => void;
+}
+
+function FilterNodes({ nodes, depth, actions }: { nodes: FilterNode[]; depth: number; actions: FilterActions }) {
+  return (
+    <>
+      {nodes.map((node) =>
+        isFilterGroup(node) ? (
+          <FilterGroupRow key={node.id} group={node} depth={depth} actions={actions} />
+        ) : (
+          <FilterLeafRow
+            key={node.id}
+            spec={node}
+            fields={actions.fields}
+            getDb={actions.getDb}
+            onPatch={(patch) => actions.patchLeaf(node.id, patch)}
+            onRemove={() => actions.removeNode(node.id)}
+          />
+        ),
+      )}
+    </>
+  );
+}
+
+/** 条件组：自带 AND/OR，里面还能再嵌一层组（嵌到 MAX_FILTER_DEPTH 层为止） */
+function FilterGroupRow({ group, depth, actions }: { group: FilterGroup; depth: number; actions: FilterActions }) {
+  const leafCount = countFilterLeaves(group.children);
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-brand-300 bg-brand-50/50 p-1.5">
+      <span className="flex shrink-0 items-center gap-1 text-[11px] font-medium text-brand-600">
+        <FolderPlus className="h-3.5 w-3.5" />
+        {t("filter.group")}
+      </span>
+      <ModeToggle mode={group.mode} onChange={(m) => actions.setGroupMode(group.id, m)} />
+      <FilterNodes nodes={group.children} depth={depth + 1} actions={actions} />
+      {leafCount === 0 && <span className="text-[11px] text-neutral-400">{t("filter.groupEmpty")}</span>}
+      <button
+        className="flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-neutral-500 hover:bg-brand-100"
+        onClick={() => actions.addLeaf(group.id)}
+      >
+        <Plus className="h-3 w-3" />
+        {t("filter.add")}
+      </button>
+      {depth < MAX_FILTER_DEPTH && (
+        <button
+          className="flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-neutral-500 hover:bg-brand-100"
+          onClick={() => actions.addGroup(group.id)}
+        >
+          <FolderPlus className="h-3 w-3" />
+          {t("filter.addGroup")}
+        </button>
+      )}
+      <button
+        className="flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-red-500"
+        onClick={() => actions.removeNode(group.id)}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
+/** 筛选条（说明书 10-M4：多条件 AND/OR + 类型化比较符 + 可嵌套条件组） */
 export function FilterBar(props: {
   fields: DatabaseField[];
-  filters: FilterSpec[];
+  filters: FilterNode[];
   mode: FilterMode;
-  onChange: (filters: FilterSpec[], mode: FilterMode) => void;
+  onChange: (filters: FilterNode[], mode: FilterMode) => void;
   onClose: () => void;
 }) {
   const { fields, filters, mode, onChange, onClose } = props;
   const visibleFields = fields.filter((f) => f.is_hidden === 0);
   // relation 筛选操作数需要目标库行数据：与表格同一份缓存通道（内部只发一次 IPC）
   const getDb = useRelationDbs(visibleFields);
+  const leafCount = countFilterLeaves(filters);
 
-  const addFilter = () => {
-    const field = visibleFields.length > 0 ? visibleFields[0] : undefined;
-    if (!field) return;
-    const op = opsForType(field.field_type)[0];
-    onChange(
-      [
-        ...filters,
-        { id: "flt_" + crypto.randomUUID().slice(0, 8), field_id: field.id, op, value: defaultOperand(field) },
-      ],
-      mode,
-    );
+  const actions: FilterActions = {
+    fields: visibleFields,
+    getDb,
+    patchLeaf: (id, patch) => onChange(patchFilterLeaf(filters, id, patch), mode),
+    setGroupMode: (id, m) => onChange(patchFilterGroupMode(filters, id, m), mode),
+    removeNode: (id) => onChange(removeFilterNode(filters, id), mode),
+    addLeaf: (parentId) => {
+      const field = visibleFields.length > 0 ? visibleFields[0] : undefined;
+      if (!field) return;
+      onChange(insertFilterNode(filters, parentId, newFilterLeaf(leafId(), field)), mode);
+    },
+    // 新建组顺手带一条条件：空组恒真、筛不出任何东西，让用户少点一次
+    addGroup: (parentId) => {
+      const field = visibleFields.length > 0 ? visibleFields[0] : undefined;
+      const group = newFilterGroup(groupId());
+      onChange(
+        insertFilterNode(filters, parentId, field ? { ...group, children: [newFilterLeaf(leafId(), field)] } : group),
+        mode,
+      );
+    },
   };
-
-  const update = (id: string, patch: Partial<FilterSpec>) => {
-    onChange(
-      filters.map((f) => (f.id === id ? { ...f, ...patch } : f)),
-      mode,
-    );
-  };
-
-  const remove = (id: string) => {
-    onChange(
-      filters.filter((f) => f.id !== id),
-      mode,
-    );
-  };
-
-  const fieldById = (id: string) => visibleFields.find((f) => f.id === id);
 
   return (
     <div
       data-testid="filter-bar"
       className="flex flex-wrap items-center gap-2 border-b border-neutral-200 bg-neutral-100/60 px-4 py-2"
     >
-      <div className="flex items-center gap-1 text-[12px]">
-        <button
-          className={cn(
-            "rounded px-1.5 py-0.5 font-medium",
-            mode === "and" ? "bg-brand-500 text-white" : "text-neutral-500 hover:bg-neutral-200",
-          )}
-          onClick={() => onChange(filters, "and")}
-        >
-          AND
-        </button>
-        <button
-          className={cn(
-            "rounded px-1.5 py-0.5 font-medium",
-            mode === "or" ? "bg-brand-500 text-white" : "text-neutral-500 hover:bg-neutral-200",
-          )}
-          onClick={() => onChange(filters, "or")}
-        >
-          OR
-        </button>
-      </div>
+      <ModeToggle mode={mode} onChange={(m) => onChange(filters, m)} />
 
-      {filters.map((f) => {
-        const field = fieldById(f.field_id);
-        if (!field) return null;
-        return (
-          <div key={f.id} className="flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-2 py-1">
-            <select
-              className="h-7 max-w-36 rounded border-none bg-transparent text-[12px] outline-none"
-              value={f.field_id}
-              onChange={(e) => {
-                const nf = fieldById(e.target.value);
-                if (!nf) return;
-                const op = opsForType(nf.field_type)[0];
-                update(f.id, { field_id: e.target.value, op, value: defaultOperand(nf) });
-              }}
-            >
-              {visibleFields.map((vf) => (
-                <option key={vf.id} value={vf.id}>
-                  {vf.name}
-                </option>
-              ))}
-            </select>
-            <select
-              className="h-7 rounded border border-neutral-200 bg-white px-1.5 text-[12px] outline-none focus:border-brand-500"
-              value={f.op}
-              onChange={(e) => update(f.id, { op: e.target.value as FilterOp })}
-            >
-              {opsForType(field.field_type).map((op) => (
-                <option key={op} value={op}>
-                  {t(`filter.op.${op}` as never)}
-                </option>
-              ))}
-            </select>
-            {!["checked", "unchecked", "is_empty", "is_not_empty"].includes(f.op) && (
-              <FilterValueInput
-                field={field}
-                value={f.value}
-                getDb={getDb}
-                onChange={(v) => update(f.id, { value: v })}
-              />
-            )}
-            <button
-              className="flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-red-500"
-              onClick={() => remove(f.id)}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        );
-      })}
+      <FilterNodes nodes={filters} depth={1} actions={actions} />
 
-      <Button variant="outline" size="sm" onClick={addFilter} disabled={visibleFields.length === 0}>
+      <Button variant="outline" size="sm" onClick={() => actions.addLeaf(null)} disabled={visibleFields.length === 0}>
         <Plus className="h-3.5 w-3.5" />
         {t("filter.add")}
+      </Button>
+      <Button variant="outline" size="sm" onClick={() => actions.addGroup(null)} disabled={visibleFields.length === 0}>
+        <FolderPlus className="h-3.5 w-3.5" />
+        {t("filter.addGroup")}
       </Button>
       <button
         className="ml-auto flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200"
@@ -415,8 +511,8 @@ export function FilterBar(props: {
       >
         <X className="h-4 w-4" />
       </button>
-      {filters.length > 0 && (
-        <span className="text-[11px] text-neutral-400">{t("filter.active", { count: String(filters.length) })}</span>
+      {leafCount > 0 && (
+        <span className="text-[11px] text-neutral-400">{t("filter.active", { count: String(leafCount) })}</span>
       )}
     </div>
   );

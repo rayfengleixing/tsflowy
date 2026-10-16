@@ -3,8 +3,7 @@ import { ChevronLeft, ChevronRight, ExternalLink, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { applyFilters, sortRows } from "@/lib/database-query";
-import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
-import { sparseGet } from "@/lib/database-values";
+import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
 import { isReadonlyType } from "@/types/database";
 import { useRelationDbs } from "./use-database-data";
 import { Button } from "@/components/ui/button";
@@ -70,7 +69,7 @@ export function FormView({
     if (!row) return {};
     // 计算列（公式/汇总/反向关系）没有存储值，本行现算一次
     const evaluated = computeEvaluatedCells([row], cells, fields, relationDbOf).display;
-    return sparseGet(evaluated, row.id) ?? sparseGet(cells, row.id) ?? {};
+    return rowCellsOf(evaluated, cells, row.id);
   }, [row, cells, fields, relationDbOf]);
 
   const commit = useCallback(

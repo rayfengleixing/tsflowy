@@ -25,25 +25,25 @@ const selectField = (id: string, type: DatabaseField["field_type"] = "single_sel
 const cells = (m: Record<string, Record<string, CellValue>>) => m;
 
 describe("aggregatesForType", () => {
+  const numeric = ["count", "filled", "empty", "unique", "sum", "average", "median", "min", "max", "share"];
   it("offers arithmetic only where it means something", () => {
-    expect(aggregatesForType("number")).toEqual(["count", "filled", "empty", "unique", "sum", "average", "min", "max"]);
+    expect(aggregatesForType("number")).toEqual(numeric);
     // 公式列求值后是数字：候选与数字列一致（汇总读求值后的单元格图）
-    expect(aggregatesForType("formula")).toEqual([
-      "count",
-      "filled",
-      "empty",
-      "unique",
-      "sum",
-      "average",
-      "min",
-      "max",
-    ]);
-    expect(aggregatesForType("checkbox")).toEqual(["count", "checked", "unchecked"]);
-    expect(aggregatesForType("date")).toEqual(["count", "filled", "empty", "unique", "min", "max"]);
-    expect(aggregatesForType("text")).toEqual(["count", "filled", "empty", "unique"]);
+    expect(aggregatesForType("formula")).toEqual(numeric);
+    expect(aggregatesForType("checkbox")).toEqual(["count", "checked", "unchecked", "share"]);
+    expect(aggregatesForType("date")).toEqual(["count", "filled", "empty", "unique", "min", "max", "share"]);
+    expect(aggregatesForType("text")).toEqual(["count", "filled", "empty", "unique", "share"]);
     // 轻量数字类型：候选与数字列一致
     for (const t of ["progress", "rating", "currency"] as const) {
-      expect(aggregatesForType(t)).toEqual(["count", "filled", "empty", "unique", "sum", "average", "min", "max"]);
+      expect(aggregatesForType(t)).toEqual(numeric);
+    }
+  });
+
+  it("中位数只给数字列，占比给所有列", () => {
+    expect(aggregatesForType("text")).not.toContain("median");
+    expect(aggregatesForType("date")).not.toContain("median");
+    for (const t of ["text", "number", "checkbox", "date"] as const) {
+      expect(aggregatesForType(t)).toContain("share");
     }
   });
 
@@ -97,6 +97,36 @@ describe("aggregateValue", () => {
     expect(aggregateValue("average", n, ids, nums)).toBe("15.00");
     expect(aggregateValue("min", n, ids, nums)).toBe("10.00");
     expect(aggregateValue("max", n, ids, nums)).toBe("20.00");
+  });
+
+  it("takes the middle value for median", () => {
+    const n = field("n", "number");
+    // 偶数个（10、20）取中间两数均值，忽略空值
+    expect(aggregateValue("median", n, ids, nums)).toBe("15.00");
+    const three = cells({ r1: { n: 10 }, r2: { n: 90 }, r3: { n: 20 } });
+    expect(aggregateValue("median", n, ids, three)).toBe("20.00");
+    // 只剩空格时没有中位数，不硬凑 0
+    expect(aggregateValue("median", n, ["r2"], nums)).toBe("");
+  });
+
+  it("shares the numeric column against the whole-table scope", () => {
+    const n = field("n", "number");
+    const all = cells({ r1: { n: 10 }, r2: { n: 20 }, r3: { n: 70 }, r4: { n: null } });
+    const scope = ["r1", "r2", "r3", "r4"];
+    expect(aggregateValue("share", n, ["r1", "r2"], all, scope)).toBe("30.0%");
+    // 不给分母就是「这一段占自己」= 100%
+    expect(aggregateValue("share", n, scope, all)).toBe("100.0%");
+    // 分母为 0 没有占比可言
+    const zero = cells({ r1: { n: 0 }, r2: { n: 0 } });
+    expect(aggregateValue("share", n, ["r1"], zero, ["r1", "r2"])).toBe("");
+  });
+
+  it("shares non-numeric columns by filled rows", () => {
+    const txt = field("t", "text");
+    const c = cells({ r1: { t: "a" }, r2: { t: "" }, r3: { t: "b" }, r4: { t: "c" } });
+    // 本段只有 r1 有值，全表 3 行有值
+    expect(aggregateValue("share", txt, ["r1", "r2"], c, ["r1", "r2", "r3", "r4"])).toBe("33.3%");
+    expect(aggregateValue("share", txt, [], c, ["r1", "r2", "r3", "r4"])).toBe("0.0%");
   });
 
   it("honours the column's own number format", () => {

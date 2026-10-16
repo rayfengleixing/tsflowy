@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { FIELD_TYPES, type FieldOptions, type FieldType } from "@/types/database";
 import { defaultValue, validateCellValue } from "./database-values";
-import { FIELD_KINDS, canGroupByKind, fieldKind, isDateKind, isOptionBearing } from "./field-kinds";
+import {
+  FIELD_KINDS,
+  canGroupByKind,
+  fieldKind,
+  isDateKind,
+  isDoneOption,
+  isOptionBearing,
+  isSingleOptionKind,
+  STATUS_TONE_COLOR,
+  statusToneOf,
+} from "./field-kinds";
 
 const opts = (o: FieldOptions): FieldOptions => o;
 const NONE: FieldOptions = { kind: "none" };
@@ -56,6 +66,7 @@ describe("field-kinds 能力位与原 switch 一致", () => {
       "rating",
       "currency",
       "date",
+      "status",
       "single_select",
       "multi_select",
       "url",
@@ -69,15 +80,19 @@ describe("field-kinds 能力位与原 switch 一致", () => {
     expect(FIELD_KINDS.checkbox.filterOps).toEqual(["checked", "unchecked"]);
   });
 
-  it("带选项列表的类型只有单选/多选（导入预建选项、选项编辑器都读这一位）", () => {
-    expect(FIELD_TYPES.filter(isOptionBearing)).toEqual(["single_select", "multi_select"]);
+  it("带选项列表的类型只有状态/单选/多选（导入预建选项、选项编辑器都读这一位）", () => {
+    expect(FIELD_TYPES.filter(isOptionBearing)).toEqual(["status", "single_select", "multi_select"]);
+  });
+
+  it("状态与单选同为「一格一选项」，多选不是（看板分列与单元格胶囊按它判定）", () => {
+    expect(FIELD_TYPES.filter(isSingleOptionKind)).toEqual(["status", "single_select"]);
   });
 });
 
 describe("field-kinds 粘贴解读", () => {
   it("只有选择类交出选项名，其余给值或直接跳过", () => {
     const optionTypes = FIELD_TYPES.filter((t) => FIELD_KINDS[t].paste("甲 ; 乙").kind === "option_names");
-    expect(optionTypes).toEqual(["single_select", "multi_select"]);
+    expect(optionTypes).toEqual(["status", "single_select", "multi_select"]);
     expect(FIELD_KINDS.single_select.paste(" 新品类 ")).toEqual({ kind: "option_names", names: ["新品类"] });
     // 多选的拆分顺序/重复保留，去重由 pasteCell 在 id 层面做
     expect(FIELD_KINDS.multi_select.paste(" 甲 ; ; 乙|甲 ")).toEqual({
@@ -175,5 +190,38 @@ describe("field-kinds 展示格式", () => {
     expect(FIELD_KINDS.attachment.format([{ name: "合同.pdf", path: "assets/1.pdf" }], NONE)).toBe("合同.pdf");
     expect(FIELD_KINDS.attachment.format(["脏数据"], NONE)).toBe("");
     expect(FIELD_KINDS.relation.format(["r1", "r2"], NONE)).toBe("r1, r2");
+  });
+});
+
+describe("status 阶段", () => {
+  const status = {
+    kind: "select",
+    options: [
+      { id: "s1", name: "待办", color: "gray", tone: "todo" },
+      { id: "s2", name: "进行中", color: "blue", tone: "doing" },
+      { id: "s3", name: "已完成", color: "green", tone: "done" },
+      { id: "s4", name: "老选项", color: "red" },
+    ],
+  } satisfies Extract<FieldOptions, { kind: "select" }>;
+
+  it("值 → 阶段：空值、已删选项、没标阶段的选项都归 null", () => {
+    expect(statusToneOf(status, "s3")).toBe("done");
+    expect(statusToneOf(status, "s4")).toBeNull();
+    expect(statusToneOf(status, null)).toBeNull();
+    expect(statusToneOf(status, "gone")).toBeNull();
+    // 字段配置坏成非选择类时也不能抛错
+    expect(statusToneOf(NONE, "s1")).toBeNull();
+  });
+
+  it("「已完成」只认阶段，配色不参与判定", () => {
+    expect(isDoneOption(status.options[2])).toBe(true);
+    expect(isDoneOption({ id: "x", name: "搞定", color: "green" })).toBe(false);
+  });
+
+  it("阶段有确定的建议配色，status 的展示与单选同源", () => {
+    expect(STATUS_TONE_COLOR).toEqual({ todo: "gray", doing: "blue", done: "green" });
+    expect(FIELD_KINDS.status.format("s2", status)).toBe("进行中");
+    expect(FIELD_KINDS.status.format("gone", status)).toBe("gone");
+    expect(FIELD_KINDS.status.format(123, status)).toBe("");
   });
 });

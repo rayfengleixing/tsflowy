@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FieldOptions } from "@/types/database";
+import type { FieldOptions, SelectOption } from "@/types/database";
 import {
   attachmentRefs,
   defaultValue,
@@ -190,5 +190,16 @@ describe("parseFieldOptions", () => {
     expect(a.name).toBe("待办");
     expect(a.id).toMatch(/^opt_/);
     expect(a.id).not.toBe(b.id);
+  });
+
+  it("status 选项按阶段取色，单选/多选不写 tone 键", () => {
+    expect(newSelectOption("已完成", "done").color).toBe("green");
+    const doing = newSelectOption("进行中", "doing");
+    expect(doing.id).toMatch(/^opt_/);
+    expect(doing.color).toBe("blue");
+    expect(doing.tone).toBe("doing");
+    // tone 为 undefined 时键在 JSON 里直接消失：老类型的选项数据不因新字段变样
+    expect("tone" in (JSON.parse(JSON.stringify(newSelectOption("分类甲"))) as SelectOption)).toBe(false);
+    expect((JSON.parse(JSON.stringify(doing)) as SelectOption).tone).toBe("doing");
   });
 });

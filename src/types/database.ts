@@ -9,6 +9,7 @@ export type FieldType =
   | "rating"
   | "currency"
   | "date"
+  | "status"
   | "single_select"
   | "multi_select"
   | "checkbox"
@@ -23,8 +24,12 @@ export type FieldType =
   | "reverse_relation"
   | "attachment";
 
+// 与 migrations/015（及后续扩展白名单的迁移）里 database_fields.field_type 的 CHECK 取值一一对应，
+// 新增类型必须先扩 CHECK，否则写入直接被 SQLite 拒绝。
 // 字段类型可选列表（created_at / last_edited_at 由触发器自动维护（READONLY_FIELD_TYPES）。
 // formula 由前端按表达式实时计算展示，无存储值，同样只读不可编辑。
+// status 是「带阶段语义的单选」：每个选项标一个阶段（待办 / 进行中 / 已完成），
+// 单元格值与 single_select 同为选项 id 字符串，只是额外可用阶段上色与看板列。
 // relation 引用另一个数据库视图的行（单元格存对端行 id 数组）；rollup 对关联行做聚合，
 // 与 formula 一样无存储值、实时计算。
 // reverse_relation 是 relation 的镜像：只读展示「其它表里指向本行的关联行」，同样无存储值。
@@ -38,6 +43,7 @@ export const FIELD_TYPES: FieldType[] = [
   "rating",
   "currency",
   "date",
+  "status",
   "single_select",
   "multi_select",
   "checkbox",
@@ -77,6 +83,8 @@ export interface DatabaseRow {
   database_view_id: string;
   position: number;
   document_id: string | null; // 行详情文档 view_id；NULL=未创建
+  /** 父行 id（NULL=顶层）。父子行层级只在表格视图未分组时展开成缩进树 */
+  parent_id: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -110,11 +118,16 @@ export interface AttachmentRef {
   path: string;
 }
 
+/** status 字段选项的阶段：待办 / 进行中 / 已完成。其它选择类不写（undefined）。 */
+export type StatusTone = "todo" | "doing" | "done";
+
 /** 单选/多选选项 */
 export interface SelectOption {
   id: string;
   name: string;
   color: string;
+  /** 仅 status 字段使用：阶段语义，决定默认配色与「已完成」勾选 */
+  tone?: StatusTone;
 }
 
 /** 字段 options JSON 的结构化形态 */

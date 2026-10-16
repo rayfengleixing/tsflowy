@@ -40,6 +40,7 @@ const row = (id: string, position = 0): DatabaseRow => ({
   database_view_id: "v1",
   position,
   document_id: null,
+  parent_id: null,
   created_at: 1,
   updated_at: 1,
 });
@@ -111,6 +112,8 @@ describe("relationRowLabel / relationRowText", () => {
     // 目标库未加载：全部降级
     expect(relationCellText(["r1"], undefined)).toBe("r1");
     expect(relationCellText(null, db(fields, rows, cells))).toBe("");
+    // 导出用的自定义分隔符（值里带逗号时不与 CSV 分隔符混淆）
+    expect(relationCellText(["r1", "r2"], db(fields, rows, cells), "; ")).toBe("任务甲; 任务乙");
   });
 });
 
@@ -201,7 +204,11 @@ describe("rollupFnsFor", () => {
     const text = field("note", "text");
     const target = db([num, text], [], {});
     expect(rollupFnsFor(target, "amount")).toContain("sum");
+    expect(rollupFnsFor(target, "amount")).toContain("median");
     expect(rollupFnsFor(target, "note")).not.toContain("sum");
+    // 占比的分母是全表，rollup 的范围只有本行的关联行（恒等 100%），不提供
+    expect(rollupFnsFor(target, "amount")).not.toContain("share");
+    expect(rollupFnsFor(target, "note")).not.toContain("share");
     expect(rollupFnsFor(target, "ghost")).toEqual(["count"]);
     expect(rollupFnsFor(undefined, "amount")).toEqual(["count"]);
   });

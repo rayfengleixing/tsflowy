@@ -1,20 +1,33 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_GROUP_DEPTH,
   UNGROUPED,
   applyFilters,
   canGroupBy,
+  countFilterLeaves,
   defaultOperand,
   evaluateFilter,
   groupRowsForGrid,
+  groupRowsNested,
+  insertFilterNode,
   isCellEmpty,
+  isFilterGroup,
   makeRelativeOperand,
+  newFilterGroup,
+  newFilterLeaf,
   opsForType,
+  patchFilterGroupMode,
+  patchFilterLeaf,
+  pruneFiltersByFields,
   relativeDayRange,
+  removeFilterNode,
   sortRows,
+  type FilterGroup,
+  type FilterNode,
   type FilterSpec,
   type GridGroup,
 } from "./database-query";
-import type { DatabaseField, DatabaseRow } from "@/types/database";
+import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 
 const field = (id: string, type: DatabaseField["field_type"], options = "{}"): DatabaseField => ({
   id,
@@ -32,6 +45,7 @@ const row = (id: string): DatabaseRow => ({
   database_view_id: "v1",
   position: 0,
   document_id: null,
+  parent_id: null,
   created_at: 0,
   updated_at: 0,
 });
@@ -267,6 +281,207 @@ describe("applyFilters", () => {
   it("unknown field is ignored (passes)", () => {
     const filters: FilterSpec[] = [{ id: "f1", field_id: "ghost", op: "is_empty", value: null }];
     expect(applyFilters(rows, cells, filters, fields, "and")).toEqual(rows);
+  });
+});
+
+describe("嵌套筛选组", () => {
+  const rows = [row("a"), row("b"), row("c"), row("d")];
+  const cells = cellsOf({
+    a: { t: "alpha", n: 1 },
+    b: { t: "beta", n: 5 },
+    c: { t: "zeta", n: 9 },
+    d: { t: "omega", n: 2 },
+  });
+  const fields = [field("t", "text"), field("n", "number")];
+  const leaf = (id: string, fieldId: string, op: FilterSpec["op"], value: CellValue): FilterSpec => ({
+    id,
+    field_id: fieldId,
+    op,
+    value,
+  });
+  const ids = (nodes: FilterNode[], mode: "and" | "or" = "and") =>
+    applyFilters(rows, cells, nodes, fields, mode).map((r) => r.id);
+
+  it("组内用自己的 mode，顶层再按顶层 mode 组合", () => {
+    const group: FilterGroup = {
+      id: "g1",
+      mode: "or",
+      children: [leaf("f1", "t", "contains", "alp"), leaf("f2", "n", "gt", 8)],
+    };
+    // 组命中 a、c；「n<6」命中 a、b、d
+    expect(ids([group, leaf("f3", "n", "lt", 6)], "and")).toEqual(["a"]);
+    expect(ids([group, leaf("f3", "n", "lt", 6)], "or")).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("组可以嵌组：内层 OR、外层 AND", () => {
+    const inner: FilterGroup = {
+      id: "g2",
+      mode: "or",
+      children: [leaf("f1", "t", "contains", "eta"), leaf("f2", "n", "gt", 8)],
+    };
+    const outer: FilterGroup = { id: "g1", mode: "and", children: [inner, leaf("f3", "n", "lt", 6)] };
+    // 内层：beta(b) 或 n>8(c)；外层再与 n<6 相交 → 只剩 b
+    expect(ids([outer])).toEqual(["b"]);
+  });
+
+  it("空组不过滤任何行（否则一个没填完的组会把整表筛空）", () => {
+    expect(ids([{ id: "g1", mode: "and", children: [] }, leaf("f2", "n", "gt", 8)])).toEqual(["c"]);
+    expect(ids([{ id: "g1", mode: "or", children: [] }])).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("组里引用已删字段的那条恒成立，不拖累同组其它条件", () => {
+    const group: FilterGroup = {
+      id: "g1",
+      mode: "and",
+      children: [leaf("f1", "ghost", "equals", "x"), leaf("f2", "n", "gte", 5)],
+    };
+    expect(ids([group])).toEqual(["b", "c"]);
+  });
+
+  it("countFilterLeaves 数叶子不数组", () => {
+    const nodes: FilterNode[] = [
+      leaf("f1", "n", "gt", 1),
+      { id: "g1", mode: "or", children: [leaf("f2", "n", "gt", 4), { id: "g2", mode: "and", children: [] }] },
+    ];
+    expect(countFilterLeaves(nodes)).toBe(2);
+  });
+});
+
+describe("筛选树的不可变编辑", () => {
+  const f = field("t", "text");
+  const tree = (): FilterNode[] => [
+    newFilterLeaf("f1", f),
+    { ...newFilterGroup("g1"), children: [newFilterLeaf("f2", f), newFilterGroup("g11")] },
+  ];
+
+  it("按 id 改叶子：嵌在组里的也改得到，没命中的条目内容不变", () => {
+    const base = tree();
+    const next = patchFilterLeaf(base, "f2", { op: "not_equals", value: "x" });
+    const group = next[1];
+    expect(isFilterGroup(group) && group.children[0]).toMatchObject({ id: "f2", op: "not_equals", value: "x" });
+    expect(next[0]).toEqual(base[0]);
+  });
+
+  it("改组的组合方式：只动命中的那个组", () => {
+    const next = patchFilterGroupMode(tree(), "g1", "or");
+    expect(isFilterGroup(next[1]) && next[1].mode).toBe("or");
+    const inner = next[1];
+    expect(isFilterGroup(inner) && isFilterGroup(inner.children[1]) && inner.children[1].mode).toBe("and");
+  });
+
+  it("删叶子只去掉一条条件，删组连里面的子组一起走", () => {
+    const afterLeaf = removeFilterNode(tree(), "f2");
+    expect(isFilterGroup(afterLeaf[1]) && afterLeaf[1].children.map((n) => n.id)).toEqual(["g11"]);
+    expect(removeFilterNode(tree(), "g1").map((n) => n.id)).toEqual(["f1"]);
+  });
+
+  it("往组里追加节点：parentId 为空即顶层，父组已被删则整棵树不动", () => {
+    expect(insertFilterNode(tree(), null, newFilterLeaf("f9", f))).toHaveLength(3);
+    const inGroup = insertFilterNode(tree(), "g1", newFilterLeaf("f9", f));
+    expect(isFilterGroup(inGroup[1]) && inGroup[1].children).toHaveLength(3);
+    expect(insertFilterNode(tree(), "gone", newFilterLeaf("f9", f))).toHaveLength(2);
+  });
+
+  it("新叶子按字段类型取默认比较符与操作数，新组默认 AND", () => {
+    const sel = field(
+      "s",
+      "single_select",
+      JSON.stringify({ kind: "select", options: [{ id: "o1", name: "A", color: "blue" }] }),
+    );
+    expect(newFilterLeaf("f1", sel)).toEqual({ id: "f1", field_id: "s", op: "is_empty", value: "o1" });
+    expect(newFilterGroup("g1")).toEqual({ id: "g1", mode: "and", children: [] });
+  });
+
+  it("删字段时清掉引用它的条件，被掏空的组一并移除", () => {
+    const nodes: FilterNode[] = [
+      newFilterLeaf("keep", field("a", "text")),
+      { ...newFilterGroup("g1"), children: [newFilterLeaf("drop", field("b", "text"))] },
+    ];
+    expect(pruneFiltersByFields(nodes, new Set(["a"])).map((n) => n.id)).toEqual(["keep"]);
+  });
+});
+
+describe("多级分组", () => {
+  const tag = JSON.stringify({
+    kind: "select",
+    options: [
+      { id: "t1", name: "甲" },
+      { id: "t2", name: "乙" },
+    ],
+  });
+  const owner = JSON.stringify({
+    kind: "select",
+    options: [
+      { id: "u1", name: "张三" },
+      { id: "u2", name: "李四" },
+    ],
+  });
+  const fields = [field("tag", "single_select", tag), field("owner", "single_select", owner)];
+  const rowsAll = [row("r1"), row("r2"), row("r3"), row("r4"), row("r5")];
+  const cells = cellsOf({
+    r1: { tag: "t2", owner: "u1" },
+    r2: { tag: "t1", owner: "u2" },
+    r3: { tag: "t1", owner: "u1" },
+    r4: { tag: "t1", owner: "u1" },
+    r5: { tag: null, owner: "u2" },
+  });
+
+  it("逐层下钻：上层桶序不变，每层各自按选项定义顺序", () => {
+    const nested = groupRowsNested(rowsAll, cells, fields);
+    expect(nested.map((g) => [g.path, g.label])).toEqual([
+      ["t1", "甲"],
+      ["t2", "乙"],
+      [UNGROUPED, ""],
+    ]);
+    expect(nested[0].subgroups.map((g) => [g.path, g.label])).toEqual([
+      ["t1/u1", "张三"],
+      ["t1/u2", "李四"],
+    ]);
+    expect(nested[0].subgroups[0].rows.map((r) => r.id)).toEqual(["r3", "r4"]);
+  });
+
+  it("父组的 rows 含全部下层行，path 逐层加前缀", () => {
+    const nested = groupRowsNested(rowsAll, cells, fields);
+    expect(nested[0].rows.map((r) => r.id)).toEqual(["r2", "r3", "r4"]);
+    expect(nested[0].depth).toBe(0);
+    expect(nested[0].subgroups[0].depth).toBe(1);
+    expect(nested[0].subgroups[0].path).toBe("t1/u1");
+  });
+
+  it("上层没填值不影响下层分组", () => {
+    const empty = groupRowsNested(rowsAll, cells, fields)[2];
+    expect(empty.key).toBe(UNGROUPED);
+    expect(empty.subgroups.map((g) => g.path)).toEqual([UNGROUPED + "/u2"]);
+  });
+
+  it("只给一个字段等同单层分组；字段列表为空或没有行时不出组", () => {
+    const one = groupRowsNested(rowsAll, cells, [fields[0]]);
+    expect(one).toHaveLength(3);
+    expect(one.every((g) => g.subgroups.length === 0)).toBe(true);
+    expect(groupRowsNested(rowsAll, cells, [])).toEqual([]);
+    expect(groupRowsNested([], cells, fields)).toEqual([]);
+  });
+
+  it("超出层数上限的字段不再下钻", () => {
+    const many = Array.from({ length: MAX_GROUP_DEPTH + 2 }, (_, i) => field("f" + i, "text"));
+    const nested = groupRowsNested([row("r1")], cellsOf({ r1: { f0: "x" } }), many);
+    let node = nested[0];
+    while (node.subgroups.length > 0) node = node.subgroups[0];
+    expect(node.depth).toBe(MAX_GROUP_DEPTH - 1);
+  });
+
+  it("每层各自沿用单层桶序（数字按大小），下层桶取自父组行集", () => {
+    const numFields = [
+      field("n", "number"),
+      field("tag", "single_select", JSON.stringify({ kind: "select", options: [{ id: "t1", name: "甲" }] })),
+    ];
+    const nested = groupRowsNested(
+      [row("r1"), row("r2")],
+      cellsOf({ r1: { n: 5, tag: "t1" }, r2: { n: 1, tag: "t1" } }),
+      numFields,
+    );
+    expect(nested.map((g) => g.label)).toEqual(["1.00", "5.00"]);
+    expect(nested[1].subgroups.map((g) => g.label)).toEqual(["甲"]);
   });
 });
 

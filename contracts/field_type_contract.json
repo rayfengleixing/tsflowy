@@ -16,6 +16,7 @@
       "defaultOptions": { "kind": "number", "format": "currency", "precision": 2, "currency": "CNY" }
     },
     { "type": "date", "defaultOptions": { "kind": "date", "include_time": false } },
+    { "type": "status", "defaultOptions": { "kind": "select", "options": [] } },
     { "type": "single_select", "defaultOptions": { "kind": "select", "options": [] } },
     { "type": "multi_select", "defaultOptions": { "kind": "select", "options": [] } },
     { "type": "checkbox", "defaultOptions": { "kind": "none" } },

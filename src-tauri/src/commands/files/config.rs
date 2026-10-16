@@ -148,8 +148,9 @@ impl Default for AiConfig {
     }
 }
 
-/// 一个模型档位：同一套 Key 下切换不同服务商 / 模型 / 温度。
-/// protocol / api_key 为空表示继承全局设置（本地模型的档位通常无需 Key）。
+/// 一个模型档位：可各自指定服务商 / 模型 / 协议 / Key / 温度。
+/// protocol 为空表示继承全局设置；api_key 字段只是凭据库不可用时的明文回退，
+/// 正常情况下 Key 存在系统凭据库（账户名 `ai-api-key:profile:<id>`），这里留空串。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiProfile {

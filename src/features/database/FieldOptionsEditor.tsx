@@ -1,9 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
-import type { DatabaseField, FieldOptions, SelectOption } from "@/types/database";
+import type { DatabaseField, FieldOptions, SelectOption, StatusTone } from "@/types/database";
 import type { AggregateFn } from "@/lib/database-aggregate";
 import { aggregateLabel } from "@/lib/database-aggregate";
-import { isOptionBearing, newSelectOption, parseFieldOptions } from "@/lib/database-values";
+import {
+  isOptionBearing,
+  newSelectOption,
+  parseFieldOptions,
+  STATUS_TONE_COLOR,
+  STATUS_TONES,
+} from "@/lib/database-values";
 import { validateFormula, type FormulaSyntaxIssue } from "@/lib/database-formula";
 import { buildRelationPickerFields, relationTarget, reverseRelationSourceFields, rollupFnsFor } from "@/lib/relation";
 import { flattenTree } from "@/lib/tree";
@@ -94,7 +100,9 @@ export function FieldOptionsEditor(props: {
     const name = optionName.trim();
     if (!name) return;
     if (options.kind !== "select") return;
-    setOptions({ ...options, options: [...options.options, newSelectOption(name)] });
+    // status 的新选项先落在「待办」阶段，配色随阶段走
+    const tone = field.field_type === "status" ? ("todo" as StatusTone) : undefined;
+    setOptions({ ...options, options: [...options.options, newSelectOption(name, tone)] });
     setOptionName("");
   };
 
@@ -132,6 +140,24 @@ export function FieldOptionsEditor(props: {
                       value={o.name}
                       onChange={(e) => updateOption(o.id, { name: e.target.value })}
                     />
+                    {/* status 的选项带阶段：改阶段同时把配色切到该阶段的建议色 */}
+                    {field.field_type === "status" && (
+                      <select
+                        className="h-7 w-[70px] shrink-0 rounded border border-neutral-300 bg-white px-1 text-[11px] outline-none focus:border-brand-500"
+                        value={o.tone ?? "todo"}
+                        title={t("field.toneColumn")}
+                        onChange={(e) => {
+                          const tone = e.target.value as StatusTone;
+                          updateOption(o.id, { tone, color: STATUS_TONE_COLOR[tone] });
+                        }}
+                      >
+                        {STATUS_TONES.map((tone) => (
+                          <option key={tone} value={tone}>
+                            {t(`field.tone.${tone}`)}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                     <div className="flex gap-0.5">
                       {SELECT_COLORS.map((c) => (
                         <button
@@ -176,6 +202,9 @@ export function FieldOptionsEditor(props: {
                 {t("common.add")}
               </Button>
             </div>
+            {field.field_type === "status" && (
+              <p className="text-[11px] leading-relaxed text-neutral-400">{t("field.toneHint")}</p>
+            )}
           </div>
         ) : field.field_type === "number" || field.field_type === "currency" ? (
           <div className="flex flex-col gap-3">

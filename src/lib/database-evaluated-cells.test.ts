@@ -24,6 +24,7 @@ const row = (id: string): DatabaseRow => ({
   database_view_id: "v1",
   position: 0,
   document_id: null,
+  parent_id: null,
   created_at: 0,
   updated_at: 0,
 });

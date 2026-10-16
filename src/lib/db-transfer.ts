@@ -4,7 +4,8 @@ import { newId, viewApi } from "./db";
 import { databaseApi } from "./database";
 import { computeEvaluatedCells } from "./database-evaluated-cells";
 import { buildSelectOptions, collectSelectNames, importCell, planImport, selectCellToText } from "./csv";
-import { parseFieldOptions } from "./database-values";
+import { isOptionBearing, parseFieldOptions } from "./database-values";
+import { isComputedKind } from "./field-kinds";
 import { logger } from "./logger";
 
 // 数据库表 ↔ Markdown 表格（整库导出的数据出口）。
@@ -37,9 +38,7 @@ export function tableToTextMatrix(
 ): string[][] {
   // 公式/汇总/反向关系没有存储值，必须先在内存求一遍，否则这几列永远是空的
   let values = cells;
-  if (
-    fields.some((f) => f.field_type === "formula" || f.field_type === "rollup" || f.field_type === "reverse_relation")
-  ) {
+  if (fields.some((f) => isComputedKind(f.field_type))) {
     try {
       values = computeEvaluatedCells(rows, cells, fields, () => undefined).display;
     } catch (e) {
@@ -156,7 +155,8 @@ export async function createDatabaseViewFromTable(
     while (used.has(fieldName)) fieldName = `${fieldName} 2`;
     used.add(fieldName);
     const type = types[i];
-    if (type === "single_select" || type === "multi_select") {
+    // 选项列（单选 / 多选 / 状态）建字段时先按整列值预建选项，文本才落得成 id
+    if (isOptionBearing(type)) {
       const { options, idByName } = buildSelectOptions(
         collectSelectNames(
           type,

@@ -19,8 +19,10 @@ import { useRelationDbs } from "./use-database-data";
 import type { RelationDb } from "@/lib/relation";
 
 export interface GridViewLocalState {
-  groupFieldId: string | null;
+  groupFieldIds: string[];
   collapsedGroups: ReadonlySet<string>;
+  /** 折叠的父行（父子行层级，只在未分组时生效） */
+  collapsedRows: ReadonlySet<string>;
   checkedRows: ReadonlySet<string>;
   aggregates: Record<string, AggregateFn | undefined>;
   /** 批量命令成功后清空勾选（本地 React 状态的 setter） */
@@ -64,9 +66,9 @@ export function useGridViewModel(state: GridViewLocalState): UseGridViewModelRes
         filters,
         filterMode,
         sorts,
-        groupFieldId: state.groupFieldId,
+        groupFieldIds: state.groupFieldIds,
       }),
-    [fields, rows, cells, sortableCells, filters, filterMode, sorts, state.groupFieldId],
+    [fields, rows, cells, sortableCells, filters, filterMode, sorts, state.groupFieldIds],
   );
 
   // 勾选/折叠/列汇总只走线性遍历：排序与分组留在 core 里，勾一行不会重算一遍
@@ -75,9 +77,10 @@ export function useGridViewModel(state: GridViewLocalState): UseGridViewModelRes
       deriveGridModel(core, {
         checkedRows: state.checkedRows,
         collapsedGroups: state.collapsedGroups,
+        collapsedRows: state.collapsedRows,
         aggregates: state.aggregates,
       }),
-    [core, state.checkedRows, state.collapsedGroups, state.aggregates],
+    [core, state.checkedRows, state.collapsedGroups, state.collapsedRows, state.aggregates],
   );
 
   const effects: BulkRowEffects = {

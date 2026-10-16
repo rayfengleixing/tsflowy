@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::super::database::TRIGGER_MANAGED_TIMESTAMPS;
@@ -406,7 +408,7 @@ pub fn duplicate(
         let rows: Vec<DatabaseRowRow> = {
             let mut stmt = tx
                 .prepare(
-                    "SELECT id, database_view_id, position, document_id, created_at, updated_at
+                    "SELECT id, database_view_id, position, document_id, parent_id, created_at, updated_at
                      FROM database_rows WHERE database_view_id = ?1 AND is_trash = 0 ORDER BY position ASC",
                 )
                 .map_err(dberr("duplicate view rows"))?;
@@ -417,8 +419,9 @@ pub fn duplicate(
                         database_view_id: r.get(1)?,
                         position: r.get(2)?,
                         document_id: r.get(3)?,
-                        created_at: r.get(4)?,
-                        updated_at: r.get(5)?,
+                        parent_id: r.get(4)?,
+                        created_at: r.get(5)?,
+                        updated_at: r.get(6)?,
                     })
                 })
                 .map_err(dberr("duplicate view rows"))?
@@ -427,8 +430,11 @@ pub fn duplicate(
             mapped
         };
 
+        // 父子行有自引用外键，插入顺序不能假定父先于子：先全部插成顶层，再回填 parent_id。
+        let mut rid_map: HashMap<&str, String> = HashMap::with_capacity(rows.len());
         for (i, r) in rows.iter().enumerate() {
             let new_rid = format!("{new_vid}_r{i}");
+            rid_map.insert(r.id.as_str(), new_rid.clone());
             let new_doc = r.document_id.as_ref().and_then(|d| {
                 pairs
                     .iter()
@@ -449,6 +455,21 @@ pub fn duplicate(
                 )
                 .map_err(dberr("duplicate view cells"))?;
             }
+        }
+        for r in rows.iter() {
+            // 父行只可能是同一张表里的可见行；指向回收站行的旧引用复制不过来，就当顶层行
+            let (Some(pid), Some(new_pid)) = (r.parent_id.as_deref(), rid_map.get(r.id.as_str()))
+            else {
+                continue;
+            };
+            let Some(new_parent) = rid_map.get(pid) else {
+                continue;
+            };
+            tx.execute(
+                "UPDATE database_rows SET parent_id = ?1 WHERE id = ?2",
+                params![new_parent, new_pid],
+            )
+            .map_err(dberr("duplicate view row parents"))?;
         }
     }
 

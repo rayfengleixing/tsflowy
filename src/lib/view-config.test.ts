@@ -90,26 +90,50 @@ describe("mergeViewConfig", () => {
       sorts: [{ field_id: "b", dir: "desc" as const }],
       boardFieldId: "s1",
       calendarFieldId: "d1",
-      groupFieldId: "g1",
+      groupFieldIds: ["g1", "g2"],
       galleryFieldId: "a1",
       aggregates: { n1: "sum" as const, b1: "checked" as const },
+      condFormats: [
+        { id: "c1", field_id: "n1", op: "gt" as const, value: 100, tone: "red" as const, scope: "cell" as const },
+        { id: "c2", field_id: "b1", op: "checked" as const, value: null, tone: "gray" as const, scope: "row" as const },
+      ],
       cardFieldIds: ["f2", "f3"],
     };
     expect(parseViewConfig(mergeViewConfig("{}", patch))).toEqual(patch);
   });
 
+  it("drops malformed conditional-format rules and keeps unknown extra keys", () => {
+    const good = { id: "c1", field_id: "n1", op: "gt", value: 5, tone: "red", scope: "cell" };
+    const merged = mergeViewConfig('{"row_detail":true}', {
+      condFormats: [
+        { id: "c1", field_id: "n1", op: "gt" as const, value: 5, tone: "red" as const, scope: "cell" as const },
+      ],
+    });
+    const raw = JSON.parse(merged) as Record<string, unknown>;
+    expect(raw.row_detail).toBe(true);
+    expect(parseViewConfig(merged).condFormats).toEqual([good]);
+    // 非法比较符的那条整条丢掉（写进 extra 的脏数据只能这样兜）
+    expect(parseViewConfig(JSON.stringify({ condFormats: [{ ...good, id: "c2", op: "near" }] })).condFormats).toEqual(
+      [],
+    );
+    expect(parseViewConfig(JSON.stringify({ condFormats: "gt" })).condFormats).toBeUndefined();
+    expect(parseViewConfig(mergeViewConfig("{}", { condFormats: [] })).condFormats).toEqual([]);
+  });
+
   it("drops unknown aggregate names and non-string card ids", () => {
     const cfg = parseViewConfig(
       JSON.stringify({
-        groupFieldId: "", // 空串 = 清除选择
+        groupFieldId: "", // 旧键空串 = 清除选择
+        groupFieldIds: [42, "", "ok", "ok", "x", "y"],
         galleryFieldId: "",
-        aggregates: { n1: "sum", ghost: "median", "": "count" },
+        aggregates: { n1: "sum", m1: "median", s1: "share", ghost: "percentile", "": "count" },
         cardFieldIds: ["f2", 42, null],
       }),
     );
-    expect(cfg.groupFieldId).toBeUndefined();
+    expect(cfg.groupFieldIds).toEqual(["ok", "x", "y"]);
     expect(cfg.galleryFieldId).toBeUndefined();
-    expect(cfg.aggregates).toEqual({ n1: "sum" });
+    // 中位数 / 占比是新函数，extra 里的名字得认；不认识的（percentile）丢掉
+    expect(cfg.aggregates).toEqual({ n1: "sum", m1: "median", s1: "share" });
     expect(cfg.cardFieldIds).toEqual(["f2"]);
     expect(parseViewConfig(JSON.stringify({ aggregates: "sum" })).aggregates).toBeUndefined();
     expect(parseViewConfig(JSON.stringify({ aggregates: [] })).aggregates).toBeUndefined();
