@@ -46,6 +46,12 @@ jobs:
       - name: Vitest
         run: npm test
 
+      - name: Build frontend
+        # tauri::generate_context! 在编译期读取 build.frontendDist（../dist），
+        # 缺它则 clippy 与 cargo test 直接报 proc macro panicked；
+        # 类型检查已由上面的 tsc --noEmit 覆盖，这里只出 vite 产物
+        run: npx vite build
+
       - name: Rust format check
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
