@@ -1,4 +1,4 @@
-import { parseViewTags, type LayoutType, type View } from "@/types/models";
+import { DB_LAYOUTS, parseViewTags, type LayoutType, type View } from "@/types/models";
 import { invoke } from "@/lib/invoke";
 import { pinyinInitials } from "@/lib/pinyin-initials";
 
@@ -148,8 +148,7 @@ function tokenizeQueryTerms(input: string): QueryToken[] {
   return out;
 }
 
-/** type: 取值 → 布局集合；database/db 展开为全部数据库视图布局 */
-const DB_LAYOUTS: LayoutType[] = ["grid", "board", "calendar", "timeline"];
+/** type: 取值 → 布局集合；database/db 展开为全部数据库视图布局（DB_LAYOUTS 由 types/models 单一来源给出） */
 const TYPE_ALIASES: Record<string, LayoutType[] | "database" | undefined> = {
   page: ["document"],
   doc: ["document"],
@@ -158,6 +157,9 @@ const TYPE_ALIASES: Record<string, LayoutType[] | "database" | undefined> = {
   grid: ["grid"],
   board: ["board"],
   calendar: ["calendar"],
+  list: ["list"],
+  gallery: ["gallery"],
+  form: ["form"],
   db: "database",
   database: "database",
   页面: ["document"],
@@ -165,6 +167,9 @@ const TYPE_ALIASES: Record<string, LayoutType[] | "database" | undefined> = {
   表格: ["grid"],
   看板: ["board"],
   日历: ["calendar"],
+  列表: ["list"],
+  画廊: ["gallery"],
+  表单: ["form"],
   数据库: "database",
 };
 

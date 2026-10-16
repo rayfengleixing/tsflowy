@@ -19,7 +19,7 @@ use rusqlite::Connection;
 
 pub use models::{
     BacklinkRow, CellLoadRow, CellSetIn, CsvFieldIn, CsvRowIn, DatabaseFieldRow, DatabaseRowRow,
-    DocRowOut, MentionRowIn, PagePropertyOut, SearchRowOut, ViewRow, WorkspaceRow,
+    DocRowOut, MentionRowIn, PagePropertyOut, SearchRowOut, TrashRowOut, ViewRow, WorkspaceRow,
 };
 
 pub const DB_FILE: &str = "appflowy.db";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { embeddableDatabaseViews, resolveDatabaseViewName, EMBED_MAX_ROWS } from "./database-view";
-import type { LayoutType, View, ViewNode } from "@/types/models";
+import { DB_LAYOUTS, type LayoutType, type View, type ViewNode } from "@/types/models";
 
 const v = (id: string, layout: LayoutType, name = id, children: ViewNode[] = []): ViewNode => {
   const base: View = {
@@ -30,17 +30,24 @@ describe("embeddableDatabaseViews", () => {
       v("g1", "grid", "任务表"),
       v("b1", "board", "看板"),
       v("c1", "calendar", "日历表"),
+      v("l1", "list", "清单"),
+      v("ga1", "gallery", "图库"),
       v("t1", "timeline", "时间线", [v("g2", "grid", "深层表格")]),
       v("d2", "document", "普通文档"),
     ]),
   ];
 
   it("列出全部数据库布局（含深层嵌套），不再只有 grid", () => {
-    expect(embeddableDatabaseViews(tree).map((x) => x.id)).toEqual(["g1", "b1", "c1", "t1", "g2"]);
+    expect(embeddableDatabaseViews(tree).map((x) => x.id)).toEqual(["g1", "b1", "c1", "l1", "ga1", "t1", "g2"]);
   });
 
   it("排除文档布局（行详情页是带 row_detail 的 document，随之排除）", () => {
     expect(embeddableDatabaseViews(tree).every((x) => x.layout !== "document")).toBe(true);
+  });
+
+  it("每种数据库布局都可嵌入：可嵌入集合恒等于 DB_LAYOUTS", () => {
+    const all = DB_LAYOUTS.map((layout, i) => v(`x${i}`, layout));
+    expect(embeddableDatabaseViews(all).map((x) => x.layout)).toEqual([...DB_LAYOUTS]);
   });
 
   it("空树返回空数组", () => {

@@ -257,6 +257,9 @@ export function DocumentOutline() {
         1: "text-[13px] font-semibold text-neutral-700",
         2: "text-[12.5px] font-medium text-neutral-700",
         3: "text-[12px] text-neutral-600",
+        4: "text-[12px] text-neutral-600",
+        5: "text-[11.5px] text-neutral-500",
+        6: "text-[11.5px] text-neutral-500",
       };
       return sizes[level] ?? "text-[12px] text-neutral-500";
     },

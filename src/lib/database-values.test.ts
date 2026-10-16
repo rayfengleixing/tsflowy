@@ -109,8 +109,10 @@ describe("formatCellValue", () => {
 
   it("formats date with and without time", () => {
     const date = "2026-08-31";
-    expect(formatCellValue("date", date, { kind: "date", include_time: false })).toBe("2026/8/31");
-    expect(formatCellValue("date", date, { kind: "date", include_time: true })).toContain("2026");
+    // 日期展示跟随系统区域与时区：期望值按同一时刻反推，硬编码中文串会在英文 locale 的机器上假红
+    const d = new Date(`${date}Z`);
+    expect(formatCellValue("date", date, { kind: "date", include_time: false })).toBe(d.toLocaleDateString());
+    expect(formatCellValue("date", date, { kind: "date", include_time: true })).toBe(d.toLocaleString());
   });
 
   it("maps single_select id to option name", () => {

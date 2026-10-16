@@ -1,8 +1,10 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { readDir, readTextFile, type DirEntry } from "@tauri-apps/plugin-fs";
 import { invoke } from "@/lib/invoke";
+import { createDatabaseViewFromTable, parseMarkdownTable } from "./db-transfer";
 import { viewApi } from "./db";
 import { documentApi } from "./documents";
+import { splitFrontmatter, type PageMeta } from "./frontmatter";
 import { markdownToJson } from "./markdown";
 import { logger } from "./logger";
 
@@ -11,9 +13,11 @@ import { logger } from "./logger";
 // 设计：
 //   1. 用户选一个目录（dialog.open({ directory: true })）。
 //   2. 递归遍历收集所有 .md 文件（relPath 用 '/' 分隔，name 去扩展名）。
-//   3. 按目录层级建页：每个子目录 → 一个父页（document 布局，空内容）；
-//      每个 .md → 子页，content = markdownToJson(text)。
-//   4. 页名优先取 .md 首个 H1，无则用文件名（去 .md）。
+//   3. 按目录层级建页：每个子目录 → 一个父页；每个 .md → 子页，content = markdownToJson(text)。
+//      - 目录同名文件（<目录>/<同名>.md）就是该目录页自己的正文，不再另建一个重名子页；
+//      - 头部有 frontmatter `layout: grid|board|calendar|timeline` 且正文含表格 → 建数据库视图并灌入行；
+//      - frontmatter 的 icon/tags/favorite 建完即回填。
+//   4. 页名优先取 frontmatter title，其次 .md 首个 H1，无则用文件名（去 .md）。
 //   5. 文中引用源目录内本地文件的图片/附件先收进本机 assets/ 再改写引用，
 //      否则导入后的文档指向源目录路径，换台机器（或源目录被删）就永远裂图。
 //   6. 全部建完后 store.reload() 一次刷树。
@@ -187,6 +191,18 @@ export interface ImportResult {
   failed: number;
 }
 
+/** 回填 frontmatter 里的页面属性；单项失败只记日志（页面本身已经建出来了，不该因此整篇算失败） */
+async function applyViewMeta(viewId: string, meta: PageMeta): Promise<void> {
+  try {
+    if (meta.icon) await viewApi.setIcon(viewId, meta.icon);
+    const tags = meta.tags ?? [];
+    if (tags.length > 0) await viewApi.setTags(viewId, tags);
+    if (meta.favorite === true) await viewApi.setFavorite(viewId, true);
+  } catch (e) {
+    logger.warn("import-folder", "apply page meta failed", viewId, e);
+  }
+}
+
 /**
  * 导入 Markdown 文件夹到当前 workspace。
  * @param workspaceId 当前工作区 id
@@ -202,10 +218,62 @@ export async function importMarkdownFolder(workspaceId: string): Promise<ImportR
   await walkMd(root, "", files);
   if (files.length === 0) return { total: 0, created: 0, failed: 0 };
 
+  // 2.1 目录同名文件（<目录>/<同名>.md）是「该目录页的正文」，先建好并登记，
+  //     避免它作为普通子页再建一次（导出树是 <页面>/<页面>.md + 子页.md，导入必须一一对应）
+  const selfByDir = new Map<string, MdFile>();
+  for (const f of files) {
+    if (!f.dirRel) continue;
+    const lastSlash = f.dirRel.lastIndexOf("/");
+    const leaf = lastSlash >= 0 ? f.dirRel.slice(lastSlash + 1) : f.dirRel;
+    if (leaf === f.baseName) selfByDir.set(f.dirRel, f);
+  }
+
   // 3. 按目录层级建页：dirRel → viewId 缓存
   //    "" (根) → null（顶层页面 parent_id = null）
   const dirViewMap = new Map<string, string | null>();
   dirViewMap.set("", null);
+  // 已作为目录页正文消费掉的文件，主循环不再重复建页
+  const consumed = new Set<string>();
+  let created = 0;
+  let failed = 0;
+  // 同一源文件被多篇文档引用时只复制一次（值为本机相对路径，null = 已试过且失败）
+  const assetCache = new Map<string, string | null>();
+  // 「目录同名文件」会先在建目录页时读一遍，主循环再遇到同一文件不重复读盘
+  const bodyCache = new Map<string, { meta: PageMeta; localized: string }>();
+
+  /** 从源文件读出正文（拆 frontmatter + 收编本地引用）；同一文件只读一次 */
+  const readBody = async (f: MdFile): Promise<{ meta: PageMeta; localized: string }> => {
+    const hit = bodyCache.get(f.absPath);
+    if (hit) return hit;
+    const text = await readTextFile(f.absPath);
+    const { meta, body } = splitFrontmatter(text);
+    const parsed = { meta, localized: await localizeLocalRefs(body, f.absPath, root, assetCache) };
+    bodyCache.set(f.absPath, parsed);
+    return parsed;
+  };
+
+  /** 用「目录同名文件」建目录页：数据库表格 → grid 视图；否则文档页 */
+  async function createDirPage(relDir: string, self: MdFile, parentId: string | null): Promise<string> {
+    const dirName = relDir.slice(relDir.lastIndexOf("/") + 1);
+    const { meta, localized } = await readBody(self);
+    consumed.add(self.absPath);
+    const table = meta.layout && meta.layout !== "document" ? parseMarkdownTable(localized) : null;
+    if (table) {
+      const { viewId } = await createDatabaseViewFromTable(workspaceId, parentId, meta.title ?? dirName, table);
+      await applyViewMeta(viewId, meta);
+      return viewId;
+    }
+    const view = await viewApi.create({
+      workspace_id: workspaceId,
+      parent_id: parentId,
+      name: meta.title ?? extractTitle(localized, dirName),
+      layout: "document",
+    });
+    const json = markdownToJson(localized);
+    await documentApi.save(view.id, JSON.stringify(json));
+    await applyViewMeta(view.id, meta);
+    return view.id;
+  }
 
   /** 确保目录 relDir 对应的父页存在，返回其 viewId（根返回 null） */
   async function ensureDirView(relDir: string): Promise<string | null> {
@@ -215,29 +283,53 @@ export async function importMarkdownFolder(workspaceId: string): Promise<ImportR
     // 递归先建父目录
     const lastSlash = relDir.lastIndexOf("/");
     const parentRel = lastSlash >= 0 ? relDir.slice(0, lastSlash) : "";
-    const dirName = lastSlash >= 0 ? relDir.slice(lastSlash + 1) : relDir;
+    const self = selfByDir.get(relDir);
     const parentId = await ensureDirView(parentRel);
-    const view = await viewApi.create({
-      workspace_id: workspaceId,
-      parent_id: parentId,
-      name: dirName,
-      layout: "document",
-    });
-    dirViewMap.set(relDir, view.id);
-    return view.id;
+    let viewId: string | null = null;
+    if (self) {
+      try {
+        viewId = await createDirPage(relDir, self, parentId);
+        created++;
+      } catch (e) {
+        failed++;
+        logger.warn("import-folder", "directory page import failed", self.absPath, e);
+        // 目录页建失败也不能让整棵子树无父：退化成空文档页继续
+        const fallback = await viewApi.create({
+          workspace_id: workspaceId,
+          parent_id: parentId,
+          name: relDir.slice(lastSlash + 1),
+          layout: "document",
+        });
+        viewId = fallback.id;
+      }
+    } else {
+      const view = await viewApi.create({
+        workspace_id: workspaceId,
+        parent_id: parentId,
+        name: relDir.slice(lastSlash + 1),
+        layout: "document",
+      });
+      viewId = view.id;
+    }
+    dirViewMap.set(relDir, viewId);
+    return viewId;
   }
 
   // 4. 顺序建页 + 写内容（顺序执行避免 SQLite 写锁竞争）
-  let created = 0;
-  let failed = 0;
-  // 同一源文件被多篇文档引用时只复制一次（值为本机相对路径，null = 已试过且失败）
-  const assetCache = new Map<string, string | null>();
   for (const f of files) {
     try {
-      const text = await readTextFile(f.absPath);
-      const localized = await localizeLocalRefs(text, f.absPath, root, assetCache);
-      const name = extractTitle(localized, f.baseName);
+      // 先建父页：父页可能就是本文件（目录同名文件），此时本页已在此处建好并登记消费
       const parentId = await ensureDirView(f.dirRel);
+      if (consumed.has(f.absPath)) continue;
+      const { meta, localized } = await readBody(f);
+      const name = meta.title ?? extractTitle(localized, f.baseName);
+      const table = meta.layout && meta.layout !== "document" ? parseMarkdownTable(localized) : null;
+      if (table) {
+        const { viewId } = await createDatabaseViewFromTable(workspaceId, parentId, name, table);
+        await applyViewMeta(viewId, meta);
+        created++;
+        continue;
+      }
       const view = await viewApi.create({
         workspace_id: workspaceId,
         parent_id: parentId,
@@ -246,6 +338,7 @@ export async function importMarkdownFolder(workspaceId: string): Promise<ImportR
       });
       const json = markdownToJson(localized);
       await documentApi.save(view.id, JSON.stringify(json));
+      await applyViewMeta(view.id, meta);
       created++;
     } catch (e) {
       failed++;

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Calendar, CalendarRange, LayoutGrid, Plus, Table2, X } from "lucide-react";
+import { Calendar, CalendarRange, FormInput, Images, LayoutGrid, List, Plus, Table2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   DropdownMenu,
@@ -23,6 +23,9 @@ const LAYOUT_ICON: Partial<Record<LayoutType, React.ReactNode>> = {
   board: <LayoutGrid className="h-3.5 w-3.5" />,
   calendar: <Calendar className="h-3.5 w-3.5" />,
   timeline: <CalendarRange className="h-3.5 w-3.5" />,
+  list: <List className="h-3.5 w-3.5" />,
+  gallery: <Images className="h-3.5 w-3.5" />,
+  form: <FormInput className="h-3.5 w-3.5" />,
 };
 
 const iconOf = (view: View): React.ReactNode => LAYOUT_ICON[view.layout] ?? LAYOUT_ICON.grid;

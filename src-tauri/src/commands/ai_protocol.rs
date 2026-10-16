@@ -1295,7 +1295,11 @@ mod tests {
         let mut no_key = cfg("", "https://api.deepseek.com/v1");
         no_key.api_key = String::new();
         let (ep, _) = chat(&no_key, Protocol::OpenAi, vec![], None, true);
-        assert!(ep.headers.is_empty(), "空 Key 不发空的 Bearer: {:?}", ep.headers);
+        assert!(
+            ep.headers.is_empty(),
+            "空 Key 不发空的 Bearer: {:?}",
+            ep.headers
+        );
         let ep = models(&no_key, Protocol::OpenAi);
         assert!(ep.headers.is_empty());
 

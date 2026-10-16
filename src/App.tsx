@@ -17,13 +17,15 @@ import { useAiStore } from "@/stores/ai";
 import { bootstrapVisualSettings, useSettingsStore } from "@/stores/settings";
 import { loadDailyNotesConfig } from "@/lib/daily-notes";
 import { findNode } from "@/lib/tree";
-import type { ViewNode } from "@/types/models";
+import { isDbLayout, type ViewNode } from "@/types/models";
 import { mentionsApi } from "@/lib/mentions";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 import { t, useLanguage } from "@/lib/i18n";
 import { flushAllForClose, registerCloseFlush } from "@/lib/close-flush";
 import { startAutoSync } from "@/lib/auto-sync";
+import { probeDbHealthOnStartup } from "@/lib/db-health";
+import { startSyncEvents } from "@/lib/sync-events";
 import { flushPendingUiPersist } from "@/stores/workspace";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -59,7 +61,7 @@ function cycleTab(step: number) {
 /** 按视图布局渲染主内容（单栏与左右分栏共用） */
 function renderView(view: ViewNode | null) {
   if (view?.layout === "document") return <EditorPage key={view.id} view={view} />;
-  if (view && ["grid", "board", "calendar", "timeline"].includes(view.layout)) {
+  if (view && isDbLayout(view.layout)) {
     return <DatabasePage key={view.id} view={view} />;
   }
   return <PlaceholderPage />;
@@ -202,9 +204,18 @@ function App() {
 
   // 自动同步（B7）：数据就绪后启动。启动拉取立即执行一次；
   // 写入后自动同步由 main.tsx 包装的 invoke 咽喉点驱动防抖定时器（见 lib/auto-sync.ts）。
+  // 先挂上同步事件监听再启动：本机库被替换的那一刻靠 sync:db-replaced 通知前端重载，
+  // "启动时自动同步一次"是紧接着就跑的，监听晚一帧就会漏掉那次重载。
   useEffect(() => {
     if (!ready) return;
-    startAutoSync();
+    void startSyncEvents().then(() => startAutoSync());
+  }, [ready]);
+
+  // 启动后的数据库结构巡检：库能打开不等于库是好的，坏了要趁还能操作时说一句。
+  // 延迟一会儿再跑（避开首屏渲染与自动同步抢磁盘 I/O），一切正常时不出声。
+  useEffect(() => {
+    if (!ready) return;
+    void probeDbHealthOnStartup();
   }, [ready]);
 
   // 全局快捷键（可在 设置 → 快捷键 里自定义）：

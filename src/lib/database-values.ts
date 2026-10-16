@@ -7,8 +7,20 @@ import type { CellValue, FieldOptions, FieldType, SelectOption } from "@/types/d
 
 export { attachmentRefs, formatNumber, isOptionBearing, ratingMax } from "./field-kinds";
 
+/** 稀疏映射取值：`Record<string, T>` 的索引签名看不出「这一行没有条目」，
+ *  用 in 判定才能拿到真正的 undefined（项目未开 noUncheckedIndexedAccess）。 */
+export function sparseGet<T>(map: Record<string, T>, key: string): T | undefined {
+  return key in map ? map[key] : undefined;
+}
+
 export function serializeValue(_type: FieldType, value: CellValue): string {
   return JSON.stringify(value);
+}
+
+/** 单元格值的同值判定（数组/附件引用按内容比较）：用于跳过无变化的提交 */
+export function sameCellValue(a: CellValue, b: CellValue): boolean {
+  if (a === b) return true;
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
 export function deserializeValue(_type: FieldType, raw: string): CellValue {

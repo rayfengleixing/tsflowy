@@ -223,7 +223,7 @@ export function cellToCsv(_type: FieldType, value: CellValue): string {
 }
 
 /** 选择类单元格 → 选项名串（单元格存的是选项 id，导出必须翻译回名字才能与按名解析的粘贴闭环） */
-function selectCellToText(value: CellValue, options: SelectOption[]): string {
+export function selectCellToText(value: CellValue, options: SelectOption[]): string {
   if (value === null) return "";
   const nameOf = new Map(options.map((o) => [o.id, o.name]));
   const one = (v: string | AttachmentRef): string => (typeof v === "string" ? (nameOf.get(v) ?? v) : v.name);
@@ -311,26 +311,38 @@ export function resolveAttachmentNames(
   return { matched, missing };
 }
 
+/** 表 → 文本矩阵（首行表头，之后每行一个数据库行）。CSV 与 Markdown 导出共用这一份取值规则：
+ *  选择类单元格存的是选项 id，必须翻译回选项名，才能与「按名解析」的粘贴/导入闭环。 */
+export function fieldsRowsToText(
+  fields: DatabaseField[],
+  rows: DatabaseRow[],
+  cells: Record<string, Record<string, CellValue>>,
+  includeHidden = false,
+): string[][] {
+  const columns = includeHidden ? fields : fields.filter((f) => f.is_hidden === 0);
+  return [
+    columns.map((f) => f.name),
+    ...rows.map((r) =>
+      columns.map((f) => {
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
+        const value = cells[r.id]?.[f.id] ?? null;
+        const opts = parseFieldOptions(f.options);
+        if (opts.kind === "select" && isOptionBearing(f.field_type)) {
+          return selectCellToText(value, opts.options);
+        }
+        return cellToCsv(f.field_type, value);
+      }),
+    ),
+  ];
+}
+
 /** 导出当前视图：首行表头，之后每行一个数据库行 */
 export function buildCsvExport(
   fields: DatabaseField[],
   rows: DatabaseRow[],
   cells: Record<string, Record<string, CellValue>>,
 ): string {
-  const visible = fields.filter((f) => f.is_hidden === 0);
-  const header = visible.map((f) => f.name);
-  const body = rows.map((r) =>
-    visible.map((f) => {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
-      const value = cells[r.id]?.[f.id] ?? null;
-      const opts = parseFieldOptions(f.options);
-      if (opts.kind === "select" && isOptionBearing(f.field_type)) {
-        return selectCellToText(value, opts.options);
-      }
-      return cellToCsv(f.field_type, value);
-    }),
-  );
-  return toCsv([header, ...body]);
+  return toCsv(fieldsRowsToText(fields, rows, cells));
 }
 
 /** 导入计划：列头 → 字段（类型推断用前 20 个样例）；空列头生成 "字段 N"（导入为新表，编号从 1 起） */

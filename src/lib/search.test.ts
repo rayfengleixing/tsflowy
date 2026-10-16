@@ -12,6 +12,7 @@ import {
   titleTierFor,
   titleExcluded,
 } from "./search";
+import { DB_LAYOUTS } from "@/types/models";
 
 // escapeFts / likePattern 的转义用例已随 Phase B 下沉 Rust（src-tauri/src/db/search.rs）。
 
@@ -175,7 +176,7 @@ describe("parseSearchQuery", () => {
       text: "",
       terms: [],
       exclude: [],
-      layouts: ["grid", "board", "calendar", "timeline"],
+      layouts: [...DB_LAYOUTS],
       tags: [],
     });
     expect(parseSearchQuery("type:页面 笔记")).toEqual({
@@ -189,7 +190,7 @@ describe("parseSearchQuery", () => {
       text: "",
       terms: [],
       exclude: [],
-      layouts: ["grid", "board", "calendar", "timeline"],
+      layouts: [...DB_LAYOUTS],
       tags: [],
     });
     expect(parseSearchQuery("tag:工作 tag:重要 项目")).toEqual({
@@ -210,6 +211,15 @@ describe("parseSearchQuery", () => {
       tags: [],
     });
     expect(parseSearchQuery("tag:Work")).toEqual({ text: "", terms: [], exclude: [], layouts: [], tags: ["work"] });
+    // 列表 / 画廊两种数据库布局的英文与中文别名
+    expect(parseSearchQuery("type:List")).toEqual({ text: "", terms: [], exclude: [], layouts: ["list"], tags: [] });
+    expect(parseSearchQuery("type:画廊")).toEqual({
+      text: "",
+      terms: [],
+      exclude: [],
+      layouts: ["gallery"],
+      tags: [],
+    });
   });
 
   it("keeps each word as its own term instead of one joined phrase", () => {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, FolderInput, FolderOutput, RefreshCw, Upload } from "lucide-react";
+import { Download, Eye, FolderInput, FolderOutput, RefreshCw, Trash2, Upload } from "lucide-react";
 import { invoke } from "@/lib/invoke";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -12,7 +12,7 @@ import { exportMarkdownFolder } from "@/lib/export-folder";
 import { flushAllForClose } from "@/lib/close-flush";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import { sortBackupArchives, type BackupArchive } from "./backup-archive";
+import { sortBackupArchives, type BackupArchive, type BackupArchiveInfo } from "./backup-archive";
 import {
   fetchRetentionPolicy,
   normalizeRetentionPolicy,
@@ -30,6 +30,37 @@ const RETENTION_FIELDS: { key: keyof RetentionPolicy; labelKey: MessageKey }[] =
   { key: "trash_retention_days", labelKey: "settings.trashRetention" },
 ];
 
+/** 备份归档内容摘要：只读 zip 目录，不做任何写入，因此展开预览本身没有风险 */
+function BackupArchiveSummary({ info }: { info: BackupArchiveInfo }) {
+  const chips: { text: string; warn?: boolean }[] = [
+    { text: t("settings.backupInspectEntries", { n: info.entry_count }) },
+    { text: t("settings.backupInspectSize", { size: formatBytes(info.unpacked_bytes) }) },
+  ];
+  if (info.database_only) {
+    // 迁移前自动留档：本来就只有数据库，附件/设置缺失不是缺陷，不能标成警告
+    chips.push({ text: t("settings.backupInspectDatabaseOnly") });
+  } else {
+    chips.push({ text: t("settings.backupInspectAssets", { n: info.asset_count }) });
+    // 缺任一项都不能算一份完整的可恢复归档，单独标红而不是静默省略
+    if (!info.has_database) chips.push({ text: t("settings.backupInspectNoDatabase"), warn: true });
+    chips.push({
+      text: info.has_config ? t("settings.backupInspectWithConfig") : t("settings.backupInspectWithoutConfig"),
+      warn: !info.has_config,
+    });
+    if (info.has_tombstones) chips.push({ text: t("settings.backupInspectTombstones") });
+  }
+
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-neutral-500">
+      {chips.map((chip) => (
+        <span key={chip.text} className={chip.warn ? "text-amber-600" : undefined}>
+          {chip.text}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /** 备份与迁移：整库导出/导入 ZIP、Markdown 文件夹双向迁移、自动备份、数据保留策略 */
 export function SettingsBackup() {
   const [busyExport, setBusyExport] = useState(false);
@@ -45,6 +76,12 @@ export function SettingsBackup() {
   // 待确认恢复的备份（恢复会整体替换本机库，先二次确认）
   const [restoreTarget, setRestoreTarget] = useState<BackupArchive | null>(null);
   const [busyRestore, setBusyRestore] = useState(false);
+  // 展开预览的归档（读 zip 目录做摘要；同时只展开一份，换行即替换）
+  const [inspect, setInspect] = useState<{ name: string; info: BackupArchiveInfo } | null>(null);
+  const [busyInspect, setBusyInspect] = useState(false);
+  // 待确认删除的归档（删除的是磁盘上的文件，不可撤销）
+  const [deleteTarget, setDeleteTarget] = useState<BackupArchive | null>(null);
+  const [busyDelete, setBusyDelete] = useState(false);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
 
   useEffect(() => {
@@ -228,6 +265,45 @@ export function SettingsBackup() {
     }
   };
 
+  /**
+   * 预览归档内容：Rust 侧只读 zip 的中央目录，不解压也不碰本机数据，所以随时可点、点了不危险。
+   * 再点同一行收起；换一行直接替换（同时只展开一份，避免列表被撑得没法看）。
+   */
+  const toggleInspect = async (name: string) => {
+    if (inspect?.name === name) {
+      setInspect(null);
+      return;
+    }
+    setBusyInspect(true);
+    try {
+      const info = await invoke<BackupArchiveInfo>("inspect_backup_archive", { name });
+      setInspect({ name, info });
+    } catch (e) {
+      logger.error("inspect backup archive failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+      setInspect(null);
+    } finally {
+      setBusyInspect(false);
+    }
+  };
+
+  /** 删除一份归档：ConfirmDialog 已二次确认；删完刷新列表并收起该行的预览 */
+  const deleteArchive = async (name: string) => {
+    setBusyDelete(true);
+    try {
+      await invoke("delete_backup_archive", { name });
+      toast.success(t("settings.backupDeleted"));
+      setInspect((cur) => (cur?.name === name ? null : cur));
+      refreshBackups();
+    } catch (e) {
+      logger.error("delete backup archive failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+      refreshBackups();
+    } finally {
+      setBusyDelete(false);
+    }
+  };
+
   return (
     <>
       <Section title={t("settings.backup")}>
@@ -338,18 +414,39 @@ export function SettingsBackup() {
             ) : (
               <ul className="divide-y divide-neutral-200 rounded-md border border-neutral-200 dark:divide-neutral-700 dark:border-neutral-700">
                 {backups.map((b) => (
-                  <li key={b.name} className="flex items-center gap-2 px-2 py-1.5">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-mono text-[11px] text-neutral-700 dark:text-neutral-200">
-                        {b.name}
+                  <li key={b.name} className="px-2 py-1.5">
+                    <div className="flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-mono text-[11px] text-neutral-700 dark:text-neutral-200">
+                          {b.name}
+                        </div>
+                        <div className="text-[10px] text-neutral-400">
+                          {b.modified} · {formatBytes(b.size)}
+                        </div>
                       </div>
-                      <div className="text-[10px] text-neutral-400">
-                        {b.modified} · {formatBytes(b.size)}
-                      </div>
+                      <button
+                        type="button"
+                        className="flex items-center gap-1 text-[11px] text-neutral-500 hover:underline disabled:opacity-50"
+                        disabled={busyInspect}
+                        onClick={() => void toggleInspect(b.name)}
+                      >
+                        <Eye className="h-3 w-3" />
+                        {inspect?.name === b.name ? t("settings.backupInspectHide") : t("settings.backupInspect")}
+                      </button>
+                      <Button size="sm" variant="outline" disabled={busyRestore} onClick={() => setRestoreTarget(b)}>
+                        {busyRestore ? "…" : t("settings.backupRestore")}
+                      </Button>
+                      <button
+                        type="button"
+                        className="text-neutral-400 hover:text-red-600 disabled:opacity-50"
+                        title={t("settings.backupDelete")}
+                        disabled={busyDelete}
+                        onClick={() => setDeleteTarget(b)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
                     </div>
-                    <Button size="sm" variant="outline" disabled={busyRestore} onClick={() => setRestoreTarget(b)}>
-                      {busyRestore ? "…" : t("settings.backupRestore")}
-                    </Button>
+                    {inspect?.name === b.name && <BackupArchiveSummary info={inspect.info} />}
                   </li>
                 ))}
               </ul>
@@ -395,6 +492,22 @@ export function SettingsBackup() {
           const name = restoreTarget?.name;
           setRestoreTarget(null);
           if (name) void restoreBackup(name);
+        }}
+      />
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        danger
+        title={t("settings.backupDelete")}
+        description={t("settings.backupDeleteConfirm", { name: deleteTarget?.name ?? "" })}
+        confirmLabel={t("settings.backupDelete")}
+        onConfirm={() => {
+          const name = deleteTarget?.name;
+          setDeleteTarget(null);
+          if (name) void deleteArchive(name);
         }}
       />
     </>

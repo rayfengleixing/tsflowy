@@ -255,7 +255,10 @@
 }
 .tiptap h1,
 .tiptap h2,
-.tiptap h3 {
+.tiptap h3,
+.tiptap h4,
+.tiptap h5,
+.tiptap h6 {
   margin: 0.8em 0 0.3em;
   font-weight: 600;
   color: #3d404f;
@@ -263,7 +266,10 @@
 }
 .dark .tiptap h1,
 .dark .tiptap h2,
-.dark .tiptap h3 {
+.dark .tiptap h3,
+.dark .tiptap h4,
+.dark .tiptap h5,
+.dark .tiptap h6 {
   color: var(--foreground);
 }
 /* 标题用 em 跟随正文 --tiptap-font-size 联动缩放：
@@ -276,6 +282,61 @@
 }
 .tiptap h3 {
   font-size: 1.15em;
+}
+/* H4–H6 收到正文大小以下：级别靠字号与颜色分档，不再像浏览器默认那样比正文还粗黑 */
+.tiptap h4 {
+  font-size: 1.05em;
+}
+.tiptap h5 {
+  font-size: 1em;
+}
+.tiptap h6 {
+  font-size: 0.95em;
+  font-weight: 500;
+  color: #5a5e70;
+}
+.dark .tiptap h6 {
+  color: var(--muted-foreground);
+}
+/* 块多选高亮：block-drag 在顶层块 DOM 上打 data-ts-selected；配色同拖拽指示条 */
+.tiptap > [data-ts-selected] {
+  background: rgba(37, 99, 235, 0.07);
+  box-shadow: inset 3px 0 0 rgba(37, 99, 235, 0.45);
+  border-radius: 3px;
+}
+.dark .tiptap > [data-ts-selected] {
+  background: rgba(96, 165, 250, 0.12);
+}
+/* 分栏列宽分隔条：ColumnNodeView 在本列左边缘挂 .column-grip，拖动改写本列与左邻列的 ratio。
+   第一列没有左邻列，分隔条一律隐藏（宽度落在 flex 容器 gap-4 的中间） */
+.tiptap [data-column] {
+  position: relative;
+}
+.tiptap [data-column] > .column-grip {
+  display: none;
+  position: absolute;
+  left: -0.6rem;
+  top: 0.25rem;
+  height: calc(100% - 0.5rem);
+  width: 0.35rem;
+  border-radius: 2px;
+  cursor: col-resize;
+  background: transparent;
+}
+.tiptap [data-column]:not(:first-child) > .column-grip {
+  display: block;
+}
+.tiptap [data-column]:hover > .column-grip {
+  background: #e5e5e5;
+}
+.tiptap [data-column] > .column-grip:hover {
+  background: #a3a3a3;
+}
+.dark .tiptap [data-column]:hover > .column-grip {
+  background: #3f3f46;
+}
+.dark .tiptap [data-column] > .column-grip:hover {
+  background: #71717a;
 }
 .tiptap ul,
 .tiptap ol {
@@ -335,6 +396,41 @@
 .tiptap ul[data-type="taskList"] li[data-checked="true"] > div {
   text-decoration: line-through;
   opacity: 0.6;
+}
+/* 任务行的截止日期 / 负责人 chip：文案由 extensions/task-meta.ts 写成 <li> 上的渲染属性，
+   TipTap 原生 NodeView 的 update() 会把渲染属性刷到 DOM 并移除多余的键，清空日期即消失。 */
+.tiptap ul[data-type="taskList"] li[data-task-meta]::after {
+  content: attr(data-task-meta);
+  flex: none;
+  align-self: center;
+  margin-left: auto;
+  padding: 0.05em 0.5em;
+  border-radius: 999px;
+  font-size: 0.75em;
+  line-height: 1.5;
+  white-space: nowrap;
+  color: #475467;
+  background: #f2f4f7;
+}
+.tiptap ul[data-type="taskList"] li[data-task-state="today"]::after {
+  color: #b54708;
+  background: #fffaeb;
+}
+.tiptap ul[data-type="taskList"] li[data-task-state="overdue"]::after {
+  color: #d92d20;
+  background: #fee9e9;
+}
+.dark .tiptap ul[data-type="taskList"] li[data-task-meta]::after {
+  color: #a6a6a6;
+  background: #27272a;
+}
+.dark .tiptap ul[data-type="taskList"] li[data-task-state="today"]::after {
+  color: #f79009;
+  background: #3a2a10;
+}
+.dark .tiptap ul[data-type="taskList"] li[data-task-state="overdue"]::after {
+  color: #f97066;
+  background: #3d1a1a;
 }
 .tiptap blockquote {
   border-left: 3px solid var(--color-brand-500, #00b5ff);

@@ -8,7 +8,10 @@ import { createDatabaseStore } from "@/stores/database";
 import { DatabaseStoreProvider } from "@/stores/database-context";
 import { BoardView } from "./BoardView";
 import { CalendarView } from "./CalendarView";
+import { FormView } from "./FormView";
+import { GalleryView } from "./GalleryView";
 import { GridView } from "./GridView";
+import { ListView } from "./ListView";
 import { TimelineView } from "./TimelineView";
 import { ViewChips } from "./ViewChips";
 import type { View } from "@/types/models";
@@ -121,6 +124,33 @@ export function DatabasePage({ view }: { view: View }) {
           tabs={tabs}
           onGoGrid={grid ? () => select(grid.id) : undefined}
         />
+      </DatabaseStoreProvider>
+    );
+  }
+  if (active.layout === "list") {
+    return (
+      <DatabaseStoreProvider value={store}>
+        <ListView key={active.id} view={active} source={view} tabs={tabs} />
+      </DatabaseStoreProvider>
+    );
+  }
+  if (active.layout === "gallery") {
+    return (
+      <DatabaseStoreProvider value={store}>
+        <GalleryView
+          key={active.id}
+          view={active}
+          source={view}
+          tabs={tabs}
+          onGoGrid={grid ? () => select(grid.id) : undefined}
+        />
+      </DatabaseStoreProvider>
+    );
+  }
+  if (active.layout === "form") {
+    return (
+      <DatabaseStoreProvider value={store}>
+        <FormView key={active.id} view={active} source={view} tabs={tabs} />
       </DatabaseStoreProvider>
     );
   }

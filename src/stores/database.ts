@@ -1,7 +1,14 @@
 import { create } from "zustand";
-import type { CellValue, DatabaseField, DatabaseRow, FieldOptions, FieldType } from "@/types/database";
+import type {
+  CellValue,
+  DatabaseField,
+  DatabaseRow,
+  DatabaseTrashRow,
+  FieldOptions,
+  FieldType,
+} from "@/types/database";
 import { databaseApi } from "@/lib/database";
-import { newSelectOption, parseFieldOptions } from "@/lib/database-values";
+import { newSelectOption, parseFieldOptions, sameCellValue } from "@/lib/database-values";
 import { renameFormulaRef } from "@/lib/database-formula";
 import { viewApi } from "@/lib/db";
 import { useRelationStore } from "@/stores/relation";
@@ -59,9 +66,19 @@ export interface DatabaseState {
   addRow: () => Promise<DatabaseRow | null>;
   /** 批量建行（TSV 粘贴）：一次 IPC 一个事务 */
   addRows: (count: number) => Promise<DatabaseRow[]>;
+  /** 删一行 = 进回收站（可在「已删除的行」里恢复） */
   removeRow: (id: string) => Promise<void>;
-  /** 批量删行（多选删除）：一次 IPC 一个事务 */
+  /** 批量删行（多选删除）：一次 IPC 一个事务，同样进回收站 */
   removeRows: (ids: string[]) => Promise<number>;
+  /** 回收站内容：打开「已删除的行」面板时才拉，平时不占内存也不增加读库次数 */
+  trash: DatabaseTrashRow[];
+  loadTrash: () => Promise<void>;
+  /** 从回收站恢复一行，成功后回到表格并刷新回收站列表 */
+  restoreRow: (id: string) => Promise<void>;
+  /** 彻底删除回收站里的一行 */
+  purgeRow: (id: string) => Promise<void>;
+  /** 清空本表回收站，返回彻底删除的行数 */
+  purgeTrash: () => Promise<number>;
   /** 复制所选行：新建行并复制其单元格值（含公式引用之外的存储值），返回新行 */
   duplicateRows: (ids: string[]) => Promise<DatabaseRow[]>;
   reorderRows: (orderedIds: string[]) => Promise<void>;
@@ -122,12 +139,6 @@ function hasDuplicateName(fields: DatabaseField[], name: string, exceptId: strin
   return fields.some((f) => f.id !== exceptId && f.name.trim().toLowerCase() === key);
 }
 
-/** 单元格值的同值判定（数组/附件引用按内容比较）：用于跳过无变化的提交 */
-function sameCellValue(a: CellValue, b: CellValue): boolean {
-  if (a === b) return true;
-  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
-}
-
 export type DatabaseStore = ReturnType<typeof createDatabaseStore>;
 
 /** 新建一个数据库 store 实例：每个数据库页（DatabasePage）持有一份，并排时互不干扰 */
@@ -154,6 +165,7 @@ export function createDatabaseStore() {
       fields: [],
       rows: [],
       cells: {},
+      trash: [],
       loading: false,
       sorts: [],
       filters: [],
@@ -180,6 +192,7 @@ export function createDatabaseStore() {
           loading: true,
           view,
           viewId,
+          trash: [],
           sorts: cfg.sorts ?? [],
           filters: cfg.filters ?? [],
           filterMode: cfg.filterMode ?? "and",
@@ -372,6 +385,32 @@ export function createDatabaseStore() {
         const n = await databaseApi.deleteRows(ids);
         const cells = Object.fromEntries(Object.entries(get().cells).filter(([rowId]) => !gone.has(rowId)));
         set({ rows: compactRowPositions(get().rows.filter((r) => !gone.has(r.id))), cells });
+        return n;
+      },
+
+      loadTrash: async () => {
+        const viewId = get().viewId;
+        if (!viewId) return;
+        set({ trash: await databaseApi.listTrash(viewId) });
+      },
+
+      restoreRow: async (id) => {
+        await databaseApi.restoreRow(id);
+        // 整表重拉：恢复行的单元格、行号都在后端算，前端不自己拼（避免与 compact 规则跑偏）
+        await get().reload();
+        await get().loadTrash();
+      },
+
+      purgeRow: async (id) => {
+        await databaseApi.purgeRow(id);
+        set({ trash: get().trash.filter((r) => r.id !== id) });
+      },
+
+      purgeTrash: async () => {
+        const viewId = get().viewId;
+        if (!viewId) return 0;
+        const n = await databaseApi.purgeTrash(viewId);
+        set({ trash: [] });
         return n;
       },
 

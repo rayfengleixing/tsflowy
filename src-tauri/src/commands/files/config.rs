@@ -6,7 +6,8 @@ use tauri::Manager;
 
 /// 存放 config.json 的独立子目录名（放在 config 系统目录下，避免被"重命名默认数据目录为备份"一起搬走）
 const CONFIG_DIR_NAME: &str = "TsFlowyConfig";
-const CONFIG_FILE_NAME: &str = "config.json";
+/// 备份打包/回档按同一个文件名处理配置文件，故对外可见
+pub(crate) const CONFIG_FILE_NAME: &str = "config.json";
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct AppConfig {

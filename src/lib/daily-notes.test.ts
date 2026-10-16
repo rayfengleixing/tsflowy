@@ -24,7 +24,7 @@ import {
 // 防新建每日笔记时编辑器报 Invalid content（与 welcome-doc.test.ts 同思路）
 const schema = getSchema([
   StarterKit.configure({ heading: false }),
-  LockedHeading.configure({ levels: [1, 2, 3] }),
+  LockedHeading.configure({ levels: [1, 2, 3, 4, 5, 6] }),
   TaskList,
   TaskItem.configure({ nested: true }),
 ]);
@@ -105,9 +105,14 @@ describe("templateToBlocks", () => {
     expect(blocks[2].content?.length).toBe(2);
   });
 
-  it("井号映射为 H2/H3（H1 已被标题占用）", () => {
-    const blocks = templateToBlocks("# 一级\n## 二级\n### 三级", vars);
-    expect(blocks.map((b) => Number(b.attrs?.level))).toEqual([2, 3, 3]);
+  it("井号整体下移一级映射为 H2…H6（H1 已被标题占用）", () => {
+    const blocks = templateToBlocks("# 一\n## 二\n### 三\n#### 四\n##### 五\n###### 六", vars);
+    expect(blocks.map((b) => Number(b.attrs?.level))).toEqual([2, 3, 4, 5, 6, 6]);
+  });
+
+  it("七个井号不是标题：按 Markdown 口径留作正文", () => {
+    const blocks = templateToBlocks("####### 七", vars);
+    expect(blocks.map((b) => b.type)).toEqual(["paragraph"]);
   });
 
   it("空模板产出空数组", () => {

@@ -125,7 +125,7 @@ function zhBody(): JSONContent[] {
 
     h3("列表与任务"),
     bullets([
-      "标题分三级（这篇文档里就有），块左侧的拖拽手柄可以把任意内容块拖去别处。",
+      "标题分六级（/ 菜单或 Ctrl+Alt+数字切换），块左侧的拖拽手柄可以把任意内容块拖去别处。",
       "无序列表、有序列表、任务清单都可以输入语法自动转换，或用 / 菜单插入。",
       "图片支持上传 / 粘贴 / 拖拽插入，双击放大（灯箱），菜单里的「多图相册」可以把多张图并排展示；附件单击即用系统默认程序打开。",
     ]),
@@ -198,7 +198,7 @@ function zhBody(): JSONContent[] {
       "全局搜索（Ctrl+Shift+F）覆盖页面标题、正文与数据库单元格，命中行可以直接定位。",
       "命令面板（Ctrl+K）快速跳转到任意页面，也能新建页面或打开今日笔记。",
       "输入 @ 可以提及任意页面：悬停预览、点击跳转，页面底部会列出引用它的反向链接。",
-      "长文档可以在右侧打开大纲（H1–H3）快速跳转；/ 菜单的「目录」块则把目录直接嵌进正文。",
+      "长文档可以在右侧打开大纲（H1–H6）快速跳转；/ 菜单的「目录」块则把目录直接嵌进正文。",
     ]),
 
     h2("导出、备份与设置"),
@@ -271,7 +271,7 @@ function enBody(): JSONContent[] {
 
     h3("Lists and tasks"),
     bullets([
-      "Headings come in three levels — this document uses them.",
+      "Headings go six levels deep — pick one from the slash menu, or press Ctrl+Alt plus the level number.",
       "Bullet lists, numbered lists and to-dos all convert from typed syntax, or insert them from the slash menu.",
       "Drag the handle on the left of any block to move it around; images upload / paste / drag in, and double-click opens a lightbox. Attachments open with their default app on a single click.",
     ]),
@@ -344,7 +344,7 @@ function enBody(): JSONContent[] {
       "Global search (Ctrl+Shift+F) covers page titles, body text and database cells, and jumps straight to the matching row.",
       "The command palette (Ctrl+K) jumps to any page, and can also create a page or open today's note.",
       "Type @ to mention a page: hover to preview, click to open; backlinks are listed at the bottom of the page.",
-      "For long documents, use the outline panel (H1–H3) on the right, or insert an 'Outline' block from the / menu for an in-page table of contents.",
+      "For long documents, use the outline panel (H1–H6) on the right, or insert an 'Outline' block from the / menu for an in-page table of contents.",
     ]),
 
     h2("Export, backup and settings"),

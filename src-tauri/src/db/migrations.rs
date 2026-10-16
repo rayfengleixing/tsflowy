@@ -98,6 +98,21 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "documents_fts_rowid",
         sql: include_str!("../../../migrations/018_documents_fts_rowid.sql"),
     },
+    Migration {
+        version: 19,
+        description: "rows_trash",
+        sql: include_str!("../../../migrations/019_rows_trash.sql"),
+    },
+    Migration {
+        version: 20,
+        description: "views_layout_list_gallery",
+        sql: include_str!("../../../migrations/020_views_layout_list_gallery.sql"),
+    },
+    Migration {
+        version: 21,
+        description: "views_layout_form",
+        sql: include_str!("../../../migrations/021_views_layout_form.sql"),
+    },
 ];
 
 /// 自带事务的迁移：重建表改 CHECK 约束需要两个连接级 PRAGMA，而它们在事务内是 no-op，
@@ -106,7 +121,7 @@ pub const MIGRATIONS: &[Migration] = &[
 ///     把子表数据一并清空；
 ///   - legacy_alter_table=ON：RENAME 默认会重解析整个 schema 以改写其它对象里的引用，
 ///     而此刻旧表已删、其它触发器仍引用它，重解析会报 "no such table"。
-const OWN_TRANSACTION_VERSIONS: &[i64] = &[12, 13, 14, 15];
+const OWN_TRANSACTION_VERSIONS: &[i64] = &[12, 13, 14, 15, 20, 21];
 
 pub fn ensure_migrated(conn: &rusqlite::Connection) -> Result<(), String> {
     ensure_migrated_with(conn, MIGRATIONS)
@@ -129,6 +144,9 @@ pub fn ensure_migrated_with(
     ensure_checksum_column(conn)?;
     seed_sqlx_baseline(conn)?;
 
+    // 本轮首次真要应用迁移前留一份档；一轮里多条迁移只留一次（留档目的是"改动前的库"，
+    // 逐条留会让磁盘涨到 N 份完整库而回退点仍然是同一个）
+    let mut snapshot_taken = false;
     for m in migrations {
         let checksum = migration_checksum(m.sql);
         let stored: Option<Option<String>> = conn
@@ -141,6 +159,17 @@ pub fn ensure_migrated_with(
             .map_err(|e| format!("read schema_migrations: {e}"))?;
         match stored {
             None => {
+                if !snapshot_taken {
+                    snapshot_taken = true;
+                    if let Err(e) = pre_migration_snapshot(conn, m.version) {
+                        // 留档失败不阻断启动：库本身是好的，只是这次没有回退点
+                        tracing::warn!(
+                            error = %e,
+                            version = m.version,
+                            "pre-migration snapshot failed"
+                        );
+                    }
+                }
                 let applied = if OWN_TRANSACTION_VERSIONS.contains(&m.version) {
                     apply_one_owning_transaction(conn, m, &checksum)
                 } else {
@@ -177,6 +206,20 @@ pub fn ensure_migrated_with(
         }
     }
     Ok(())
+}
+
+/// 迁移前留档交给备份模块（归档命名与 zip 写入都在它那边）。
+/// 内存库没有对应文件（`path()` 为 None 或指向不存在的文件），直接跳过。
+fn pre_migration_snapshot(conn: &rusqlite::Connection, version: i64) -> Result<(), String> {
+    // rusqlite 的 path() 是字符串：内存库为空串，落盘库才是可留档的文件
+    let Some(db) = conn
+        .path()
+        .map(std::path::Path::new)
+        .filter(|p| p.is_file())
+    else {
+        return Ok(());
+    };
+    crate::commands::files::backup::capture_pre_migration(db, version).map(|_| ())
 }
 
 /// schema_migrations 的内容指纹：迁移 SQL 的 SHA384 十六进制。
@@ -270,6 +313,40 @@ fn seed_sqlx_baseline(conn: &rusqlite::Connection) -> Result<(), String> {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+
+    #[test]
+    fn ensure_migrated_snapshots_the_file_database_once_before_applying() {
+        // 落盘库（conn 有 path）才会留档；一轮迁移只留一份，已最新时不再留档
+        let base = std::env::temp_dir().join(format!("tsflowy-premig-run-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let db = base.join("appflowy.db");
+        let count = || -> usize {
+            let dir = base.join("backups");
+            if !dir.is_dir() {
+                return 0;
+            }
+            std::fs::read_dir(&dir)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|n| {
+                    n.starts_with(crate::commands::files::auto_backup::PRE_MIGRATION_PREFIX)
+                })
+                .count()
+        };
+
+        {
+            let conn = Connection::open(&db).unwrap();
+            ensure_migrated(&conn).unwrap();
+        }
+        assert_eq!(count(), 1, "首次应用迁移前应留档一份");
+
+        let conn = Connection::open(&db).unwrap();
+        ensure_migrated(&conn).unwrap();
+        assert_eq!(count(), 1, "没有待应用迁移时不该再留档");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn fresh_applies_all() {
@@ -1054,6 +1131,142 @@ mod tests {
             )
             .unwrap();
         assert_eq!(snaps, 0, "重建后 trg_snapshots_purge 仍清理快照");
+
+        let fk: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk, 1, "迁移后必须恢复 foreign_keys=ON");
+        let legacy: i64 = conn
+            .query_row("PRAGMA legacy_alter_table", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(legacy, 0, "迁移后必须恢复 legacy_alter_table=OFF");
+    }
+
+    /// 存量库（1–19 已应用）升到 020：重建 views 把 layout 白名单加入 'list' / 'gallery'。
+    /// 与 014 同构，重点复核 015–019 期间新增的列/表（database_rows 的回收站列等）不受影响。
+    #[test]
+    fn migration_020_extends_layout_check_for_list_and_gallery() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_older_than(&conn, 20);
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute(
+            "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ('w1','W',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at, visited_at, tags)
+             VALUES ('v1','w1','图鉴','grid','{}',0,1,1,42,'[\"工作\"]')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO documents(view_id, content, updated_at) VALUES ('v1','{}',1)",
+            [],
+        )
+        .unwrap();
+
+        ensure_migrated(&conn).unwrap();
+
+        let (name, visited, tags): (String, i64, String) = conn
+            .query_row(
+                "SELECT name, visited_at, tags FROM views WHERE id='v1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "图鉴");
+        assert_eq!(visited, 42, "重建 views 不能丢 visited_at");
+        assert_eq!(tags, "[\"工作\"]", "重建 views 不能丢 tags");
+        let docs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(docs, 1, "重建 views 不能级联删除文档");
+
+        for layout in ["list", "gallery"] {
+            conn.execute(
+                "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at, source_id)
+                 VALUES (?1,'w1',?2,?2,'{}',0,1,1,'v1')",
+                rusqlite::params![format!("v-{layout}"), layout],
+            )
+            .unwrap_or_else(|e| panic!("{layout} 应被 CHECK 接受: {e}"));
+        }
+        let err = conn
+            .execute(
+                "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at)
+                 VALUES ('v9','w1','x','ghost_layout','{}',0,1,1)",
+                [],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("CHECK"), "{err}");
+
+        let fk: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fk, 1, "迁移后必须恢复 foreign_keys=ON");
+        let legacy: i64 = conn
+            .query_row("PRAGMA legacy_alter_table", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(legacy, 0, "迁移后必须恢复 legacy_alter_table=OFF");
+    }
+
+    /// 存量库（1–20 已应用）升到 021：重建 views 把 layout 白名单加入 'form'。
+    /// 与 020 同构，多验证一步：派生视图（带 source_id）也能落成 form。
+    #[test]
+    fn migration_021_extends_layout_check_for_form() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_older_than(&conn, 21);
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute(
+            "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ('w1','W',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at, visited_at, tags)
+             VALUES ('v1','w1','录入表','grid','{}',0,1,1,42,'[\"工作\"]')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO documents(view_id, content, updated_at) VALUES ('v1','{}',1)",
+            [],
+        )
+        .unwrap();
+
+        ensure_migrated(&conn).unwrap();
+
+        let (name, visited, tags): (String, i64, String) = conn
+            .query_row(
+                "SELECT name, visited_at, tags FROM views WHERE id='v1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "录入表");
+        assert_eq!(visited, 42, "重建 views 不能丢 visited_at");
+        assert_eq!(tags, "[\"工作\"]", "重建 views 不能丢 tags");
+        let docs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(docs, 1, "重建 views 不能级联删除文档");
+
+        for layout in ["list", "gallery", "form"] {
+            conn.execute(
+                "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at, source_id)
+                 VALUES (?1,'w1',?2,?2,'{}',0,1,1,'v1')",
+                rusqlite::params![format!("v-{layout}"), layout],
+            )
+            .unwrap_or_else(|e| panic!("{layout} 应被 CHECK 接受: {e}"));
+        }
+        let err = conn
+            .execute(
+                "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at)
+                 VALUES ('v9','w1','x','ghost_layout','{}',0,1,1)",
+                [],
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("CHECK"), "{err}");
 
         let fk: i64 = conn
             .query_row("PRAGMA foreign_keys", [], |r| r.get(0))

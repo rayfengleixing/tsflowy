@@ -1,23 +1,31 @@
 use std::fs;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+use zip::ZipArchive;
 
 use crate::db::{Db, DB_FILE};
 
 use super::asset::ASSETS_DIR;
-use super::backup::{make_db_snapshot, restore_backup_from, write_backup_zip};
-use super::config::{load_app_config, save_app_config, AutoBackupConfig};
+use super::backup::{
+    make_db_snapshot, restore_backup_from, scope_from_manifest_text, write_backup_zip, BackupScope,
+    MANIFEST_ENTRY,
+};
+use super::config::{load_app_config, save_app_config, AutoBackupConfig, CONFIG_FILE_NAME};
 use super::data_dir::{open_path_in_system, real_data_dir};
+use crate::commands::sync::TOMBSTONE_FILE;
 
 /// 自动备份落点子目录（数据目录下），与 assets/ 平级
-const BACKUP_DIR: &str = "backups";
+pub(crate) const BACKUP_DIR: &str = "backups";
 /// 自动备份文件名前缀（用于与用户手动导出的 zip 区分、以及清理时筛选）
 const AUTO_BACKUP_PREFIX: &str = "auto-";
 /// 设置页「导出备份」默认文件名的前缀（tsflowy-backup-YYYYMMDD-HHMM.zip）；
 /// 用户手动导出到 backups/ 目录的归档同样进备份列表
 const MANUAL_BACKUP_PREFIX: &str = "tsflowy-backup-";
+/// 迁移前自动留档的归档名前缀（以 MANUAL_BACKUP_PREFIX 开头，因此直接出现在备份列表里可一键恢复）
+pub(crate) const PRE_MIGRATION_PREFIX: &str = "tsflowy-backup-premigration-";
 
 /// 自动备份目录：数据目录下 backups/
 pub(crate) fn backup_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -52,7 +60,7 @@ pub fn run_auto_backup(app: &tauri::AppHandle, keep: usize) -> Result<PathBuf, S
     let snap = data_dir.join(format!("{DB_FILE}.auto-{}", std::process::id()));
     let _ = fs::remove_file(&snap);
     let outcome = make_db_snapshot(&db, &snap)
-        .and_then(|()| write_backup_zip(&target, &snap, &data_dir, &assets));
+        .and_then(|()| write_backup_zip(&target, &snap, &data_dir, &assets, BackupScope::Full));
     let _ = fs::remove_file(&snap);
     outcome?;
 
@@ -239,10 +247,7 @@ pub(crate) fn list_backup_archives(dir: &Path) -> Vec<BackupArchive> {
                     name,
                     size: m.len(),
                     modified: format_local_time(t),
-                    mtime_ms: t
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64,
+                    mtime_ms: t.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
                 },
             ))
         })
@@ -292,9 +297,169 @@ pub async fn restore_backup(
         .map_err(|e| format!("restore task failed: {e}"))?
 }
 
+/// 归档内容摘要（设置页「预览内容」用）：只读 zip 的中央目录，不解压、不碰本机数据。
+/// 逐条列文件对几百个附件没有意义，用户真正要判断的是"这份里有没有我要的东西"。
+#[derive(Debug, Serialize)]
+pub struct BackupArchiveInfo {
+    pub entry_count: usize,
+    pub has_database: bool,
+    /// 是否含 config.json：早期版本的归档没有，恢复时不会改动设置
+    pub has_config: bool,
+    /// 是否含附件删除墓碑清单：没有它对侧同步可能把已删附件复活
+    pub has_tombstones: bool,
+    pub asset_count: usize,
+    /// 是否只装数据库（迁移前自动留档）：这类归档不含附件与设置，恢复时也不会动它们
+    pub database_only: bool,
+    /// 解压后所需字节数（条目未压缩大小之和），恢复前估个空间
+    pub unpacked_bytes: u64,
+}
+
+/// 读归档中央目录做摘要（路径由调用方从备份目录内拼好，纯文件名）
+pub(crate) fn summarize_backup_archive(path: &Path) -> Result<BackupArchiveInfo, String> {
+    let file = fs::File::open(path).map_err(|e| format!("open backup failed: {e}"))?;
+    let mut archive =
+        ZipArchive::new(BufReader::new(file)).map_err(|e| format!("invalid zip archive: {e}"))?;
+    let mut info = BackupArchiveInfo {
+        entry_count: archive.len(),
+        has_database: false,
+        has_config: false,
+        has_tombstones: false,
+        database_only: false,
+        asset_count: 0,
+        unpacked_bytes: 0,
+    };
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("read zip entry: {e}"))?;
+        let name = entry.name().to_string();
+        if name == DB_FILE {
+            info.has_database = true;
+        } else if name == CONFIG_FILE_NAME {
+            info.has_config = true;
+        } else if name == TOMBSTONE_FILE {
+            info.has_tombstones = true;
+        } else if name == MANIFEST_ENTRY {
+            let mut text = String::new();
+            if entry.read_to_string(&mut text).is_ok() {
+                info.database_only = scope_from_manifest_text(&text) == BackupScope::DatabaseOnly;
+            }
+        } else if name.starts_with(&format!("{ASSETS_DIR}/")) && !entry.is_dir() {
+            info.asset_count += 1;
+        }
+        info.unpacked_bytes = info.unpacked_bytes.saturating_add(entry.size());
+    }
+    Ok(info)
+}
+
+/// 预览某份备份归档的内容（不写任何文件）
+#[tauri::command]
+pub async fn inspect_backup_archive(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<BackupArchiveInfo, String> {
+    if !is_backup_archive_name(&name) {
+        return Err(format!("invalid backup name: {name}"));
+    }
+    let path = backup_dir(&app)?.join(&name);
+    tauri::async_runtime::spawn_blocking(move || summarize_backup_archive(&path))
+        .await
+        .map_err(|e| format!("inspect backup task failed: {e}"))?
+}
+
+/// 删除 backups/ 里的一份归档。名字沿用 restore_backup 的准入判定：
+/// 只接受两种备份命名的纯文件名，前端二次确认后才调用。
+#[tauri::command]
+pub async fn delete_backup_archive(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    if !is_backup_archive_name(&name) {
+        return Err(format!("invalid backup name: {name}"));
+    }
+    let path = backup_dir(&app)?.join(&name);
+    tauri::async_runtime::spawn_blocking(move || {
+        if !path.is_file() {
+            return Err(format!("backup file not found: {}", path.display()));
+        }
+        fs::remove_file(&path).map_err(|e| format!("delete backup failed: {e}"))
+    })
+    .await
+    .map_err(|e| format!("delete backup task failed: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zip::write::FileOptions;
+    use zip::ZipWriter;
+
+    /// 造一份最小归档：条目名 → 内容
+    fn make_archive(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = fs::File::create(path).unwrap();
+        let mut zip = ZipWriter::new(file);
+        let opts = FileOptions::default();
+        for (name, bytes) in entries {
+            zip.start_file(*name, opts).unwrap();
+            std::io::Write::write_all(&mut zip, bytes).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn summarize_reports_which_parts_the_archive_carries() {
+        let base = std::env::temp_dir().join(format!("tsflowy-inspect-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let zip_path = base.join("auto-x.zip");
+        make_archive(
+            &zip_path,
+            &[
+                (DB_FILE, b"db-bytes"),
+                (CONFIG_FILE_NAME, b"{\"a\":1}"),
+                (TOMBSTONE_FILE, b"assets/gone.png\n"),
+                ("assets/a.png", b"12345"),
+                ("assets/b.png", b"67890"),
+            ],
+        );
+
+        let info = summarize_backup_archive(&zip_path).unwrap();
+        assert_eq!(info.entry_count, 5);
+        assert!(info.has_database);
+        assert!(info.has_config, "新版归档应带设置");
+        assert!(info.has_tombstones);
+        assert!(!info.database_only, "没有范围清单一律按完整备份");
+        assert_eq!(info.asset_count, 2);
+        assert_eq!(
+            info.unpacked_bytes,
+            8 + 7 + 16 + 5 + 5,
+            "解压后所需总字节（各条目未压缩大小之和）"
+        );
+
+        // 旧版归档（只有库 + 附件）：预览应如实显示"不含设置"，恢复时不会动配置
+        let legacy = base.join("auto-legacy.zip");
+        make_archive(&legacy, &[(DB_FILE, b"db"), ("assets/a.png", b"x")]);
+        let info = summarize_backup_archive(&legacy).unwrap();
+        assert!(info.has_database && !info.has_config && !info.has_tombstones);
+
+        // 迁移前留档：范围清单声明只装数据库，预览据此提示而不是报"不含设置"警告
+        let pre = base.join("auto-pre.zip");
+        make_archive(
+            &pre,
+            &[
+                (DB_FILE, b"db"),
+                (MANIFEST_ENTRY, br#"{"scope":"database_only"}"#),
+            ],
+        );
+        let info = summarize_backup_archive(&pre).unwrap();
+        assert!(info.database_only);
+        assert!(!info.has_config && info.asset_count == 0);
+
+        // 非 zip 文件：明确报错，不能返回一个"空归档"
+        let junk = base.join("auto-junk.zip");
+        fs::write(&junk, b"not a zip").unwrap();
+        assert!(summarize_backup_archive(&junk)
+            .unwrap_err()
+            .contains("invalid zip archive"));
+        let _ = fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn backup_name_filter_accepts_only_known_patterns() {

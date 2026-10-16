@@ -1,3 +1,4 @@
+import { DB_LAYOUTS } from "@/types/models";
 import type { CellValue, DatabaseField, DatabaseRow, FieldOptions } from "@/types/database";
 import { aggregatesForType, aggregateValue, type AggregateFn } from "./database-aggregate";
 import { formatCellValue, parseFieldOptions } from "./database-values";
@@ -101,8 +102,8 @@ export function rollupFnsFor(db: RelationDb | undefined, targetFieldId: string):
   return target ? aggregatesForType(target.field_type) : ["count"];
 }
 
-/** 能作为关联目标的布局：这三种布局背后才是数据库三表 */
-const DATABASE_LAYOUTS: string[] = ["grid", "board", "calendar"];
+/** 能作为关联目标的布局：数据库布局背后才有字段/行/单元格三表 */
+const DATABASE_LAYOUTS: readonly string[] = DB_LAYOUTS;
 
 /** 可选作关联目标的视图：宿主数据库表（派生视图与文档页排除，它们没有独立的字段/行） */
 export function buildRelationPickerFields<T extends { layout: string; source_id?: string | null }>(views: T[]): T[] {

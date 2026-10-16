@@ -35,12 +35,19 @@ describe("parseInline", () => {
 
 describe("markdownToJson", () => {
   it("converts headings", () => {
-    const json = markdownToJson("# 一级\n## 二级\n### 三级");
+    const json = markdownToJson("# 一级\n## 二级\n### 三级\n#### 四级\n##### 五级\n###### 六级");
     expect(json.content?.map((b) => [b.type, b.attrs])).toEqual([
       ["heading", { level: 1 }],
       ["heading", { level: 2 }],
       ["heading", { level: 3 }],
+      ["heading", { level: 4 }],
+      ["heading", { level: 5 }],
+      ["heading", { level: 6 }],
     ]);
+  });
+
+  it("七个井号按 Markdown 口径不是标题，别被截成六级", () => {
+    expect(markdownToJson("####### 七").content?.map((b) => b.type)).toEqual(["paragraph"]);
   });
 
   it("converts bullet and ordered lists", () => {
@@ -80,6 +87,22 @@ describe("markdownToJson", () => {
         },
       ],
     });
+  });
+
+  it("读回任务行尾的 due / assignee 标记", () => {
+    const json = markdownToJson("- [ ] 写周报 <!-- task due=2026-10-20 assignee=张三 -->\n- [x] 老任务");
+    const items = json.content?.[0].content ?? [];
+    expect(items[0].attrs).toEqual({ checked: false, due: "2026-10-20", assignee: "张三" });
+    expect(items[0].content?.[0].content).toEqual([{ type: "text", text: "写周报" }]);
+    // 无元数据的历史行不补空 attrs，JSON 形状与旧导出一致
+    expect(items[1].attrs).toEqual({ checked: true });
+  });
+
+  it("坏 due 与空 assignee 不进 attrs，标记照样从正文里摘干净", () => {
+    const json = markdownToJson("- [ ] 甲 <!-- task due=2026-02-30 assignee=  -->");
+    const item = json.content?.[0].content?.[0];
+    expect(item?.attrs).toEqual({ checked: false });
+    expect(item?.content?.[0].content).toEqual([{ type: "text", text: "甲" }]);
   });
 
   it("converts code fence with language", () => {
@@ -268,10 +291,36 @@ describe("markdownToJson", () => {
     expect(json.content).toEqual([
       {
         type: "callout",
-        attrs: { emoji: "⚠️" },
+        attrs: { emoji: "⚠️", color: "blue" },
         content: [{ type: "paragraph", content: [{ type: "text", text: "注意内容" }] }],
       },
     ]);
+  });
+
+  it("reads the callout color marker written by the exporter", () => {
+    const json = markdownToJson("> 🔥 **Callout** <!-- color:orange -->\n> 注意内容");
+    expect(json.content?.[0]?.attrs).toEqual({ emoji: "🔥", color: "orange" });
+  });
+
+  it("falls back to blue for a callout color marker with an unknown color", () => {
+    expect(markdownToJson("> **Callout** <!-- color:rainbow -->\n> 内容").content?.[0]?.attrs).toEqual({
+      emoji: "💡",
+      color: "blue",
+    });
+  });
+
+  it("strips the align marker from paragraph and heading lines", () => {
+    const json = markdownToJson("## 居中标题 <!-- align:center -->\n\n右对齐正文 <!-- align:right -->");
+    expect(json.content).toEqual([
+      { type: "heading", attrs: { level: 2, textAlign: "center" }, content: [{ type: "text", text: "居中标题" }] },
+      { type: "paragraph", attrs: { textAlign: "right" }, content: [{ type: "text", text: "右对齐正文" }] },
+    ]);
+  });
+
+  it("ignores an align marker sitting anywhere but the end of the line", () => {
+    const json = markdownToJson("普通段落里提到 <!-- align:center --> 这种字样");
+    expect(json.content?.[0]?.attrs).toBeUndefined();
+    expect(json.content?.[0]?.content?.[0]?.text).toContain("align");
   });
 
   it("restores gallery export format as imageGallery node (no comment residue)", () => {
@@ -295,6 +344,7 @@ describe("markdownToJson", () => {
 describe("looksLikeMarkdown / textToBlocks", () => {
   it("detects markdown structures", () => {
     expect(looksLikeMarkdown("# 标题")).toBe(true);
+    expect(looksLikeMarkdown("#### 四级标题")).toBe(true);
     expect(looksLikeMarkdown("- 列表项")).toBe(true);
     expect(looksLikeMarkdown("> 引用")).toBe(true);
     expect(looksLikeMarkdown("```js\ncode\n```")).toBe(true);
@@ -321,11 +371,31 @@ describe("jsonToMarkdown", () => {
         { type: "heading", attrs: { level: 1 }, content: [{ type: "text", text: "标题一" }] },
         { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "标题二" }] },
         { type: "heading", attrs: { level: 3 }, content: [{ type: "text", text: "标题三" }] },
+        { type: "heading", attrs: { level: 4 }, content: [{ type: "text", text: "标题四" }] },
+        { type: "heading", attrs: { level: 5 }, content: [{ type: "text", text: "标题五" }] },
+        { type: "heading", attrs: { level: 6 }, content: [{ type: "text", text: "标题六" }] },
       ],
     });
     expect(md).toMatch(/^# 标题一$/m);
     expect(md).toMatch(/^## 标题二$/m);
     expect(md).toMatch(/^### 标题三$/m);
+    expect(md).toMatch(/^#### 标题四$/m);
+    expect(md).toMatch(/^##### 标题五$/m);
+    expect(md).toMatch(/^###### 标题六$/m);
+    // 六级标题导出后必须原样读回来：任一边收窄都会让 #### 往返退化成段落
+    expect(markdownToJson(md).content?.map((b) => Number(b.attrs?.level))).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("越界级别夹回 1-6，不会打出七个井号", () => {
+    const md = jsonToMarkdown({
+      type: "doc",
+      content: [
+        { type: "heading", attrs: { level: 0 }, content: [{ type: "text", text: "零" }] },
+        { type: "heading", attrs: { level: 9 }, content: [{ type: "text", text: "九" }] },
+      ],
+    });
+    expect(md).toMatch(/^# 零$/m);
+    expect(md).toMatch(/^#{6} 九$/m);
   });
 
   it("renders inline marks: bold/italic/strike/code/link/highlight", () => {
@@ -399,6 +469,35 @@ describe("jsonToMarkdown", () => {
     expect(md).toMatch(/^2\. 二$/m);
     expect(md).toMatch(/^- \[ \] 未$/m);
     expect(md).toMatch(/^- \[x\] 已$/m);
+  });
+
+  it("任务行的截止日期与负责人写成行尾标记，且能被读回", () => {
+    const doc = {
+      type: "doc",
+      content: [
+        {
+          type: "taskList",
+          content: [
+            {
+              type: "taskItem",
+              attrs: { checked: false, due: "2026-10-20", assignee: "张三" },
+              content: [{ type: "paragraph", content: [{ type: "text", text: "写周报" }] }],
+            },
+            {
+              type: "taskItem",
+              attrs: { checked: true },
+              content: [{ type: "paragraph", content: [{ type: "text", text: "老任务" }] }],
+            },
+          ],
+        },
+      ],
+    };
+    const md = jsonToMarkdown(doc);
+    expect(md).toContain("- [ ] 写周报 <!-- task due=2026-10-20 assignee=张三 -->");
+    // 空元数据不写标记，历史导出格式零变化
+    expect(md).toMatch(/^- \[x\] 老任务$/m);
+    expect(md).not.toContain("<!-- task -->");
+    expect(markdownToJson(md).content).toEqual(doc.content);
   });
 
   it("renders code block with language fence", () => {
@@ -635,6 +734,76 @@ describe("jsonToMarkdown", () => {
     expect(markdownToJson(md)).toEqual(json);
   });
 
+  it("合并导出后导回：形状仍是一张表，合并按 GFM 语义丢弃", () => {
+    const cell = (type: string, text: string, attrs?: Record<string, number>) => ({
+      type,
+      attrs,
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    });
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "table",
+          content: [
+            { type: "tableRow", content: [cell("tableHeader", "A", { colspan: 2 }), cell("tableHeader", "C")] },
+            { type: "tableRow", content: [cell("tableCell", "1"), cell("tableCell", "2"), cell("tableCell", "3")] },
+          ],
+        },
+      ],
+    };
+    const back = markdownToJson(jsonToMarkdown(json));
+    const rows = (back.content?.[0].content ?? []).map((r) => (r.content ?? []).length);
+    expect(rows).toEqual([3, 3]); // 补齐成矩形，读回来不会多一格少一格
+    expect(back.content?.[0].content?.[0].content?.[2].content?.[0].content?.[0].text).toBe("C");
+  });
+
+  it("跨行合并：下一行本来就少一个节点，占位由上一行的 rowspan 补出", () => {
+    const cell = (text: string, attrs?: Record<string, number>) => ({
+      type: "tableCell",
+      attrs,
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    });
+    const md = jsonToMarkdown({
+      type: "doc",
+      content: [
+        {
+          type: "table",
+          content: [
+            { type: "tableRow", content: [cell("A", { rowspan: 2 }), cell("B")] },
+            { type: "tableRow", content: [cell("C")] },
+          ],
+        },
+      ],
+    });
+    expect(md.split("\n").filter((l) => l.startsWith("|"))).toEqual(["| A | B |", "| --- | --- |", "|  | C |"]);
+  });
+
+  it("坏数据（rowspan 超出真实行数）只补空行，不抛异常", () => {
+    const md = jsonToMarkdown({
+      type: "doc",
+      content: [
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [
+                {
+                  type: "tableCell",
+                  attrs: { rowspan: 5 },
+                  content: [{ type: "paragraph", content: [{ type: "text", text: "A" }] }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    // 表头 + 分隔行 + 被撑出来的 4 行
+    expect(md.split("\n").filter((l) => l.startsWith("|"))).toHaveLength(6);
+  });
+
   it("round-trips columns: json → md → json", () => {
     const json = {
       type: "doc",
@@ -644,10 +813,12 @@ describe("jsonToMarkdown", () => {
           content: [
             {
               type: "column",
+              attrs: { ratio: 1 },
               content: [{ type: "paragraph", content: [{ type: "text", text: "左栏" }] }],
             },
             {
               type: "column",
+              attrs: { ratio: 1 },
               content: [{ type: "paragraph", content: [{ type: "text", text: "右栏" }] }],
             },
           ],
@@ -659,6 +830,43 @@ describe("jsonToMarkdown", () => {
     expect(md).toContain("<!-- column 2/2 -->");
     expect(md).toContain("<!-- /columns -->");
     expect(markdownToJson(md)).toEqual(json);
+  });
+
+  it("round-trips column ratios（列宽拖过就写第三段，均分保持老格式）", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "columns",
+          content: [
+            { type: "column", attrs: { ratio: 2 }, content: [{ type: "paragraph" }] },
+            { type: "column", attrs: { ratio: 0.5 }, content: [{ type: "paragraph" }] },
+          ],
+        },
+      ],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("<!-- column 1/2 2 -->");
+    expect(md).toContain("<!-- column 2/2 0.5 -->");
+    expect(markdownToJson(md)).toEqual(json);
+  });
+
+  it("无比例段的旧分栏标记仍按均分导入", () => {
+    const md = [
+      "<!-- columns (2) -->",
+      "<!-- column 1/2 -->",
+      "左",
+      "<!-- column 2/2 -->",
+      "右",
+      "<!-- /columns -->",
+    ].join("\n");
+    const columnRatios = (markdownToJson(md).content?.[0].content ?? []).map((col) => Number(col.attrs?.ratio));
+    expect(columnRatios).toEqual([1, 1]);
+  });
+
+  it("坏的分栏比例值退回均分而不是把列搞没", () => {
+    const md = ["<!-- columns (1) -->", "<!-- column 1/1 abc -->", "只有一列", "<!-- /columns -->"].join("\n");
+    expect(markdownToJson(md).content?.[0].content?.[0].attrs?.ratio).toBe(1);
   });
 
   it("round-trips basic markdown through markdownToJson → jsonToMarkdown", () => {
@@ -796,12 +1004,60 @@ describe("jsonToMarkdown", () => {
       content: [
         {
           type: "callout",
-          attrs: { emoji: "💡" },
+          attrs: { emoji: "💡", color: "blue" },
           content: [{ type: "paragraph", content: [{ type: "text", text: "提示正文" }] }],
         },
       ],
     };
+    // 蓝是默认色，导出保持旧格式（不写注释），历史 md 文件回读才不会被判定成格式变化
+    expect(jsonToMarkdown(json).trim()).toBe("> 💡 **Callout**\n> 提示正文");
     expect(markdownToJson(jsonToMarkdown(json))).toEqual(json);
+  });
+
+  it("round-trips a non-default callout color through the marker", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "callout",
+          attrs: { emoji: "🔥", color: "green" },
+          content: [{ type: "paragraph", content: [{ type: "text", text: "提示正文" }] }],
+        },
+      ],
+    };
+    expect(jsonToMarkdown(json).trim()).toBe("> 🔥 **Callout** <!-- color:green -->\n> 提示正文");
+    expect(markdownToJson(jsonToMarkdown(json))).toEqual(json);
+  });
+
+  it("writes block alignment into a trailing marker and reads it back", () => {
+    const json = {
+      type: "doc",
+      content: [
+        { type: "heading", attrs: { level: 1, textAlign: "center" }, content: [{ type: "text", text: "标题" }] },
+        { type: "paragraph", attrs: { textAlign: "justify" }, content: [{ type: "text", text: "正文" }] },
+      ],
+    };
+    expect(jsonToMarkdown(json).trim()).toBe("# 标题 <!-- align:center -->\n\n正文 <!-- align:justify -->");
+    expect(markdownToJson(jsonToMarkdown(json))).toEqual(json);
+  });
+
+  it("leaves default and left alignment out of the exported markdown", () => {
+    const json = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "无属性" }] },
+        { type: "paragraph", attrs: { textAlign: "left" }, content: [{ type: "text", text: "显式左对齐" }] },
+      ],
+    };
+    expect(jsonToMarkdown(json).trim()).toBe("无属性\n\n显式左对齐");
+    // 回读只还原正文，不再补 attrs：left 与默认同义，避免多出一个属性让 toEqual 失败
+    expect(markdownToJson(jsonToMarkdown(json))).toEqual({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "无属性" }] },
+        { type: "paragraph", content: [{ type: "text", text: "显式左对齐" }] },
+      ],
+    });
   });
 
   it("round-trips gallery: json → md → json", () => {

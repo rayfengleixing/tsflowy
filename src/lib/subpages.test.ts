@@ -11,7 +11,7 @@ import { readSubpagesItems, subpagesAnchorIndex, upsertSubpagesNode, type Subpag
 // 防插入子页面块后编辑器报 Invalid content
 const schema = getSchema([
   StarterKit.configure({ heading: false }),
-  LockedHeading.configure({ levels: [1, 2, 3] }),
+  LockedHeading.configure({ levels: [1, 2, 3, 4, 5, 6] }),
   Subpages,
 ]);
 

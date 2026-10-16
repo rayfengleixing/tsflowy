@@ -1,9 +1,10 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::models::{
-    CellLoadRow, CellSetIn, CsvFieldIn, CsvRowIn, DatabaseFieldRow, DatabaseRowRow,
+    CellLoadRow, CellSetIn, CsvFieldIn, CsvRowIn, DatabaseFieldRow, DatabaseRowRow, TrashRowOut,
 };
 use super::views::data_view_id;
+use super::views::trash::{purge_within, with_recursive_subtree};
 use super::{dberr, now_ms};
 
 // 数据库三表（database_fields / database_rows / database_cells）领域函数，
@@ -59,10 +60,18 @@ pub fn default_options_json(field_type: &str) -> String {
 }
 
 /// 表名只来自调用方写死的两处字面量，不接收用户输入。
+/// 行表要排掉回收站里的行：新行接在「表里可见的行」末尾，deleted 行占的旧号由恢复时重排。
 fn next_position(conn: &Connection, table: &str, view_id: &str) -> Result<i64, String> {
     debug_assert!(matches!(table, "database_fields" | "database_rows"));
+    let live = if table == "database_rows" {
+        " AND is_trash = 0"
+    } else {
+        ""
+    };
     conn.query_row(
-        &format!("SELECT COALESCE(MAX(position), -1) + 1 FROM {table} WHERE database_view_id = ?1"),
+        &format!(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM {table} WHERE database_view_id = ?1{live}"
+        ),
         params![view_id],
         |r| r.get(0),
     )
@@ -262,7 +271,7 @@ pub fn list_rows(conn: &Connection, view_id: &str) -> Result<Vec<DatabaseRowRow>
     let mut stmt = conn
         .prepare(
             "SELECT id, database_view_id, position, document_id, created_at, updated_at
-             FROM database_rows WHERE database_view_id = ?1 ORDER BY position ASC",
+             FROM database_rows WHERE database_view_id = ?1 AND is_trash = 0 ORDER BY position ASC",
         )
         .map_err(dberr("list rows"))?;
     let rows = stmt
@@ -327,71 +336,234 @@ pub fn set_row_document_id(
 
 /// 把视图内行的 position 压紧成 0..n-1（按现有 position，再按 id 定序）。
 /// 行号列直接显示 position + 1（GridView），删除后不压紧会跳号；reorder 本就写 0..n-1，与此语义一致。
+/// 回收站中的行不参与编号、也不改写它的 position：恢复时统一排队到可见行末尾（见 restore_row）。
 fn compact_row_positions(tx: &Connection, view_id: &str) -> Result<(), String> {
     tx.execute(
         "WITH numbered AS (
              SELECT id, ROW_NUMBER() OVER (ORDER BY position ASC, id ASC) - 1 AS rn
-             FROM database_rows WHERE database_view_id = ?1
+             FROM database_rows WHERE database_view_id = ?1 AND is_trash = 0
          )
          UPDATE database_rows
          SET position = (SELECT rn FROM numbered WHERE numbered.id = database_rows.id)
-         WHERE database_view_id = ?1",
+         WHERE database_view_id = ?1 AND is_trash = 0",
         params![view_id],
     )
     .map_err(dberr("compact row positions"))?;
     Ok(())
 }
 
-pub fn delete_row(conn: &Connection, row_id: &str) -> Result<(), String> {
-    let tx = conn.unchecked_transaction().map_err(dberr("delete row"))?;
-    let view_id: Option<String> = tx
-        .query_row(
-            "SELECT database_view_id FROM database_rows WHERE id = ?1",
-            params![row_id],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(dberr("delete row (read view)"))?;
-    tx.execute("DELETE FROM database_rows WHERE id = ?1", params![row_id])
-        .map_err(dberr("delete row"))?; // cells 经 FK 级联
-    if let Some(view_id) = view_id {
-        compact_row_positions(&tx, &view_id)?;
+/// 行的删除标记连带它的行详情文档一起进出回收站。
+/// 不这么做的话：搜索（documents_fts 只看 view.is_trash）和快照列表仍能翻出已删行的正文。
+/// 行详情文档带 extra.row_detail 标记，页面树与页面回收站都按同一条件排除它，
+/// 所以给它打上 is_trash 不会在「页面回收站」里冒出一条看不懂的条目。
+fn move_row_document(
+    tx: &Connection,
+    document_id: &str,
+    to_trash: bool,
+    t: i64,
+) -> Result<(), String> {
+    if to_trash {
+        with_recursive_subtree(
+            tx,
+            "UPDATE views SET is_trash = 1, deleted_at = ?2 WHERE id IN (SELECT id FROM sub) AND is_trash = 0",
+            document_id,
+            Some(t),
+            "trash row document",
+        )?;
+    } else {
+        with_recursive_subtree(
+            tx,
+            "UPDATE views SET is_trash = 0, deleted_at = NULL WHERE id IN (SELECT id FROM sub)",
+            document_id,
+            None,
+            "restore row document",
+        )?;
     }
-    tx.commit().map_err(dberr("delete row (commit)"))?;
     Ok(())
 }
 
-/// 批量删行（多选删除）：一个事务，任何一行缺 id 不影响其余行；删后压紧剩余 position。
-pub fn delete_rows(conn: &Connection, ids: &[String]) -> Result<usize, String> {
-    let tx = conn.unchecked_transaction().map_err(dberr("delete rows"))?;
-    // 先收集受影响视图（position 压紧按视图做；正常场景只有一张表）
-    let mut view_ids: Vec<String> = Vec::new();
-    for id in ids {
-        if let Some(v) = tx
-            .query_row(
-                "SELECT database_view_id FROM database_rows WHERE id = ?1",
-                params![id],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(dberr("delete rows (read view)"))?
-        {
-            if !view_ids.contains(&v) {
-                view_ids.push(v);
-            }
-        }
-    }
+/// 进回收站（软删）。一个事务里完成：标记行 + 连带行详情文档 + 压紧剩余可见行。
+/// 已在回收站里的行与不存在的 id 都不计数，重复调用幂等。
+pub fn soft_delete_rows(conn: &Connection, ids: &[String]) -> Result<usize, String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(dberr("soft delete rows"))?;
+    let t = now_ms();
+    let mut affected_views: Vec<String> = Vec::new();
     let mut n = 0;
     for id in ids {
+        let row = tx
+            .query_row(
+                "SELECT database_view_id, document_id FROM database_rows WHERE id = ?1 AND is_trash = 0",
+                params![id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+            )
+            .optional()
+            .map_err(dberr("soft delete rows (read row)"))?;
+        let Some((view_id, document_id)) = row else {
+            continue;
+        };
         n += tx
-            .execute("DELETE FROM database_rows WHERE id = ?1", params![id])
-            .map_err(dberr("delete rows"))?;
+            .execute(
+                // updated_at 一并刷新：同步的变更水位读的是 MAX(database_rows.updated_at)
+                "UPDATE database_rows SET is_trash = 1, deleted_at = ?2, updated_at = ?2 WHERE id = ?1",
+                params![id, t],
+            )
+            .map_err(dberr("soft delete rows"))?;
+        if let Some(doc) = document_id {
+            move_row_document(&tx, &doc, true, t)?;
+        }
+        if !affected_views.contains(&view_id) {
+            affected_views.push(view_id);
+        }
     }
-    for v in &view_ids {
+    for v in &affected_views {
         compact_row_positions(&tx, v)?;
     }
-    tx.commit().map_err(dberr("delete rows (commit)"))?;
+    tx.commit().map_err(dberr("soft delete rows (commit)"))?;
     Ok(n)
+}
+
+/// 从回收站恢复一行：行号排到可见行末尾（原 position 大概率已被压紧时占用，保留会撞号）。
+/// 不在回收站里（或不存在）时报错，让前端明确知道这一行已经恢复过了。
+pub fn restore_row(conn: &Connection, row_id: &str) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(dberr("restore row"))?;
+    let row = tx
+        .query_row(
+            "SELECT database_view_id, document_id FROM database_rows WHERE id = ?1 AND is_trash = 1",
+            params![row_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .optional()
+        .map_err(dberr("restore row (read row)"))?;
+    let Some((view_id, document_id)) = row else {
+        return Err(format!("row not in trash: {row_id}"));
+    };
+    let t = now_ms();
+    let position = next_position(&tx, "database_rows", &view_id)?;
+    tx.execute(
+        "UPDATE database_rows SET is_trash = 0, deleted_at = NULL, position = ?2, updated_at = ?3 WHERE id = ?1",
+        params![row_id, position, t],
+    )
+    .map_err(dberr("restore row"))?;
+    if let Some(doc) = document_id {
+        move_row_document(&tx, &doc, false, t)?;
+        // 页面回收站的清空可能已经把这份详情文档一起彻底删了（它也是普通 view）。
+        // 悬空的 document_id 会让下次打开行详情报 "row detail view missing"，
+        // 这里顺手清成 NULL，让前端按「首次打开」重建一页。
+        tx.execute(
+            "UPDATE database_rows SET document_id = NULL
+             WHERE id = ?1 AND document_id IS NOT NULL AND document_id NOT IN (SELECT id FROM views)",
+            params![row_id],
+        )
+        .map_err(dberr("restore row (clear dangling document)"))?;
+    }
+    tx.commit().map_err(dberr("restore row (commit)"))?;
+    Ok(())
+}
+
+/// 彻底删除：真删行（cells 经 FK 级联，FTS 由触发器清理）并连带删掉行详情文档。
+/// 不在回收站里的行同样能删——历史调用方（整表清空、复制视图回滚）走的就是这个语义。
+pub fn purge_rows(conn: &Connection, ids: &[String]) -> Result<usize, String> {
+    let tx = conn.unchecked_transaction().map_err(dberr("purge rows"))?;
+    let mut affected_views: Vec<String> = Vec::new();
+    let mut n = 0;
+    for id in ids {
+        let row = tx
+            .query_row(
+                "SELECT database_view_id, document_id FROM database_rows WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+            )
+            .optional()
+            .map_err(dberr("purge rows (read row)"))?;
+        let Some((view_id, document_id)) = row else {
+            continue;
+        };
+        if let Some(doc) = document_id {
+            // 只删文档自身 + 已在回收站里的后代；用户后来恢复出回收站的子页改挂到宿主页，不陪葬
+            purge_within(&tx, &doc)?;
+        }
+        n += tx
+            .execute("DELETE FROM database_rows WHERE id = ?1", params![id])
+            .map_err(dberr("purge rows"))?;
+        if !affected_views.contains(&view_id) {
+            affected_views.push(view_id);
+        }
+    }
+    for v in &affected_views {
+        compact_row_positions(&tx, v)?;
+    }
+    tx.commit().map_err(dberr("purge rows (commit)"))?;
+    Ok(n)
+}
+
+/// 某张表的回收站内容（按删除时间倒序）。
+/// title 走 database_cell_text（选项 id 已解析成选项名、公式/复选框有各自的显示口径），
+/// 取该表第一个字段的显示文本，只用于列表辨认是哪一行。
+pub fn list_trash_rows(conn: &Connection, view_id: &str) -> Result<Vec<TrashRowOut>, String> {
+    let host = data_view_id(conn, view_id)?;
+    let view_id = host.as_str();
+    let mut stmt = conn
+        .prepare(
+            "SELECT r.id, r.database_view_id, r.document_id, r.deleted_at,
+                    COALESCE((
+                      SELECT substr(t.txt, 1, 60)
+                      FROM database_cell_text t
+                      JOIN database_fields f ON f.id = t.field_id
+                      WHERE t.row_id = r.id AND f.database_view_id = r.database_view_id
+                      ORDER BY f.position ASC, f.id ASC LIMIT 1
+                    ), '') AS title
+             FROM database_rows r
+             WHERE r.database_view_id = ?1 AND r.is_trash = 1
+             ORDER BY r.deleted_at DESC, r.id DESC",
+        )
+        .map_err(dberr("list trash rows"))?;
+    let rows = stmt
+        .query_map(params![view_id], |r| {
+            Ok(TrashRowOut {
+                id: r.get(0)?,
+                database_view_id: r.get(1)?,
+                document_id: r.get(2)?,
+                deleted_at: r.get(3)?,
+                title: r.get(4)?,
+            })
+        })
+        .map_err(dberr("list trash rows"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(dberr("list trash rows"))?;
+    Ok(rows)
+}
+
+/// 清空某张表的回收站，返回彻底删除的行数。
+pub fn purge_trash_rows(conn: &Connection, view_id: &str) -> Result<usize, String> {
+    let host = data_view_id(conn, view_id)?;
+    let mut stmt = conn
+        .prepare("SELECT id FROM database_rows WHERE database_view_id = ?1 AND is_trash = 1")
+        .map_err(dberr("scan trash rows"))?;
+    let ids = stmt
+        .query_map(params![host], |r| r.get::<_, String>(0))
+        .map_err(dberr("scan trash rows"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(dberr("scan trash rows"))?;
+    // 先收集再删：purge_rows 内部删的是同一张表，边遍历游标边写会踩 SQLite 的未定义行为
+    purge_rows(conn, &ids)
+}
+
+/// 跨空间清理过期回收站（页面回收站的同一套小时级定时器调用），返回彻底删除的行数。
+pub fn purge_expired_trash_rows(conn: &Connection, deadline_ms: i64) -> Result<usize, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id FROM database_rows
+             WHERE is_trash = 1 AND deleted_at IS NOT NULL AND deleted_at < ?1",
+        )
+        .map_err(dberr("scan expired trash rows"))?;
+    let ids = stmt
+        .query_map(params![deadline_ms], |r| r.get::<_, String>(0))
+        .map_err(dberr("scan expired trash rows"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(dberr("scan expired trash rows"))?;
+    purge_rows(conn, &ids)
 }
 
 pub fn reorder_rows(conn: &Connection, view_id: &str, ordered_ids: &[&str]) -> Result<(), String> {
@@ -422,7 +594,7 @@ pub fn load_cells(conn: &Connection, view_id: &str) -> Result<Vec<CellLoadRow>, 
             "SELECT c.row_id, c.field_id, c.value
              FROM database_cells c
              JOIN database_rows r ON r.id = c.row_id
-             WHERE r.database_view_id = ?1",
+             WHERE r.database_view_id = ?1 AND r.is_trash = 0",
         )
         .map_err(dberr("load cells"))?;
     let rows = stmt
@@ -796,7 +968,7 @@ mod tests {
             Some("doc-1")
         );
 
-        delete_row(&conn, "r2").unwrap();
+        purge_rows(&conn, &["r2".into()]).unwrap();
         let rows = list_rows(&conn, "v1").unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "r1");
@@ -835,13 +1007,13 @@ mod tests {
     }
 
     #[test]
-    fn delete_row_cascades_cells() {
+    fn purge_row_cascades_cells() {
         let conn = setup();
         create_field(&conn, "v1", "f1", "text", None).unwrap();
         create_row(&conn, "v1", "r1").unwrap();
         set_cell(&conn, "r1", "f1", r#""x""#).unwrap();
 
-        delete_row(&conn, "r1").unwrap();
+        purge_rows(&conn, &["r1".into()]).unwrap();
         assert!(list_rows(&conn, "v1").unwrap().is_empty());
         assert!(load_cells(&conn, "v1").unwrap().is_empty());
     }
@@ -971,7 +1143,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_rows_removes_all_and_cascades_cells() {
+    fn purge_rows_removes_all_and_cascades_cells() {
         let conn = setup();
         create_field(&conn, "v1", "f1", "text", None).unwrap();
         create_rows(&conn, "v1", &["r1".into(), "r2".into(), "r3".into()]).unwrap();
@@ -993,7 +1165,7 @@ mod tests {
         .unwrap();
 
         // 多选删除：已不存在的 id 不计入、也不中断整批
-        let n = delete_rows(&conn, &["r2".into(), "ghost".into()]).unwrap();
+        let n = purge_rows(&conn, &["r2".into(), "ghost".into()]).unwrap();
         assert_eq!(n, 1);
         let ids: Vec<String> = list_rows(&conn, "v1")
             .unwrap()
@@ -1017,7 +1189,7 @@ mod tests {
         )
         .unwrap();
 
-        delete_row(&conn, "r2").unwrap();
+        purge_rows(&conn, &["r2".into()]).unwrap();
         let rows = list_rows(&conn, "v1").unwrap();
         assert_eq!(
             rows.iter()
@@ -1027,7 +1199,7 @@ mod tests {
         );
 
         // 批量删除（含缺 id）同样压紧
-        delete_rows(&conn, &["r1".into(), "ghost".into()]).unwrap();
+        purge_rows(&conn, &["r1".into(), "ghost".into()]).unwrap();
         let rows = list_rows(&conn, "v1").unwrap();
         assert_eq!(
             rows.iter()
@@ -1035,6 +1207,210 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("r3", 0), ("r4", 1)]
         );
+    }
+
+    // ---------- 行回收站 ----------
+
+    /// 读原始标记列：list_rows/list_trash_rows 已经按 is_trash 过滤，测试要看底层真实状态
+    fn trash_flag(conn: &Connection, row_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT is_trash FROM database_rows WHERE id = ?1",
+            params![row_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn seed_doc_view(conn: &Connection, id: &str) {
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at)
+             VALUES (?1, 'w1', 'v1', '行详情', 'document', '{\"row_detail\":true}', 1, 1, 1)",
+            params![id],
+        )
+        .unwrap();
+    }
+
+    fn doc_trash_flag(conn: &Connection, id: &str) -> i64 {
+        conn.query_row(
+            "SELECT is_trash FROM views WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn soft_delete_hides_row_but_keeps_cells() {
+        let conn = setup();
+        create_field(&conn, "v1", "f1", "text", None).unwrap();
+        create_rows(&conn, "v1", &["r1".into(), "r2".into(), "r3".into()]).unwrap();
+        set_cell(&conn, "r2", "f1", r#""任务 B""#).unwrap();
+
+        let n = soft_delete_rows(&conn, &["r2".into(), "ghost".into()]).unwrap();
+        assert_eq!(n, 1, "不存在的 id 不计入，也不中断整批");
+
+        let ids: Vec<String> = list_rows(&conn, "v1")
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["r1", "r3"],
+            "剩下的行压紧行号，回收站里的行不再出现"
+        );
+        assert_eq!(
+            list_rows(&conn, "v1")
+                .unwrap()
+                .iter()
+                .map(|r| r.position)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert!(
+            load_cells(&conn, "v1").unwrap().is_empty(),
+            "r2 的单元格读不到"
+        );
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM database_cells", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 1, "软删只是打标记，单元格留在库里等着恢复");
+
+        let trash = list_trash_rows(&conn, "v1").unwrap();
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].id, "r2");
+        assert_eq!(trash[0].title, "任务 B", "列表要能认出删掉的是哪一行");
+        assert!(trash[0].deleted_at.is_some());
+
+        // 重复软删同一行不计数（幂等，前端重试安全）
+        assert_eq!(soft_delete_rows(&conn, &["r2".into()]).unwrap(), 0);
+        assert_eq!(trash_flag(&conn, "r2"), 1);
+    }
+
+    #[test]
+    fn restore_row_appends_it_at_the_end() {
+        let conn = setup();
+        create_rows(
+            &conn,
+            "v1",
+            &["r1".into(), "r2".into(), "r3".into(), "r4".into()],
+        )
+        .unwrap();
+        soft_delete_rows(&conn, &["r2".into()]).unwrap();
+        // 回收站期间又删掉一行并新增一行，原 position 早已不属于它
+        soft_delete_rows(&conn, &["r3".into()]).unwrap();
+        create_row(&conn, "v1", "r5").unwrap();
+
+        restore_row(&conn, "r2").unwrap();
+        let rows = list_rows(&conn, "v1").unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.id.as_str(), r.position))
+                .collect::<Vec<_>>(),
+            vec![("r1", 0), ("r4", 1), ("r5", 2), ("r2", 3)],
+            "恢复排在可见行末尾，行号连续不撞号"
+        );
+        assert_eq!(trash_flag(&conn, "r2"), 0);
+        assert!(list_trash_rows(&conn, "v1")
+            .unwrap()
+            .iter()
+            .all(|t| t.id != "r2"));
+
+        let err = restore_row(&conn, "r2").unwrap_err();
+        assert!(err.contains("r2"), "重复恢复要报错而不是静默：{err}");
+    }
+
+    #[test]
+    fn row_document_follows_the_row_into_and_out_of_trash() {
+        let conn = setup();
+        create_row(&conn, "v1", "r1").unwrap();
+        seed_doc_view(&conn, "d1");
+        set_row_document_id(&conn, "r1", "d1").unwrap();
+
+        soft_delete_rows(&conn, &["r1".into()]).unwrap();
+        assert_eq!(
+            doc_trash_flag(&conn, "d1"),
+            1,
+            "行删了，详情文档不能再被搜到"
+        );
+
+        restore_row(&conn, "r1").unwrap();
+        assert_eq!(doc_trash_flag(&conn, "d1"), 0);
+
+        // 详情文档也会被「页面回收站的自动清空」连带删掉：恢复行时 document_id 要清成 NULL，
+        // 否则下次打开行详情会拿着悬空 id 报 "row detail view missing"
+        soft_delete_rows(&conn, &["r1".into()]).unwrap();
+        crate::db::views::purge_expired_trash(&conn, "w1", i64::MAX).unwrap();
+        restore_row(&conn, "r1").unwrap();
+        assert_eq!(
+            get_row(&conn, "r1").unwrap().unwrap().document_id,
+            None,
+            "文档已被清空时不留悬空引用"
+        );
+
+        // 彻底删除：文档一并清掉，不留 hidden 孤儿页
+        soft_delete_rows(&conn, &["r1".into()]).unwrap();
+        purge_rows(&conn, &["r1".into()]).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM views WHERE id = 'd1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(n, 0, "行彻底删除时行详情文档也要消失");
+    }
+
+    #[test]
+    fn purge_trash_rows_empties_one_table_only() {
+        let conn = setup();
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at)
+             VALUES ('v2', 'w1', NULL, '第二张表', 'grid', '{}', 2, 1, 1)",
+            [],
+        )
+        .unwrap();
+        create_field(&conn, "v1", "f1", "text", None).unwrap();
+        create_field(&conn, "v2", "f2", "text", None).unwrap();
+        create_row(&conn, "v1", "r1").unwrap();
+        create_row(&conn, "v2", "r2").unwrap();
+        soft_delete_rows(&conn, &["r1".into(), "r2".into()]).unwrap();
+
+        let n = purge_trash_rows(&conn, "v1").unwrap();
+        assert_eq!(n, 1);
+        assert!(list_trash_rows(&conn, "v1").unwrap().is_empty());
+        assert_eq!(
+            list_trash_rows(&conn, "v2").unwrap().len(),
+            1,
+            "别表的回收站不受影响"
+        );
+        let cells: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM database_cells WHERE row_id = 'r1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cells, 0, "彻底删除才走 FK 级联清单元格");
+    }
+
+    #[test]
+    fn purge_expired_trash_rows_respects_the_deadline() {
+        let conn = setup();
+        create_rows(&conn, "v1", &["r1".into(), "r2".into()]).unwrap();
+        soft_delete_rows(&conn, &["r1".into(), "r2".into()]).unwrap();
+        conn.execute(
+            "UPDATE database_rows SET deleted_at = 1000 WHERE id = 'r1'",
+            [],
+        )
+        .unwrap();
+
+        let n = purge_expired_trash_rows(&conn, 5000).unwrap();
+        assert_eq!(n, 1, "只清过期的一条");
+        let left: Vec<String> = list_trash_rows(&conn, "v1")
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(left, vec!["r2"]);
     }
 
     // ---------- CSV 导入 ----------

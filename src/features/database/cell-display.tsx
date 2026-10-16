@@ -4,7 +4,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { File as FileIcon, Link2, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
 import type { CellValue, DatabaseField, FieldType, SelectOption } from "@/types/database";
-import { attachmentRefs, parseFieldOptions, ratingMax } from "@/lib/database-values";
+import { isReadonlyType } from "@/types/database";
+import { attachmentRefs, formatCellValue, parseFieldOptions, ratingMax } from "@/lib/database-values";
 import { isImageFile, openAttachment, resolveAssetUrl } from "@/lib/assets";
 import { relationRowIds, relationRowLabel, relationTarget, reverseRelationConfig } from "@/lib/relation";
 import { useRelationStore } from "@/stores/relation";
@@ -213,7 +214,7 @@ export function RelationChips({
 }
 
 /** assets 相对路径 → 可加载 URL（异步解析；path 变为 null 或组件卸载后不再 setState） */
-function useAssetUrl(path: string | null): string | null {
+export function useAssetUrl(path: string | null): string | null {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!path) {
@@ -422,4 +423,24 @@ const DEDICATED_DISPLAYS: Partial<
 export function cellDisplayContent(p: CellDisplayProps): CellDisplayContent | null {
   const entry = DEDICATED_DISPLAYS[p.field.field_type];
   return entry ? entry(p, p.variant === "grid") : null;
+}
+
+/** 只读单元格值（看板/日历/列表/画廊等卡片、属性行共用）：
+ *  专用部件走详情臂，其余按文本渲染。空值不给占位文案——由调用方决定隐藏还是显示。 */
+export function CellReadValue({ field, value }: { field: DatabaseField; value: CellValue }) {
+  const custom = cellDisplayContent({ field, value, variant: "detail" });
+  if (custom) return <>{custom.node}</>;
+  const text = formatCellValue(field.field_type, value, parseFieldOptions(field.options));
+  return (
+    <span
+      className={cn(
+        "truncate",
+        isReadonlyType(field.field_type)
+          ? "text-neutral-400 dark:text-neutral-500"
+          : "text-neutral-800 dark:text-neutral-200",
+      )}
+    >
+      {text}
+    </span>
+  );
 }

@@ -200,6 +200,18 @@ pub struct DatabaseRowRow {
     pub updated_at: i64,
 }
 
+/// 回收站里的行（row_list_trash 用）：不进 DatabaseRowRow 是为了不给表格行模型加两个永远为 0 的列。
+/// title 是该表第一个字段的单元格文本，只用于列表展示，可能为空串。
+#[derive(Debug, Clone, Serialize)]
+pub struct TrashRowOut {
+    pub id: String,
+    pub database_view_id: String,
+    /// 行详情文档 view_id；恢复/彻底删除都要靠它连带处理那一页
+    pub document_id: Option<String>,
+    pub deleted_at: Option<i64>,
+    pub title: String,
+}
+
 /// cells_load 的扁平行（JS 侧再组装成 Record<rowId, Record<fieldId, CellValue>>）
 #[derive(Debug, Clone, Serialize)]
 pub struct CellLoadRow {

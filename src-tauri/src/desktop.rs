@@ -79,7 +79,13 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             &PredefinedMenuItem::select_all(app, None)?,
         ],
     )?;
-    let palette = MenuItem::with_id(app, "menu:palette", "命令面板 / 全局搜索", true, None::<&str>)?;
+    let palette = MenuItem::with_id(
+        app,
+        "menu:palette",
+        "命令面板 / 全局搜索",
+        true,
+        None::<&str>,
+    )?;
     let view = Submenu::with_items(app, "视图", true, &[&palette])?;
     let window_menu = Submenu::with_items(
         app,
@@ -138,13 +144,16 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     // ——— 全局快捷键 Ctrl+Alt+T：唤起/聚焦主窗（快捷捕捉）———
     // 注册失败（被其它应用占用）只告警，不阻塞启动
     let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyT);
-    if let Err(e) = app.global_shortcut().on_shortcut(shortcut, |_app, _shortcut, event| {
-        if event.state == ShortcutState::Pressed {
-            if let Some(win) = main_window(_app) {
-                reveal_window(&win);
+    if let Err(e) = app
+        .global_shortcut()
+        .on_shortcut(shortcut, |_app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                if let Some(win) = main_window(_app) {
+                    reveal_window(&win);
+                }
             }
-        }
-    }) {
+        })
+    {
         tracing::warn!(error = %e, "global shortcut Ctrl+Alt+T register failed (maybe taken by another app)");
     }
 
@@ -186,6 +195,9 @@ mod tests {
             "tsflowy://page/a",
             "tsflowy://page/b?x=1",
         ]);
-        assert_eq!(deep_link_urls_from_argv(&argv), vec!["tsflowy://page/a", "tsflowy://page/b?x=1"]);
+        assert_eq!(
+            deep_link_urls_from_argv(&argv),
+            vec!["tsflowy://page/a", "tsflowy://page/b?x=1"]
+        );
     }
 }

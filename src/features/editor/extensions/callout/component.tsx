@@ -62,6 +62,10 @@ export function CalloutNodeView(props: ReactNodeViewProps<HTMLElement>) {
   return (
     <NodeViewWrapper
       data-drag-handle
+      // 复制走的是 NodeView 的 DOM，不带这三个属性的话粘出去就变成一个普通 div（emoji 与颜色一起丢）
+      data-callout=""
+      data-emoji={emoji}
+      data-color={color}
       className={cn(
         "group/callout relative my-3 rounded-lg border p-3",
         tokens.bg,

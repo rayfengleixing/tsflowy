@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { AlertTriangle, FolderOpen, RefreshCw, Upload } from "lucide-react";
+import { AlertTriangle, FolderOpen, RefreshCw, Upload, Wrench } from "lucide-react";
 import { invoke } from "@/lib/invoke";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { t } from "@/lib/i18n";
+import { t, type MessageKey } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 
 /** db_health 返回结构（Rust 侧字段名即 JSON 键名） */
@@ -22,6 +22,23 @@ export interface DbHealth {
   /** 悬空目录联接告警：数据目录目标被外部删除时非空（当前库不是原来的库） */
   dangling_data_dir: string | null;
 }
+
+/** repair_database 返回结构（兜底页自带一份镜像：这页要在 store/AI 都起不来时也能画） */
+interface DbRepairResult {
+  /** none = 结构本来就没坏（打不开的原因在别处）；failed = 没救回来，原库未动 */
+  action: "none" | "wal" | "rebuild" | "failed";
+  ok: boolean;
+  before: string[];
+  after: string[];
+  kept_aside: { from: string; to: string }[];
+}
+
+const REPAIR_ACTION_KEY: Record<DbRepairResult["action"], MessageKey> = {
+  none: "settings.dbRepairNone",
+  wal: "settings.dbRepairWal",
+  rebuild: "settings.dbRepairRebuild",
+  failed: "settings.dbRepairFailed",
+};
 
 function formatSize(bytes: number): string {
   if (bytes <= 0) return "—";
@@ -111,6 +128,32 @@ export function DbUnavailable({ health }: { health: DbHealth }) {
     }
   };
 
+  /**
+   * 库文件还在、结构却坏了：依次尝试挪开可疑的日志侧车、用还能读出的内容重建库文件。
+   * 比「导入备份」少丢掉这段时间的数据——全程只改名不删除，没救回来时原库分毫未动。
+   */
+  const tryRepair = async () => {
+    if (!window.confirm(t("settings.dbRepairConfirm"))) return;
+    setBusy(true);
+    try {
+      const r = await invoke<DbRepairResult>("repair_database");
+      if (r.action === "none") {
+        // 结构没问题却打不开：坏在别处（被占用/权限/磁盘），别再让用户以为能修
+        toast.info(t("settings.dbRepairNone"));
+      } else if (r.ok) {
+        toast.success(t(REPAIR_ACTION_KEY[r.action]));
+        window.location.reload();
+      } else {
+        toast.error(t("settings.dbRepairFailed"));
+      }
+    } catch (e) {
+      logger.error("DbUnavailable.tryRepair", "repair database failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="flex h-screen items-center justify-center bg-neutral-50 px-6">
       <div className="w-full max-w-xl rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
@@ -178,6 +221,13 @@ export function DbUnavailable({ health }: { health: DbHealth }) {
             <RefreshCw className="mr-1 h-3.5 w-3.5" />
             {t("db.errorRetry")}
           </Button>
+          {/* 悬空联接时库文件压根不在，修复阶梯无从下手：只留「导入备份」与「重建数据目录」 */}
+          {!health.dangling_data_dir && (
+            <Button size="sm" variant="outline" onClick={() => void tryRepair()} disabled={busy}>
+              <Wrench className="mr-1 h-3.5 w-3.5" />
+              {t("db.errorRepair")}
+            </Button>
+          )}
           {/* 仅在数据目录真的丢了时才出现：这是"放弃找回、重建为空库"的出口 */}
           {health.dangling_data_dir && (
             <Button size="sm" variant="destructive" onClick={() => void rebuildDataDir()} disabled={busy}>

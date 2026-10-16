@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { flushAllForClose } from "./close-flush";
+import { requestSyncReload } from "./sync-events";
 import { t } from "@/lib/i18n";
 import { logger } from "./logger";
 
@@ -118,6 +119,10 @@ const WRITE_COMMANDS = new Set([
   "row_set_document_id",
   "row_delete",
   "row_delete_many",
+  "row_restore",
+  "row_purge",
+  "row_purge_trash",
+  "row_purge_expired_trash",
   "row_reorder",
   "cell_set",
   "cell_set_many",
@@ -176,8 +181,10 @@ async function doSync() {
     // 用户会带着"以为已同步"的心智继续改数据
     if (r.pulled) {
       toast.info(t("sync.autoPulled"));
-      // 本机库被远端替换：所有前端缓存都是旧数据，重载最彻底
-      window.location.reload();
+      // 本机库被远端替换：所有前端缓存都是旧数据，重载最彻底。
+      // 正常情况下 sync:db-replaced 事件在换库那一刻就已经重载过了，这里是兜底
+      // （监听没挂上时仍要重载，否则会继续把旧数据写进新库）
+      requestSyncReload();
       return;
     }
     if (r.action === "conflict") {

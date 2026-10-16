@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Calendar, CalendarRange, FileText, Kanban, Table } from "lucide-react";
+import { Calendar, CalendarRange, FileText, FormInput, Images, Kanban, List, Table } from "lucide-react";
 import type { LayoutType } from "@/types/models";
 import { t } from "@/lib/i18n";
 
@@ -17,6 +17,12 @@ export function layoutMeta(layout: LayoutType): { icon: ReactNode; label: string
       return { icon: <Calendar className={size} />, label: t("layout.calendar") };
     case "timeline":
       return { icon: <CalendarRange className={size} />, label: t("layout.timeline") };
+    case "list":
+      return { icon: <List className={size} />, label: t("layout.list") };
+    case "gallery":
+      return { icon: <Images className={size} />, label: t("layout.gallery") };
+    case "form":
+      return { icon: <FormInput className={size} />, label: t("layout.form") };
   }
 }
 

@@ -81,6 +81,17 @@ export interface DatabaseRow {
   updated_at: number;
 }
 
+/** 回收站里的行（row_list_trash 的返回）：不带 position，恢复时由后端重新排到末尾 */
+export interface DatabaseTrashRow {
+  id: string;
+  database_view_id: string;
+  document_id: string | null;
+  /** 进回收站的时间（毫秒）；NULL 只出现在手工改库的异常数据上 */
+  deleted_at: number | null;
+  /** 该表第一个字段的单元格文本，仅用于列表辨认是哪一行，可能为空 */
+  title: string;
+}
+
 /**
  * 单元格值（说明书 7.2 编码，database_cells.value 为 JSON 字符串）：
  * - text/url/phone/email/date/single_select → string

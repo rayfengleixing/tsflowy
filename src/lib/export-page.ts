@@ -5,11 +5,16 @@ import { toast } from "sonner";
 import { useEditorStore } from "@/stores/editor";
 import { flushAllForClose } from "./close-flush";
 import { t } from "./i18n";
-import { collectAssetPaths, copyAssetsForExport } from "./assets";
+import { collectAssetPaths, copyAssetsForExport, isLibraryAssetPath } from "./assets";
+import { attachmentKindOf } from "./attachment-kind";
+import { databaseApi } from "./database";
+import { tableToTextMatrix, toMarkdownTable } from "./db-transfer";
+import { viewApi } from "./db";
 import { documentApi } from "./documents";
-import { jsonToMarkdown } from "./markdown";
+import { alignValueOf, calloutColorOf, columnRatioOf, jsonToMarkdown } from "./markdown";
 import { logger } from "./logger";
 import { sanitizeFileName } from "./utils";
+import { dueState, taskMetaLabel, taskMetaOf, todayIso } from "./task-meta";
 
 interface JSONContent {
   type?: string;
@@ -67,28 +72,76 @@ function jsonToHTML(nodes: JSONContent[], title: string): string {
   .math { text-align: center; font-family: "Cambria Math", Georgia, serif; font-size: 1.1em; margin: 1em 0; }
   .mermaid { background: #fafafa; border: 1px dashed #ddd; }
   .attachment a { display: inline-block; border: 1px solid #ddd; border-radius: 8px; padding: 8px 12px; text-decoration: none; color: #333; }
+  .attachment audio, .attachment video, .attachment img.attachment-image { display: block; max-width: 100%; margin-top: 8px; }
+  .attachment iframe { display: block; width: 100%; height: 640px; margin-top: 8px; border: 1px solid #ddd; border-radius: 6px; background: #fff; }
   .database-view { border: 1px solid #e5e5e5; border-radius: 8px; padding: 10px 14px; color: #666; background: #fafafa; }
   .mention { color: #2563eb; }
   details { border: 1px solid #eee; border-radius: 6px; padding: 8px 12px; margin: 1em 0; }
   summary { cursor: pointer; font-weight: 600; }
-  aside.callout { display: flex; gap: 10px; border-left: 3px solid #93c5fd; background: #f8fafc; padding: 10px 14px; border-radius: 6px; }
+  aside.callout { display: flex; gap: 10px; border-left: 3px solid #93c5fd; background: #eff6ff; padding: 10px 14px; border-radius: 6px; }
+  aside.callout-green { border-left-color: #86efac; background: #f0fdf4; }
+  aside.callout-orange { border-left-color: #fdba74; background: #fff7ed; }
+  aside.callout-red { border-left-color: #fca5a5; background: #fef2f2; }
+  aside.callout-purple { border-left-color: #c4b5fd; background: #faf5ff; }
+  aside.callout-yellow { border-left-color: #fde047; background: #fefce8; }
   .callout-emoji { flex: none; }
   .columns { display: flex; gap: 20px; align-items: flex-start; }
   .columns > .column { flex: 1 1 0; min-width: 0; }
   .gallery { display: flex; flex-wrap: wrap; gap: 8px; }
   .gallery img { max-height: 240px; border-radius: 6px; }
+  ul.task-list { list-style: none; }
+  .task-meta { margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 0.8em; white-space: nowrap; color: #475467; background: #f2f4f7; }
+  .task-meta-today { color: #b54708; background: #fffaeb; }
+  .task-meta-overdue { color: #d92d20; background: #fee9e9; }
 </style></head>
 <body>${body}</body></html>`;
+}
+
+/** 任务行 chip（截止日期 / 负责人）：文案与状态口径都取自 lib/task-meta，编辑器与导出一致 */
+function taskMetaChipHtml(attrs: Record<string, unknown> | undefined): string {
+  const meta = taskMetaOf(attrs);
+  const label = taskMetaLabel(meta);
+  if (!label) return "";
+  const state = meta.due ? dueState(meta.due, todayIso()) : null;
+  const cls = state ? `task-meta task-meta-${state}` : "task-meta";
+  return `<span class="${cls}">${escapeHtml(label)}</span>`;
+}
+
+/** 附件预览：图片 / 音频 / 视频 / PDF 在导出页里直接可看可播，其余类型仍只是下载链接。
+ *  只嵌库内相对路径与 http(s)——绝对本地路径在别人机器上指向不了任何东西，嵌进去只剩一个报错的黑框。 */
+function attachmentPreviewHtml(node: JSONContent, rawSrc: string): string {
+  if (!(isLibraryAssetPath(rawSrc) || /^https?:\/\//i.test(rawSrc))) return "";
+  const kind = attachmentKindOf(attrStr(node, "name"), rawSrc);
+  if (kind === "other") return "";
+  const href = escapeAttr(rawSrc);
+  const label = escapeAttr(attrStr(node, "name") || rawSrc);
+  switch (kind) {
+    case "image":
+      return `<img class="attachment-image" src="${href}" alt="${label}"/>`;
+    case "audio":
+      return `<audio class="attachment-audio" controls src="${href}"></audio>`;
+    case "video":
+      return `<video class="attachment-video" controls preload="metadata" src="${href}"></video>`;
+    case "pdf":
+      return `<iframe class="attachment-pdf" title="${label}" src="${href}"></iframe>`;
+  }
+}
+
+/** 块级对齐写进 inline style（值已由 alignValueOf 白名单过滤，不需要再转义） */
+function alignAttr(node: JSONContent): string {
+  const align = alignValueOf(node);
+  return align ? ` style="text-align:${align}"` : "";
 }
 
 function nodeToHtml(node: JSONContent): string {
   switch (node.type) {
     case "heading": {
-      const level = Number(node.attrs?.level) || 1;
-      return `<h${level}>${inlineHtml(node)}</h${level}>`;
+      // 存下来的 JSON 可能来自别的编辑器：夹进 h1–h6，否则拼出 <h0>/<h7> 这种无效标签
+      const level = Math.min(6, Math.max(1, Number(node.attrs?.level) || 1));
+      return `<h${level}${alignAttr(node)}>${inlineHtml(node)}</h${level}>`;
     }
     case "paragraph":
-      return `<p>${inlineHtml(node)}</p>`;
+      return `<p${alignAttr(node)}>${inlineHtml(node)}</p>`;
     case "codeBlock": {
       const lang = (node.attrs?.language as string) || "";
       return `<pre><code class="language-${escapeAttr(lang)}">${escapeHtml(textOf(node))}</code></pre>`;
@@ -102,7 +155,12 @@ function nodeToHtml(node: JSONContent): string {
     }
     case "taskList":
       return `<ul class="task-list">${(node.content ?? [])
-        .map((c) => `<li><input type="checkbox" ${c.attrs?.checked ? "checked" : ""} disabled/> ${inlineHtml(c)}</li>`)
+        .map(
+          (c) =>
+            `<li><input type="checkbox" ${c.attrs?.checked ? "checked" : ""} disabled/> ${inlineHtml(c)}${taskMetaChipHtml(
+              c.attrs,
+            )}</li>`,
+        )
         .join("")}</ul>`;
     case "bulletList":
       return `<ul>${(node.content ?? []).map((c) => `<li>${inlineHtml(c)}</li>`).join("")}</ul>`;
@@ -123,9 +181,10 @@ function nodeToHtml(node: JSONContent): string {
       return `<pre class="mermaid">${escapeHtml(attrStr(node, "code"))}</pre>`;
     }
     case "attachment": {
-      const src = escapeAttr(attrStr(node, "src"));
-      const name = escapeHtml(firstNonEmpty(attrStr(node, "name"), attrStr(node, "src"), t("attachment.defaultName")));
-      return `<p class="attachment"><a href="${src}">${name}</a></p>`;
+      const rawSrc = attrStr(node, "src");
+      const src = escapeAttr(rawSrc);
+      const name = escapeHtml(firstNonEmpty(attrStr(node, "name"), rawSrc, t("attachment.defaultName")));
+      return `<p class="attachment"><a href="${src}">${name}</a>${attachmentPreviewHtml(node, rawSrc)}</p>`;
     }
     case "databaseView": {
       const name = escapeHtml(firstNonEmpty(attrStr(node, "name"), t("databaseView.defaultName")));
@@ -141,13 +200,17 @@ function nodeToHtml(node: JSONContent): string {
     }
     case "callout": {
       const emoji = escapeHtml(firstNonEmpty(attrStr(node, "emoji"), "💡"));
-      return `<aside class="callout"><span class="callout-emoji">${emoji}</span>${(node.content ?? [])
-        .map(nodeToHtml)
-        .join("")}</aside>`;
+      // 色名走 markdown.ts 同一份白名单，导出只加 class，颜色由 <style> 决定
+      const inner = (node.content ?? []).map(nodeToHtml).join("");
+      return `<aside class="callout callout-${calloutColorOf(node)}"><span class="callout-emoji">${emoji}</span>${inner}</aside>`;
     }
     case "columns": {
+      // 列宽跟随 column.ratio（静态导出也要保持用户拖出来的比例）
       const cols = (node.content ?? []).map(
-        (col) => `<div class="column">${(col.content ?? []).map(nodeToHtml).join("")}</div>`,
+        (col) =>
+          `<div class="column" style="flex:${columnRatioOf(col)} 1 0%">${(col.content ?? [])
+            .map(nodeToHtml)
+            .join("")}</div>`,
       );
       return `<div class="columns">${cols.join("")}</div>`;
     }
@@ -200,7 +263,12 @@ function renderTableHtml(node: JSONContent): string {
     html += "<tr>";
     for (const cell of row.content ?? []) {
       const tag = i === 0 && isHeader ? "th" : "td";
-      html += `<${tag}>${inlineHtml(cell)}</${tag}>`;
+      // 合并单元格：模型里被覆盖的位置没有节点，所以只要把 colspan/rowspan 写出来就是对的表
+      const span = (key: "colspan" | "rowspan") => {
+        const v = Number(cell.attrs?.[key] ?? 1);
+        return v > 1 ? ` ${key}="${Math.floor(v)}"` : "";
+      };
+      html += `<${tag}${span("colspan")}${span("rowspan")}>${inlineHtml(cell)}</${tag}>`;
     }
     html += "</tr>";
   });
@@ -208,11 +276,48 @@ function renderTableHtml(node: JSONContent): string {
   return html;
 }
 
+/** 数据库页（grid/board/calendar/timeline）的整表导出。
+ *  返回 false 表示这不是数据库页（调用方继续按文档处理）；返回 true 表示本次导出已收尾（含用户取消）。 */
+async function exportDatabasePage(viewId: string, viewName: string, format: "markdown" | "html"): Promise<boolean> {
+  const view = await viewApi.get(viewId);
+  if (!view || view.layout === "document") return false;
+  const [fields, rows, cells] = await Promise.all([
+    databaseApi.listFields(viewId),
+    databaseApi.listRows(viewId),
+    databaseApi.loadCells(viewId),
+  ]);
+  if (fields.length === 0) return false;
+  // 整表导出含隐藏列：这是数据出口，不是界面复刻
+  const matrix = tableToTextMatrix(fields, rows, cells, true);
+  const ext = format === "markdown" ? "md" : "html";
+  const body =
+    format === "markdown"
+      ? `# ${viewName}\n\n${toMarkdownTable(matrix)}\n`
+      : `<h1>${escapeHtml(viewName)}</h1>\n<table>\n` +
+        matrix
+          .map(
+            (row, i) =>
+              `<tr>${row.map((c) => `<${i === 0 ? "th" : "td"}>${escapeHtml(c)}</${i === 0 ? "th" : "td"}>`).join("")}</tr>`,
+          )
+          .join("\n") +
+        "\n</table>\n";
+
+  const target = await save({
+    defaultPath: `${viewName}.${ext}`,
+    filters: [{ name: format === "markdown" ? "Markdown" : "HTML", extensions: [ext] }],
+  });
+  if (!target) return true;
+  await writeTextFile(target, body);
+  return true;
+}
+
 export async function exportPage(viewId: string, viewName: string, format: "markdown" | "html"): Promise<void> {
   // 打开的文档可能还有防抖窗口（800ms）内未落库的改动：先冲刷挂起写，否则导出的是库里的旧内容
   await flushAllForClose();
   const raw = await documentApi.get(viewId);
   if (!raw) {
+    // 数据库页没有文档正文：导出整张表，否则「导出此页」对 grid/board/calendar/timeline 永远只有一句空文档警告
+    if (await exportDatabasePage(viewId, viewName, format)) return;
     logger.warn("export-page", "document content is empty", viewId);
     return;
   }
@@ -442,7 +547,9 @@ function ensurePrintStyle() {
   body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} h1,
   body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} h2,
   body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} h3,
-  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} h4 {
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} h4,
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} h5,
+  body.${PRINTING_CLASS} .${PRINT_ROOT_CLASS} h6 {
     break-after: avoid;
     page-break-after: avoid;
   }

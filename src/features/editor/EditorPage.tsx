@@ -6,9 +6,10 @@ import Highlight from "@tiptap/extension-highlight";
 import TextAlign from "@tiptap/extension-text-align";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Color from "@tiptap/extension-color";
-import CharacterCount from "@tiptap/extension-character-count";
+import { countWords, readingMinutes } from "@/lib/word-count";
 import TaskList from "@tiptap/extension-task-list";
-import TaskItem from "@tiptap/extension-task-item";
+// 任务行带「截止日期 / 负责人」两个自定义 attrs，chip 靠渲染属性显形（见 extensions/task-meta.ts）
+import { TaskItemWithMeta } from "./extensions/task-meta";
 import { Table } from "@tiptap/extension-table";
 import { TableRow } from "@tiptap/extension-table-row";
 import { TableHeader } from "@tiptap/extension-table-header";
@@ -217,8 +218,8 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         codeBlock: false,
         heading: false,
       }),
-      // 标题：H1 锁定为只读文档标题（首行），H2/H3 正常可编辑
-      LockedHeading.configure({ levels: [1, 2, 3] }),
+      // 标题：H1 锁定为只读文档标题（首行），H2–H6 正常可编辑
+      LockedHeading.configure({ levels: [1, 2, 3, 4, 5, 6] }),
       // 结构锁定：首行 H1 + 第二行分割线不可修改（filterTransaction 拦截）
       DocumentStructureLock,
       CodeBlock,
@@ -236,9 +237,8 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       TextAlign.configure({ types: ["heading", "paragraph"] }),
       TextStyle,
       Color,
-      CharacterCount,
       TaskList,
-      TaskItem.configure({ nested: true }),
+      TaskItemWithMeta.configure({ nested: true }),
       Table.configure({ resizable: true }),
       TableRow,
       CenteredTableHeader,
@@ -986,6 +986,17 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     return m;
   }, [backlinks]);
 
+  // 右下角字数浮层：整篇 textBetween + 分词只在文档真的变过时重算，
+  // hoverMention、反链开合这类纯 UI 重渲染不该拖着扫全文（doc 对象不变时 useMemo 直接命中缓存）
+  const docForCount = editor.state.doc;
+  const docWords = useMemo(
+    () => countWords(docForCount.textBetween(0, docForCount.content.size, " ", " ")),
+    [docForCount],
+  );
+  const docMinutes = readingMinutes(docWords);
+  const { from, to, empty } = editor.state.selection;
+  const selectionWords = empty ? null : countWords(docForCount.textBetween(from, to, " ", " ")).total;
+
   return (
     <div ref={paneRef} data-editor-pane className="relative flex h-full flex-col overflow-hidden bg-white">
       {/* 编辑区：内容最大宽由 --tiptap-max-width 控制（默认 800px，设置页可调，说明书 6.1）。
@@ -1053,9 +1064,13 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         </div>
       )}
 
-      {/* 字数统计：右下角浮层 */}
+      {/* 字数统计：右下角浮层。中文按字、英文按词，混排两边都算（见 src/lib/word-count.ts） */}
       <div className="pointer-events-none absolute bottom-2 right-4 text-[11px] text-neutral-400">
-        {editor.storage.characterCount.characters()} {t("editor.chars")}
+        {docWords.total.toLocaleString()} {t("editor.wordsUnit")}
+        {docMinutes > 0 && <span className="ml-2">· {t("editor.readingTime", { minutes: docMinutes })}</span>}
+        {selectionWords !== null && (
+          <span className="ml-2">· {t("editor.selectionWords", { count: selectionWords })}</span>
+        )}
       </div>
 
       {/* mention hover 预览浮层：定位到 mention 节点下方 */}

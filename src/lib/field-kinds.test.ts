@@ -136,7 +136,14 @@ describe("field-kinds 展示格式", () => {
     expect(FIELD_KINDS.rating.format(3.4, opts({ kind: "rating", max: 5 }))).toBe("★★★☆☆");
     expect(
       FIELD_KINDS.currency.format(1234.5, opts({ kind: "number", format: "integer", precision: 0, currency: "USD" })),
-    ).toBe("US$1,235");
+    ).toBe(
+      // 货币符号写法随系统 locale（zh-CN 出 US$1,235，en-US 出 $1,235），故按同一 locale 反推期望值
+      new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 0,
+      }).format(1234.5),
+    );
   });
 
   it("脏值（类型不符）显示为空串", () => {

@@ -8,6 +8,7 @@ import { SettingsUpdates } from "./SettingsUpdates";
 import { SettingsAppearance } from "./SettingsAppearance";
 import { SettingsDataDir } from "./SettingsDataDir";
 import { SettingsBackup } from "./SettingsBackup";
+import { SettingsDbHealth } from "./SettingsDbHealth";
 import { SettingsAssets } from "./SettingsAssets";
 import { SettingsSync } from "./SettingsSync";
 import { SettingsDailyNotes } from "./SettingsDailyNotes";
@@ -16,7 +17,7 @@ import { SettingsShortcuts } from "./SettingsShortcuts";
 
 /**
  * 设置页（M6）：只负责页头与区块编排。
- * 各区块（更新/外观/数据目录/备份/资源/同步/每日笔记/AI/快捷键）拆成独立组件，
+ * 各区块（更新/外观/数据目录/备份/数据库健康/资源/同步/每日笔记/AI/快捷键）拆成独立组件，
  * 各自持有状态与拉取——一个区块的输入/保存不再重渲染整页。
  */
 export function SettingsPage() {
@@ -45,6 +46,7 @@ export function SettingsPage() {
         <SettingsAppearance />
         <SettingsDataDir />
         <SettingsBackup />
+        <SettingsDbHealth />
         <SettingsAssets />
         <SettingsSync />
         <SettingsDailyNotes />

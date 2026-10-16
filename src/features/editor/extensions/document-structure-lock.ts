@@ -3,11 +3,11 @@
 // 目标：文档固定「首行 H1 标题 + 第二行分割线」结构，二者不可删除/转换/拖动/前插；
 // 但 H1 的文本内容可编辑——H1 即文档标题，编辑内容会同步为视图名称。
 // 实现：
-//   - LockedHeading：H1/H2/H3 均渲染为标准可编辑标题视图（H1 带 data-locked-title 标记）；
+//   - LockedHeading：H1–H6 均渲染为标准可编辑标题视图（H1 带 data-locked-title 标记）；
 //     结构锁定由下方事务过滤保证，而非只读 NodeView。
 //   - DocumentStructureLock：filterTransaction 拦截破坏保护区（[0, protectedEnd)）结构的事务，
 //     但放行 H1 内部纯文本替换与格式标记；Enter 在 H1 内时改为跳到下一内容块（不做 split）。
-//   - 拖拽手柄排除见 block-drag（isProtectedStructureBlock）。
+//   - 拖拽手柄与块多选的排除规则见 block-drag / block-selection（复用这里的 protectedEnd）。
 import { Extension } from "@tiptap/core";
 import Heading from "@tiptap/extension-heading";
 import { Plugin, PluginKey, Selection } from "@tiptap/pm/state";
@@ -23,7 +23,7 @@ function isH1(node: ProseMirrorNode): boolean {
 }
 
 /** 保护区末端：首行 H1 的 nodeSize +（存在时）第二行分割线的 nodeSize；首行非 H1 时不保护 */
-function protectedEnd(doc: ProseMirrorNode): number {
+export function protectedEnd(doc: ProseMirrorNode): number {
   if (doc.childCount === 0 || !isH1(doc.child(0))) return 0;
   let end = doc.child(0).nodeSize;
   if (doc.childCount > 1 && doc.child(1).type.name === "horizontalRule") {

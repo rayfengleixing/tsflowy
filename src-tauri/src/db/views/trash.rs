@@ -2,7 +2,10 @@ use rusqlite::{params, Connection};
 
 use super::super::{dberr, now_ms};
 
-fn with_recursive_subtree(
+/// 对「视图 + 其子树」跑一条递归 CTE 语句。对外可见供数据库行回收站复用：
+/// 行详情文档挂在宿主视图下，行进/出回收站要连它一起搬，而它本身是普通视图行。
+/// 只做单条 execute，不开事务——调用方负责把多次改动包进同一个 tx。
+pub(crate) fn with_recursive_subtree(
     conn: &Connection,
     body: &str,
     id: &str,
@@ -71,14 +74,22 @@ pub fn restore(conn: &Connection, id: &str) -> Result<(), String> {
     tx.commit().map_err(dberr("restore view (commit)"))
 }
 
-/// 彻底删除：只硬删回收站中的子树部分 + 被显式指定的根节点；
+/// 彻底删除：见 [`purge_within`]。
+pub fn purge(conn: &Connection, id: &str) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(dberr("purge view"))?;
+    purge_within(&tx, id)?;
+    tx.commit().map_err(dberr("purge view (commit)"))?;
+    Ok(())
+}
+
+/// 彻底删除的主体（不开事务，可在调用方事务内复用）：
+/// 只硬删回收站中的子树部分 + 被显式指定的根节点；
 /// 子树里"已被单独恢复出回收站"的后代改挂到根节点的父级，不陪葬（回收站可以单独恢复子页，
 /// 若这里按整棵子树硬删，会把已经回到树里的页面连同文档一起删除）。
 /// documents/database_* 经 FK 级联 + FTS delete 触发器；派生视图经 views.source_id 的 FK 级联删除。
-pub fn purge(conn: &Connection, id: &str) -> Result<(), String> {
-    let tx = conn.unchecked_transaction().map_err(dberr("purge view"))?;
+pub(crate) fn purge_within(conn: &Connection, id: &str) -> Result<(), String> {
     // 1) 回收站外的后代先改挂到根的父级（del = 将被删除的行；keep = 保留下来的行）
-    tx.execute(
+    conn.execute(
         "WITH RECURSIVE sub(id) AS (
            SELECT id FROM views WHERE id = ?1
            UNION ALL
@@ -96,7 +107,7 @@ pub fn purge(conn: &Connection, id: &str) -> Result<(), String> {
     )
     .map_err(dberr("purge view (reparent survivors)"))?;
     // 2) 删除回收站部分
-    tx.execute(
+    conn.execute(
         "WITH RECURSIVE sub(id) AS (
            SELECT id FROM views WHERE id = ?1
            UNION ALL
@@ -106,7 +117,6 @@ pub fn purge(conn: &Connection, id: &str) -> Result<(), String> {
         params![id],
     )
     .map_err(dberr("purge view (delete)"))?;
-    tx.commit().map_err(dberr("purge view (commit)"))?;
     Ok(())
 }
 

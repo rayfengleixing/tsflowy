@@ -109,6 +109,17 @@ pub fn like_pattern(input: &str) -> String {
     format!("%{escaped}%")
 }
 
+/// 回收站里的行不该被搜到。行 id 表达式为 NULL（文档命中）时不加条件；
+/// 数据库命中要按 row_id 反查行的 is_trash——database_fts 由单元格触发器维护，
+/// 软删行只是打标记（单元格还在，为了能从回收站恢复），所以过滤只能放在查询侧。
+fn row_trash_filter(row_id_expr: &str) -> String {
+    if row_id_expr == "NULL" {
+        String::new()
+    } else {
+        format!(" AND NOT EXISTS (SELECT 1 FROM database_rows dr WHERE dr.id = {row_id_expr} AND dr.is_trash = 1)")
+    }
+}
+
 /// 对某张 FTS5 表跑一次检索。table/snippet_col/row_id_expr 只接受调用方写死的常量，
 /// 不来自用户输入（FTS5 表不能加别名，所以表名要拼进 SQL）。
 fn fts_rows(
@@ -126,10 +137,11 @@ fn fts_rows(
                 bm25({table}) AS rank
          FROM {table}
          JOIN views v ON v.id = {table}.view_id
-         WHERE v.is_trash = 0 AND v.workspace_id = ?1 AND {table} MATCH ?2
+         WHERE v.is_trash = 0 AND v.workspace_id = ?1 AND {table} MATCH ?2{trash}
          ORDER BY bm25({table}) LIMIT 100",
         col = snippet_col,
-        row_id = row_id_expr
+        row_id = row_id_expr,
+        trash = row_trash_filter(row_id_expr)
     );
     query_rows(
         conn,
@@ -170,9 +182,10 @@ fn like_rows(
                 '' AS snippet, {row_id} AS row_id, 1e9 AS rank
          FROM {from}
          JOIN views v ON v.id = {id_expr}
-         WHERE v.is_trash = 0 AND v.workspace_id = ?1{filter}
+         WHERE v.is_trash = 0 AND v.workspace_id = ?1{filter}{trash}
          LIMIT 50",
-        row_id = row_id_expr
+        row_id = row_id_expr,
+        trash = row_trash_filter(row_id_expr)
     );
     query_rows(conn, &sql, workspace_id, &patterns, "search fallback")
 }
@@ -963,6 +976,29 @@ mod tests {
             hits[0].row_id.as_deref() == Some("r1") || hits[0].row_id.as_deref() == Some("r2"),
             "{:?}",
             hits[0].row_id
+        );
+    }
+
+    /// 回收站里的行不再可搜：database_fts 由单元格触发器维护，软删不会删索引行，
+    /// 过滤只能放在检索侧（FTS 与 LIKE 兜底两条路都要挡）。
+    #[test]
+    fn trashed_row_is_not_searchable() {
+        let conn = setup();
+        seed_db_view(&conn, "v1", "项目表");
+        seed_field(&conn, "f1", "v1", "标题", "text", "{}");
+        seed_row(&conn, "r1", "v1");
+        seed_cell(&conn, "r1", "f1", r#""营收口径说明""#);
+        assert_eq!(search(&conn, "w1", "营收口径").unwrap().len(), 1);
+
+        super::super::database::soft_delete_rows(&conn, &["r1".to_string()]).unwrap();
+
+        assert!(
+            search(&conn, "w1", "营收口径").unwrap().is_empty(),
+            "FTS 路径漏掉了行级回收站过滤"
+        );
+        assert!(
+            search(&conn, "w1", "营收").unwrap().is_empty(),
+            "LIKE 兜底路径漏掉了行级回收站过滤"
         );
     }
 

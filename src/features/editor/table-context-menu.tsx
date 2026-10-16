@@ -1,14 +1,24 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Editor } from "@tiptap/core";
+import { CellSelection } from "@tiptap/pm/tables";
 import { t } from "@/lib/i18n";
 import { clampFloatToEditor } from "./float-clamp";
 
 const CELL_TYPES = ["tableCell", "tableHeader"];
 
-/** 表格右键菜单：添加/删除行、列与删除整个表格（项目说明书 6.3 表格块） */
+/** 打开菜单时算好合并/拆分是否可用：库里的 mergeCells/splitCell 自己判定几何是否合法，
+ *  这里只做「能不能」的探测（can 模式不会派发事务），不给用户点了没反应的按钮 */
+function mergeChoices(editor: Editor) {
+  return {
+    canMerge: editor.can().chain().focus().mergeCells().run(),
+    canSplit: editor.can().chain().focus().splitCell().run(),
+  };
+}
+
+/** 表格右键菜单：添加/删除行、列，合并/拆分单元格与删除整个表格（项目说明书 6.3 表格块） */
 export function TableContextMenu({ editor }: { editor: Editor | null }) {
-  const [raw, setRaw] = useState<{ x: number; y: number } | null>(null);
+  const [raw, setRaw] = useState<{ x: number; y: number; canMerge: boolean; canSplit: boolean } | null>(null);
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -35,9 +45,23 @@ export function TableContextMenu({ editor }: { editor: Editor | null }) {
       }
       if (cellPos < 0) return;
       event.preventDefault();
-      // 将 ProseMirror 选择定位到被右键的单元格，确保增删命令作用于该单元格
-      editor.chain().setCellSelection({ anchorCell: cellPos, headCell: cellPos }).run();
-      setRaw({ x: event.clientX, y: event.clientY });
+      // 已经框选了多个单元格（按住拖动格子形成的 CellSelection）且右键落在其中：
+      // 保留整片选择，否则「拖选一片 → 右键 → 合并」这条路会被这一步压成单格而永远合不了。
+      const sel = editor.state.selection;
+      const inExistingRange =
+        sel instanceof CellSelection &&
+        (() => {
+          let hit = false;
+          sel.forEachCell((_node, p) => {
+            if (p === cellPos) hit = true;
+          });
+          return hit;
+        })();
+      if (!inExistingRange) {
+        // 将 ProseMirror 选择定位到被右键的单元格，确保增删命令作用于该单元格
+        editor.chain().setCellSelection({ anchorCell: cellPos, headCell: cellPos }).run();
+      }
+      setRaw({ x: event.clientX, y: event.clientY, ...mergeChoices(editor) });
     };
     dom.addEventListener("contextmenu", onContextMenu);
     return () => dom.removeEventListener("contextmenu", onContextMenu);
@@ -93,6 +117,17 @@ export function TableContextMenu({ editor }: { editor: Editor | null }) {
       style={{ left: pos.x, top: pos.y }}
       onContextMenu={(e) => e.preventDefault()}
     >
+      {raw.canMerge && (
+        <button className={itemCls} onClick={run(() => editor.chain().focus().mergeCells().run())}>
+          {t("table.mergeCells")}
+        </button>
+      )}
+      {raw.canSplit && (
+        <button className={itemCls} onClick={run(() => editor.chain().focus().splitCell().run())}>
+          {t("table.splitCell")}
+        </button>
+      )}
+      {(raw.canMerge || raw.canSplit) && divider}
       <button className={itemCls} onClick={run(() => editor.chain().focus().addRowBefore().run())}>
         {t("table.addRowAbove")}
       </button>

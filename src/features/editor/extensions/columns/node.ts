@@ -1,6 +1,7 @@
 import { mergeAttributes, Node } from "@tiptap/core";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import { ColumnsNodeView, ColumnNodeView } from "./component";
+import { normalizeRatio } from "./ratio";
 
 // 分栏容器（说明书 8.2 M3：columns，子节点必须是 column）
 export const Columns = Node.create({
@@ -38,7 +39,16 @@ export const Column = Node.create({
 
   addAttributes() {
     return {
-      ratio: { default: 1 },
+      // 列宽比例：相对值（均分时每列都是 1）。renderHTML 同时写 data-ratio 与 flex，
+      // 所以复制粘贴、HTML 导出、以及从 HTML 导入都能带走列宽。
+      ratio: {
+        default: 1,
+        parseHTML: (element) => normalizeRatio(element.getAttribute("data-ratio") ?? element.style.flexGrow),
+        renderHTML: (attributes) => {
+          const ratio = normalizeRatio(attributes.ratio);
+          return { "data-ratio": ratio, style: `flex: ${ratio} 1 0%` };
+        },
+      },
     };
   },
 

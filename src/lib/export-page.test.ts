@@ -22,6 +22,11 @@ const RICH_DOC = {
     { type: "math", attrs: { tex: "E=mc^2" } },
     { type: "mermaid", attrs: { code: "graph LR\n  A-->B" } },
     { type: "attachment", attrs: { src: "assets/报告.pdf", name: "报告.pdf" } },
+    { type: "attachment", attrs: { src: "assets/会议.mp3", name: "会议录音.mp3" } },
+    { type: "attachment", attrs: { src: "assets/clip.mp4", name: "片段.mp4" } },
+    { type: "attachment", attrs: { src: "assets/1234", name: "截图.PNG" } },
+    { type: "attachment", attrs: { src: "assets/tool.zip", name: "压缩工具.zip" } },
+    { type: "attachment", attrs: { src: "D:/temp/外部录音.mp3", name: "外部录音.mp3" } },
     { type: "databaseView", attrs: { viewId: "db-1", name: "任务表" } },
     {
       type: "toggle",
@@ -39,12 +44,43 @@ const RICH_DOC = {
     {
       type: "columns",
       content: [
-        { type: "column", content: [{ type: "paragraph", content: [{ type: "text", text: "左栏" }] }] },
+        {
+          type: "column",
+          attrs: { ratio: 2 },
+          content: [{ type: "paragraph", content: [{ type: "text", text: "左栏" }] }],
+        },
         { type: "column", content: [{ type: "paragraph", content: [{ type: "text", text: "右栏" }] }] },
       ],
     },
     { type: "imageGallery", content: [{ type: "image", attrs: { src: "assets/a.png", alt: "图一" } }] },
     { type: "outline" },
+    {
+      type: "heading",
+      attrs: { level: 2, textAlign: "center" },
+      content: [{ type: "text", text: "居中标题" }],
+    },
+    { type: "paragraph", attrs: { textAlign: "right" }, content: [{ type: "text", text: "右对齐段落" }] },
+    { type: "paragraph", attrs: { textAlign: "middle" }, content: [{ type: "text", text: "坏对齐值" }] },
+    {
+      type: "taskList",
+      content: [
+        {
+          type: "taskItem",
+          attrs: { checked: false, due: "1999-01-01", assignee: "张三" },
+          content: [{ type: "paragraph", content: [{ type: "text", text: "逾期任务" }] }],
+        },
+        {
+          type: "taskItem",
+          attrs: { checked: false, due: "2999-12-31" },
+          content: [{ type: "paragraph", content: [{ type: "text", text: "将来的任务" }] }],
+        },
+        {
+          type: "taskItem",
+          attrs: { checked: true },
+          content: [{ type: "paragraph", content: [{ type: "text", text: "没有元数据" }] }],
+        },
+      ],
+    },
     { type: "paragraph", content: [{ type: "text", text: "<script>alert(1)</script>" }] },
   ],
 };
@@ -85,12 +121,35 @@ describe("exportPage（HTML 格式）", () => {
     const html = writeMock.mock.calls[0]?.[1] as string;
     expect(html).toContain('<div class="math">E=mc^2</div>');
     expect(html).toContain('<pre class="mermaid">graph LR\n  A--&gt;B</pre>');
-    expect(html).toContain('<p class="attachment"><a href="assets/报告.pdf">报告.pdf</a></p>');
+    expect(html).toContain(
+      '<p class="attachment"><a href="assets/报告.pdf">报告.pdf</a><iframe class="attachment-pdf" title="报告.pdf" src="assets/报告.pdf"></iframe></p>',
+    );
+    // 音视频与图片按类型内嵌；zip 与绝对本地路径只留链接（嵌进去也只是个报错的黑框）
+    expect(html).toContain('<audio class="attachment-audio" controls src="assets/会议.mp3"></audio>');
+    expect(html).toContain(
+      '<video class="attachment-video" controls preload="metadata" src="assets/clip.mp4"></video>',
+    );
+    expect(html).toContain('<img class="attachment-image" src="assets/1234" alt="截图.PNG"/>');
+    expect(html).toContain('<p class="attachment"><a href="assets/tool.zip">压缩工具.zip</a></p>');
+    expect(html).toContain('<p class="attachment"><a href="D:/temp/外部录音.mp3">外部录音.mp3</a></p>');
     expect(html).toContain('<div class="database-view">任务表</div>');
     expect(html).toContain("<details open><summary>折叠标题</summary>");
-    expect(html).toContain('<aside class="callout"><span class="callout-emoji">⚠️</span>');
-    expect(html).toContain('<div class="columns"><div class="column">');
+    expect(html).toContain('<aside class="callout callout-yellow"><span class="callout-emoji">⚠️</span>');
+    expect(html).toContain('<div class="columns"><div class="column" style="flex:2 1 0%">');
+    expect(html).toContain('<div class="column" style="flex:1 1 0%"><p>右栏</p></div>');
     expect(html).toContain('<div class="gallery"><img src="assets/a.png" alt="图一"/>');
+    expect(html).toContain('<h2 style="text-align:center">居中标题</h2>');
+    expect(html).toContain('<p style="text-align:right">右对齐段落</p>');
+    // 白名单外的对齐值不落进 style，免得把 attrs 里的字符串直接拼进 HTML
+    expect(html).toContain("<p>坏对齐值</p>");
+    expect(html).not.toContain("middle");
+    expect(html).toContain("aside.callout-yellow");
+    // 任务行 chip：文案 + 按日期算出的状态；无元数据的历史行不长 chip
+    expect(html).toContain("📅 1999-01-01 · 👤 张三");
+    expect(html).toContain('<span class="task-meta task-meta-overdue">');
+    expect(html).toContain('<span class="task-meta task-meta-upcoming">📅 2999-12-31</span>');
+    expect(html).toContain('<li><input type="checkbox" checked disabled/> <p>没有元数据</p></li>');
+    expect(html).toContain(".task-meta-overdue");
     expect(html).not.toContain("outline");
   });
 

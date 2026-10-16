@@ -1,5 +1,12 @@
 import { invoke } from "@/lib/invoke";
-import type { CellValue, DatabaseField, DatabaseRow, FieldOptions, FieldType } from "@/types/database";
+import type {
+  CellValue,
+  DatabaseField,
+  DatabaseRow,
+  DatabaseTrashRow,
+  FieldOptions,
+  FieldType,
+} from "@/types/database";
 import { newId } from "./db";
 import { deserializeValue } from "./database-values";
 
@@ -73,12 +80,37 @@ export const databaseApi = {
   },
 
   async deleteRow(rowId: string): Promise<void> {
-    return invoke("row_delete", { rowId }); // cells 级联
+    return invoke("row_delete", { rowId }); // 进回收站，可用 row_restore 找回
   },
 
-  /** 批量删行（多选删除）：一次 IPC 一个事务，返回实际删除行数 */
+  /** 批量删行（多选删除）：一次 IPC 一个事务，返回实际进回收站的行数 */
   async deleteRows(rowIds: string[]): Promise<number> {
     return invoke<number>("row_delete_many", { rowIds });
+  },
+
+  /** 本表的回收站内容（按删除时间倒序） */
+  async listTrash(viewId: string): Promise<DatabaseTrashRow[]> {
+    return invoke<DatabaseTrashRow[]>("row_list_trash", { viewId });
+  },
+
+  /** 从回收站恢复一行（行号排到末尾） */
+  async restoreRow(rowId: string): Promise<void> {
+    return invoke("row_restore", { rowId });
+  },
+
+  /** 彻底删除一行：单元格与行详情文档一并删除，不可恢复 */
+  async purgeRow(rowId: string): Promise<void> {
+    return invoke("row_purge", { rowId });
+  },
+
+  /** 清空本表回收站，返回彻底删除的行数 */
+  async purgeTrash(viewId: string): Promise<number> {
+    return invoke<number>("row_purge_trash", { viewId });
+  },
+
+  /** 超过保留期的行彻底删除（全局小时级清理定时器调用，与页面回收站共用保留天数） */
+  async purgeExpiredTrash(deadlineMs: number): Promise<number> {
+    return invoke<number>("row_purge_expired_trash", { deadlineMs });
   },
 
   async reorderRows(viewId: string, orderedIds: string[]): Promise<void> {

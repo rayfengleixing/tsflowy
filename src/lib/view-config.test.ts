@@ -91,6 +91,7 @@ describe("mergeViewConfig", () => {
       boardFieldId: "s1",
       calendarFieldId: "d1",
       groupFieldId: "g1",
+      galleryFieldId: "a1",
       aggregates: { n1: "sum" as const, b1: "checked" as const },
       cardFieldIds: ["f2", "f3"],
     };
@@ -101,11 +102,13 @@ describe("mergeViewConfig", () => {
     const cfg = parseViewConfig(
       JSON.stringify({
         groupFieldId: "", // 空串 = 清除选择
+        galleryFieldId: "",
         aggregates: { n1: "sum", ghost: "median", "": "count" },
         cardFieldIds: ["f2", 42, null],
       }),
     );
     expect(cfg.groupFieldId).toBeUndefined();
+    expect(cfg.galleryFieldId).toBeUndefined();
     expect(cfg.aggregates).toEqual({ n1: "sum" });
     expect(cfg.cardFieldIds).toEqual(["f2"]);
     expect(parseViewConfig(JSON.stringify({ aggregates: "sum" })).aggregates).toBeUndefined();

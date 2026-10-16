@@ -87,9 +87,20 @@ export interface SyncInfo {
 export interface ConflictFile {
   name: string;
   size: number;
-  /** 修改时间（本地时间串） */
+  /** 副本写下的时间（本地时间串） */
   modified: string;
+  /** 被舍弃的是哪一侧的数据：local = 本机那一版，remote = 同步文件夹那一版 */
+  side: "local" | "remote" | "unknown";
+  /** 这份副本里最后一次数据活动的时间；读不出为 null */
+  activity: string | null;
 }
+
+/** 冲突副本来源 → 文案 */
+export const SYNC_SIDE_KEY: Record<ConflictFile["side"], MessageKey> = {
+  local: "settings.syncConflictSideLocal",
+  remote: "settings.syncConflictSideRemote",
+  unknown: "settings.syncConflictSideUnknown",
+};
 
 /** run_sync 返回结构 */
 export interface SyncRunResult {
@@ -98,6 +109,11 @@ export interface SyncRunResult {
   pulled: boolean;
   assets_copied: number;
   conflicts: string[];
+  /** 发生冲突时保留下来的一侧（本机 / 同步文件夹）；无冲突为 null */
+  conflict_winner: "local" | "remote" | null;
+  /** 两侧库内最后一次数据活动的时间：解释"为什么是这一侧胜出" */
+  local_activity: string | null;
+  remote_activity: string | null;
   info: SyncInfo;
 }
 

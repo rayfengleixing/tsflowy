@@ -132,7 +132,7 @@ export function dailyNoteNameMatches(name: string, dateKey: string): boolean {
 
 const paragraph = (text: string): JSONContent =>
   text ? { type: "paragraph", content: [{ type: "text", text }] } : { type: "paragraph" };
-const heading = (level: 2 | 3, text: string): JSONContent =>
+const heading = (level: 2 | 3 | 4 | 5 | 6, text: string): JSONContent =>
   text
     ? { type: "heading", attrs: { level }, content: [{ type: "text", text }] }
     : { type: "heading", attrs: { level } };
@@ -147,7 +147,7 @@ export function interpolateTemplate(line: string, vars: DailyTemplateVars): stri
 
 /**
  * 模板文本 → 块节点数组。支持的语法（够用即可，不做完整 Markdown）：
- *   `# / ## / ###`      → H2 / H3 / H3
+ *   `# / ## / ###…`     → H2 / H3 / H4…（整体下移一级，最多 H6）
  *   `- [ ]` / `- [x]`   → 待办（连续多行合并成一个任务列表）
  *   `- ` / `* `         → 无序列表（连续多行合并）
  *   `1. `               → 有序列表（连续多行合并）
@@ -207,9 +207,10 @@ export function templateToBlocks(template: string, vars: DailyTemplateVars): JSO
       continue;
     }
     flush();
-    const h = /^(#{1,3})\s+(.*)$/.exec(line);
+    const h = /^(#{1,6})\s+(.*)$/.exec(line);
     if (h) {
-      out.push(heading(h[1].length === 1 ? 2 : 3, h[2].trim()));
+      // 整体下移一级：模板里的 `#` 是正文首层标题，而 H1 已被页面标题（文档首行）占用
+      out.push(heading(Math.min(6, h[1].length + 1) as 2 | 3 | 4 | 5 | 6, h[2].trim()));
       continue;
     }
     out.push(paragraph(line));

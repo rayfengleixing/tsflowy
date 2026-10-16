@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use tauri::Emitter;
 
 use super::files::{self, AppConfig};
 use crate::db::{Db, DbInner, SharedDb, DB_FILE};
@@ -24,9 +25,88 @@ const CONFLICT_DIR: &str = "conflicts";
 /// conflicts/ 里保留的份数
 const KEEP_CONFLICTS: usize = 5;
 /// 附件删除墓碑文件：同步目录里的持久清单，防止对侧把已删资产「复活」
-const TOMBSTONE_FILE: &str = "deleted-assets.txt";
+/// 备份打包要按同一个名字入档/回档，故对外可见
+pub(crate) const TOMBSTONE_FILE: &str = "deleted-assets.txt";
 /// 墓碑文件名里 assets 相对路径的分隔符（固定 `/`，跨设备一致）
 pub(crate) const TOMBSTONE_PREFIX: &str = "assets/";
+
+/// 同步进度事件（前端订阅见 src/lib/sync-events.ts）：一轮同步要算两次整库 sha256
+/// 并复制可达数百 MB 的附件，没有进度就只能对着一个转圈的按钮等。
+pub const SYNC_PROGRESS_EVENT: &str = "sync:progress";
+/// 本机库已被替换的事件：**在替换完成的那一刻发出**，不等同步命令返回。
+/// 因为拉取之后还有补附件/写墓碑/落基线这些步骤可能失败——命令报错时前端拿不到
+/// pulled 标志就不会重载，渲染进程会继续把内存里的旧数据写进已经换掉的库。
+pub const SYNC_DB_REPLACED_EVENT: &str = "sync:db-replaced";
+
+/// 进度阶段标识（前端按 stage 取文案；与 src/lib/sync-events.ts 的 SYNC_STAGES 对应）
+mod stage {
+    /// 本机库做一致性快照（WAL 下直接拷主库会丢未 checkpoint 的事务）
+    pub const SNAPSHOT: &str = "snapshot";
+    pub const HASH_LOCAL: &str = "hash_local";
+    pub const HASH_REMOTE: &str = "hash_remote";
+    /// 用远端库替换本机库（关库 → 换文件 → 重开）
+    pub const REPLACE_DB: &str = "replace_db";
+    pub const ASSETS: &str = "assets";
+    pub const TOMBSTONES: &str = "tombstones";
+    /// 一轮同步的收尾帧：**失败路径也必发**，否则前端的进度条会一直挂着
+    pub const DONE: &str = "done";
+}
+
+/// SYNC_PROGRESS_EVENT 的负载。total = 0 表示这一步无法预估工作量（单条阻塞调用）。
+#[derive(Serialize, Clone)]
+pub struct SyncProgress {
+    pub stage: &'static str,
+    pub done: u64,
+    pub total: u64,
+}
+
+/// 同步过程的可观测性回调：命令层注入会发 Tauri 事件的实现，单测用默认空实现，
+/// 这样 run_sync_inner 仍然与 AppHandle 解耦。
+pub(crate) trait SyncHooks {
+    fn progress(&self, _stage: &'static str, _done: u64, _total: u64) {}
+    /// 本机库文件已换掉（内容与内存里的前端数据不再同源）
+    fn local_replaced(&self) {}
+}
+
+/// 什么都不通知的实现（单测、以及只想要指纹而不关库的调用方）
+struct SilentHooks;
+
+impl SyncHooks for SilentHooks {}
+
+/// 向所有窗口广播进度与替换事件
+struct EmitHooks {
+    app: tauri::AppHandle,
+    /// 上一次发出进度的 done 值，用于节流
+    last: std::cell::Cell<u64>,
+}
+
+impl EmitHooks {
+    fn new(app: tauri::AppHandle) -> EmitHooks {
+        EmitHooks {
+            app,
+            last: std::cell::Cell::new(0),
+        }
+    }
+}
+
+impl SyncHooks for EmitHooks {
+    fn progress(&self, stage: &'static str, done: u64, total: u64) {
+        // done == 0 一定是新阶段的起点（顺带重置节流基准）；收尾帧必发，
+        // 中间帧约 40 帧封顶——百 MB 的库按 64KiB 分块会有上万块，全发会淹掉事件通道
+        let terminal = total == 0 || done == 0 || done >= total;
+        if !terminal && done - self.last.get() < total / 40 {
+            return;
+        }
+        self.last.set(done);
+        let _ = self
+            .app
+            .emit(SYNC_PROGRESS_EVENT, SyncProgress { stage, done, total });
+    }
+
+    fn local_replaced(&self) {
+        let _ = self.app.emit(SYNC_DB_REPLACED_EVENT, ());
+    }
+}
 
 #[derive(Serialize)]
 pub struct SyncInfo {
@@ -51,6 +131,12 @@ pub struct SyncOutcome {
     pub assets_deleted: usize,
     /// 本次新产生的冲突副本（文件名，位于同步目录的 conflicts/ 下）
     pub conflicts: Vec<String>,
+    /// 发生冲突时保留下来的一侧：local = 本机胜（远端旧版存成副本），remote = 远端胜
+    pub conflict_winner: Option<String>,
+    /// 本机库内最近一次数据活动的时间（裁决依据，不是文件 mtime）
+    pub local_activity: Option<String>,
+    /// 远端库内最近一次数据活动的时间
+    pub remote_activity: Option<String>,
 }
 
 /// 命令返回值：本次动作 + 同步后的最新设置（前端一次调用即可刷新展示）
@@ -61,23 +147,46 @@ pub struct SyncRunResult {
     pub info: SyncInfo,
 }
 
+impl SyncOutcome {
+    /// 除 action 外全为默认值；后续按步骤补计数与冲突信息
+    fn new(action: &str) -> SyncOutcome {
+        SyncOutcome {
+            action: action.to_string(),
+            pulled: false,
+            assets_copied: 0,
+            assets_deleted: 0,
+            conflicts: Vec::new(),
+            conflict_winner: None,
+            local_activity: None,
+            remote_activity: None,
+        }
+    }
+}
+
 /// 同步目录：<用户所选目录>/TsFlowySync
 fn sync_dir_of(dir: &str) -> PathBuf {
     PathBuf::from(dir).join(SYNC_SUBDIR)
 }
 
-/// 文件内容指纹（分块读取，库可能有上百 MB）
-fn sha256_file(p: &Path) -> Result<String, String> {
+/// 文件内容指纹（分块读取，库可能有上百 MB），并把「已读字节 / 文件总字节」报给进度回调。
+/// 整库哈希是大库同步里最耗时的两步，值得单独有进度；不需要报进度时传 SilentHooks。
+fn sha256_file_with(p: &Path, st: &'static str, hooks: &dyn SyncHooks) -> Result<String, String> {
     let mut f = fs::File::open(p).map_err(|e| format!("open {} failed: {e}", p.display()))?;
+    let total = f.metadata().map(|m| m.len()).unwrap_or(0);
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
+    let mut done = 0u64;
+    hooks.progress(st, 0, total);
     loop {
         let n = f.read(&mut buf).map_err(|e| format!("read failed: {e}"))?;
         if n == 0 {
             break;
         }
         hasher.update(&buf[..n]);
+        done += n as u64;
+        hooks.progress(st, done, total);
     }
+    hooks.progress(st, total, total);
     Ok(format!("{:x}", hasher.finalize()))
 }
 
@@ -120,12 +229,25 @@ fn decide(local: &str, remote: &str, last: Option<&str>, remote_newer: bool) -> 
     }
 }
 
+/// 目录里的文件数（只数一层，附件目录不分层）。目录不存在/读不了记 0，
+/// 它只用于估算进度，不能把同步本身带崩。
+fn count_files(dir: &Path) -> u64 {
+    match fs::read_dir(dir) {
+        Ok(entries) => entries.flatten().filter(|e| e.path().is_file()).count() as u64,
+        Err(_) => 0,
+    }
+}
+
 /// 单向补齐：src 里有而 dst 里没有、且未被墓碑声明删除的文件复制过去。
 /// 附件文件名是纳秒时间戳且从不改写，因此"同名即同内容"，跳过已存在的即可。
+/// base/total 让两个方向共用一根进度条（total 为两侧文件数之和）。
 fn copy_missing_files(
     src: &Path,
     dst: &Path,
     tombstones: &HashSet<String>,
+    hooks: &dyn SyncHooks,
+    base: u64,
+    total: u64,
 ) -> Result<usize, String> {
     if !src.is_dir() {
         return Ok(0);
@@ -133,11 +255,12 @@ fn copy_missing_files(
     fs::create_dir_all(dst).map_err(|e| format!("create {} failed: {e}", dst.display()))?;
     let mut n = 0;
     let entries = fs::read_dir(src).map_err(|e| format!("read {} failed: {e}", src.display()))?;
-    for entry in entries.flatten() {
+    for (i, entry) in entries.flatten().enumerate() {
         let from = entry.path();
         if !from.is_file() {
             continue;
         }
+        hooks.progress(stage::ASSETS, base + i as u64, total);
         let Some(file_name) = from.file_name().and_then(|s| s.to_str()) else {
             continue;
         };
@@ -159,9 +282,20 @@ fn sync_assets(
     local_assets: &Path,
     remote_assets: &Path,
     tombstones: &HashSet<String>,
+    hooks: &dyn SyncHooks,
 ) -> Result<usize, String> {
-    let up = copy_missing_files(local_assets, remote_assets, tombstones)?;
-    let down = copy_missing_files(remote_assets, local_assets, tombstones)?;
+    let up_total = count_files(local_assets);
+    let total = up_total + count_files(remote_assets);
+    let up = copy_missing_files(local_assets, remote_assets, tombstones, hooks, 0, total)?;
+    let down = copy_missing_files(
+        remote_assets,
+        local_assets,
+        tombstones,
+        hooks,
+        up_total,
+        total,
+    )?;
+    hooks.progress(stage::ASSETS, total, total);
     Ok(up + down)
 }
 
@@ -240,9 +374,12 @@ fn apply_tombstones(
     local_assets: &Path,
     remote_assets: &Path,
     tombstones: &HashSet<String>,
+    hooks: &dyn SyncHooks,
 ) -> usize {
+    let total = tombstones.len() as u64;
     let mut deleted = 0usize;
-    for rel in tombstones {
+    hooks.progress(stage::TOMBSTONES, 0, total);
+    for (i, rel) in tombstones.iter().enumerate() {
         let Some(name) = rel.strip_prefix(TOMBSTONE_PREFIX) else {
             continue;
         };
@@ -252,6 +389,7 @@ fn apply_tombstones(
                 deleted += 1;
             }
         }
+        hooks.progress(stage::TOMBSTONES, i as u64 + 1, total);
     }
     deleted
 }
@@ -387,6 +525,15 @@ fn db_activity_ms(db_path: &Path) -> i64 {
     .unwrap_or(0)
 }
 
+/// 数据活动时间戳（毫秒）→ 本地时间串。0 表示读不出来（非 SQLite / 空表），不展示。
+fn activity_label(ms: i64) -> Option<String> {
+    if ms <= 0 {
+        return None;
+    }
+    let t = UNIX_EPOCH + std::time::Duration::from_millis(ms as u64);
+    Some(files::format_local_time(t))
+}
+
 fn info_of(cfg: &AppConfig) -> SyncInfo {
     let dir = cfg.sync.dir.clone().filter(|d| !d.trim().is_empty());
     SyncInfo {
@@ -468,6 +615,7 @@ fn run_sync_blocking(app: tauri::AppHandle, db: SharedDb) -> Result<SyncRunResul
     // 1) 本机一致快照（WAL 下直接拷主库会丢掉未 checkpoint 的事务）
     let snap = data_dir.join(format!("{DB_FILE}.sync-{}", std::process::id()));
     let _ = fs::remove_file(&snap);
+    let hooks = EmitHooks::new(app.clone());
     let result = run_sync_inner(
         &db,
         &local_db,
@@ -478,13 +626,21 @@ fn run_sync_blocking(app: tauri::AppHandle, db: SharedDb) -> Result<SyncRunResul
         &remote_assets,
         &sync_dir,
         cfg.sync.last_hash.as_deref(),
+        &hooks,
     );
     let _ = fs::remove_file(&snap);
-    let outcome = result?;
+    let outcome = match result {
+        Ok(o) => o,
+        Err(e) => {
+            // 失败也要收掉前端的进度条，否则它会一直停在失败那一步
+            hooks.progress(stage::DONE, 1, 1);
+            return Err(e);
+        }
+    };
 
     // 2) 落基线：同步结束后两侧内容一致，基线就是远端（=本机）库的指纹
     let last_hash = if remote_db.is_file() {
-        sha256_file(&remote_db).ok()
+        sha256_file_with(&remote_db, stage::HASH_REMOTE, &SilentHooks).ok()
     } else {
         None
     };
@@ -495,6 +651,7 @@ fn run_sync_blocking(app: tauri::AppHandle, db: SharedDb) -> Result<SyncRunResul
     if let Err(e) = files::save_app_config(&app, &cfg) {
         tracing::warn!(error = %e, "sync: save config failed");
     }
+    hooks.progress(stage::DONE, 1, 1);
 
     Ok(SyncRunResult {
         outcome,
@@ -515,9 +672,11 @@ fn run_sync_inner(
     remote_assets: &Path,
     sync_dir: &Path,
     last_hash: Option<&str>,
+    hooks: &dyn SyncHooks,
 ) -> Result<SyncOutcome, String> {
+    hooks.progress(stage::SNAPSHOT, 0, 0);
     files::make_db_snapshot(local_db, snap)?;
-    let local_hash = sha256_file(snap)?;
+    let local_hash = sha256_file_with(snap, stage::HASH_LOCAL, hooks)?;
 
     // 墓碑并集 = 本机清单 ∪ 同步目录清单（首次并入时把本机新增项立刻落到远端，防对侧抢先复制）
     let mut tombstones = read_tombstone_file(&sync_dir.join(TOMBSTONE_FILE));
@@ -526,66 +685,78 @@ fn run_sync_inner(
     // 首次同步（远端还没有库）：把本机推上去
     if !remote_db.is_file() {
         replace_file(snap, remote_db)?;
-        let assets_copied = sync_assets(local_assets, remote_assets, &tombstones)?;
-        let assets_deleted = apply_tombstones(local_assets, remote_assets, &tombstones);
+        let mut outcome = SyncOutcome::new("upload");
+        outcome.assets_copied = sync_assets(local_assets, remote_assets, &tombstones, hooks)?;
+        outcome.assets_deleted = apply_tombstones(local_assets, remote_assets, &tombstones, hooks);
+        outcome.local_activity = activity_label(db_activity_ms(snap));
         write_tombstone_file(&sync_dir.join(TOMBSTONE_FILE), &tombstones)?;
-        return Ok(SyncOutcome {
-            action: "upload".to_string(),
-            pulled: false,
-            assets_copied,
-            assets_deleted,
-            conflicts: Vec::new(),
-        });
+        return Ok(outcome);
     }
 
-    let remote_hash = sha256_file(remote_db)?;
-    let remote_newer = db_activity_ms(remote_db) > db_activity_ms(snap);
-    let decision = decide(&local_hash, &remote_hash, last_hash, remote_newer);
+    let remote_hash = sha256_file_with(remote_db, stage::HASH_REMOTE, hooks)?;
+    // 两侧的活动时间既用于裁决，也回传前端解释「为什么是这一侧胜出」
+    let local_activity = db_activity_ms(snap);
+    let remote_activity = db_activity_ms(remote_db);
+    let decision = decide(
+        &local_hash,
+        &remote_hash,
+        last_hash,
+        remote_activity > local_activity,
+    );
 
-    let mut conflicts: Vec<String> = Vec::new();
-    let mut pulled = false;
-    let action = match decision {
-        Decision::Noop => "none",
+    let mut outcome = SyncOutcome::new("none");
+    match decision {
+        Decision::Noop => {}
         Decision::Upload => {
             replace_file(snap, remote_db)?;
-            "upload"
+            outcome.action = "upload".to_string();
         }
         Decision::Download => {
-            pull_into_local(db, local_db, remote_db)?;
-            pulled = true;
-            "download"
+            pull_into_local(db, local_db, remote_db, hooks)?;
+            outcome.pulled = true;
+            outcome.action = "download".to_string();
         }
         Decision::RemoteWins => {
             // 本机这一版作为副本留下（放在同步目录，别的设备也能取回）。
             // 必须用一致性快照 snap：直接拷主库会丢掉还在 WAL 里的未 checkpoint 事务
-            conflicts.push(save_conflict(sync_dir, snap, "local")?);
-            pull_into_local(db, local_db, remote_db)?;
-            pulled = true;
-            "conflict"
+            outcome
+                .conflicts
+                .push(save_conflict(sync_dir, snap, "local")?);
+            pull_into_local(db, local_db, remote_db, hooks)?;
+            outcome.pulled = true;
+            outcome.conflict_winner = Some("remote".to_string());
+            outcome.action = "conflict".to_string();
         }
         Decision::LocalWins => {
-            conflicts.push(save_conflict(sync_dir, remote_db, "remote")?);
+            outcome
+                .conflicts
+                .push(save_conflict(sync_dir, remote_db, "remote")?);
             replace_file(snap, remote_db)?;
-            "conflict"
+            outcome.conflict_winner = Some("local".to_string());
+            outcome.action = "conflict".to_string();
         }
-    };
+    }
 
-    let assets_copied = sync_assets(local_assets, remote_assets, &tombstones)?;
-    let assets_deleted = apply_tombstones(local_assets, remote_assets, &tombstones);
+    outcome.assets_copied = sync_assets(local_assets, remote_assets, &tombstones, hooks)?;
+    outcome.assets_deleted = apply_tombstones(local_assets, remote_assets, &tombstones, hooks);
+    outcome.local_activity = activity_label(local_activity);
+    outcome.remote_activity = activity_label(remote_activity);
     write_tombstone_file(&sync_dir.join(TOMBSTONE_FILE), &tombstones)?;
-    Ok(SyncOutcome {
-        action: action.to_string(),
-        pulled,
-        assets_copied,
-        assets_deleted,
-        conflicts,
-    })
+    Ok(outcome)
 }
 
 /// 用远端库替换本机库：库还开着时先把远端库拷到同目录临时文件（IO 失败不触碰本机库），
 /// 再关库 → stash 旧库 → rename 原子替换；stash 或替换失败自动回滚回同步前状态。
 /// 旧库的 -wal/-shm 由 stash 一并移走，否则新库会被旧 WAL 回放损坏。
-fn pull_into_local(db: &DbInner, local_db: &Path, remote_db: &Path) -> Result<(), String> {
+/// 替换成功即刻 hooks.local_replaced()：此时本机库与前端内存数据已经不同源，
+/// 后面补附件/写墓碑哪怕失败，前端也必须重载（不能等命令返回值）。
+fn pull_into_local(
+    db: &DbInner,
+    local_db: &Path,
+    remote_db: &Path,
+    hooks: &dyn SyncHooks,
+) -> Result<(), String> {
+    hooks.progress(stage::REPLACE_DB, 0, 0);
     let tmp = local_db.with_file_name(format!("{DB_FILE}.pull-{}", std::process::id()));
     let _ = fs::remove_file(&tmp);
     fs::copy(remote_db, &tmp).map_err(|e| format!("stage synced db failed: {e}"))?;
@@ -599,7 +770,10 @@ fn pull_into_local(db: &DbInner, local_db: &Path, remote_db: &Path) -> Result<()
     })();
     let _ = fs::remove_file(&tmp);
     match result {
-        Ok(()) => db.reopen(),
+        Ok(()) => {
+            hooks.local_replaced();
+            db.reopen()
+        }
         Err(e) => {
             // 替换没完成：把 stash 的旧库找回来，尽量回到同步前状态（.bak 只作最后手段）
             restore_stashed_db(local_db, &suffix);
@@ -631,14 +805,35 @@ fn restore_stashed_db(local_db: &Path, suffix: &str) {
 pub struct ConflictFile {
     pub name: String,
     pub size: u64,
-    /// 修改时间（本地时间串）
+    /// 修改时间（本地时间串）：这是「副本被写下的时间」
     pub modified: String,
+    /// 被舍弃的是哪一侧的数据：local = 本机那一版，remote = 同步文件夹那一版
+    pub side: &'static str,
+    /// 这份副本里最后一次数据活动的时间——用户判断"这份还值不值得取回"的依据
+    pub activity: Option<String>,
+}
+
+/// 冲突副本文件名里的来源标签（`local-<时间戳>-<后缀>.db`，见 save_conflict）。
+/// 认不出来只会退化成"未知来源"，不影响列表展示。
+fn conflict_side(name: &str) -> &'static str {
+    match name.split('-').next() {
+        Some("local") => "local",
+        Some("remote") => "remote",
+        _ => "unknown",
+    }
 }
 
 /// 列出冲突副本（按修改时间倒序）。未开启同步或目录不存在时返回空列表。
+/// 每份副本都会被只读打开一次取数据活动时间，属于阻塞 IO → 走 blocking 线程。
 #[tauri::command]
-pub fn list_sync_conflicts(app: tauri::AppHandle) -> Result<Vec<ConflictFile>, String> {
-    let cfg = files::load_app_config(&app);
+pub async fn list_sync_conflicts(app: tauri::AppHandle) -> Result<Vec<ConflictFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || list_conflicts_blocking(&app))
+        .await
+        .map_err(|e| format!("list conflicts failed: {e}"))?
+}
+
+fn list_conflicts_blocking(app: &tauri::AppHandle) -> Result<Vec<ConflictFile>, String> {
+    let cfg = files::load_app_config(app);
     let Some(dir) = cfg.sync.dir.clone().filter(|d| !d.trim().is_empty()) else {
         return Ok(Vec::new());
     };
@@ -653,13 +848,21 @@ pub fn list_sync_conflicts(app: tauri::AppHandle) -> Result<Vec<ConflictFile>, S
             if !m.is_file() {
                 return None;
             }
+            // save_conflict 的中途残留（改名前崩溃）不算一份副本
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.contains(".tmp-") {
+                return None;
+            }
+            let path = e.path();
             let modified = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
             Some((
                 modified,
                 ConflictFile {
-                    name: e.file_name().to_string_lossy().to_string(),
-                    size: m.len(),
+                    activity: activity_label(db_activity_ms(&path)),
+                    side: conflict_side(&name),
                     modified: files::format_local_time(modified),
+                    name,
+                    size: m.len(),
                 },
             ))
         })
@@ -681,7 +884,7 @@ pub fn open_conflicts_dir(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 /// 用一份冲突副本替换本机库（与拉取同一条替换路径：关库→备份旧库→原子换库）。
-/// 替换后本机库比远端"新"，下一次同步会自动把它推上去。前端调用成功后必须重载窗口。
+/// 换库瞬间会广播 sync:db-replaced，前端据此重载，无需等这里的返回值。
 #[tauri::command]
 pub async fn restore_sync_conflict(
     app: tauri::AppHandle,
@@ -703,7 +906,14 @@ pub async fn restore_sync_conflict(
         return Err(format!("conflict file not found: {name}"));
     }
     let local_db = files::real_data_dir(&app)?.join(DB_FILE);
-    pull_into_local(&db, &local_db, &src)
+    // 与 run_sync 同理：拷贝数百 MB + 关库重开是阻塞 IO，不占 tokio worker
+    let db = db.shared();
+    tauri::async_runtime::spawn_blocking(move || {
+        let hooks = EmitHooks::new(app);
+        pull_into_local(&db, &local_db, &src, &hooks)
+    })
+    .await
+    .map_err(|e| format!("conflict restore task failed: {e}"))?
 }
 
 #[cfg(test)]
@@ -718,6 +928,43 @@ mod tests {
         }
         let mut f = File::create(p).unwrap();
         f.write_all(bytes).unwrap();
+    }
+
+    /// 不关心进度的调用点（单测里等价于命令层的静默实现）
+    fn hash_of(p: &Path) -> Result<String, String> {
+        sha256_file_with(p, stage::HASH_LOCAL, &SilentHooks)
+    }
+
+    /// 记下收到的进度与替换通知，用于断言「前端能看到什么」
+    #[derive(Default)]
+    struct RecordingHooks {
+        events: std::sync::Mutex<Vec<(&'static str, u64, u64)>>,
+        replaced: std::sync::atomic::AtomicBool,
+    }
+
+    impl SyncHooks for RecordingHooks {
+        fn progress(&self, st: &'static str, done: u64, total: u64) {
+            self.events.lock().unwrap().push((st, done, total));
+        }
+        fn local_replaced(&self) {
+            self.replaced
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    impl RecordingHooks {
+        fn events(&self) -> Vec<(&'static str, u64, u64)> {
+            self.events.lock().unwrap().clone()
+        }
+        fn replaced(&self) -> bool {
+            self.replaced.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    fn temp_base(name: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("tsflowy-sync-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        base
     }
 
     #[test]
@@ -750,16 +997,44 @@ mod tests {
 
     #[test]
     fn sha256_file_is_stable_and_content_sensitive() {
-        let base = std::env::temp_dir().join(format!("tsflowy-sync-hash-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
+        let base = temp_base("hash");
         let a = base.join("a.bin");
         let b = base.join("b.bin");
         write(&a, b"hello");
         write(&b, b"hello");
-        assert_eq!(sha256_file(&a).unwrap(), sha256_file(&b).unwrap());
+        assert_eq!(hash_of(&a).unwrap(), hash_of(&b).unwrap());
         write(&b, b"hello!");
-        assert_ne!(sha256_file(&a).unwrap(), sha256_file(&b).unwrap());
-        assert!(sha256_file(&base.join("missing.bin")).is_err());
+        assert_ne!(hash_of(&a).unwrap(), hash_of(&b).unwrap());
+        assert!(hash_of(&base.join("missing.bin")).is_err());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn hashing_reports_byte_progress_from_zero_to_total() {
+        let base = temp_base("hashprog");
+        // 3 个分块多一点：确保中间帧与收尾帧都出现
+        let payload = vec![7u8; 64 * 1024 * 3 + 10];
+        let f = base.join("big.bin");
+        write(&f, &payload);
+        let hooks = RecordingHooks::default();
+        let hash = sha256_file_with(&f, stage::HASH_REMOTE, &hooks).unwrap();
+        assert_eq!(hash.len(), 64);
+        let events = hooks.events();
+        assert_eq!(events[0], (stage::HASH_REMOTE, 0, payload.len() as u64));
+        assert_eq!(
+            *events.last().unwrap(),
+            (
+                stage::HASH_REMOTE,
+                payload.len() as u64,
+                payload.len() as u64
+            )
+        );
+        assert!(events.len() >= 5, "分块进度应有多帧: {events:?}");
+        // done 单调不减，且不超过 total
+        for w in events.windows(2) {
+            assert!(w[1].1 >= w[0].1, "进度回退了: {events:?}");
+            assert!(w[1].1 <= w[1].2, "进度越过 total: {events:?}");
+        }
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -778,12 +1053,12 @@ mod tests {
         ts.insert("assets/dead.png".to_string());
         ts.insert("assets/gone.png".to_string());
 
-        let copied = sync_assets(&local, &remote, &ts).unwrap();
+        let copied = sync_assets(&local, &remote, &ts, &SilentHooks).unwrap();
         assert_eq!(copied, 1, "只有 keep.png 被补过去，墓碑项跳过");
         assert!(remote.join("keep.png").is_file());
         assert!(!remote.join("dead.png").exists());
 
-        let deleted = apply_tombstones(&local, &remote, &ts);
+        let deleted = apply_tombstones(&local, &remote, &ts, &SilentHooks);
         assert_eq!(deleted, 2, "本机 dead.png 与远端残留 gone.png 都被墓碑清掉");
         assert!(!local.join("dead.png").exists());
         assert!(!remote.join("gone.png").exists());
@@ -871,9 +1146,18 @@ mod tests {
         write(&local.join("3.png"), b"both-sides");
         write(&remote.join("3.png"), b"both-sides");
 
-        let n = sync_assets(&local, &remote, &HashSet::new()).unwrap();
+        let hooks = RecordingHooks::default();
+        let n = sync_assets(&local, &remote, &HashSet::new(), &hooks).unwrap();
 
         assert_eq!(n, 2, "只补两侧各缺的那一个");
+        // 两个方向共用一根进度条：total = 两侧文件数之和，done 从 0 单调走到 total
+        let events = hooks.events();
+        assert_eq!(events.first().unwrap().2, 4, "total 应含两侧文件");
+        assert_eq!(
+            events.last().unwrap(),
+            &(stage::ASSETS, 4u64, 4u64),
+            "收尾帧必须报满，否则进度条停在半路: {events:?}"
+        );
         assert_eq!(
             fs::read(remote.join("1.png")).unwrap(),
             b"local-only".to_vec()
@@ -888,7 +1172,10 @@ mod tests {
             b"both-sides".to_vec()
         );
         // 再跑一次：已补齐，零复制（幂等）
-        assert_eq!(sync_assets(&local, &remote, &HashSet::new()).unwrap(), 0);
+        assert_eq!(
+            sync_assets(&local, &remote, &HashSet::new(), &SilentHooks).unwrap(),
+            0
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -900,7 +1187,10 @@ mod tests {
         let local = base.join("local/assets");
         let remote = base.join("remote/assets");
         // 两侧都不存在：不报错、不复制
-        assert_eq!(sync_assets(&local, &remote, &HashSet::new()).unwrap(), 0);
+        assert_eq!(
+            sync_assets(&local, &remote, &HashSet::new(), &SilentHooks).unwrap(),
+            0
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -930,6 +1220,155 @@ mod tests {
         prune_conflicts(&sync_dir.join(CONFLICT_DIR));
         let left = fs::read_dir(sync_dir.join(CONFLICT_DIR)).unwrap().count();
         assert_eq!(left, KEEP_CONFLICTS, "只保留最新 {KEEP_CONFLICTS} 份");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn conflict_side_reads_the_name_tag() {
+        assert_eq!(conflict_side("local-20261015-1a2b.db"), "local");
+        assert_eq!(conflict_side("remote-20261015-1a2b.db"), "remote");
+        // 用户自己丢进 conflicts/ 的文件、以及认不出标签的历史命名
+        assert_eq!(conflict_side("notes.txt"), "unknown");
+        assert_eq!(conflict_side("backup-2026.db"), "unknown");
+    }
+
+    #[test]
+    fn activity_label_hides_unreadable_timestamps() {
+        // 读不出来（非 SQLite / 空表）返回 0 → 不展示，而不是显示 1970 年
+        assert_eq!(activity_label(0), None);
+        assert_eq!(activity_label(-5), None);
+        assert!(activity_label(1_700_000_000_000).is_some());
+    }
+
+    /// 打开一次真 Db 把库建出来（跑完迁移），随后关闭：
+    /// run_sync_inner 的快照走 VACUUM INTO，只有真库文件才可用
+    fn make_real_db(path: &Path) {
+        let db = crate::db::Db::open(path.to_path_buf());
+        drop(db);
+    }
+
+    /// 造一轮同步的目录骨架，返回 (data_dir, sync_dir)
+    fn sync_dirs(base: &Path) -> (PathBuf, PathBuf) {
+        let data_dir = base.join("data");
+        let sync_dir = base.join("chosen").join(SYNC_SUBDIR);
+        fs::create_dir_all(data_dir.join("assets")).unwrap();
+        fs::create_dir_all(sync_dir.join(CONFLICT_DIR)).unwrap();
+        (data_dir, sync_dir)
+    }
+
+    /// 把库内数据活动时间抬到未来（模拟另一台设备改过：多了一个页面）
+    fn bump_activity(db_path: &Path, ms: i64) {
+        let conn = rusqlite::Connection::open(db_path).unwrap();
+        conn.execute_batch(&format!(
+            "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ('w1', 'W', {ms}, {ms});
+             INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at)
+             VALUES ('v1', 'w1', '来自另一台设备', 'document', '{{}}', 0, {ms}, {ms});"
+        ))
+        .unwrap();
+        drop(conn);
+    }
+
+    #[test]
+    fn remote_wins_replaces_local_db_and_notifies_before_the_command_returns() {
+        let base = temp_base("pull");
+        let (data_dir, sync_dir) = sync_dirs(&base);
+        let local_db = data_dir.join(DB_FILE);
+        let remote_db = sync_dir.join(DB_FILE);
+        make_real_db(&local_db);
+        fs::copy(&local_db, &remote_db).unwrap();
+        bump_activity(&remote_db, 4_102_444_800_000); // 2100 年：稳赢本机
+
+        let db = crate::db::Db::open(local_db.clone());
+        let hooks = RecordingHooks::default();
+        let snap = data_dir.join(format!("{DB_FILE}.snap"));
+        let outcome = run_sync_inner(
+            &db,
+            &local_db,
+            &remote_db,
+            &snap,
+            &data_dir,
+            &data_dir.join("assets"),
+            &sync_dir.join("assets"),
+            &sync_dir,
+            None,
+            &hooks,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.action, "conflict");
+        assert!(outcome.pulled);
+        assert_eq!(outcome.conflict_winner.as_deref(), Some("remote"));
+        assert_eq!(outcome.conflicts.len(), 1, "本机旧版要留下一份副本");
+        assert_eq!(outcome.local_activity, None, "本机空库读不出活动时间");
+        assert!(outcome.remote_activity.is_some(), "远端时间要能展示给用户");
+        // 这条是本轮改动的核心：替换发生的那一刻就通知，
+        // 否则后续补附件/写墓碑失败时前端拿不到 pulled，会继续往新库写旧数据
+        assert!(hooks.replaced(), "库已替换却没发通知");
+        let views: i64 = db
+            .read_conn()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM views", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(views, 1, "重开后的本机库应是被拉下来的那一份");
+
+        let stages: Vec<&str> = hooks.events().iter().map(|e| e.0).collect();
+        for st in [
+            stage::SNAPSHOT,
+            stage::HASH_LOCAL,
+            stage::HASH_REMOTE,
+            stage::REPLACE_DB,
+            stage::ASSETS,
+        ] {
+            assert!(stages.contains(&st), "缺少阶段进度 {st}: {stages:?}");
+        }
+        drop(db);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn local_wins_keeps_local_db_and_sends_no_replace_notice() {
+        let base = temp_base("push");
+        let (data_dir, sync_dir) = sync_dirs(&base);
+        let local_db = data_dir.join(DB_FILE);
+        let remote_db = sync_dir.join(DB_FILE);
+        make_real_db(&local_db);
+        fs::copy(&local_db, &remote_db).unwrap();
+
+        let db = crate::db::Db::open(local_db.clone());
+        let hooks = RecordingHooks::default();
+        let snap = data_dir.join(format!("{DB_FILE}.snap"));
+        // 基线对不上任何一侧 + 两侧活动时间都读不出（平局）→ 本机胜，远端旧版存副本
+        let outcome = run_sync_inner(
+            &db,
+            &local_db,
+            &remote_db,
+            &snap,
+            &data_dir,
+            &data_dir.join("assets"),
+            &sync_dir.join("assets"),
+            &sync_dir,
+            Some("no-baseline"),
+            &hooks,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.action, "conflict");
+        assert!(!outcome.pulled);
+        assert_eq!(outcome.conflict_winner.as_deref(), Some("local"));
+        assert!(outcome.conflicts[0].starts_with("remote-"));
+        assert!(!hooks.replaced(), "没换库就不该发替换通知");
+        let views: i64 = db
+            .read_conn()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM views", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(views, 0, "本机胜出的路径不能碰本机库文件");
+        let stages: Vec<&str> = hooks.events().iter().map(|e| e.0).collect();
+        assert!(
+            !stages.contains(&stage::REPLACE_DB),
+            "没换库却有换库进度: {stages:?}"
+        );
+        drop(db);
         let _ = fs::remove_dir_all(&base);
     }
 

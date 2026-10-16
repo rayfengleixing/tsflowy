@@ -8,12 +8,20 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { detectDataDirRisk } from "@/lib/data-dir-risk";
 import { flushAllForClose } from "@/lib/close-flush";
+import {
+  onSyncProgress,
+  requestSyncReload,
+  syncProgressPercent,
+  syncStageLabel,
+  type SyncProgress,
+} from "@/lib/sync-events";
 import { loadAutoSyncConfig, saveAutoSyncConfig, type AutoSyncConfig } from "@/lib/auto-sync";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { cn } from "@/lib/utils";
 import {
   SYNC_ACTION_KEY,
+  SYNC_SIDE_KEY,
   Section,
   RiskNotice,
   formatBytes,
@@ -26,6 +34,10 @@ import {
 export function SettingsSync() {
   const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null);
   const [busySync, setBusySync] = useState(false);
+  // 同步进度（Rust 侧按阶段广播；后台自动同步的进度同样会流到这里）
+  const [progress, setProgress] = useState<SyncProgress | null>(null);
+  // 最近一次同步的冲突详情（只在 action=conflict 时有值，用于解释裁决结果）
+  const [lastConflict, setLastConflict] = useState<SyncRunResult | null>(null);
   // 冲突副本列表（进入同步区块时拉取；恢复/打开目录后刷新）
   const [conflictFiles, setConflictFiles] = useState<ConflictFile[]>([]);
   // 待确认恢复的冲突副本（恢复会替换本机库，先确认）
@@ -42,9 +54,14 @@ export function SettingsSync() {
       .catch((e: unknown) => logger.error("failed to get data dir", e));
   }, []);
 
+  // 进度事件订阅：手动同步与后台自动同步共用一根进度条
+  useEffect(() => onSyncProgress(setProgress), []);
+
   // 上次同步动作对应的文案 key；未知动作返回 undefined（不渲染）
   const syncLastActionKey = syncInfo?.last_action ? SYNC_ACTION_KEY[syncInfo.last_action] : undefined;
   const dataDirRisk = detectDataDirRisk(dataDir, syncInfo?.dir);
+  // 百分比为 null：这一步（快照/换库）报不出量，画成不定长的脉冲条
+  const syncPercent = progress ? syncProgressPercent(progress) : null;
 
   const refreshSyncInfo = () => {
     invoke<SyncInfo>("get_sync_info")
@@ -68,12 +85,12 @@ export function SettingsSync() {
     saveAutoSyncConfig(next);
   };
 
-  /** 用冲突副本替换本机库：成功后必须重载（本机库已被换掉） */
+  /** 用冲突副本替换本机库：Rust 侧换库即广播替换事件，这里兜底保证一定重载 */
   const restoreConflict = async (name: string) => {
     try {
       await flushAllForClose();
       await invoke("restore_sync_conflict", { name });
-      window.location.reload();
+      requestSyncReload();
     } catch (e) {
       logger.error("restore conflict failed", e);
       toast.error(t("error.db", { message: String(e) }));
@@ -120,9 +137,13 @@ export function SettingsSync() {
   /**
    * 手动双向同步。拉取（本机库被远端替换）后前端的树/表格/文档全是旧数据，
    * 必须重新加载——直接重载窗口最彻底，避免残留缓存的旧文档回写覆盖远端数据。
+   * 重载由 sync:db-replaced 事件驱动（换库那一刻就发），这里的 pulled 分支只是兜底：
+   * 监听器注册是异步的，冷启动首轮同步可能赶在它前面。
    */
   const syncNow = async () => {
     setBusySync(true);
+    setProgress(null);
+    setLastConflict(null);
     try {
       // 同步会短暂关库（拉取时还要替换本机库）：先把编辑器自动保存、视图配置等挂起写入
       // 全部冲刷落盘，避免它们撞进维护窗口失败，或落在随即被替换的旧库上
@@ -136,9 +157,12 @@ export function SettingsSync() {
       const key = SYNC_ACTION_KEY[r.action] ?? "settings.syncActionNone";
       const extra = r.assets_copied > 0 ? ` · ${t("settings.syncAssets", { n: r.assets_copied })}` : "";
       if (r.action === "conflict") {
+        setLastConflict(r);
+        const side = r.conflict_winner === "local" ? t("settings.syncWinnerLocal") : t("settings.syncWinnerRemote");
         toast.warning(t(key) + extra, {
-          description:
-            r.conflicts.length > 0 ? `${t("settings.syncConflictFiles")}: ${r.conflicts.join(", ")}` : undefined,
+          description: `${t("settings.syncConflictWinner", { side })} · ${t("settings.syncConflictSaved", {
+            n: String(r.conflicts.length),
+          })}`,
         });
       } else {
         toast.success(t(key) + extra);
@@ -146,7 +170,7 @@ export function SettingsSync() {
       if (r.pulled) {
         // 本机库刚被替换：立即重载，不能再等（原 1.5s 延迟窗口里编辑器会自动把旧内存态
         // 写回新库、覆盖刚拉取的内容）；重载后树/文档/设置页全部读新库
-        window.location.reload();
+        requestSyncReload();
         return;
       }
       // 未被替换：同步期间撞进维护窗口而失败的保存，这里重试一次
@@ -156,6 +180,7 @@ export function SettingsSync() {
       toast.error(`${t("settings.syncFailed")}：${String(e)}`);
     } finally {
       setBusySync(false);
+      setProgress(null);
     }
   };
 
@@ -181,7 +206,7 @@ export function SettingsSync() {
             <div className="mt-3 flex flex-wrap gap-2">
               <Button size="sm" onClick={syncNow} disabled={busySync}>
                 <RefreshCw className={cn("mr-1 h-3.5 w-3.5", busySync && "animate-spin")} />
-                {busySync ? "…" : t("settings.syncNow")}
+                {busySync ? t("settings.syncRunning") : t("settings.syncNow")}
               </Button>
               <Button size="sm" variant="outline" onClick={chooseSyncDir} disabled={busySync}>
                 <FolderInput className="mr-1 h-3.5 w-3.5" />
@@ -191,10 +216,49 @@ export function SettingsSync() {
                 {t("settings.syncOff")}
               </Button>
             </div>
+            {/* 进度：一轮同步要算两次整库 sha256 并复制附件，没有阶段与百分比就只剩干等 */}
+            {busySync && (
+              <div className="mt-3 max-w-lg">
+                <div className="mb-1 flex items-center justify-between text-[11px] text-neutral-500">
+                  <span>{progress ? syncStageLabel(progress) : t("settings.syncStageWorking")}</span>
+                  <span>{syncPercent !== null ? `${syncPercent}%` : ""}</span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
+                  <div
+                    className={cn(
+                      "h-full rounded-full bg-brand-500 transition-[width] duration-150",
+                      syncPercent === null && "w-full animate-pulse opacity-40",
+                    )}
+                    style={syncPercent !== null ? { width: `${syncPercent}%` } : undefined}
+                  />
+                </div>
+              </div>
+            )}
             <div className="mt-3 text-[11px] text-neutral-500">
               {t("settings.syncLast")}：{syncInfo.last_time ?? t("settings.syncNever")}
               {syncLastActionKey && <span className="ml-2">{t(syncLastActionKey)}</span>}
             </div>
+            {/* 冲突详情：把裁决依据摊开，用户才知道被舍弃的是哪一份、去哪取回 */}
+            {lastConflict && (
+              <div className="mt-3 max-w-lg rounded-md border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                <div className="mb-1 font-medium">{t("settings.syncActionConflict")}</div>
+                <div>
+                  {t("settings.syncConflictWinner", {
+                    side:
+                      lastConflict.conflict_winner === "local"
+                        ? t("settings.syncWinnerLocal")
+                        : t("settings.syncWinnerRemote"),
+                  })}
+                </div>
+                <div className="mt-0.5">
+                  {t("settings.syncLocalActivity")}：{lastConflict.local_activity ?? t("settings.syncActivityUnknown")}
+                </div>
+                <div>
+                  {t("settings.syncRemoteActivity")}：
+                  {lastConflict.remote_activity ?? t("settings.syncActivityUnknown")}
+                </div>
+              </div>
+            )}
             <div className="mt-3 flex flex-col gap-2">
               <label className="flex items-center gap-2 text-[12px] text-neutral-700 dark:text-neutral-200">
                 <input
@@ -277,7 +341,13 @@ export function SettingsSync() {
                           {f.name}
                         </div>
                         <div className="text-[10px] text-neutral-400">
-                          {f.modified} · {formatBytes(f.size)}
+                          {t(SYNC_SIDE_KEY[f.side])} · {f.modified} · {formatBytes(f.size)}
+                          {f.activity && (
+                            <>
+                              {" "}
+                              · {t("settings.syncConflictActivity")} {f.activity}
+                            </>
+                          )}
                         </div>
                       </div>
                       <Button size="sm" variant="outline" onClick={() => setRestoreTarget(f)}>

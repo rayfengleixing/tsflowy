@@ -7,6 +7,8 @@ import {
   AlignCenter,
   AlignLeft,
   AlignRight,
+  ArrowDown,
+  ArrowUp,
   CheckSquare,
   ChevronDown,
   Code2,
@@ -14,6 +16,9 @@ import {
   Heading1,
   Heading2,
   Heading3,
+  Heading4,
+  Heading5,
+  Heading6,
   Highlighter,
   Lightbulb,
   List,
@@ -23,13 +28,17 @@ import {
   Scissors,
   Trash2,
   Type,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { t, type MessageKey } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { expandContainerToTextBlocks } from "./block-convert";
+import { deleteBlockSpan, moveBlockSpan } from "./block-ops";
+import { BLOCK_SELECTION_META, type BlockSpan } from "./extensions/block-selection";
 import { TEXT_COLORS, HIGHLIGHT_COLORS, SwatchPalette, IconBtn } from "./floating-menu";
 import { clampXToEditor } from "./float-clamp";
+import { TaskMetaPanel } from "./task-meta-panel";
 
 export const BLOCK_MENU_EVENT = "tsflowy:block-menu";
 
@@ -43,6 +52,10 @@ export interface BlockMenuPayload {
   /** 块顶部屏幕坐标 */
   y: number;
   editor: Editor;
+  /** 手柄所在的多选区间：count=1 就是单块，from/to 是整段区间（Shift 扩选后有值） */
+  count: number;
+  from: number;
+  to: number;
 }
 
 /** 容器块（列表/引用/表格等）：转换类型只提供"转为文本"（解包），避免破坏嵌套结构 */
@@ -116,6 +129,39 @@ const CONVERT_ITEMS: ConvertItem[] = [
         .focus()
         .setTextSelection(p + 1)
         .toggleHeading({ level: 3 })
+        .run(),
+  },
+  {
+    key: "heading4",
+    icon: <Heading4 className="h-4 w-4" />,
+    run: (e, p) =>
+      e
+        .chain()
+        .focus()
+        .setTextSelection(p + 1)
+        .toggleHeading({ level: 4 })
+        .run(),
+  },
+  {
+    key: "heading5",
+    icon: <Heading5 className="h-4 w-4" />,
+    run: (e, p) =>
+      e
+        .chain()
+        .focus()
+        .setTextSelection(p + 1)
+        .toggleHeading({ level: 5 })
+        .run(),
+  },
+  {
+    key: "heading6",
+    icon: <Heading6 className="h-4 w-4" />,
+    run: (e, p) =>
+      e
+        .chain()
+        .focus()
+        .setTextSelection(p + 1)
+        .toggleHeading({ level: 6 })
         .run(),
   },
   {
@@ -243,7 +289,7 @@ export function BlockMenu() {
   }, []);
 
   if (!payload) return null;
-  const { pos, nodeType, nodeSize, x, y, editor } = payload;
+  const { pos, nodeType, nodeSize, x, y, editor, count, from, to } = payload;
   const isContainer = CONTAINER_TYPES.has(nodeType);
   // 定位：优先块左侧；左侧空间不足则放右侧；再用编辑区边界 clamp（行详情窄面板不飘出）
   let left = x - MENU_WIDTH - 12 < 8 ? x + 12 : x - MENU_WIDTH - 12;
@@ -353,6 +399,64 @@ export function BlockMenu() {
     }
   };
 
+  // 多选（Shift 点手柄扩出的整段）：只给对整段说得清的动作。对齐/转换/颜色都是块内部
+  // 的文本格式，摊到 N 个块上要么无意义（表格）要么改坏结构（列表转标题），不如不给。
+  if (count > 1) {
+    const span: BlockSpan = { from, to, count };
+    const act = (fn: () => void) => {
+      fn();
+      close();
+    };
+    return (
+      <div
+        ref={boxRef}
+        className="fixed z-[60] w-[284px] rounded-lg border border-neutral-200 bg-white py-1.5 shadow-2xl dark:border-neutral-700 dark:bg-neutral-900"
+        style={{ left, top }}
+        onMouseDown={(e) => e.preventDefault()}
+      >
+        <div className="px-2 pb-1.5 text-[11px] font-medium text-neutral-600 dark:text-neutral-300">
+          {t("block.selectedCount", { count })}
+        </div>
+        <div className="flex items-center gap-1 border-t border-neutral-100 px-2 pt-1.5 dark:border-neutral-800">
+          <IconBtn
+            title={t("block.moveUp")}
+            onClick={() =>
+              act(() => {
+                if (!moveBlockSpan(editor, span, -1)) toast.info(t("block.moveBlocked"));
+              })
+            }
+          >
+            <ArrowUp className="h-4 w-4" />
+          </IconBtn>
+          <IconBtn
+            title={t("block.moveDown")}
+            onClick={() =>
+              act(() => {
+                if (!moveBlockSpan(editor, span, 1)) toast.info(t("block.moveBlocked"));
+              })
+            }
+          >
+            <ArrowDown className="h-4 w-4" />
+          </IconBtn>
+          <IconBtn title={t("block.deleteSelected")} onClick={() => act(() => void deleteBlockSpan(editor, span))}>
+            <Trash2 className="h-4 w-4" />
+          </IconBtn>
+          <IconBtn
+            title={t("block.clearSelection")}
+            onClick={() =>
+              act(() => {
+                editor.view.dispatch(editor.state.tr.setMeta(BLOCK_SELECTION_META, null));
+              })
+            }
+          >
+            <X className="h-4 w-4" />
+          </IconBtn>
+        </div>
+        <p className="mt-1.5 px-2 text-[10px] leading-relaxed text-neutral-400">{t("block.multiSelectHint")}</p>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={boxRef}
@@ -360,19 +464,23 @@ export function BlockMenu() {
       style={{ left, top }}
       onMouseDown={(e) => e.preventDefault()}
     >
-      {/* 对齐 */}
-      <div className="flex items-center gap-1 border-b border-neutral-100 px-2 pb-1.5 dark:border-neutral-800">
-        <span className="mr-1 w-8 shrink-0 text-[11px] text-neutral-400">{t("blockMenu.align")}</span>
-        <IconBtn title={t("blockMenu.alignLeft")} onClick={() => runAlign("left")}>
-          <AlignLeft className="h-4 w-4" />
-        </IconBtn>
-        <IconBtn title={t("blockMenu.alignCenter")} onClick={() => runAlign("center")}>
-          <AlignCenter className="h-4 w-4" />
-        </IconBtn>
-        <IconBtn title={t("blockMenu.alignRight")} onClick={() => runAlign("right")}>
-          <AlignRight className="h-4 w-4" />
-        </IconBtn>
-      </div>
+      {/* 对齐（任务清单换成日期/负责人面板：列表文字对齐没什么意义，两行也塞不下） */}
+      {nodeType === "taskList" ? (
+        <TaskMetaPanel editor={editor} listPos={pos} />
+      ) : (
+        <div className="flex items-center gap-1 border-b border-neutral-100 px-2 pb-1.5 dark:border-neutral-800">
+          <span className="mr-1 w-8 shrink-0 text-[11px] text-neutral-400">{t("blockMenu.align")}</span>
+          <IconBtn title={t("blockMenu.alignLeft")} onClick={() => runAlign("left")}>
+            <AlignLeft className="h-4 w-4" />
+          </IconBtn>
+          <IconBtn title={t("blockMenu.alignCenter")} onClick={() => runAlign("center")}>
+            <AlignCenter className="h-4 w-4" />
+          </IconBtn>
+          <IconBtn title={t("blockMenu.alignRight")} onClick={() => runAlign("right")}>
+            <AlignRight className="h-4 w-4" />
+          </IconBtn>
+        </div>
+      )}
 
       {/* 转换块类型 */}
       {isContainer ? (

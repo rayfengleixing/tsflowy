@@ -1,4 +1,5 @@
 import { workspaceApi, viewApi } from "@/lib/db";
+import { databaseApi } from "@/lib/database";
 import { documentApi } from "@/lib/documents";
 import { logger } from "@/lib/logger";
 import { t } from "@/lib/i18n";
@@ -27,6 +28,12 @@ const purgeAllExpiredTrash = async (get: WorkspaceGet): Promise<void> => {
     } catch (e) {
       logger.error("WorkspaceStore", "auto purge expired trash failed", ws.id, e);
     }
+  }
+  // 数据库行的回收站共用这一套保留期：行表不带 workspace 列，一次全局按 deleted_at 扫
+  try {
+    purged += await databaseApi.purgeExpiredTrash(deadline);
+  } catch (e) {
+    logger.error("WorkspaceStore", "auto purge expired row trash failed", e);
   }
   // 真的清掉过东西才 reload 刷新 UI：每小时空扫描不该引发整树重拉与订阅风暴
   if (purged > 0) {

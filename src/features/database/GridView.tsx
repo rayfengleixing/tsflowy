@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
+  Archive,
   ArrowUpDown,
   CheckSquare,
   Copy,
@@ -8,6 +9,7 @@ import {
   Filter,
   GripVertical,
   Square,
+  SquarePen,
   Trash2,
   X,
 } from "lucide-react";
@@ -19,7 +21,7 @@ import { isReadonlyType } from "@/types/database";
 import { useDbStore, useDbStoreApi } from "@/stores/database-context";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { viewApi, newId } from "@/lib/db";
-import { isOptionBearing, parseFieldOptions } from "@/lib/database-values";
+import { isOptionBearing, parseFieldOptions, sparseGet } from "@/lib/database-values";
 import type { SortSpec } from "@/lib/database-query";
 import type { AggregateFn } from "@/lib/database-aggregate";
 import {
@@ -35,6 +37,8 @@ import {
   type PasteDeps,
 } from "@/lib/csv";
 import { CsvImportDialog } from "./CsvImportDialog";
+import { RowTrashDialog } from "./RowTrashDialog";
+import { BulkEditDialog } from "./BulkEditDialog";
 import { relationRowIds, relationRowLabel, relationTarget } from "@/lib/relation";
 import { useGridViewModel } from "./use-grid-view-model";
 import { toggleRowChecked as updateRowChecked, toggleAllRowsChecked as updateAllRowsChecked } from "./grid-view-model";
@@ -96,11 +100,14 @@ export function GridView({
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
-  // 待确认删除的行（行删除不可撤销，先确认再落库）
+  // 待确认删除的行（删行=进回收站，确认后仍可在「回收站」里恢复）
   const [deleteRowTarget, setDeleteRowTarget] = useState<DatabaseRow | null>(null);
+  const [rowTrashOpen, setRowTrashOpen] = useState(false);
   // 多选行（序号列勾选框）：键为 rowId；实际生效集合每次按可见行求交，行被删/被筛走都不会残留
   const [checkedRows, setCheckedRows] = useState<Set<string>>(new Set());
   const [deleteSelectedOpen, setDeleteSelectedOpen] = useState(false);
+  // 批量改值弹窗：勾选行 + 一个字段一次改完
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const [draggingField, setDraggingField] = useState<string | null>(null);
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
   const [groupFieldId, setGroupFieldId] = useState<string | null>(() => readViewConfig(view).groupFieldId ?? null);
@@ -183,6 +190,15 @@ export function GridView({
     // 用上回调形式：连点同一行时不能都基于同一份旧集合
     setCheckedRows((prev) => updateRowChecked(prev, rowId));
   };
+
+  // 批量改值读的是存储值（不是计算列的展示值）：cells 为按行稀疏映射，没写过的格子没有条目
+  const readStoredCell = useCallback(
+    (rowId: string, fieldId: string): CellValue | undefined => {
+      const rowCells = sparseGet(cells, rowId);
+      return rowCells ? sparseGet(rowCells, fieldId) : undefined;
+    },
+    [cells],
+  );
 
   const toggleSelectAll = () => setCheckedRows(updateAllRowsChecked(displayRows, allSelected));
 
@@ -885,6 +901,10 @@ export function GridView({
                 <Copy className="h-3.5 w-3.5" />
                 {t("row.duplicateSelected")}
               </Button>
+              <Button variant="ghost" size="sm" onClick={() => setBulkEditOpen(true)}>
+                <SquarePen className="h-3.5 w-3.5" />
+                {t("row.bulkEdit")}
+              </Button>
               <Button
                 variant="ghost"
                 size="sm"
@@ -921,6 +941,10 @@ export function GridView({
               </select>
             </div>
           )}
+          <Button variant="ghost" size="sm" onClick={() => setRowTrashOpen(true)} title={t("row.trash")}>
+            <Archive className="h-3.5 w-3.5" />
+            {t("row.trash")}
+          </Button>
           <HiddenColumnsMenu fields={fields} onShow={(id) => void store.toggleFieldHidden(id)} />
           <Button
             variant="ghost"
@@ -1196,6 +1220,21 @@ export function GridView({
         description={t("row.deleteSelectedConfirmDesc", { count: String(selectedIds.length) })}
         confirmLabel={t("common.delete")}
         onConfirm={() => void runDeleteCheckedRows()}
+      />
+
+      <RowTrashDialog open={rowTrashOpen} onOpenChange={setRowTrashOpen} />
+
+      {/* 批量改值：改完清掉勾选，避免「刚改的行还挂着选」让人以为没生效 */}
+      <BulkEditDialog
+        open={bulkEditOpen}
+        onOpenChange={setBulkEditOpen}
+        fields={fields}
+        rowIds={selectedIds}
+        readCell={readStoredCell}
+        onApply={async (updates) => {
+          await store.setCellsMany(updates);
+          setCheckedRows(new Set());
+        }}
       />
 
       {/* CSV 导入确认：逐列选类型 + 附件列选文件夹（取消则不建视图）；可选追加到当前表 */}

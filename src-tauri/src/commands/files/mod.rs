@@ -19,11 +19,11 @@ pub mod secret;
 // —— 配置读写（config.json）——
 pub use config::{
     app_config_dir_raw, config_file_path, load_config_raw, AiConfig, AiProfile, AiQuickAction,
-    AI_CTX_MAX_MESSAGES_DEFAULT, AI_CTX_TOKEN_BUDGET_DEFAULT, AppConfig, AutoBackupConfig,
-    SnapshotConfig, SyncConfig, TrashConfig,
+    AppConfig, AutoBackupConfig, SnapshotConfig, SyncConfig, TrashConfig,
+    AI_CTX_MAX_MESSAGES_DEFAULT, AI_CTX_TOKEN_BUDGET_DEFAULT,
 };
-pub(crate) use config::{load_app_config, save_app_config};
 pub use config::{get_retention_policy, set_retention_policy, RetentionPolicyInfo};
+pub(crate) use config::{load_app_config, save_app_config};
 
 // —— 数据目录解析 / 迁移 / 自定义目录命令 ——
 pub(crate) use data_dir::{app_data_dir, open_path_in_system, timestamp_suffix};
@@ -48,13 +48,16 @@ pub(crate) use backup::{make_db_snapshot, stash_current_db};
 // —— 自动备份调度 ——
 pub(crate) use auto_backup::{backup_dir, backup_stamp, format_local_time, latest_auto_backup};
 pub use auto_backup::{
-    get_auto_backup_config, list_backups, maybe_run_auto_backup, open_backups_dir,
-    restore_backup, run_auto_backup, run_auto_backup_now, set_auto_backup_config,
-    AutoBackupInfo, BackupArchive,
+    delete_backup_archive, get_auto_backup_config, inspect_backup_archive, list_backups,
+    maybe_run_auto_backup, open_backups_dir, restore_backup, run_auto_backup, run_auto_backup_now,
+    set_auto_backup_config, AutoBackupInfo, BackupArchive, BackupArchiveInfo,
 };
 
-// —— 数据库健康诊断（兜底提示页）——
-pub use health::{db_health, rebuild_data_dir, DbHealth};
+// —— 数据库健康诊断（兜底提示页 + 结构检查/修复）——
+pub use health::{
+    check_db_integrity, db_health, rebuild_data_dir, repair_database, DbHealth, DbRepairResult,
+    IntegrityReport, KeptAside,
+};
 
 // —— 未引用资源扫描 / 回收 ——
 pub mod orphan;
@@ -93,21 +96,23 @@ pub use asset::{
 };
 #[doc(hidden)]
 pub use auto_backup::{
-    __cmd__get_auto_backup_config, __cmd__list_backups, __cmd__open_backups_dir,
-    __cmd__restore_backup, __cmd__run_auto_backup_now, __cmd__set_auto_backup_config,
-    __tauri_command_name_get_auto_backup_config, __tauri_command_name_list_backups,
+    __cmd__delete_backup_archive, __cmd__get_auto_backup_config, __cmd__inspect_backup_archive,
+    __cmd__list_backups, __cmd__open_backups_dir, __cmd__restore_backup,
+    __cmd__run_auto_backup_now, __cmd__set_auto_backup_config,
+    __tauri_command_name_delete_backup_archive, __tauri_command_name_get_auto_backup_config,
+    __tauri_command_name_inspect_backup_archive, __tauri_command_name_list_backups,
     __tauri_command_name_open_backups_dir, __tauri_command_name_restore_backup,
     __tauri_command_name_run_auto_backup_now, __tauri_command_name_set_auto_backup_config,
-};
-#[doc(hidden)]
-pub use config::{
-    __cmd__get_retention_policy, __cmd__set_retention_policy,
-    __tauri_command_name_get_retention_policy, __tauri_command_name_set_retention_policy,
 };
 #[doc(hidden)]
 pub use backup::{
     __cmd__export_backup, __cmd__import_backup, __tauri_command_name_export_backup,
     __tauri_command_name_import_backup,
+};
+#[doc(hidden)]
+pub use config::{
+    __cmd__get_retention_policy, __cmd__set_retention_policy,
+    __tauri_command_name_get_retention_policy, __tauri_command_name_set_retention_policy,
 };
 #[doc(hidden)]
 pub use data_dir::{
@@ -118,8 +123,9 @@ pub use data_dir::{
 };
 #[doc(hidden)]
 pub use health::{
-    __cmd__db_health, __cmd__rebuild_data_dir, __tauri_command_name_db_health,
-    __tauri_command_name_rebuild_data_dir,
+    __cmd__check_db_integrity, __cmd__db_health, __cmd__rebuild_data_dir, __cmd__repair_database,
+    __tauri_command_name_check_db_integrity, __tauri_command_name_db_health,
+    __tauri_command_name_rebuild_data_dir, __tauri_command_name_repair_database,
 };
 #[doc(hidden)]
 pub use orphan::{

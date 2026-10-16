@@ -11,8 +11,8 @@ use tauri::State;
 
 use crate::db::{
     self, BacklinkRow, CellLoadRow, CellSetIn, CsvFieldIn, CsvRowIn, DatabaseFieldRow,
-    DatabaseRowRow, Db, DocRowOut, MentionRowIn, PagePropertyOut, SearchRowOut, ViewRow,
-    WorkspaceRow,
+    DatabaseRowRow, Db, DocRowOut, MentionRowIn, PagePropertyOut, SearchRowOut, TrashRowOut,
+    ViewRow, WorkspaceRow,
 };
 
 // ---------- 命令入口参数校验 ----------
@@ -672,17 +672,60 @@ pub async fn row_set_document_id(
     db::database::set_row_document_id(&conn, &row_id, &document_id)
 }
 
+/// 删行 = 进回收站（可恢复）；彻底删除用 row_purge。
 #[tauri::command]
 pub async fn row_delete(db: State<'_, Db>, row_id: String) -> Result<(), String> {
     let conn = db.write_conn()?;
-    db::database::delete_row(&conn, &row_id)
+    db::database::soft_delete_rows(&conn, std::slice::from_ref(&row_id))?;
+    Ok(())
 }
 
-/// 批量删行（多选删除）：一次 IPC 一个事务；返回实际删除的行数。
+/// 批量删行（多选删除）：一次 IPC 一个事务；返回实际进回收站的行数。
 #[tauri::command]
 pub async fn row_delete_many(db: State<'_, Db>, row_ids: Vec<String>) -> Result<i64, String> {
     let conn = db.write_conn()?;
-    let n = db::database::delete_rows(&conn, &row_ids)?;
+    let n = db::database::soft_delete_rows(&conn, &row_ids)?;
+    Ok(n as i64)
+}
+
+/// 某张表的回收站内容（按删除时间倒序）
+#[tauri::command]
+pub async fn row_list_trash(
+    db: State<'_, Db>,
+    view_id: String,
+) -> Result<Vec<TrashRowOut>, String> {
+    let conn = db.read_conn()?;
+    db::database::list_trash_rows(&conn, &view_id)
+}
+
+/// 从回收站恢复一行（行号排到末尾）
+#[tauri::command]
+pub async fn row_restore(db: State<'_, Db>, row_id: String) -> Result<(), String> {
+    let conn = db.write_conn()?;
+    db::database::restore_row(&conn, &row_id)
+}
+
+/// 彻底删除一行（连同单元格与其行详情文档），不可恢复
+#[tauri::command]
+pub async fn row_purge(db: State<'_, Db>, row_id: String) -> Result<(), String> {
+    let conn = db.write_conn()?;
+    db::database::purge_rows(&conn, std::slice::from_ref(&row_id))?;
+    Ok(())
+}
+
+/// 清空某张表的回收站
+#[tauri::command]
+pub async fn row_purge_trash(db: State<'_, Db>, view_id: String) -> Result<i64, String> {
+    let conn = db.write_conn()?;
+    let n = db::database::purge_trash_rows(&conn, &view_id)?;
+    Ok(n as i64)
+}
+
+/// 超过保留期的行彻底删除（与页面回收站共用同一个小时级清理定时器）
+#[tauri::command]
+pub async fn row_purge_expired_trash(db: State<'_, Db>, deadline_ms: i64) -> Result<i64, String> {
+    let conn = db.write_conn()?;
+    let n = db::database::purge_expired_trash_rows(&conn, deadline_ms)?;
     Ok(n as i64)
 }
 

@@ -1,12 +1,13 @@
 // 文档内嵌数据库视图的纯逻辑层：选择器筛选、渲染态标题解析、行数上限。
 // 与 subpages.ts 同思路，全部纯函数便于 Vitest 单测。
-import type { LayoutType, View, ViewNode } from "@/types/models";
+import { DB_LAYOUTS, type LayoutType, type View, type ViewNode } from "@/types/models";
 import { flattenTree, findNode } from "./tree";
 
 /** 嵌入渲染的行数上限；完整数据通过「打开完整视图」跳转查看 */
 export const EMBED_MAX_ROWS = 50;
 
-const EMBEDDABLE_LAYOUTS: readonly LayoutType[] = ["grid", "board", "calendar", "timeline"];
+/** 可嵌入的布局 = 全部数据库布局；类型放宽到 readonly LayoutType[] 才能 includes(LayoutType) */
+const EMBEDDABLE_LAYOUTS: readonly LayoutType[] = DB_LAYOUTS;
 
 /** 可嵌入文档的数据库视图：任意数据库布局（文档页/行详情页按 layout 天然排除） */
 export function embeddableDatabaseViews(tree: ViewNode[]): View[] {

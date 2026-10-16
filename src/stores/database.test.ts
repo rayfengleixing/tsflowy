@@ -9,6 +9,10 @@ const api = vi.hoisted(() => ({
   setCell: vi.fn(),
   deleteRow: vi.fn(),
   deleteRows: vi.fn(),
+  listTrash: vi.fn(),
+  restoreRow: vi.fn(),
+  purgeRow: vi.fn(),
+  purgeTrash: vi.fn(),
   createRows: vi.fn(),
   setCellsMany: vi.fn(),
 }));
@@ -19,7 +23,7 @@ vi.mock("@/lib/view-config", () => ({ readViewConfig: () => ({}), patchViewConfi
 vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn() } }));
 
 import { useDatabaseStore } from "@/stores/database";
-import type { DatabaseField, DatabaseRow } from "@/types/database";
+import type { DatabaseField, DatabaseRow, DatabaseTrashRow } from "@/types/database";
 import type { View } from "@/types/models";
 
 function deferred<T>() {
@@ -46,7 +50,15 @@ function armDeferredLoads(a: ReturnType<typeof deferred>[], b: ReturnType<typeof
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useDatabaseStore.setState({ viewId: null, view: null, fields: [], rows: [], cells: {}, loading: false });
+  useDatabaseStore.setState({
+    viewId: null,
+    view: null,
+    fields: [],
+    rows: [],
+    cells: {},
+    trash: [],
+    loading: false,
+  });
 });
 
 describe("database store 加载竞态", () => {
@@ -303,5 +315,74 @@ describe("数据库 store 删除选择选项", () => {
     expect(api.setCell).toHaveBeenCalledWith("r1", "f-sel", null);
     const opts = JSON.parse(store.getState().fields[0].options) as { options: unknown[] };
     expect(opts.options).toEqual([O1]);
+  });
+});
+
+describe("数据库 store 行回收站", () => {
+  const entry = (id: string, title: string) =>
+    ({ id, database_view_id: "v1", document_id: null, deleted_at: 1, title }) as DatabaseTrashRow;
+
+  it("打开回收站才拉列表；未选中视图时不发 IPC", async () => {
+    const store = useDatabaseStore;
+    store.setState({ viewId: null });
+    await store.getState().loadTrash();
+    expect(api.listTrash).not.toHaveBeenCalled();
+
+    store.setState({ viewId: "v1" });
+    api.listTrash.mockResolvedValue([entry("r9", "旧行")]);
+    await store.getState().loadTrash();
+    expect(api.listTrash).toHaveBeenCalledWith("v1");
+    expect(store.getState().trash.map((r) => r.id)).toEqual(["r9"]);
+  });
+
+  it("恢复一行：整表重拉（行号与单元格交回后端），再刷新回收站", async () => {
+    const store = useDatabaseStore;
+    store.setState({
+      viewId: "v1",
+      view: view("v1"),
+      rows: [],
+      cells: {},
+      trash: [entry("r9", "旧行")],
+    });
+    api.restoreRow.mockResolvedValue(undefined);
+    api.listFields.mockResolvedValue([]);
+    api.listRows.mockResolvedValue([
+      { id: "r9", database_view_id: "v1", position: 0, document_id: null, created_at: 1, updated_at: 1 },
+    ]);
+    api.loadCells.mockResolvedValue({ r9: { f1: "旧行" } });
+    api.listTrash.mockResolvedValue([]);
+
+    await store.getState().restoreRow("r9");
+
+    expect(api.restoreRow).toHaveBeenCalledWith("r9");
+    expect(store.getState().rows.map((r) => r.id)).toEqual(["r9"]);
+    expect(store.getState().cells.r9.f1).toBe("旧行");
+    expect(store.getState().trash).toEqual([]);
+  });
+
+  it("彻底删除：只从回收站列表摘掉，表格行不受影响", async () => {
+    const store = useDatabaseStore;
+    store.setState({
+      viewId: "v1",
+      rows: [],
+      trash: [entry("r9", "旧行"), entry("r8", "更早")],
+    });
+    api.purgeRow.mockResolvedValue(undefined);
+
+    await store.getState().purgeRow("r9");
+
+    expect(api.purgeRow).toHaveBeenCalledWith("r9");
+    expect(store.getState().trash.map((r) => r.id)).toEqual(["r8"]);
+    expect(api.listRows).not.toHaveBeenCalled();
+  });
+
+  it("清空回收站：返回彻底删除的行数并清空列表", async () => {
+    const store = useDatabaseStore;
+    store.setState({ viewId: "v1", trash: [entry("r9", "旧行")] });
+    api.purgeTrash.mockResolvedValue(1);
+
+    expect(await store.getState().purgeTrash()).toBe(1);
+    expect(api.purgeTrash).toHaveBeenCalledWith("v1");
+    expect(store.getState().trash).toEqual([]);
   });
 });

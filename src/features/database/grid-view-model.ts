@@ -153,7 +153,7 @@ export interface BulkRowEffects {
   log(message: string, err: unknown): void;
 }
 
-/** 删除选中行：行删除不可撤销，调用方应先确认。空集合直接不发命令。 */
+/** 删除选中行 = 移入本表回收站（可在「回收站」里恢复），调用方仍要先确认。空集合直接不发命令。 */
 export async function deleteCheckedRows(ids: string[], fx: BulkRowEffects): Promise<void> {
   if (ids.length === 0) return;
   try {

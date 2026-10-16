@@ -7,19 +7,39 @@ import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
 
+/** 与 LockedHeading 的 levels 同口径（EditorPage 装配）：改动上限时两边都要跟着 */
+type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
+const MAX_HEADING_LEVEL: HeadingLevel = 6;
+
 interface HeadingEntry {
   pos: number; // 文档中的绝对 position（0-based，node start）
-  level: 1 | 2 | 3;
+  level: HeadingLevel;
   text: string;
 }
+
+/** 库里可能存着别的编辑器写来的越界级别：夹回 1-6，别让 Record 取到 undefined */
+function clampLevel(lvl: number): HeadingLevel {
+  const n = Math.round(lvl);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return (n > MAX_HEADING_LEVEL ? MAX_HEADING_LEVEL : n) as HeadingLevel;
+}
+
+/** 每级缩进一档（步进 16px），4 级起字号收回一档：目录块本身不该比正文更抢眼 */
+const LEVEL_CLASS: Record<HeadingLevel, string> = {
+  1: "pl-2 font-semibold text-neutral-800",
+  2: "pl-6 text-neutral-700",
+  3: "pl-10 text-[12.5px] text-neutral-600",
+  4: "pl-14 text-[12px] text-neutral-600",
+  5: "pl-[72px] text-[12px] text-neutral-500",
+  6: "pl-[88px] text-[12px] text-neutral-500",
+};
 
 function collectHeadings(editor: Editor): HeadingEntry[] {
   const result: HeadingEntry[] = [];
   editor.state.doc.descendants((node: PMNode, pos: number) => {
     if (node.type.name === "heading") {
       const lvl = (node.attrs.level as number | undefined) ?? 1;
-      const level = (lvl >= 3 ? 3 : lvl <= 1 ? 1 : lvl) as 1 | 2 | 3;
-      result.push({ pos, level, text: node.textContent.trim() });
+      result.push({ pos, level: clampLevel(lvl), text: node.textContent.trim() });
     }
     return undefined;
   });
@@ -88,14 +108,10 @@ export function OutlineNodeView(props: ReactNodeViewProps<HTMLElement>) {
               onClick={() => scrollToItem(h)}
               className={cn(
                 "flex items-center gap-2 rounded px-2 py-1 text-left text-[13px] hover:bg-brand-100",
-                h.level === 1 && "pl-2 font-semibold text-neutral-800",
-                h.level === 2 && "pl-6 text-neutral-700",
-                h.level === 3 && "pl-10 text-[12.5px] text-neutral-600",
+                LEVEL_CLASS[h.level],
               )}
             >
-              <span className="w-4 shrink-0 text-neutral-400">
-                {h.level === 1 ? "H1" : h.level === 2 ? "H2" : "H3"}
-              </span>
+              <span className="w-5 shrink-0 text-neutral-400">H{h.level}</span>
               <span className="min-w-0 truncate">
                 {h.text || (
                   <em className="text-neutral-300">{t("outline.untitled", { level: t(`outline.h${h.level}`) })}</em>

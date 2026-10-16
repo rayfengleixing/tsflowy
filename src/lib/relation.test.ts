@@ -214,8 +214,11 @@ describe("buildRelationPickerFields", () => {
       { id: "v2", name: "客户库", layout: "board" as const, source_id: null },
       { id: "v3", name: "文档页", layout: "document" as const, source_id: null },
       { id: "v4", name: "客户库(派生)", layout: "grid" as const, source_id: "v2" },
+      // 任何数据库布局的宿主页面背后都是同一套三表，都能当关联目标
+      { id: "v5", name: "图库", layout: "gallery" as const, source_id: null },
+      { id: "v6", name: "清单", layout: "list" as const, source_id: null },
     ];
-    expect(buildRelationPickerFields(views).map((v) => v.id)).toEqual(["v1", "v2"]);
+    expect(buildRelationPickerFields(views).map((v) => v.id)).toEqual(["v1", "v2", "v5", "v6"]);
   });
 });
 

@@ -1,5 +1,6 @@
 import type { JSONContent } from "@tiptap/core";
 import { t } from "./i18n";
+import { EMPTY_TASK_META, encodeTaskMeta, stripTaskMeta, taskMetaOf, type TaskMeta } from "./task-meta";
 
 // Markdown 粘贴转换（项目说明书 8.2/10-M3：粘贴 markdown 文本自动转成块）。
 // 纯函数：文本 → TipTap JSON，便于 Vitest 单测。
@@ -35,7 +36,7 @@ function restoreEscapes(text: string): string {
 
 const CODE_FENCE_RE = /^```(\w*)\s*$/;
 const MERMAID_FENCE_RE = /^```mermaid\s*$/i;
-const HEADING_RE = /^(#{1,3})\s+(.*)$/;
+const HEADING_RE = /^(#{1,6})\s+(.*)$/;
 const HR_RE = /^(-{3,}|\*{3,}|_{3,})$/;
 const TASK_RE = /^[-*]\s+\[([ xX])\]\s+(.*)$/;
 const BULLET_RE = /^[-*+]\s+(.*)$/;
@@ -48,14 +49,20 @@ const SUMMARY_RE = /^<summary>(.*)<\/summary>$/i;
 const TABLE_ROW_RE = /^\|.*\|$/;
 const TABLE_SEP_RE = /^\|[\s:|-]+\|$/;
 const COLUMNS_RE = /^<!--\s*columns\s*\((\d+)\)\s*-->$/;
-const COLUMN_RE = /^<!--\s*column\s+(\d+)\s*\/\s*(\d+)\s*-->$/;
+// 第三段是列宽比例；写宽一点（\S+）是为了坏值也当成标记行被归一，而不是掉进列内容里
+const COLUMN_RE = /^<!--\s*column\s+(\d+)\s*\/\s*(\d+)(?:\s+(\S+))?\s*-->$/;
 const COLUMNS_END_RE = /^<!--\s*\/columns\s*-->$/;
 const DB_VIEW_RE = /^→\[([^\]]*)\]\(db:([^)\n]+)\)$/;
 /** 相册导出头 `<!-- image gallery (n images) -->`（后跟连续图片行） */
 const GALLERY_RE = /^<!--\s*image gallery\b/i;
 const OUTLINE_RE = /^<!--\s*outline block\s*-->$/i;
-/** callout 导出首行 `> 💡 **Callout**`（引用块内识别，emoji 取前导部分） */
-const CALLOUT_HEAD_RE = /^(.*?)\s*\*\*Callout\*\*\s*$/;
+/** callout 导出首行 `> 💡 **Callout**`（引用块内识别，emoji 取前导部分）；
+ *  可选尾随 `<!-- color:orange -->` 带出色值，旧文件没有这段就按默认蓝处理 */
+const CALLOUT_HEAD_RE = /^(.*?)\s*\*\*Callout\*\*(?:\s*<!--\s*color:([a-z]+)\s*-->)?\s*$/;
+/** 块级对齐：Markdown 没有居中/右对齐语法，导出时在行尾挂 `<!-- align:center -->`，导入时摘掉 */
+const ALIGN_RE = /\s*<!--\s*align:(left|center|right|justify)\s*-->\s*$/i;
+/** 与 callout/node.ts 的 CalloutColor 同一份名单（lib 不反向依赖 features，改一边要改另一边） */
+const CALLOUT_COLORS = ["blue", "green", "orange", "red", "purple", "yellow"];
 /** 附件导出格式 `[name](attach:src)` 的协议前缀 */
 const ATTACH_PREFIX = "attach:";
 
@@ -136,7 +143,7 @@ export function looksLikeMarkdown(text: string): boolean {
   return lines.some((line) => {
     const l = line.trim();
     return (
-      /^(#{1,3})\s+/.test(l) ||
+      /^(#{1,6})\s+/.test(l) ||
       /^[-*+]\s+\[[ xX]\]/.test(l) ||
       /^[-*+]\s+/.test(l) ||
       /^\d+[.)]\s+/.test(l) ||
@@ -269,17 +276,20 @@ export function markdownToJson(md: string): JSONContent {
       continue;
     }
 
-    // 分栏：<!-- columns (n) --> … <!-- column i/n --> … <!-- /columns -->（jsonToMarkdown 的导出格式）
+    // 分栏：<!-- columns (n) --> … <!-- column i/n [ratio] --> … <!-- /columns -->（jsonToMarkdown 的导出格式）
     if (COLUMNS_RE.test(trimmed)) {
       i++;
       const cols: JSONContent[] = [];
       let cur: string[] = [];
       let collecting = false;
+      let ratio = 1;
       while (i < lines.length && !COLUMNS_END_RE.test(lines[i].trim())) {
-        if (COLUMN_RE.test(lines[i].trim())) {
-          if (collecting) cols.push(columnToJson(cur));
+        const marker = COLUMN_RE.exec(lines[i].trim());
+        if (marker) {
+          if (collecting) cols.push(columnToJson(cur, ratio));
           cur = [];
           collecting = true;
+          ratio = parseRatio(marker[3]);
           i++;
           continue;
         }
@@ -287,7 +297,7 @@ export function markdownToJson(md: string): JSONContent {
         i++;
       }
       i++; // 跳过 <!-- /columns -->
-      if (collecting) cols.push(columnToJson(cur));
+      if (collecting) cols.push(columnToJson(cur, ratio));
       blocks.push({
         type: "columns",
         content: cols.length > 0 ? cols : [{ type: "column", content: [{ type: "paragraph" }] }],
@@ -315,13 +325,14 @@ export function markdownToJson(md: string): JSONContent {
       continue;
     }
 
-    // 标题 1-3
+    // 标题 1-6（与 jsonToMarkdown 的 clamp 同口径，否则 `####` 往返退化成段落）
     const h = HEADING_RE.exec(trimmed);
     if (h) {
+      const { body, align } = stripAlign(h[2]);
       blocks.push({
         type: "heading",
-        attrs: { level: h[1].length },
-        content: parseInline(h[2]),
+        attrs: { level: h[1].length, ...(align ? { textAlign: align } : {}) },
+        content: parseInline(body),
       });
       i++;
       continue;
@@ -344,9 +355,11 @@ export function markdownToJson(md: string): JSONContent {
       const head = quoteLines.length > 0 ? CALLOUT_HEAD_RE.exec(quoteLines[0]) : null;
       if (head) {
         const inner = markdownToJson(quoteLines.slice(1).join("\n"));
+        const emoji = head[1].trim() !== "" ? head[1].trim() : "💡";
+        const color = CALLOUT_COLORS.includes(head[2]) ? head[2] : "blue";
         blocks.push({
           type: "callout",
-          attrs: { emoji: head[1].trim() !== "" ? head[1].trim() : "💡" },
+          attrs: { emoji, color },
           content: (inner.content?.length ?? 0) > 0 ? inner.content : [{ type: "paragraph" }],
         });
       } else {
@@ -370,7 +383,8 @@ export function markdownToJson(md: string): JSONContent {
       buf.push(lines[i].trim());
       i++;
     }
-    const inline = parseInline(buf.join(" "));
+    const paragraph = stripAlign(buf.join(" "));
+    const inline = parseInline(paragraph.body);
     // 独占一段的 attachment 还原为块级节点（导出时它在块级位置）
     const soloLink = inline.length === 1 ? inline[0] : undefined;
     if (soloLink?.type === "text" && soloLink.marks?.length === 1) {
@@ -384,7 +398,11 @@ export function markdownToJson(md: string): JSONContent {
         continue;
       }
     }
-    blocks.push({ type: "paragraph", content: inline });
+    blocks.push({
+      type: "paragraph",
+      ...(paragraph.align ? { attrs: { textAlign: paragraph.align } } : {}),
+      content: inline,
+    });
   }
 
   return { type: "doc", content: blocks };
@@ -395,6 +413,8 @@ interface ParsedListItem {
   kind: "task" | "bullet" | "ordered";
   checked: boolean;
   text: string;
+  /** 任务行末尾的 `<!-- task due=… assignee=… -->`；非任务行与无标记时都是空 */
+  meta: TaskMeta;
 }
 
 /** 单行 → 列表项（含缩进宽度）；非列表行返回 null */
@@ -402,11 +422,21 @@ function listItemOf(line: string): ParsedListItem | null {
   const indent = line.length - line.trimStart().length;
   const t = line.trim();
   const task = TASK_RE.exec(t);
-  if (task) return { indent, kind: "task", checked: task[1].toLowerCase() === "x", text: task[2] };
+  if (task) {
+    // 元数据标记先摘掉，否则 `-->` 会被当成任务正文里的普通字符导出再导回，越滚越长
+    const stripped = stripTaskMeta(task[2]);
+    return {
+      indent,
+      kind: "task",
+      checked: task[1].toLowerCase() === "x",
+      text: stripped.body,
+      meta: stripped.meta,
+    };
+  }
   const bullet = BULLET_RE.exec(t);
-  if (bullet) return { indent, kind: "bullet", checked: false, text: bullet[1] };
+  if (bullet) return { indent, kind: "bullet", checked: false, text: bullet[1], meta: EMPTY_TASK_META };
   const ordered = ORDERED_RE.exec(t);
-  if (ordered) return { indent, kind: "ordered", checked: false, text: ordered[1] };
+  if (ordered) return { indent, kind: "ordered", checked: false, text: ordered[1], meta: EMPTY_TASK_META };
   return null;
 }
 
@@ -420,9 +450,14 @@ function buildList(lines: string[], start: number, indent: number): [JSONContent
     if (li?.indent !== indent) break;
     kind ??= li.kind;
     const para: JSONContent = { type: "paragraph", content: parseInline(li.text) };
+    // 没有元数据时不带 due/assignee 键：旧导出文件的 JSON 形状保持不变，往返用例也不会多出两个 null
+    const metaAttrs = {
+      ...(li.meta.due ? { due: li.meta.due } : {}),
+      ...(li.meta.assignee ? { assignee: li.meta.assignee } : {}),
+    };
     const item: JSONContent =
       li.kind === "task"
-        ? { type: "taskItem", attrs: { checked: li.checked }, content: [para] }
+        ? { type: "taskItem", attrs: { checked: li.checked, ...metaAttrs }, content: [para] }
         : { type: "listItem", content: [para] };
     i++;
     if (i < lines.length) {
@@ -483,10 +518,21 @@ function tableToJson(rows: string[][]): JSONContent {
   return { type: "table", content: [makeRow(header, "tableHeader"), ...body.map((r) => makeRow(r, "tableCell"))] };
 }
 
+/** 分栏标记里的列宽比例：缺省或坏数据按 1（均分）处理 */
+function parseRatio(raw: string | undefined): number {
+  const value = Number(raw ?? 1);
+  return Number.isFinite(value) && value > 0 ? Math.min(20, Math.max(0.05, value)) : 1;
+}
+
+/** column 节点的列宽比例（供 Markdown 与 HTML 导出共用）：坏数据退回均分 */
+export function columnRatioOf(node: JSONContent): number {
+  return parseRatio(node.attrs?.ratio === undefined ? undefined : String(node.attrs.ratio));
+}
+
 /** 分栏内容行 → column 节点（递归走 markdownToJson，空列补空段落） */
-function columnToJson(lines: string[]): JSONContent {
+function columnToJson(lines: string[], ratio = 1): JSONContent {
   const inner = markdownToJson(lines.join("\n")).content ?? [];
-  return { type: "column", content: inner.length > 0 ? inner : [{ type: "paragraph" }] };
+  return { type: "column", attrs: { ratio }, content: inner.length > 0 ? inner : [{ type: "paragraph" }] };
 }
 
 /** <details> 内部行 → toggle 节点：<summary> 还原为标题段落，其余递归走 markdownToJson */
@@ -627,23 +673,99 @@ function indentLines(text: string, indent: string): string {
     .join("\n");
 }
 
-function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: string } = { indent: "" }): string {
+/** 导出渲染上下文：indent 为当前缩进；tables 为「viewId → Markdown 表格文本」，
+ *  由调用方（整库导出）预先取好，让本模块保持同步纯函数 */
+interface RenderCtx {
+  orderedIndex?: number;
+  indent: string;
+  tables?: Record<string, string>;
+}
+
+/** 单元格上的合并属性：历史数据里 attr 可能是字符串或缺省，一律当 1 处理 */
+function numAttr(node: JSONContent, key: "colspan" | "rowspan"): number {
+  const raw = Number(node.attrs?.[key] ?? 1);
+  return Number.isFinite(raw) && raw > 1 ? Math.floor(raw) : 1;
+}
+
+/**
+ * 把带 colspan/rowspan 的一行行单元格摊成矩形网格。
+ * 模型里被合并覆盖的位置本来就没有节点，所以只需按锚点格占位、覆盖格补空串，
+ * 最后把长短不一的行补齐到总列宽（GFM 要求每行列数相同）。
+ */
+function flattenTableGrid(rows: { text: string; colspan: number; rowspan: number }[][]): string[][] {
+  const grid: (string | null)[][] = rows.map(() => []);
+  const put = (r: number, c: number, v: string | null) => {
+    while (grid.length <= r) grid.push([]); // 坏数据里 rowspan 超出真实行数也不能崩
+    while (grid[r].length <= c) grid[r].push(null);
+    grid[r][c] = v;
+  };
+  // 已占位 = 该列存着字符串（null 是补的空位，越界是还没写到的列，两者都算空）
+  const taken = (r: number, c: number) => typeof grid[r][c] === "string";
+  rows.forEach((cells, r) => {
+    let col = 0;
+    for (const cell of cells) {
+      while (taken(r, col)) col++;
+      for (let dr = 0; dr < cell.rowspan; dr++) {
+        for (let dc = 0; dc < cell.colspan; dc++) {
+          put(r + dr, col + dc, dr === 0 && dc === 0 ? cell.text : "");
+        }
+      }
+      col += cell.colspan;
+    }
+  });
+  const width = Math.max(...grid.map((row) => row.length));
+  return grid.map((row) => Array.from({ length: width }, (_, c) => row[c] ?? ""));
+}
+
+/** 块级对齐（TextAlign 扩展的 textAlign attr）：Markdown 无此语法，导出挂在行尾注释里 */
+const ALIGN_VALUES = ["left", "center", "right", "justify"];
+
+/** 合法对齐值，缺省/left/坏数据返回 null（与 defaultAlignment 同义，不必额外记录） */
+export function alignValueOf(node: JSONContent): string | null {
+  const value: unknown = node.attrs?.textAlign;
+  if (typeof value !== "string") return null;
+  const align = value.toLowerCase();
+  return align === "left" ? null : ALIGN_VALUES.includes(align) ? align : null;
+}
+
+function alignSuffix(node: JSONContent): string {
+  // 缺省与 left 视觉一致，不写注释，避免每段都拖一条尾巴
+  const align = alignValueOf(node);
+  return align ? ` <!-- align:${align} -->` : "";
+}
+
+/** 从行尾摘掉对齐注释，返回去掉注释的正文与对齐值 */
+function stripAlign(text: string): { body: string; align: string | null } {
+  const match = ALIGN_RE.exec(text);
+  if (!match) return { body: text, align: null };
+  return { body: text.slice(0, match.index), align: match[1].toLowerCase() };
+}
+
+/** callout 的 color attr → 合法色名（坏数据与缺省都按蓝）；HTML 导出按同一个口径上色 */
+export function calloutColorOf(node: JSONContent): string {
+  const value: unknown = node.attrs?.color;
+  return typeof value === "string" && CALLOUT_COLORS.includes(value) ? value : "blue";
+}
+
+function renderBlock(node: JSONContent, ctx: RenderCtx = { indent: "" }): string {
   const indent = ctx.indent;
+  const kids = (content: JSONContent[] | undefined, nextIndent = ""): string =>
+    renderChildren(content, { indent: nextIndent, tables: ctx.tables });
   switch (node.type) {
     case "paragraph":
-      return renderInline(node.content);
+      return renderInline(node.content) + alignSuffix(node);
 
     case "heading": {
       const level = Math.max(1, Math.min(6, (node.attrs?.level as number | undefined) ?? 1));
       const hashes = "#".repeat(level);
-      return `${hashes} ${renderInline(node.content)}`;
+      return `${hashes} ${renderInline(node.content)}${alignSuffix(node)}`;
     }
 
     case "horizontalRule":
       return "---";
 
     case "blockquote": {
-      const inner = renderChildren(node.content, "");
+      const inner = kids(node.content, "");
       return indentLines(inner, "> ").replace(/^> $/gm, ">");
     }
 
@@ -655,9 +777,12 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
 
     case "callout": {
       const emoji = (node.attrs?.emoji as string | undefined) ?? "💡";
-      const inner = renderChildren(node.content, "");
+      const color = calloutColorOf(node);
+      // 蓝色是默认值，不写注释，历史导出格式保持不变
+      const mark = color === "blue" ? "" : ` <!-- color:${color} -->`;
+      const inner = kids(node.content, "");
       const lines = inner.split("\n");
-      return `> ${emoji} **Callout**\n> ${lines.join("\n> ")}`;
+      return `> ${emoji} **Callout**${mark}\n> ${lines.join("\n> ")}`;
     }
 
     case "toggle": {
@@ -669,7 +794,7 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
       // <summary> 是 HTML 上下文，只做 HTML 转义（markdown 转义符会原样显示）
       const title = rawTitle.replace(/&/g, "&amp;").replace(/</g, "&lt;");
       const body = firstIsTitle ? blocks.slice(1) : blocks;
-      const inner = renderChildren(body, "");
+      const inner = kids(body, "");
       const open = node.attrs?.collapsed ? "" : " open";
       const parts = [`<details${open}>`];
       if (title) parts.push(`<summary>${title}</summary>`);
@@ -682,7 +807,7 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
     case "taskList":
     case "orderedList": {
       const items = node.content ?? [];
-      return items.map((it, i) => renderListItem(it, i, node.type === "orderedList", indent)).join("\n");
+      return items.map((it, i) => renderListItem(it, i, node.type === "orderedList", ctx)).join("\n");
     }
 
     case "table": {
@@ -691,16 +816,22 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
       // 历史数据/测试里 cell 也可能直接挂 inline 节点（text/image…），一并按 inline 渲染
       const inlineish = new Set(["text", "image", "mention", "hardBreak"]);
       const rows = (node.content ?? []).map((row) =>
-        (row.content ?? []).map((cell) =>
-          (cell.content ?? [])
-            .map((b) => (inlineish.has(b.type ?? "") ? renderInline([b]) : renderBlock(b)))
+        (row.content ?? []).map((cell) => ({
+          text: (cell.content ?? [])
+            .map((b) =>
+              inlineish.has(b.type ?? "") ? renderInline([b]) : renderBlock(b, { indent: "", tables: ctx.tables }),
+            )
             .filter((s) => s !== "")
             .join("<br>"),
-        ),
+          colspan: numAttr(cell, "colspan"),
+          rowspan: numAttr(cell, "rowspan"),
+        })),
       );
       if (rows.length === 0) return "";
-      const header = rows[0];
-      const body = rows.slice(1);
+      // GFM 表格没有跨行跨列语法：合并只能在导出时摊平成一个矩形网格——
+      // 内容留在锚点格，被覆盖的位置补空。宁可丢掉合并，也不能导出短一行/长一行的坏表。
+      const grid = flattenTableGrid(rows);
+      const [header, ...body] = grid;
       const sep = `| ${header.map(() => "---").join(" | ")} |`;
       const renderRow = (r: string[]) => `| ${r.join(" | ")} |`;
       const out = [renderRow(header), sep, ...body.map(renderRow)];
@@ -729,13 +860,21 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
     case "databaseView": {
       const viewId = (node.attrs?.viewId as string | undefined) ?? "";
       const name = (node.attrs?.name as string) || t("databaseView.defaultName");
-      return `→[${name}](db:${viewId})`;
+      const pointer = `→[${name}](db:${viewId})`;
+      // 表格文本由调用方预取（见 export-folder 的 databaseTables）：读不到就只留指针，不能让导出中断
+      const table = ctx.tables?.[viewId];
+      return table ? `${pointer}\n\n${table}` : pointer;
     }
 
     case "columns": {
       // 带标记与结束标记：导入时可无损还原（见 markdownToJson 的分栏分支）
+      // ratio 为 1（均分）时不写第三段，保持与历史导出格式一致
       const cols = node.content ?? [];
-      const parts = cols.map((col, i) => `<!-- column ${i + 1}/${cols.length} -->\n${renderChildren(col.content, "")}`);
+      const parts = cols.map((col, i) => {
+        const ratio = columnRatioOf(col);
+        const mark = ratio === 1 ? "" : ` ${ratio}`;
+        return `<!-- column ${i + 1}/${cols.length}${mark} -->\n${kids(col.content, "")}`;
+      });
       return `<!-- columns (${cols.length}) -->\n${parts.join("\n")}\n<!-- /columns -->`;
     }
 
@@ -776,27 +915,31 @@ function renderBlock(node: JSONContent, ctx: { orderedIndex?: number; indent: st
     // 兜底：未知类型 → HTML 注释占位，避免导出时丢失结构
     default:
       if (Array.isArray(node.content) && node.content.length > 0) {
-        return `<!-- unsupported block: ${node.type} -->\n${renderChildren(node.content, indent)}`;
+        return `<!-- unsupported block: ${node.type} -->\n${kids(node.content, indent)}`;
       }
       return `<!-- unsupported block: ${node.type} -->`;
   }
 }
 
-function renderListItem(item: JSONContent, index: number, ordered: boolean, indent: string): string {
+function renderListItem(item: JSONContent, index: number, ordered: boolean, ctx: RenderCtx): string {
   // item.type 预期：listItem 或 taskItem
+  const indent = ctx.indent;
   const prefix = ordered ? `${index + 1}. ` : "- ";
   const check = item.type === "taskItem" ? (item.attrs?.checked ? "[x] " : "[ ] ") : "";
   // item.content = [paragraph, ?nestedList, ...]
   const contents = item.content ?? [];
   const firstPara = contents.find((c) => c.type === "paragraph");
   const nested = contents.find((c) => c.type === "bulletList" || c.type === "orderedList" || c.type === "taskList");
-  const head = indent + prefix + check + renderInline(firstPara?.content);
+  // 任务行的日期/负责人跟在正文后、嵌套子项前，回读时由 stripTaskMeta 摘走
+  const meta = item.type === "taskItem" ? encodeTaskMeta(taskMetaOf(item.attrs)) : "";
+  const head = indent + prefix + check + renderInline(firstPara?.content) + meta;
   if (!nested) return head;
-  const tail = renderBlock(nested, { indent: indent + "  " });
+  const tail = renderBlock(nested, { ...ctx, indent: indent + "  " });
   return `${head}\n${tail}`;
 }
 
-function renderChildren(children: JSONContent[] | undefined, indent: string): string {
+function renderChildren(children: JSONContent[] | undefined, ctx: RenderCtx): string {
+  const indent = ctx.indent;
   if (!children || children.length === 0) return "";
   // 如果所有子节点都是"内联级"（text/mention/image 等，非块类型），
   // 直接拼接内联渲染结果；避免 markdownToJson 生成的 blockquote.content: [{type:'text',...}] 被当作未知块。
@@ -805,7 +948,7 @@ function renderChildren(children: JSONContent[] | undefined, indent: string): st
   );
   if (allInline) return indent + renderInline(children);
   const parts: string[] = [];
-  for (const c of children) parts.push(renderBlock(c, { indent }));
+  for (const c of children) parts.push(renderBlock(c, ctx));
   // 两个块间空行分隔（heading 后需要，列表项内部由 renderListItem 负责）
   return parts.join("\n\n");
 }
@@ -817,11 +960,14 @@ function renderChildren(children: JSONContent[] | undefined, indent: string): st
  *       bulletList / orderedList / taskList / table / image / mention / math / mermaid /
  *       toggle / attachment / columns / databaseView / callout / gallery / outline（可往返）；
  * 不支持的未知块输出 `<!-- unsupported block -->` 占位注释（不保证还原，但内容可读不丢失）。
+ *
+ * opts.databaseTables：viewId → 该数据库视图的 Markdown 表格文本。数据库内容存在 SQLite 里，
+ * 取数要跨 IPC（异步），而本函数是同步纯函数，所以由调用方预先取好再传进来（见 export-folder）。
  */
-export function jsonToMarkdown(json: JSONContent): string {
+export function jsonToMarkdown(json: JSONContent, opts?: { databaseTables?: Record<string, string> }): string {
   const root = json.type === "doc" ? json : { type: "doc", content: [json] };
   return (
-    renderChildren(root.content, "")
+    renderChildren(root.content, { indent: "", tables: opts?.databaseTables })
       .replace(/\n{3,}/g, "\n\n")
       .trimEnd() + "\n"
   );

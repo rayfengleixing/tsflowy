@@ -25,7 +25,7 @@ const schema = getSchema([
     codeBlock: false,
     heading: false,
   }),
-  LockedHeading.configure({ levels: [1, 2, 3] }),
+  LockedHeading.configure({ levels: [1, 2, 3, 4, 5, 6] }),
   CodeBlock,
   Highlight.configure({ multicolor: true }),
   TextStyle,

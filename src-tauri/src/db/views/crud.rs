@@ -407,7 +407,7 @@ pub fn duplicate(
             let mut stmt = tx
                 .prepare(
                     "SELECT id, database_view_id, position, document_id, created_at, updated_at
-                     FROM database_rows WHERE database_view_id = ?1 ORDER BY position ASC",
+                     FROM database_rows WHERE database_view_id = ?1 AND is_trash = 0 ORDER BY position ASC",
                 )
                 .map_err(dberr("duplicate view rows"))?;
             let mapped = stmt

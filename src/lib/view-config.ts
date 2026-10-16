@@ -27,6 +27,8 @@ export interface ViewConfig {
   aggregates?: Record<string, AggregateFn>;
   /** 看板卡片上额外展示的字段 id（按此顺序）；未配置沿用"前 3 个可见字段"启发式，空数组=只显示标题 */
   cardFieldIds?: string[];
+  /** 画廊视图：封面图取自哪个附件字段 */
+  galleryFieldId?: string;
   activeViewId?: string;
 }
 
@@ -77,6 +79,7 @@ export function parseViewConfig(text: string | null | undefined): ViewConfig {
     out.timelineStartFieldId = o.timelineStartFieldId;
   if (typeof o.timelineEndFieldId === "string" && o.timelineEndFieldId) out.timelineEndFieldId = o.timelineEndFieldId;
   if (typeof o.groupFieldId === "string" && o.groupFieldId) out.groupFieldId = o.groupFieldId;
+  if (typeof o.galleryFieldId === "string" && o.galleryFieldId) out.galleryFieldId = o.galleryFieldId;
   const aggregates = parseAggregates(o.aggregates);
   if (aggregates) out.aggregates = aggregates;
   const cardFieldIds = specArray<string>(o.cardFieldIds, isString);
@@ -96,6 +99,7 @@ export function mergeViewConfig(text: string | null | undefined, patch: Partial<
   if (patch.timelineStartFieldId !== undefined) next.timelineStartFieldId = patch.timelineStartFieldId;
   if (patch.timelineEndFieldId !== undefined) next.timelineEndFieldId = patch.timelineEndFieldId;
   if (patch.groupFieldId !== undefined) next.groupFieldId = patch.groupFieldId;
+  if (patch.galleryFieldId !== undefined) next.galleryFieldId = patch.galleryFieldId;
   if (patch.aggregates !== undefined) next.aggregates = patch.aggregates;
   if (patch.cardFieldIds !== undefined) next.cardFieldIds = patch.cardFieldIds;
   if (patch.activeViewId !== undefined) next.activeViewId = patch.activeViewId;

@@ -9,11 +9,15 @@ import {
   CheckSquare,
   ChevronDown,
   Code2,
+  Columns2,
   File as FileIcon,
   FunctionSquare,
   Heading1,
   Heading2,
   Heading3,
+  Heading4,
+  Heading5,
+  Heading6,
   Image as ImageIcon,
   Images,
   Lightbulb,
@@ -93,6 +97,24 @@ export const slashItems: SlashItem[] = [
     alias: "h3",
     icon: <Heading3 className="h-4 w-4" />,
     run: (e) => e.chain().focus().toggleHeading({ level: 3 }).run(),
+  },
+  {
+    key: "heading4",
+    alias: "h4",
+    icon: <Heading4 className="h-4 w-4" />,
+    run: (e) => e.chain().focus().toggleHeading({ level: 4 }).run(),
+  },
+  {
+    key: "heading5",
+    alias: "h5",
+    icon: <Heading5 className="h-4 w-4" />,
+    run: (e) => e.chain().focus().toggleHeading({ level: 5 }).run(),
+  },
+  {
+    key: "heading6",
+    alias: "h6",
+    icon: <Heading6 className="h-4 w-4" />,
+    run: (e) => e.chain().focus().toggleHeading({ level: 6 }).run(),
   },
   {
     key: "bulletList",
@@ -268,6 +290,24 @@ export const slashItems: SlashItem[] = [
     alias: "gallery",
     icon: <Images className="h-4 w-4" />,
     run: (e) => e.chain().focus().insertContent({ type: "imageGallery" }).run(),
+  },
+  {
+    key: "columns",
+    alias: "cols",
+    icon: <Columns2 className="h-4 w-4" />,
+    keywords: "分栏 布局 多栏 columns layout grid",
+    run: (e) =>
+      e
+        .chain()
+        .focus()
+        .insertContent({
+          type: "columns",
+          content: [
+            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
+            { type: "column", attrs: { ratio: 1 }, content: [{ type: "paragraph" }] },
+          ],
+        })
+        .run(),
   },
   {
     key: "aiAsk",

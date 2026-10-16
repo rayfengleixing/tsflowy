@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type { AttachmentRef } from "@/types/database";
 import { invoke } from "@/lib/invoke";
 import { logger } from "./logger";
+import { extOfName, IMAGE_EXTS } from "./attachment-kind";
 
 // 图片资源地址（项目说明书 12 节风险 4：二进制存 assets/ + 相对路径入库）。
 // 相对路径 "assets/xxx.png" → asset 协议 URL（依赖 tauri.conf.json 的 assetProtocol 配置）。
@@ -41,14 +42,6 @@ export async function uploadImageBytes(bytes: Uint8Array, ext: string): Promise<
   });
 }
 
-/** 从文件名取扩展名（小写、1-5 位字母数字），取不到返回 null */
-function nameExt(name: string): string | null {
-  const dot = name.lastIndexOf(".");
-  if (dot < 0) return null;
-  const e = name.slice(dot + 1).toLowerCase();
-  return /^[a-z0-9]{1,5}$/.test(e) ? e : null;
-}
-
 /** 从 MIME 取子类型（image/png → png），取不到返回 null */
 function mimeExt(mime: string): string | null {
   const m = /^[a-z0-9.+-]+\/([a-z0-9.+-]+)/.exec(mime.toLowerCase());
@@ -60,15 +53,12 @@ function mimeExt(mime: string): string | null {
  * 优先用 file.name 的扩展名，回落到 MIME（image/png → png），最后兜底 "png"。
  */
 export function pickImageExt(file: File): string {
-  return nameExt(file.name) ?? mimeExt(file.type) ?? "png";
+  return extOfName(file.name) ?? mimeExt(file.type) ?? "png";
 }
-
-/** 图片扩展名白名单（判断附件是否可用 <img> 渲染缩略图） */
-const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif", "ico"]);
 
 /** 附件名是否为图片（只按扩展名判断，供缩略图分支使用） */
 export function isImageFile(name: string): boolean {
-  const ext = nameExt(name);
+  const ext = extOfName(name);
   return ext !== null && IMAGE_EXTS.has(ext);
 }
 
@@ -103,7 +93,7 @@ export function filesFromDataTransfer(dt: DataTransfer | null): File[] {
  */
 export async function saveAttachmentFile(file: File, fallbackName: string): Promise<AttachmentRef> {
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const ext = nameExt(file.name) ?? mimeExt(file.type) ?? "bin";
+  const ext = extOfName(file.name) ?? mimeExt(file.type) ?? "bin";
   const relative = await invoke<string>("save_asset_bytes", { bytes: Array.from(bytes), ext });
   const name = file.name.trim() || `${fallbackName}.${ext}`;
   return { name: baseName(name), path: relative };

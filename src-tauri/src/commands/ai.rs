@@ -1546,9 +1546,10 @@ data: [DONE]
     #[test]
     fn profile_input_without_api_key_keeps_old_value() {
         // AiProfileInput.api_key 缺省（None）时 serde 反序列化应为 None 而非报错
-        let input: AiProfileInput =
-            serde_json::from_str(r#"{"id":"a","name":"A","base_url":"","model":"","temperature":0.7}"#)
-                .unwrap();
+        let input: AiProfileInput = serde_json::from_str(
+            r#"{"id":"a","name":"A","base_url":"","model":"","temperature":0.7}"#,
+        )
+        .unwrap();
         assert!(input.api_key.is_none());
         assert_eq!(input.protocol, "");
         // Some("") 表示清空
