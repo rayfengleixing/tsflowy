@@ -5,9 +5,13 @@ import { EMPTY_TASK_META, encodeTaskMeta, stripTaskMeta, taskMetaOf, type TaskMe
 // Markdown 粘贴转换（项目说明书 8.2/10-M3：粘贴 markdown 文本自动转成块）。
 // 纯函数：文本 → TipTap JSON，便于 Vitest 单测。
 
-/** 行内语法：mention/数据库链接/加粗/斜体/行内代码/删除线/高亮/下划线/图片/链接 */
+/** 行内语法：mention/数据库链接/加粗/斜体/行内代码/删除线/高亮/下划线/高亮色/文字色/图片/链接
+ *
+ *  `<u>` `<mark>` `<span>` 三段允许内层再套 HTML（正文里的 `<` 已被 protectEscapes 换成占位符，
+ *  只有真标签才有 `<`），所以用「不能越过自己闭合标签」的负先行而不是 `[^<]*`：
+ *  `<span style="color: …"><u>…</u></span>` 这类叠加要能递归解析下去。 */
 const INLINE_SRC =
-  "(<u>[^<\\n]*<\\/u>)|(@\\[[^\\]]*\\]\\(view:[^)\\n]+\\))|(→\\[[^\\]]*\\]\\(db:[^)\\n]+\\))|(\\*\\*[^*]+\\*\\*)|(\\*[^*\\n]+\\*)|(`[^`\\n]+`)|(~~[^~\\n]+~~)|(==[^=\\n]+==)|(!\\[[^\\]]*\\]\\([^)\\n]+\\))|(\\[[^\\]]+\\]\\([^)\\n]+\\))";
+  '(<u>(?:(?!<\\/u>)[^\\n])*<\\/u>)|(<mark\\b[^<>\\n]*data-color="[^"\\n]*"[^<>\\n]*>(?:(?!<\\/mark>)[^\\n])*<\\/mark>)|(<span\\b[^<>\\n]*style="color:[^"\\n]*"[^<>\\n]*>(?:(?!<\\/span>)[^\\n])*<\\/span>)|(@\\[[^\\]]*\\]\\(view:[^)\\n]+\\))|(→\\[[^\\]]*\\]\\(db:[^)\\n]+\\))|(\\*\\*[^*]+\\*\\*)|(\\*[^*\\n]+\\*)|(`[^`\\n]+`)|(~~[^~\\n]+~~)|(==[^=\\n]+==)|(!\\[[^\\]]*\\]\\([^)\\n]+\\))|(\\[[^\\]]+\\]\\([^)\\n]+\\))';
 
 // 每次调用新建实例：parseInline 的 <u> 分支会递归自身，共享同一个 global regex
 // 会在递归中重置 lastIndex，导致外层死循环重复匹配同一段
@@ -65,9 +69,21 @@ const ALIGN_RE = /\s*<!--\s*align:(left|center|right|justify)\s*-->\s*$/i;
 const CALLOUT_COLORS = ["blue", "green", "orange", "red", "purple", "yellow"];
 /** 附件导出格式 `[name](attach:src)` 的协议前缀 */
 const ATTACH_PREFIX = "attach:";
+/** 图片标题位 `(src "图注")` / `(src '图注')`：Markdown 原生语法，用来承载 image 的 caption。
+ *  组 1 是引号、组 2 是内容；反引用只让「另一种引号」出现在内容里。 */
+const IMG_TITLE_RE = /\s+(["'])((?:(?!\1)[^\n])*)\1$/;
 
 function textWithMarks(text: string, marks: JSONContent["marks"] = []): JSONContent {
   return marks.length ? { type: "text", text, marks } : { type: "text", text };
+}
+
+/** HTML 标签包裹的行内段（<u>/<mark>/<span>）：内层递归解析后统一补上 mark。
+ *  非文本节点（image/mention）拿不到 mark，原样返回——和 <u>图片 一样不该崩。 */
+function parseHtmlRun(raw: string, mark: { type: string; attrs?: Record<string, unknown> }): JSONContent[] {
+  const body = raw.slice(raw.indexOf(">") + 1, raw.lastIndexOf("<"));
+  return parseInline(body).map((node) =>
+    node.type === "text" ? { ...node, marks: [...(node.marks ?? []), mark] } : node,
+  );
 }
 
 /** 行内解析：mention/数据库链接/普通文本 + 粗/斜/删/高亮/码/链接/图片 */
@@ -96,13 +112,15 @@ export function parseInline(text: string): JSONContent[] {
       push(raw);
     } else if (raw.startsWith("<u>")) {
       // 下划线导出为 <u>…</u>：内层递归解析（可含粗斜体），给文本节点统一追加 underline mark
-      for (const inner of parseInline(raw.slice(3, -4))) {
-        if (inner.type === "text") {
-          out.push({ type: "text", text: inner.text, marks: [...(inner.marks ?? []), { type: "underline" }] });
-        } else {
-          out.push(inner);
-        }
-      }
+      out.push(...parseHtmlRun(raw, { type: "underline" }));
+    } else if (raw.startsWith("<mark")) {
+      // 带色高亮：<mark data-color="#FEF3C7" …>（tiptap 自己的渲染形式，粘贴回编辑器也能还原）
+      const color = /data-color="([^"\n]*)"/.exec(raw)?.[1];
+      out.push(...parseHtmlRun(raw, { type: "highlight", attrs: { color } }));
+    } else if (raw.startsWith("<span")) {
+      // 文字色：<span style="color:#0092D6">；值可能带尾随分号或空格，摘掉再交给 mark
+      const color = /style="color:\s*([^;"\n]*)/i.exec(raw)?.[1];
+      out.push(...parseHtmlRun(raw, { type: "textStyle", attrs: { color } }));
     } else if (raw.startsWith("**")) {
       push(raw.slice(2, -2), [{ type: "bold" }]);
     } else if (raw.startsWith("~~")) {
@@ -118,8 +136,16 @@ export function parseInline(text: string): JSONContent[] {
       const src = inner.slice(close + 2);
       // 尾缀 {width=60%}：图片显示宽度（导出时 width≠100 才带）
       const wm = /\{width=(\d+)%\}$/.exec(src);
-      const attrs: Record<string, unknown> = { src: wm ? src.slice(0, wm.index) : src, alt: inner.slice(0, close) };
+      const rest = wm ? src.slice(0, wm.index) : src;
+      // 标准 Markdown 标题位 `![alt](src "图注")`：图片 caption 借这一位往返（导出只在非空时写）
+      const tm = IMG_TITLE_RE.exec(rest);
+      const attrs: Record<string, unknown> = {
+        src: tm ? rest.slice(0, tm.index) : rest,
+        alt: inner.slice(0, close),
+      };
       if (wm) attrs.width = Math.max(20, Math.min(100, Number(wm[1])));
+      const caption = tm ? tm[2] : "";
+      if (caption) attrs.caption = caption;
       out.push({ type: "image", attrs });
     } else if (raw.startsWith("[")) {
       const inner = raw.slice(1, -1);
@@ -585,7 +611,11 @@ interface MarksRecord {
   code?: boolean;
   link?: string | null;
   highlight?: boolean;
+  /** 高亮色（multicolor Highlight 的 attrs.color）；空值走默认 `==文本==` */
+  highlightColor?: string;
   underline?: boolean;
+  /** 文字色（TextStyle + Color 的 attrs.color）；"inherit" 是「恢复默认色」，等价于无 mark */
+  textColor?: string;
 }
 
 function marksOf(node: JSONContent): MarksRecord {
@@ -610,14 +640,32 @@ function marksOf(node: JSONContent): MarksRecord {
         break;
       case "highlight":
         m.highlight = true;
+        m.highlightColor = colorAttr(mark.attrs?.color);
         break;
       case "underline":
         m.underline = true;
         break;
-      // color/textStyle 等颜色不映射 Markdown，保留纯文本即可
+      case "textStyle":
+        m.textColor = colorAttr(mark.attrs?.color);
+        break;
+      // font-size/line-height 等 TextStyle 的其他属性仍不映射 Markdown，保留纯文本即可
     }
   }
   return m;
+}
+
+/** 颜色 mark 属性：空值与 "inherit"（编辑器「默认色」档）都当没有颜色 */
+function colorAttr(raw: unknown): string | undefined {
+  const value = typeof raw === "string" ? raw.trim() : "";
+  return value && value !== "inherit" ? value : undefined;
+}
+
+/** 高亮 / 文字色的 HTML 段：属性值来自编辑器色板，含空格所以导出用 `; ` 分隔 */
+function htmlColorRun(tag: "mark" | "span", color: string, inner: string): string {
+  if (tag === "mark") {
+    return `<mark data-color="${color}" style="background-color: ${color}; color: inherit">${inner}</mark>`;
+  }
+  return `<span style="color: ${color}">${inner}</span>`;
 }
 
 function wrapMarks(text: string, m: MarksRecord): string {
@@ -630,11 +678,36 @@ function wrapMarks(text: string, m: MarksRecord): string {
   if (m.italic) out = `*${out}*`;
   if (m.strike) out = `~~${out}~~`;
   if (m.link) out = `[${out}](${m.link})`;
-  // highlight：Markdown 无原生语法，用 ==包裹（Obsidian/Notion 兼容）
-  if (m.highlight) out = `==${out}==`;
+  // highlight：Markdown 无原生语法，默认色用 ==包裹（Obsidian/Notion 兼容）；
+  // 带色只能导成 <mark>，否则色值在往返里丢掉
+  if (m.highlight) out = m.highlightColor ? htmlColorRun("mark", m.highlightColor, out) : `==${out}==`;
   // 下划线：Markdown 无原生语法，导出 HTML <u>（导入侧 parseInline 识别还原）
   if (m.underline) out = `<u>${out}</u>`;
+  // 文字色：同 <u>，套在最外层（<span> 能包住 <u>/<mark>，反过来会让内层标签正则匹配不上）
+  if (m.textColor) out = htmlColorRun("span", m.textColor, out);
   return out;
+}
+
+/** caption 进图片标题位前的消毒：内层解析 `![…](…)` 匹配到第一个 `)` 就收，
+ *  半角括号会截断语法（换全角保可读），引号会打乱标题边界（换单引号），换行折成空格。 */
+function captionForMd(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  return raw
+    .replace(/[\r\n]+/g, " ")
+    .replace(/"/g, "'")
+    .replace(/\(/g, "（")
+    .replace(/\)/g, "）")
+    .trim();
+}
+
+/** 图片导出：`![alt](src "caption"){width=60%}`——caption 借标准标题位，空值不写 */
+function imageMarkdown(attrs: Record<string, unknown> | undefined): string {
+  const src = (attrs?.src as string | undefined) ?? "";
+  const alt = (attrs?.alt as string | undefined) ?? "";
+  const caption = captionForMd(attrs?.caption);
+  const width = (attrs?.width as number | undefined) ?? 100;
+  const target = `${src}${caption ? ` "${caption}"` : ""}${width !== 100 ? `{width=${width}%}` : ""}`;
+  return `![${alt}](${target})`;
 }
 
 function renderInline(nodes: JSONContent[] | undefined): string {
@@ -653,10 +726,7 @@ function renderInline(nodes: JSONContent[] | undefined): string {
       const label = (n.attrs?.label as string | undefined) ?? id;
       out += `@[${label}](view:${id})`;
     } else if (n.type === "image") {
-      const src = (n.attrs?.src as string | undefined) ?? "";
-      const alt = (n.attrs?.alt as string | undefined) ?? "";
-      const w = (n.attrs?.width as number | undefined) ?? 100;
-      out += `![${alt}](${src}${w !== 100 ? `{width=${w}%}` : ""})`;
+      out += imageMarkdown(n.attrs);
     } else {
       // 其他 inline（date/relations/hardBreak emoji 等）：回退到 textContent
       if (typeof n.text === "string") out += escapeInline(n.text);
@@ -838,12 +908,8 @@ function renderBlock(node: JSONContent, ctx: RenderCtx = { indent: "" }): string
       return out.join("\n");
     }
 
-    case "image": {
-      const src = (node.attrs?.src as string | undefined) ?? "";
-      const alt = (node.attrs?.alt as string | undefined) ?? "";
-      const w = (node.attrs?.width as number | undefined) ?? 100;
-      return `![${alt}](${src}${w !== 100 ? `{width=${w}%}` : ""})`;
-    }
+    case "image":
+      return imageMarkdown(node.attrs);
 
     case "math": {
       // math 节点是块级 atom，唯一属性为 tex（extensions/math/node.ts），按 display math 围栏导出
@@ -880,12 +946,7 @@ function renderBlock(node: JSONContent, ctx: RenderCtx = { indent: "" }): string
 
     case "imageGallery": {
       // gallery 无 attrs（子节点是 image，content: "image*"）；导出标记注释 + 连续图片行（可导入还原）
-      const imgs = (node.content ?? []).map((img) => {
-        const src = (img.attrs?.src as string | undefined) ?? "";
-        const alt = (img.attrs?.alt as string | undefined) ?? "";
-        const w = (img.attrs?.width as number | undefined) ?? 100;
-        return `![${alt}](${src}${w !== 100 ? `{width=${w}%}` : ""})`;
-      });
+      const imgs = (node.content ?? []).map((img) => imageMarkdown(img.attrs));
       return `<!-- image gallery (${imgs.length} images) -->\n${imgs.join("\n")}`;
     }
 

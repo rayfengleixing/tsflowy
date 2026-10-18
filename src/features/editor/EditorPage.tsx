@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { Link2, ChevronDown, ChevronUp } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { registerDocEditor, useEditorStore } from "@/stores/editor";
+import { useSettingsStore } from "@/stores/settings";
 import { documentApi } from "@/lib/documents";
 import { mentionsApi, type MentionRow } from "@/lib/mentions";
 import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown";
@@ -92,6 +93,8 @@ function reportSaveMetrics(viewId: string, chars: number, ms: number) {
 
 /** 光标所在行相对编辑区高度的上限：超过就把内容上滚，保证当前行留在 70% 线以上 */
 const CARET_LINE_RATIO = 0.7;
+/** 打字机模式：光标行钉在视口中线，新行往下长时正文整体上移，视线不用追到屏幕底部 */
+const TYPEWRITER_RATIO = 0.5;
 
 // 表格单元格默认居中（tiptap v3 表格原生支持 align 属性，导出/粘贴可保留）
 const centeredCellAttrs = () => ({
@@ -150,6 +153,11 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   // 上一次选区变化是否来自键盘：鼠标点击不触发上滚，否则点到下半屏会把视图顶飞
   const keyNavRef = useRef(false);
   const caretRafRef = useRef<number | null>(null);
+  // 正文加载完成（编辑器交接给只读模式）前为 false：见加载竞态注释
+  const docLoadedRef = useRef(false);
+  const editorReadonly = useSettingsStore((s) => s.editorReadonly);
+  const focusMode = useSettingsStore((s) => s.focusMode);
+  const typewriter = useSettingsStore((s) => s.typewriter);
 
   // 返回落库 promise：关窗冲刷（close-flush）需要 await 真正写完；平时调用方忽略即可。
   // 成功才清脏标记：失败时保留，下一次 flush（含关窗前的冲刷）可以重试同一份内容。
@@ -194,7 +202,8 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     saveTimer.current = window.setTimeout(flushQuietly, AUTOSAVE_MS);
   }, [flushQuietly]);
 
-  // 光标行不低于编辑区 70%：rAF 里量（等浏览器的原生光标滚动先落地，否则会被它覆盖回去）
+  // 光标行位置：打字机模式钉死在中线（上下都调），否则只把超过 70% 线的行推上来。
+  // rAF 里量（等浏览器的原生光标滚动先落地，否则会被它覆盖回去）
   const clampCaretSoon = useCallback(() => {
     if (caretRafRef.current !== null) return;
     caretRafRef.current = window.requestAnimationFrame(() => {
@@ -204,6 +213,11 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       if (!ed || ed.isDestroyed || !scroller) return;
       const box = scroller.getBoundingClientRect();
       const caret = ed.view.coordsAtPos(ed.state.selection.head);
+      // 模式开关走 getState：这个回调喂给 useEditor（只建一次），订阅值会停留在首帧
+      if (useSettingsStore.getState().typewriter) {
+        scroller.scrollTop += caret.bottom - (box.top + box.height * TYPEWRITER_RATIO);
+        return;
+      }
       const overflow = caret.bottom - (box.top + box.height * CARET_LINE_RATIO);
       if (overflow > 1) scroller.scrollTop += overflow;
     });
@@ -318,14 +332,16 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       handleKeyDown: (_view, event) => {
         keyNavRef.current = true;
         const metaOrCtrl = event.ctrlKey || event.metaKey;
+        // 硬编码的编辑器命令一律不吞带 Alt 的组合：Alt 档留给全局快捷键（AltGr 布局因此也不会误触发）
+        const plainMod = metaOrCtrl && !event.altKey;
         // — 文档内查找替换：Ctrl+F 打开面板（面板内 Enter/Shift+Enter 走各自输入框）—
-        if (metaOrCtrl && !event.shiftKey && event.key.toLowerCase() === "f") {
+        if (plainMod && !event.shiftKey && event.key.toLowerCase() === "f") {
           event.preventDefault();
           setFindOpen(true);
           return true;
         }
         // — 快捷键 1：Ctrl+S 手动保存（Ctrl+Shift+S 留给「删除线」） —
-        if (metaOrCtrl && !event.shiftKey && event.key.toLowerCase() === "s") {
+        if (plainMod && !event.shiftKey && event.key.toLowerCase() === "s") {
           event.preventDefault();
           flush()
             .then(() => toast.success(t("editor.saved")))
@@ -333,7 +349,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
           return true;
         }
         // — M6 修复 5：Ctrl+T 插入 3×3 表格（带表头）—
-        if (metaOrCtrl && event.key.toLowerCase() === "t") {
+        if (plainMod && event.key.toLowerCase() === "t") {
           event.preventDefault();
           if (editorRef.current && !editorRef.current.isDestroyed) {
             editorRef.current.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
@@ -341,7 +357,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
           return true;
         }
         // — M6 修复 5：Ctrl+L 切换任务列表（段落↔任务项）—
-        if (metaOrCtrl && event.key.toLowerCase() === "l") {
+        if (plainMod && event.key.toLowerCase() === "l") {
           event.preventDefault();
           if (editorRef.current && !editorRef.current.isDestroyed) {
             editorRef.current.chain().focus().toggleTaskList().run();
@@ -724,7 +740,9 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     const unlock = () => {
       // setEditable 第二参 false：解锁不产生 update 事件
       if (alive && editor && !editor.isDestroyed) {
-        editor.setEditable(true, false);
+        docLoadedRef.current = true;
+        // 只读模式开着时保持锁定；开关本身的接管见下面那条 effect
+        editor.setEditable(!useSettingsStore.getState().editorReadonly, false);
         // 加载完成后补一次 H1 同步（挂载时的 effect 早退且不会因加载再触发）
         syncH1ToViewNameRef.current();
       }
@@ -791,17 +809,27 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     };
   }, [view.id]);
 
-  // 编辑区尾部留白 = 视口高度的 30%（与 CARET_LINE_RATIO 配对）：没有这段余量，
-  // 文档末尾无内容可滚时，光标行只能停在视口底部，70% 规则失效
+  // 只读模式：正文没加载完之前 editable 由加载流程掌管（防「加载期间输入被覆盖」的竞态），
+  // 加载完成后才轮到开关接管。第二参 false：翻开关不算一次修改，不该触发自动保存。
+  useEffect(() => {
+    if (!docLoadedRef.current) return;
+    const editor = editorRef.current;
+    if (!editor || editor.isDestroyed) return;
+    editor.setEditable(!editorReadonly, false);
+  }, [editorReadonly]);
+
+  // 编辑区尾部留白 = 视口高度减去光标线（与 CARET_LINE_RATIO / TYPEWRITER_RATIO 配对）：
+  // 没有这段余量，文档末尾无内容可滚时，光标行只能停在视口底部，上滚规则失效
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const sync = () => el.style.setProperty("--editor-tail", `${el.clientHeight * (1 - CARET_LINE_RATIO)}px`);
+    const ratio = typewriter ? TYPEWRITER_RATIO : CARET_LINE_RATIO;
+    const sync = () => el.style.setProperty("--editor-tail", `${el.clientHeight * (1 - ratio)}px`);
     sync();
     const ro = new ResizeObserver(sync);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [typewriter]);
 
   useEffect(() => {
     syncH1ToViewName();
@@ -833,7 +861,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return;
       if (!ownsPaneShortcuts(paneRef.current, isMainPane)) return;
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "s") {
         e.preventDefault();
         flush()
           .then(() => toast.success(t("editor.saved")))
@@ -850,7 +878,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return;
       if (!ownsPaneShortcuts(paneRef.current, isMainPane)) return;
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "f") {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
         setFindOpen(true);
       }
@@ -1004,9 +1032,14 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       <div ref={scrollRef} data-editor-scroll className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto px-6 py-4" style={{ maxWidth: "var(--tiptap-max-width, 800px)" }}>
           <EditorContent editor={editor} />
-          <FloatingMenu editor={editor} />
-          <TableContextMenu editor={editor} />
-          <BlockMenu />
+          {/* 只读模式收掉三个改结构的浮层入口（拖拽手柄由 block-drag 自己按 isEditable 隐藏） */}
+          {!editorReadonly && (
+            <>
+              <FloatingMenu editor={editor} />
+              <TableContextMenu editor={editor} />
+              <BlockMenu />
+            </>
+          )}
           {/* 尾部留白：给"光标行不超过 70%"预留可滚动余量，否则文档末尾时光标只能停在视口底部 */}
           <div style={{ height: "var(--editor-tail, 0px)" }} />
         </div>
@@ -1014,8 +1047,8 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
 
       {findOpen && <FindReplaceBar editor={editor} onClose={() => setFindOpen(false)} />}
 
-      {/* 反链面板：底部固定，可收起 */}
-      {backlinks.length > 0 && (
+      {/* 反链面板：底部固定，可收起；专注模式下连同外壳一起藏起 */}
+      {!focusMode && backlinks.length > 0 && (
         <div className="shrink-0 border-t border-neutral-200 bg-neutral-50/60">
           <button
             type="button"
@@ -1066,6 +1099,11 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
 
       {/* 字数统计：右下角浮层。中文按字、英文按词，混排两边都算（见 src/lib/word-count.ts） */}
       <div className="pointer-events-none absolute bottom-2 right-4 text-[11px] text-neutral-400">
+        {editorReadonly && (
+          <span className="mr-2 rounded bg-neutral-100 px-1.5 py-0.5 text-neutral-500">
+            {t("editor.readonlyBadge")}
+          </span>
+        )}
         {docWords.total.toLocaleString()} {t("editor.wordsUnit")}
         {docMinutes > 0 && <span className="ml-2">· {t("editor.readingTime", { minutes: docMinutes })}</span>}
         {selectionWords !== null && (

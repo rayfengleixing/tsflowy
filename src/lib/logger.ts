@@ -5,8 +5,11 @@
  * · 生产构建下自动降级：warn/error 保留；debug/trace/log 级直接丢弃（避免 63 处 console.error/warn 裸写
  *   在 release 中依然刷用户控制台）。
  * · 可切换 `logger.setLevel('debug')` 手动开到 debug。
- * · 未来要接「写本地日志文件/上报 Tauri invoke」只需改本文件（所有组件都走 logger 入口）。
+ * · 每一行实际打印出来的日志同时经 client-log 转写本机日志文件（设置页可一键导出诊断包），
+ *   所以新增日志只需走本入口，不要再用 console.*。
  */
+
+import { formatLogArgs, pushClientLog } from "./client-log";
 
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "off";
 
@@ -36,21 +39,36 @@ const buildMessage = (ctx: string | undefined, args: unknown[]): unknown[] => {
   return args;
 };
 
+/** 控制台之外再落一份到本机日志文件；error 级不等批量窗口，崩溃前的最后一条最值得留 */
+const toFile = (level: "trace" | "debug" | "info" | "warn" | "error", ctx: string | undefined, args: unknown[]) => {
+  pushClientLog(level, formatLogArgs(ctx, args), level === "error");
+};
+
 export const logger = {
   trace: (...args: unknown[]) => {
-    if (isOn("trace")) console.trace(...buildMessage(undefined, args));
+    if (!isOn("trace")) return;
+    console.trace(...buildMessage(undefined, args));
+    toFile("trace", undefined, args);
   },
   debug: (ctx?: string, ...args: unknown[]) => {
-    if (isOn("debug")) console.debug(...buildMessage(ctx, args));
+    if (!isOn("debug")) return;
+    console.debug(...buildMessage(ctx, args));
+    toFile("debug", ctx, args);
   },
   info: (ctx?: string, ...args: unknown[]) => {
-    if (isOn("info")) console.info(...buildMessage(ctx, args));
+    if (!isOn("info")) return;
+    console.info(...buildMessage(ctx, args));
+    toFile("info", ctx, args);
   },
   warn: (ctx?: string, ...args: unknown[]) => {
-    if (isOn("warn")) console.warn(...buildMessage(ctx, args));
+    if (!isOn("warn")) return;
+    console.warn(...buildMessage(ctx, args));
+    toFile("warn", ctx, args);
   },
   error: (ctx?: string, ...args: unknown[]) => {
-    if (isOn("error")) console.error(...buildMessage(ctx, args));
+    if (!isOn("error")) return;
+    console.error(...buildMessage(ctx, args));
+    toFile("error", ctx, args);
   },
   /**
    * 便捷写法：logger.catch("load tabs", id)(e) → 错误上下文 + warn 级别（常见模式）。
@@ -59,7 +77,9 @@ export const logger = {
   catch:
     (ctx: string, ...extra: unknown[]) =>
     (e: unknown) => {
-      if (isOn("warn")) console.warn(`[${ctx}]`, ...extra, e);
+      if (!isOn("warn")) return;
+      console.warn(`[${ctx}]`, ...extra, e);
+      toFile("warn", ctx, [...extra, e]);
     },
 };
 

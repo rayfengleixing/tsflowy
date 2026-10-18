@@ -200,7 +200,7 @@ fn pragma_messages(conn: &Connection, deep: bool) -> (bool, Vec<String>) {
 }
 
 /// 对某个库文件做一次检查并汇总成前端可读的报告
-fn integrity_report(path: &Path, deep: bool) -> IntegrityReport {
+pub(crate) fn integrity_report(path: &Path, deep: bool) -> IntegrityReport {
     let started = Instant::now();
     let (ok, messages) = match open_for_check(path) {
         Ok(conn) => pragma_messages(&conn, deep),

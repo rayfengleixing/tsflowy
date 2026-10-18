@@ -127,7 +127,7 @@ export type AiChatEvent =
   | { type: "chunk"; delta: string }
   | { type: "reasoning"; delta: string }
   | { type: "done"; full: string; usage?: AiUsage | null; tool_calls?: AiToolCallRaw[] }
-  /** code 为错误归类码（auth / rate_limit / quota / timeout / network / server …），可能为 null */
+  /** code 为错误归类码（auth / rate_limit / quota / timeout / network / server / context_length …），可能为 null */
   | { type: "error"; message: string; code?: string | null };
 
 /** Rust 侧回传的完整函数调用（Done.tool_calls / 事件流内累积） */

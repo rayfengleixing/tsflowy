@@ -36,9 +36,8 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Lint
-        # 阈值 9：仅剩 react-compiler 对「有意的 effect 依赖收窄」的提示，
-        # 消除需改 effect 依赖（改变运行时行为），故封顶防止新增回退
-        run: npm run lint -- --max-warnings 9
+        # 与本地 npm run lint 同口径（--max-warnings=0）：放宽阈值会把新增告警静默吞掉
+        run: npm run lint
 
       - name: Prettier check
         run: npm run format:check

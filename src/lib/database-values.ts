@@ -1,5 +1,6 @@
 import { fieldKind, STATUS_TONE_COLOR } from "./field-kinds";
-import type { CellValue, FieldOptions, FieldType, SelectOption, StatusTone } from "@/types/database";
+import { isReadonlyType } from "@/types/database";
+import type { CellValue, DatabaseField, FieldOptions, FieldType, SelectOption, StatusTone } from "@/types/database";
 
 // 字段值序列化/展示（项目说明书 7.2 / 11 节：纯逻辑，Vitest 单测）
 // database_cells.value 统一存 JSON 字符串；空单元格为 "null"
@@ -50,6 +51,16 @@ export function defaultValue(type: FieldType): CellValue {
 export function validateCellValue(type: FieldType, value: CellValue): boolean {
   if (value === null) return true;
   return fieldKind(type).validate(value);
+}
+
+/** 落库前的类型闸门。
+ *  编辑器控件、粘贴解析与 AI 归一各自都会把值收成正确形态，这一层兜的是绕过它们的路径：
+ *  历史脏数据被原样回写、外部工具改过的行、以后新增的写入口。
+ *  只读列（公式/汇总/反向关系/触发器时间）的存储值由计算或触发器生成，不参与校验；
+ *  字段查不到（store 尚未加载完）时也放行，让写库那侧报错比这里误判更准。 */
+export function cellWriteTypeSafe(field: DatabaseField | undefined, value: CellValue): boolean {
+  if (!field || isReadonlyType(field.field_type)) return true;
+  return validateCellValue(field.field_type, value);
 }
 
 /** 展示用文本：不同类型不同格式（只读时间字段做本地化） */

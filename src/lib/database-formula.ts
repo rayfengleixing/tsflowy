@@ -661,20 +661,23 @@ export function computeRowFormulas(
   // 自引用已在建边时排除，这里找到的都是长度 ≥2 的互引环。
   const onCycle = (start: string): boolean => {
     const seen = new Set<string>();
-    const stack = [...deps.get(start)!];
-    while (stack.length > 0) {
-      const d = stack.pop()!;
-      if (d === start) return true;
-      if (seen.has(d)) continue;
-      seen.add(d);
-      stack.push(...deps.get(d)!);
-    }
-    return false;
+    const reachesStart = (ids: string[]): boolean => {
+      for (const id of ids) {
+        if (id === start) return true;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        if (reachesStart(deps.get(id) ?? [])) return true;
+      }
+      return false;
+    };
+    return reachesStart(deps.get(start) ?? []);
   };
   const evaluate = (id: string) => {
+    const expr = exprs.get(id);
+    if (expr === undefined) return;
     values.set(
       id,
-      evalFormula(exprs.get(id)!, (name) => {
+      evalFormula(expr, (name) => {
         const t = byName.get(name);
         if (!t || t.id === id) return null; // 引用自身/不存在 → 无效
         if (exprs.has(t.id)) return values.get(t.id) ?? null; // 环成员=#CYCLE；其余按拓扑序已有值
@@ -693,7 +696,7 @@ export function computeRowFormulas(
     progressed = false;
     for (let i = 0; i < todo.length;) {
       const id = todo[i];
-      if (deps.get(id)!.every((d) => values.has(d))) {
+      if ((deps.get(id) ?? []).every((d) => values.has(d))) {
         evaluate(id);
         todo.splice(i, 1);
         progressed = true;

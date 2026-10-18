@@ -62,3 +62,44 @@ describe("settings 持久化与语言切换", () => {
     expect(reloaded.getState().font).toBe("serif");
   });
 });
+
+describe("编辑器模式开关", () => {
+  it("默认全关：开着只读启动会让用户以为键盘坏了", async () => {
+    const store = await loadStore();
+    const s = store.getState();
+    expect(s.editorReadonly).toBe(false);
+    expect(s.typewriter).toBe(false);
+    expect(s.focusMode).toBe(false);
+  });
+
+  it("只读与打字机写 localStorage 并跨重启恢复", async () => {
+    const store = await loadStore();
+    store.getState().setEditorReadonly(true);
+    store.getState().setTypewriter(true);
+    expect(storage.get("tsflowy:editor-readonly")).toBe("1");
+    expect(storage.get("tsflowy:editor-typewriter")).toBe("1");
+
+    store.getState().setEditorReadonly(false);
+    expect(storage.get("tsflowy:editor-readonly")).toBe("0");
+
+    const reloaded = await loadStore();
+    expect(reloaded.getState().editorReadonly).toBe(false);
+    expect(reloaded.getState().typewriter).toBe(true);
+  });
+
+  it("专注模式不落盘：重启后外壳回到可见状态，退出入口不该依赖上次留下的开关", async () => {
+    const store = await loadStore();
+    store.getState().setFocusMode(true);
+    expect([...storage.keys()].filter((k) => k.includes("focus"))).toEqual([]);
+    expect(store.getState().focusMode).toBe(true);
+
+    const reloaded = await loadStore();
+    expect(reloaded.getState().focusMode).toBe(false);
+  });
+
+  it("localStorage 里的脏值按关处理", async () => {
+    storage.set("tsflowy:editor-readonly", "true");
+    const store = await loadStore();
+    expect(store.getState().editorReadonly).toBe(false);
+  });
+});

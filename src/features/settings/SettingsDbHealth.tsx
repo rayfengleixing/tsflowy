@@ -1,8 +1,12 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Stethoscope, Wrench } from "lucide-react";
+import { Download, RefreshCw, Stethoscope, Wrench } from "lucide-react";
+import { toast } from "sonner";
+import { save } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@/lib/invoke";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { flushClientLogs } from "@/lib/client-log";
 import { flushAllForClose } from "@/lib/close-flush";
 import {
   checkDbIntegrity,
@@ -13,7 +17,7 @@ import {
 } from "@/lib/db-health";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import { formatBytes, Section } from "./settings-parts";
+import { formatBytes, Section, timestamp } from "./settings-parts";
 
 /**
  * 修复动了文件就必须整页重载，而那会把刚打印出来的结果（尤其是「哪些文件被改名留在原地」）
@@ -51,6 +55,7 @@ function ReportSummary({ report }: { report: IntegrityReport }) {
 export function SettingsDbHealth() {
   const [report, setReport] = useState<IntegrityReport | null>(null);
   const [busy, setBusy] = useState<"quick" | "deep" | "repair" | null>(null);
+  const [busyDiagnostics, setBusyDiagnostics] = useState(false);
   const [repair, setRepair] = useState<DbRepairResult | null>(null);
   const [confirmRepair, setConfirmRepair] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -99,6 +104,29 @@ export function SettingsDbHealth() {
       setError(t("error.db", { message: String(e) }));
     } finally {
       setBusy(null);
+    }
+  };
+
+  /**
+   * 诊断包读的是磁盘上的日志文件，而前端 warn 是攒着发的：先把缓冲区交给 IPC，
+   * 否则刚点过的那几条问题现场不会出现在这次导出的包里。
+   */
+  const exportDiagnostics = async () => {
+    setBusyDiagnostics(true);
+    try {
+      await flushClientLogs();
+      const target = await save({
+        defaultPath: `tsflowy-diagnostics-${timestamp()}.zip`,
+        filters: [{ name: "ZIP", extensions: ["zip"] }],
+      });
+      if (!target) return;
+      await invoke<void>("export_diagnostics", { targetPath: target });
+      toast.success(t("settings.diagnosticsExported"));
+    } catch (e) {
+      logger.error("export diagnostics failed", e);
+      toast.error(t("error.diagnostics", { message: String(e) }));
+    } finally {
+      setBusyDiagnostics(false);
     }
   };
 
@@ -176,6 +204,20 @@ export function SettingsDbHealth() {
             )}
           </div>
         )}
+      </Section>
+
+      <Section title={t("settings.diagnostics")}>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" disabled={busyDiagnostics} onClick={() => void exportDiagnostics()}>
+            {busyDiagnostics ? (
+              <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Download className="mr-1 h-3.5 w-3.5" />
+            )}
+            {t("settings.exportDiagnostics")}
+          </Button>
+        </div>
+        <p className="mt-1.5 max-w-lg text-[11px] text-neutral-500">{t("settings.exportDiagnosticsHint")}</p>
       </Section>
 
       <ConfirmDialog

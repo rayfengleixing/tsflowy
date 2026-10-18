@@ -91,6 +91,18 @@ pub fn maybe_snapshot(
     trim_by_reason(conn, view_id, "auto", policy.keep)
 }
 
+/// 取单份快照的正文（历史版本对比用）。列表只回元数据，正文按需单独取，
+/// 否则一次打开历史面板就要把几十份全文搬过 IPC。
+pub fn content(conn: &Connection, id: i64) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT content FROM document_snapshots WHERE id = ?1",
+        params![id],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(dberr("get snapshot content"))
+}
+
 pub fn list(conn: &Connection, view_id: &str) -> Result<Vec<SnapshotRowOut>, String> {
     let mut stmt = conn
         .prepare("SELECT id, view_id, reason, created_at FROM document_snapshots WHERE view_id = ?1 ORDER BY id DESC")
@@ -306,6 +318,29 @@ mod tests {
         let conn = setup();
         let err = restore(&conn, 999, &SnapshotPolicy::default()).unwrap_err();
         assert!(err.contains("snapshot not found"), "{err}");
+    }
+
+    #[test]
+    fn content_reads_one_snapshot_by_id() {
+        let conn = setup();
+        seed_doc(&conn);
+        let policy = SnapshotPolicy {
+            interval_ms: 0,
+            ..SnapshotPolicy::default()
+        };
+        maybe_snapshot(&conn, "v1", r#"{"v":1}"#, &policy).unwrap();
+        maybe_snapshot(&conn, "v1", r#"{"v":2}"#, &policy).unwrap();
+        let rows = list(&conn, "v1").unwrap();
+        assert_eq!(
+            content(&conn, rows[0].id).unwrap().as_deref(),
+            Some(r#"{"v":2}"#)
+        );
+        assert_eq!(
+            content(&conn, rows[1].id).unwrap().as_deref(),
+            Some(r#"{"v":1}"#)
+        );
+        // 不存在的 id 回 None，不是错误：前端要能区分「没这份」和「库读不动」
+        assert_eq!(content(&conn, 999).unwrap(), None);
     }
 
     #[test]

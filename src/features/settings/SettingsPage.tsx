@@ -6,6 +6,7 @@ import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { SettingsUpdates } from "./SettingsUpdates";
 import { SettingsAppearance } from "./SettingsAppearance";
+import { SettingsEditorModes } from "./SettingsEditorModes";
 import { SettingsDataDir } from "./SettingsDataDir";
 import { SettingsBackup } from "./SettingsBackup";
 import { SettingsDbHealth } from "./SettingsDbHealth";
@@ -17,7 +18,7 @@ import { SettingsShortcuts } from "./SettingsShortcuts";
 
 /**
  * 设置页（M6）：只负责页头与区块编排。
- * 各区块（更新/外观/数据目录/备份/数据库健康/资源/同步/每日笔记/AI/快捷键）拆成独立组件，
+ * 各区块（更新/外观/编辑器模式/数据目录/备份/数据库健康/资源/同步/每日笔记/AI/快捷键）拆成独立组件，
  * 各自持有状态与拉取——一个区块的输入/保存不再重渲染整页。
  */
 export function SettingsPage() {
@@ -44,6 +45,7 @@ export function SettingsPage() {
 
         <SettingsUpdates />
         <SettingsAppearance />
+        <SettingsEditorModes />
         <SettingsDataDir />
         <SettingsBackup />
         <SettingsDbHealth />

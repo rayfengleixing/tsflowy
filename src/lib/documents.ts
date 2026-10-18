@@ -95,6 +95,11 @@ export const documentApi = {
     return invoke<SnapshotRow[]>("doc_snapshot_list", { viewId });
   },
 
+  /** 单份快照的正文 JSON 字符串（版本对比按需取）；id 不存在返回 null */
+  async snapshotContent(id: number): Promise<string | null> {
+    return invoke<string | null>("doc_snapshot_get", { id });
+  },
+
   /** 恢复快照；返回 viewId（恢复前的当前内容会被存为可撤销的备份） */
   async restoreSnapshot(id: number): Promise<string> {
     return invoke<string>("doc_snapshot_restore", { id });

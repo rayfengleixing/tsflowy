@@ -149,6 +149,10 @@ function App() {
   const currentViewId = useWorkspaceStore((s) => s.currentViewId);
   const splitViewId = useWorkspaceStore((s) => s.splitViewId);
   const tree = useWorkspaceStore((s) => s.tree);
+  // 专注模式：藏起界面外壳，只留正文。只在工作区生效——设置/搜索/回收站是整页视图，
+  // 没了侧边栏就走不回来。
+  const focusMode = useSettingsStore((s) => s.focusMode);
+  const focusChrome = focusMode && route === "workspace";
 
   // 订阅语言：t() 读 getState 不订阅，切换语言后靠这里触发整树重渲染刷新文案
   useLanguage();
@@ -229,6 +233,14 @@ function App() {
           s.closePalette();
           return;
         }
+        // 专注模式没有常驻按钮以外的退出入口，Esc 是最省事的退路。
+        // 弹窗（Radix）吃掉的那次不算：关掉历史版本对话框不该连带退出专注。
+        const st = useSettingsStore.getState();
+        if (!e.defaultPrevented && st.focusMode && s.route === "workspace") {
+          e.preventDefault();
+          st.setFocusMode(false);
+          return;
+        }
         requestEscapeClose();
         return;
       }
@@ -299,6 +311,27 @@ function App() {
       if (comboEquals(combo, combos.aiPanel)) {
         e.preventDefault();
         useAiStore.getState().toggle();
+        return;
+      }
+      // 三种编辑器模式：与命令面板、设置页里的开关共用同一个 store
+      if (comboEquals(combo, combos.toggleReadonly)) {
+        e.preventDefault();
+        const st = useSettingsStore.getState();
+        st.setEditorReadonly(!st.editorReadonly);
+        return;
+      }
+      if (comboEquals(combo, combos.toggleTypewriter)) {
+        e.preventDefault();
+        const st = useSettingsStore.getState();
+        st.setTypewriter(!st.typewriter);
+        return;
+      }
+      if (comboEquals(combo, combos.toggleFocus)) {
+        // 专注模式只在工作区有意义：其它页面上开着，等于把自己关进没有侧边栏的死角
+        if (useWorkspaceStore.getState().route !== "workspace") return;
+        e.preventDefault();
+        const st = useSettingsStore.getState();
+        st.setFocusMode(!st.focusMode);
         return;
       }
     };
@@ -391,7 +424,7 @@ function App() {
     <div className="h-screen">
       <RouteErrorBoundary resetKey="app-shell">
         <div className="flex h-full overflow-hidden">
-          <Sidebar />
+          {!focusChrome && <Sidebar />}
           <div className="flex min-w-0 flex-1 flex-col">
             <RouteErrorBoundary resetKey={`${route}:${currentViewId ?? ""}:${splitViewId ?? ""}`}>
               <Suspense
@@ -409,14 +442,25 @@ function App() {
                   <SettingsPage />
                 ) : (
                   <>
-                    <TabBar />
+                    {!focusChrome && <TabBar />}
                     {splitView ? <SplitView left={view} right={splitView} /> : renderView(view)}
                   </>
                 )}
               </Suspense>
             </RouteErrorBoundary>
           </div>
-          <AiPanel />
+          {!focusChrome && <AiPanel />}
+          {focusChrome && (
+            // 外壳全藏了，得留一个看得见、点得动的出口（Esc 是同义入口）
+            <button
+              type="button"
+              onClick={() => useSettingsStore.getState().setFocusMode(false)}
+              className="fixed right-3 top-3 z-40 flex items-center gap-1.5 rounded-md border border-neutral-200 bg-white/90 px-2.5 py-1 text-[11px] text-neutral-500 shadow-sm hover:bg-neutral-50 hover:text-neutral-700"
+            >
+              {t("focus.exit")}
+              <kbd className="rounded border border-neutral-200 px-1 text-[10px] text-neutral-400">Esc</kbd>
+            </button>
+          )}
           <CommandPalette />
           <DatabaseViewPicker />
           <EmojiPickerDialog />

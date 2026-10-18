@@ -324,6 +324,13 @@ pub async fn doc_snapshot_list(
     db::snapshots::list(&conn, &view_id)
 }
 
+/// 读取单份快照正文（历史版本对比按需取，列表仍只回元数据）
+#[tauri::command]
+pub async fn doc_snapshot_get(db: State<'_, Db>, id: i64) -> Result<Option<String>, String> {
+    let conn = db.read_conn()?;
+    db::snapshots::content(&conn, id)
+}
+
 #[tauri::command]
 pub async fn doc_snapshot_restore(
     app: tauri::AppHandle,

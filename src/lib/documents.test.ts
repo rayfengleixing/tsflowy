@@ -67,3 +67,18 @@ describe("documentApi.save 排队语义", () => {
     await p2;
   });
 });
+
+describe("documentApi 快照读取", () => {
+  it("按 id 取单份快照正文，参数走 camelCase→snake_case 的 id", async () => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValueOnce('{"v":1}');
+    expect(await documentApi.snapshotContent(7)).toBe('{"v":1}');
+    expect(invokeMock).toHaveBeenCalledWith("doc_snapshot_get", { id: 7 });
+  });
+
+  it("快照不存在时回 null（前端要能区分「没这份」和读失败）", async () => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValueOnce(null);
+    expect(await documentApi.snapshotContent(999)).toBeNull();
+  });
+});

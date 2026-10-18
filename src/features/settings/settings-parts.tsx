@@ -361,7 +361,7 @@ export function ShortcutRecorder({ id }: { id: ShortcutId }) {
       const conflict = findConflict(id, next);
       if (conflict) {
         const def = CUSTOMIZABLE_SHORTCUTS.find((s) => s.id === conflict);
-        toast.error(t("settings.shortcutConflict", { name: def ? t(def.labelKey as MessageKey) : conflict }));
+        toast.error(t("settings.shortcutConflict", { name: def ? t(def.labelKey) : conflict }));
         return;
       }
       setShortcut(id, next);

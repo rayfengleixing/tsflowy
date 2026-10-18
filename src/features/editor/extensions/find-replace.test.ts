@@ -131,3 +131,51 @@ describe("scanMatches 匹配选项（区分大小写 / 全词）", () => {
     expect(scanMatches(d, "the", { wholeWord: true }).matches).toEqual([{ from: 1, to: 4 }]);
   });
 });
+
+describe("scanMatches 正则档", () => {
+  it("默认不区分大小写，caseSensitive 才收紧", () => {
+    const d = doc([{ type: "paragraph", content: [text("Hello HELLO hillo")] }]);
+    expect(scanMatches(d, "h.llo", { regex: true }).matches).toEqual([
+      { from: 1, to: 6 },
+      { from: 7, to: 12 },
+      { from: 13, to: 18 },
+    ]);
+    expect(scanMatches(d, "h.llo", { regex: true, caseSensitive: true }).matches).toEqual([{ from: 13, to: 18 }]);
+  });
+
+  it("正则元字符只在正则档生效，全文档一律当字面量", () => {
+    const d = doc([{ type: "paragraph", content: [text("abc 订单 12345 号")] }]);
+    expect(scanMatches(d, "a.c", { regex: true }).matches).toEqual([{ from: 1, to: 4 }]);
+    expect(scanMatches(d, "\\d+", { regex: true }).matches).toEqual([{ from: 8, to: 13 }]);
+    expect(scanMatches(d, "a.c").matches).toEqual([]);
+    expect(scanMatches(d, "\\d+").matches).toEqual([]);
+  });
+
+  it("命中跨 mark 时按拼接索引映射回整段位置", () => {
+    const d = doc([{ type: "paragraph", content: [text("20", [{ type: "bold" }]), text("26-10")] }]);
+    expect(scanMatches(d, "\\d{4}-\\d{2}", { regex: true }).matches).toEqual([{ from: 1, to: 8 }]);
+  });
+
+  it("零宽命中（x*、^ 一类）不进结果也不会死循环", () => {
+    const d = doc([{ type: "paragraph", content: [text("axxb")] }]);
+    expect(scanMatches(d, "x*", { regex: true }).matches).toEqual([{ from: 2, to: 4 }]);
+    expect(scanMatches(d, "^", { regex: true }).matches).toEqual([]);
+  });
+
+  it("wholeWord 在正则档同样生效", () => {
+    const d = doc([{ type: "paragraph", content: [text("the there")] }]);
+    expect(scanMatches(d, "the", { regex: true, wholeWord: true }).matches).toEqual([{ from: 1, to: 4 }]);
+  });
+
+  it("非法表达式返回 invalid，不与「没有命中」混为一谈", () => {
+    const d = doc([{ type: "paragraph", content: [text("hello")] }]);
+    expect(scanMatches(d, "(未闭合", { regex: true })).toEqual({ matches: [], truncated: false, invalid: true });
+    expect(scanMatches(d, "zzz", { regex: true })).toEqual({ matches: [], truncated: false, invalid: false });
+  });
+
+  it("触顶时 truncated 与全文扫描口径一致", () => {
+    const d = doc([{ type: "paragraph", content: [text("a".repeat(1001))] }]);
+    expect(scanMatches(d, "a", { regex: true }).matches).toHaveLength(1000);
+    expect(scanMatches(d, "a", { regex: true }).truncated).toBe(true);
+  });
+});

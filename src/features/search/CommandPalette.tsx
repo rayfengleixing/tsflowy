@@ -4,15 +4,18 @@ import {
   CalendarDays,
   Clock,
   CornerDownLeft,
+  EyeOff,
   FilePlus,
   FileSearch,
   FileText,
   History,
+  Maximize2,
   Search,
   Settings,
   Sparkles,
   SunMoon,
   Trash2,
+  Type,
   X,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -38,6 +41,11 @@ interface PaletteAction {
   run: () => void;
 }
 
+/** 模式类动作把当前开关状态写进标题：同一句话既是命令也是现态 */
+function modeStateLabel(on: boolean): string {
+  return on ? t("mode.on") : t("mode.off");
+}
+
 /** 面板里的一行：动作 / 历史查询 / 最近访问 / 搜索命中，↑↓ 走的就是这条扁平序列 */
 type Row =
   | { kind: "action"; action: PaletteAction }
@@ -55,6 +63,10 @@ export function CommandPalette() {
   const createView = useWorkspaceStore((s) => s.createView);
   const openDailyNote = useWorkspaceStore((s) => s.openDailyNote);
   const setRoute = useWorkspaceStore((s) => s.setRoute);
+  // 动作标题带上模式现状，面板里一眼看出这条是按下去开还是关
+  const editorReadonly = useSettingsStore((s) => s.editorReadonly);
+  const focusMode = useSettingsStore((s) => s.focusMode);
+  const typewriter = useSettingsStore((s) => s.typewriter);
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchHit[]>([]);
@@ -98,6 +110,35 @@ export function CommandPalette() {
         },
       },
       {
+        id: "toggleReadonly",
+        label: t("palette.action.readonly", { state: modeStateLabel(editorReadonly) }),
+        icon: <EyeOff className="h-4 w-4" />,
+        run: () => {
+          const s = useSettingsStore.getState();
+          s.setEditorReadonly(!s.editorReadonly);
+        },
+      },
+      {
+        id: "toggleFocus",
+        label: t("palette.action.focus", { state: modeStateLabel(focusMode) }),
+        icon: <Maximize2 className="h-4 w-4" />,
+        // 专注模式只在工作区有意义：设置/搜索页上开着，等于把自己关进没有侧边栏的死角
+        run: () => {
+          if (useWorkspaceStore.getState().route !== "workspace") return;
+          const s = useSettingsStore.getState();
+          s.setFocusMode(!s.focusMode);
+        },
+      },
+      {
+        id: "toggleTypewriter",
+        label: t("palette.action.typewriter", { state: modeStateLabel(typewriter) }),
+        icon: <Type className="h-4 w-4" />,
+        run: () => {
+          const s = useSettingsStore.getState();
+          s.setTypewriter(!s.typewriter);
+        },
+      },
+      {
         id: "openSettings",
         label: t("palette.action.openSettings"),
         icon: <Settings className="h-4 w-4" />,
@@ -124,7 +165,7 @@ export function CommandPalette() {
         },
       },
     ],
-    [createView, openDailyNote, setRoute],
+    [createView, openDailyNote, setRoute, editorReadonly, focusMode, typewriter],
   );
 
   const trimmed = query.trim();

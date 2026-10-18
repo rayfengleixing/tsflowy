@@ -1009,7 +1009,10 @@ fn error_code(status: u16, payload: &str) -> &'static str {
         402 => "quota",
         _ => {
             let lower = payload.to_lowercase();
-            if lower.contains("insufficient")
+            // 上下文超长各家都回 400，混在 request 里会误导用户去查模型名，先单独认出来
+            if is_context_length_error(&lower) {
+                "context_length"
+            } else if lower.contains("insufficient")
                 || lower.contains("balance")
                 || lower.contains("quota")
                 || lower.contains("余额")
@@ -1024,6 +1027,22 @@ fn error_code(status: u16, payload: &str) -> &'static str {
     }
 }
 
+/// 上下文超长的识别：状态码帮不上忙（400 是通用「请求有问题」），只能认服务端文案。
+/// 传进来的字符串须已小写；中文关键字原样匹配。
+fn is_context_length_error(lower: &str) -> bool {
+    const PHRASES: [&str; 6] = [
+        "context_length_exceeded",
+        "context length",
+        "context window",
+        "prompt is too long",
+        "too many tokens",
+        "input is too long",
+    ];
+    PHRASES.iter().any(|p| lower.contains(p))
+        || (lower.contains("上下文")
+            && (lower.contains("超出") || lower.contains("超过") || lower.contains("过长")))
+}
+
 /// 流开始之后才报出的错误拿不到状态码，只能从文本里猜归类
 fn guess_error_code(message: &str) -> &'static str {
     let lower = message.to_lowercase();
@@ -1036,6 +1055,8 @@ fn guess_error_code(message: &str) -> &'static str {
     } else if lower.contains("429") || lower.contains("rate limit") || lower.contains("rate_limit")
     {
         "rate_limit"
+    } else if is_context_length_error(&lower) {
+        "context_length"
     } else if lower.contains("insufficient")
         || lower.contains("balance")
         || lower.contains("quota")
@@ -1648,5 +1669,46 @@ data: [DONE]
         let p = &ai.profiles[0];
         assert_eq!(p.protocol, "");
         assert_eq!(p.api_key, "");
+    }
+
+    #[test]
+    fn context_length_400_is_not_classified_as_a_bad_request() {
+        // OpenAI / Anthropic / 中文网关三种写法都要认出 context_length
+        assert_eq!(
+            error_code(
+                400,
+                r#"{"error":{"code":"context_length_exceeded","message":"This model's maximum context length is 8192 tokens"}}"#
+            ),
+            "context_length"
+        );
+        assert_eq!(
+            error_code(400, "prompt is too long: 254000 tokens > 200000 maximum"),
+            "context_length"
+        );
+        assert_eq!(
+            error_code(400, "输入长度已超出上下文范围"),
+            "context_length"
+        );
+        // 其它 400 仍归 request，别把上下文判定扩得太宽
+        assert_eq!(
+            error_code(400, r#"{"error":{"message":"Invalid model name"}}"#),
+            "request"
+        );
+        assert_eq!(
+            error_code(400, "temperature must be between 0 and 2"),
+            "request"
+        );
+    }
+
+    #[test]
+    fn quota_and_context_length_keep_separate_codes() {
+        assert_eq!(error_code(400, "Insufficient balance"), "quota");
+        assert_eq!(error_code(429, "too many tokens per minute"), "rate_limit");
+        assert_eq!(error_code(503, "upstream unavailable"), "server");
+        // 流内报错没有状态码，同样要认出超长
+        assert_eq!(
+            guess_error_code("This model's context window is 32768 tokens"),
+            "context_length"
+        );
     }
 }

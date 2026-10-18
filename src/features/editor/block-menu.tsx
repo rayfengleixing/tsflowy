@@ -2,6 +2,7 @@
 // 由 block-drag 扩展在"点击手柄（未拖拽）"时派发 BLOCK_MENU_EVENT 打开，fixed 定位在块旁。
 import { useEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/core";
+import { DOMSerializer } from "@tiptap/pm/model";
 import { toast } from "sonner";
 import {
   AlignCenter,
@@ -79,6 +80,41 @@ const CONTAINER_TYPES = new Set([
 ]);
 
 const MENU_WIDTH = 284;
+
+/** 块级复制 / 剪切：纯文本之外再写一份 text/html，否则粘回编辑器（或别的富文本工具）只剩一段没了结构的文字；
+ *  图片这类 atom 块的纯文本本来就是空的，HTML 是它唯一能被复制出去的形态。
+ *  HTML 走各节点自己的 renderHTML，碰到没定义序列化器的节点会抛，那就退回只给纯文本。 */
+async function copyBlock(editor: Editor, pos: number, plain: string): Promise<void> {
+  const node = editor.state.doc.nodeAt(pos);
+  let html: string | null = null;
+  if (node) {
+    try {
+      const dom = DOMSerializer.fromSchema(editor.schema).serializeNode(node);
+      const box = document.createElement("div");
+      if (typeof dom === "string") box.textContent = dom;
+      else box.append(dom);
+      html = box.innerHTML;
+    } catch (e) {
+      logger.warn("block html serialize failed", e);
+    }
+  }
+  if (!html) {
+    await navigator.clipboard.writeText(plain);
+    return;
+  }
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        "text/plain": new Blob([plain], { type: "text/plain" }),
+        "text/html": new Blob([html], { type: "text/html" }),
+      }),
+    ]);
+  } catch (e) {
+    // WebView2 里没有 ClipboardItem、或写入被拒：退化成纯文本，不能让整个复制失败
+    logger.warn("clipboard write failed, fallback to plain text", e);
+    await navigator.clipboard.writeText(plain);
+  }
+}
 
 interface ConvertItem {
   key: string;
@@ -343,7 +379,7 @@ export function BlockMenu() {
   const runCopy = async () => {
     try {
       const text = editor.state.doc.textBetween(pos + 1, pos + nodeSize - 1, "\n");
-      await navigator.clipboard.writeText(text);
+      await copyBlock(editor, pos, text);
       toast.success(t("blockMenu.copied"));
     } catch (e) {
       logger.error("copy block failed", e);
@@ -356,7 +392,7 @@ export function BlockMenu() {
     try {
       const text = editor.state.doc.textBetween(pos + 1, pos + nodeSize - 1, "\n");
       selectWholeText(editor, pos, nodeSize).run();
-      await navigator.clipboard.writeText(text);
+      await copyBlock(editor, pos, text);
       editor
         .chain()
         .focus()

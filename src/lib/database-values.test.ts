@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { FieldOptions, SelectOption } from "@/types/database";
+import type { DatabaseField, FieldOptions, SelectOption } from "@/types/database";
 import {
   attachmentRefs,
+  cellWriteTypeSafe,
   defaultValue,
   deserializeValue,
   formatCellValue,
@@ -71,6 +72,26 @@ describe("validateCellValue", () => {
     // 脏数据：裸字符串、缺 name/path 的对象都判非法
     expect(validateCellValue("attachment", ["assets/1.pdf"])).toBe(false);
     expect(validateCellValue("attachment", [{ name: "a.pdf" }] as never)).toBe(false);
+  });
+});
+
+describe("cellWriteTypeSafe", () => {
+  const field = (field_type: string) => ({ id: "f1", name: "F", field_type, options: "{}" }) as DatabaseField;
+
+  it("按字段类型判定写入是否合规", () => {
+    expect(cellWriteTypeSafe(field("number"), 12)).toBe(true);
+    expect(cellWriteTypeSafe(field("number"), "12")).toBe(false);
+    expect(cellWriteTypeSafe(field("text"), "abc")).toBe(true);
+    // 空值一律放行（清空单元格任何类型都合法）
+    expect(cellWriteTypeSafe(field("number"), null)).toBe(true);
+  });
+
+  it("只读列与查不到的字段不做校验", () => {
+    // 公式/汇总/反向关系与触发器时间列的存储值由计算或触发器生成，形态判定在这里会误伤
+    expect(cellWriteTypeSafe(field("formula"), "文本公式值")).toBe(true);
+    expect(cellWriteTypeSafe(field("rollup"), [])).toBe(true);
+    expect(cellWriteTypeSafe(field("last_edited_at"), 123)).toBe(true);
+    expect(cellWriteTypeSafe(undefined, "任意值")).toBe(true);
   });
 });
 

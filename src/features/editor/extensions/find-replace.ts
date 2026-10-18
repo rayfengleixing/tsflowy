@@ -4,7 +4,8 @@
 //   - 命中按块收集：把每个文本块的文本片段映射回文档位置，跨 mark 的命中也能整段选中；
 //   - 高亮走 decoration（不改文档），活动项单独上色；
 //   - 替换/全部替换用一条事务从后往前落，位置不互相污染；
-//   - 支持「区分大小写」「全词匹配」两个开关（见 FindOptions，默认关闭时行为与旧版一致）。
+//   - 支持「区分大小写」「全词匹配」「正则」三个开关（见 FindOptions，默认关闭时行为与旧版一致）；
+//     正则档的替换串按 JS 语义展开捕获组（$1、$&、$$）。
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import type { Transaction } from "@tiptap/pm/state";
@@ -27,15 +28,16 @@ export interface FindMatch {
   to: number;
 }
 
-/** 匹配选项；不传时保持旧默认（忽略大小写、不做全词） */
+/** 匹配选项；不传时保持旧默认（忽略大小写、不做全词、不用正则） */
 export interface FindOptions {
   caseSensitive?: boolean;
   wholeWord?: boolean;
+  regex?: boolean;
 }
 
 type ResolvedFindOptions = Required<FindOptions>;
 
-const NO_OPTIONS: ResolvedFindOptions = { caseSensitive: false, wholeWord: false };
+const NO_OPTIONS: ResolvedFindOptions = { caseSensitive: false, wholeWord: false, regex: false };
 
 export interface FindState {
   query: string;
@@ -45,6 +47,8 @@ export interface FindState {
   active: number;
   /** 命中数触顶（MAX_MATCHES）：超出部分未参与高亮，UI 须提示结果不完整 */
   truncated: boolean;
+  /** 正则档下表达式非法：当作无命中，但 UI 要区分「没找到」和「写错了」 */
+  invalid: boolean;
 }
 
 type FindMeta =
@@ -106,6 +110,7 @@ function buildTextIndex(doc: ProseMirrorNode): TextIndex {
 export interface FindScan {
   matches: FindMatch[];
   truncated: boolean;
+  invalid: boolean;
 }
 
 /**
@@ -122,12 +127,52 @@ function isWholeWordAt(text: string, idx: number, len: number): boolean {
   return !(before && WORD_CHAR.test(before)) && !(after && WORD_CHAR.test(after));
 }
 
+/** 正则档扫描：与全文扫描共用同一份 posMap，非法表达式当无命中（invalid=true 交给 UI 提示）。
+ *  大小写不敏感直接用 `i` 修饰符跑原文，不做 toLowerCase——省掉长度漂移那一类坑。 */
+function scanRegex(
+  text: string,
+  posMap: number[],
+  query: string,
+  caseSensitive: boolean,
+  wholeWord: boolean,
+): FindScan {
+  let re: RegExp;
+  try {
+    re = new RegExp(query, caseSensitive ? "g" : "gi");
+  } catch {
+    return { matches: [], truncated: false, invalid: true };
+  }
+  const matches: FindMatch[] = [];
+  let count = 0;
+  let truncated = false;
+  let m: RegExpExecArray | null = re.exec(text);
+  while (m) {
+    // 零宽命中（x*、^ 一类）不能进结果：位置无意义，而且 lastIndex 不动会死循环
+    if (m[0].length > 0) {
+      const end = m.index + m[0].length - 1;
+      if (end >= posMap.length) break;
+      if (!wholeWord || isWholeWordAt(text, m.index, m[0].length)) {
+        count++;
+        if (count > MAX_MATCHES) {
+          truncated = true;
+          break;
+        }
+        matches.push({ from: posMap[m.index], to: posMap[end] + 1 });
+      }
+    }
+    if (re.lastIndex === m.index) re.lastIndex++;
+    m = re.exec(text);
+  }
+  return { matches, truncated, invalid: false };
+}
+
 /** 全档扫描：块内/跨块/跨 atom 的映射统一走拼接索引，命中超 MAX_MATCHES 提前止损 */
 export function scanMatches(doc: ProseMirrorNode, query: string, options: FindOptions = {}): FindScan {
-  if (!query) return { matches: [], truncated: false };
+  if (!query) return { matches: [], truncated: false, invalid: false };
   const caseSensitive = options.caseSensitive === true;
   const wholeWord = options.wholeWord === true;
   const { text, posMap } = buildTextIndex(doc);
+  if (options.regex) return scanRegex(text, posMap, query, caseSensitive, wholeWord);
   let hay = text;
   let needle = query;
   if (!caseSensitive) {
@@ -158,7 +203,7 @@ export function scanMatches(doc: ProseMirrorNode, query: string, options: FindOp
     matches.push({ from: posMap[idx], to: posMap[idx + needle.length - 1] + 1 });
     idx = hay.indexOf(needle, idx + needle.length);
   }
-  return { matches, truncated };
+  return { matches, truncated, invalid: false };
 }
 
 /** 兼容旧调用方：只取命中列表 */
@@ -176,6 +221,7 @@ export function setFindQuery(editor: Editor, query: string, options: FindOptions
   const resolved: ResolvedFindOptions = {
     caseSensitive: options.caseSensitive === true,
     wholeWord: options.wholeWord === true,
+    regex: options.regex === true,
   };
   editor.view.dispatch(
     editor.state.tr.setMeta(findReplaceKey, { type: "setQuery", query, options: resolved } satisfies FindMeta),
@@ -204,7 +250,18 @@ function replaceable(st: FindState | null): st is FindState {
 function recomputeMatches(state: FindState, doc: ProseMirrorNode): FindState {
   const scan = scanMatches(doc, state.query, state.options);
   const active = scan.matches.length === 0 ? -1 : Math.min(Math.max(state.active, 0), scan.matches.length - 1);
-  return { ...state, matches: scan.matches, active, truncated: scan.truncated };
+  return { ...state, matches: scan.matches, active, truncated: scan.truncated, invalid: scan.invalid };
+}
+
+/** 正则档的替换串走 JS 语义：`$1`、`$&`、`$$` 这些按当前命中展开；表达式已失效时原样替换 */
+function expandReplacement(st: FindState, doc: ProseMirrorNode, match: FindMatch, replacement: string): string {
+  if (!st.options.regex) return replacement;
+  try {
+    const re = new RegExp(st.query, st.options.caseSensitive ? "" : "i");
+    return doc.textBetween(match.from, match.to, "\n").replace(re, replacement);
+  } catch {
+    return replacement;
+  }
 }
 
 /** 替换前/替换后强制同步重算：位置全变或可能吃到延迟窗口内的旧命中，等不起尾抖动 */
@@ -221,9 +278,10 @@ export function replaceActiveMatch(editor: Editor, replacement: string): boolean
   const st = getFindState(editor);
   if (!replaceable(st)) return false;
   const m = st.matches[st.active];
+  const value = expandReplacement(st, editor.state.doc, m, replacement);
   const chain = editor.chain().focus();
-  if (replacement === "") chain.deleteRange({ from: m.from, to: m.to });
-  else chain.insertContentAt({ from: m.from, to: m.to }, replacement);
+  if (value === "") chain.deleteRange({ from: m.from, to: m.to });
+  else chain.insertContentAt({ from: m.from, to: m.to }, value);
   chain.run();
   // 替换后所有命中位置都变了：立即重算，after 才是新位置
   recomputeFindNow(editor);
@@ -242,8 +300,10 @@ export function replaceAllMatches(editor: Editor, replacement: string): number {
   const chain = editor.chain().focus();
   for (let i = st.matches.length - 1; i >= 0; i--) {
     const m = st.matches[i];
-    if (replacement === "") chain.deleteRange({ from: m.from, to: m.to });
-    else chain.insertContentAt({ from: m.from, to: m.to }, replacement);
+    // 逐个命中各自展开捕获组：从后往前落，前面的位置与文本都不受已替换部分影响
+    const value = expandReplacement(st, editor.state.doc, m, replacement);
+    if (value === "") chain.deleteRange({ from: m.from, to: m.to });
+    else chain.insertContentAt({ from: m.from, to: m.to }, value);
   }
   chain.run();
   recomputeFindNow(editor);
@@ -256,7 +316,8 @@ export function clearFind(editor: Editor) {
 }
 
 function applyMeta(state: FindState, tr: Transaction, meta: FindMeta): FindState {
-  if (meta.type === "clear") return { query: "", options: NO_OPTIONS, matches: [], active: -1, truncated: false };
+  if (meta.type === "clear")
+    return { query: "", options: NO_OPTIONS, matches: [], active: -1, truncated: false, invalid: false };
   if (meta.type === "setQuery") {
     const scan = scanMatches(tr.doc, meta.query, meta.options);
     return {
@@ -265,6 +326,7 @@ function applyMeta(state: FindState, tr: Transaction, meta: FindMeta): FindState
       matches: scan.matches,
       active: scan.matches.length > 0 ? 0 : -1,
       truncated: scan.truncated,
+      invalid: scan.invalid,
     };
   }
   if (meta.type === "recompute") return recomputeMatches(state, tr.doc);
@@ -301,7 +363,14 @@ export const FindReplace = Extension.create({
       new Plugin<FindState>({
         key: findReplaceKey,
         state: {
-          init: () => ({ query: "", options: NO_OPTIONS, matches: [], active: -1, truncated: false }),
+          init: () => ({
+            query: "",
+            options: NO_OPTIONS,
+            matches: [],
+            active: -1,
+            truncated: false,
+            invalid: false,
+          }),
           apply(tr, prev) {
             const meta = tr.getMeta(findReplaceKey) as FindMeta | undefined;
             if (meta) {

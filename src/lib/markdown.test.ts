@@ -1098,4 +1098,95 @@ describe("jsonToMarkdown", () => {
     expect(md).toContain("<u>划线</u>");
     expect(markdownToJson(md)).toEqual(json);
   });
+
+  it("round-trips colored highlight while plain highlight stays ==", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "默认", marks: [{ type: "highlight" }] },
+            { type: "text", text: "带色", marks: [{ type: "highlight", attrs: { color: "#FEF3C7" } }] },
+          ],
+        },
+      ],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain("==默认==");
+    expect(md).toContain('<mark data-color="#FEF3C7"');
+    expect(markdownToJson(md)).toEqual(json);
+  });
+
+  it("round-trips text color through <span style>", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "蓝字", marks: [{ type: "textStyle", attrs: { color: "#0092D6" } }] }],
+        },
+      ],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toContain('<span style="color: #0092D6">蓝字</span>');
+    expect(markdownToJson(md)).toEqual(json);
+  });
+
+  it("round-trips color stacked on bold + underline", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "text",
+              text: "重点",
+              marks: [{ type: "bold" }, { type: "underline" }, { type: "textStyle", attrs: { color: "#D92D20" } }],
+            },
+          ],
+        },
+      ],
+    };
+    expect(markdownToJson(jsonToMarkdown(json))).toEqual(json);
+  });
+
+  it("treats the inherit text color as no color", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "默认色", marks: [{ type: "textStyle", attrs: { color: "inherit" } }] }],
+        },
+      ],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).not.toContain("<span");
+    expect(md).toContain("默认色");
+  });
+
+  it("round-trips image caption through the markdown title slot", () => {
+    const json = markdownToJson('![图](assets/a.png "说明文字"{width=60%})');
+    expect(json.content?.[0]?.content?.[0]?.attrs).toEqual({
+      src: "assets/a.png",
+      alt: "图",
+      caption: "说明文字",
+      width: 60,
+    });
+    expect(jsonToMarkdown(json)).toContain('![图](assets/a.png "说明文字"{width=60%})');
+  });
+
+  it("keeps captions without a title slot unchanged and sanitizes breaking characters", () => {
+    const json = {
+      type: "doc",
+      content: [{ type: "image", attrs: { src: "a.png", alt: "", caption: '含"引号"和(括号)' } }],
+    };
+    const md = jsonToMarkdown(json);
+    // 半角括号会截断 ![...](...)，导出换成全角；引号折成单引号，回读仍是同一张图片
+    const parsed = markdownToJson(md);
+    expect(parsed.content?.[0]?.content?.[0]?.type).toBe("image");
+    expect(parsed.content?.[0]?.content?.[0]?.attrs).toEqual({ src: "a.png", alt: "", caption: "含'引号'和（括号）" });
+  });
 });

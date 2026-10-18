@@ -21,10 +21,12 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
   const [showReplace, setShowReplace] = useState(false);
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
-  const [info, setInfo] = useState<{ total: number; active: number; truncated: boolean }>({
+  const [regex, setRegex] = useState(false);
+  const [info, setInfo] = useState<{ total: number; active: number; truncated: boolean; invalid: boolean }>({
     total: 0,
     active: -1,
     truncated: false,
+    invalid: false,
   });
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -35,8 +37,8 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
 
   // 查询词/匹配选项变化 → 交给插件重算并跳到首个命中
   useEffect(() => {
-    setFindQuery(editor, query, { caseSensitive, wholeWord });
-  }, [editor, query, caseSensitive, wholeWord]);
+    setFindQuery(editor, query, { caseSensitive, wholeWord, regex });
+  }, [editor, query, caseSensitive, wholeWord, regex]);
 
   // 事务驱动计数：编辑文档/移动活动项都会刷新 n/m
   useEffect(() => {
@@ -45,10 +47,11 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
       const total = st?.matches.length ?? 0;
       const active = st?.active ?? -1;
       const truncated = st?.truncated ?? false;
+      const invalid = st?.invalid ?? false;
       setInfo((prev) =>
-        prev.total === total && prev.active === active && prev.truncated === truncated
+        prev.total === total && prev.active === active && prev.truncated === truncated && prev.invalid === invalid
           ? prev
-          : { total, active, truncated },
+          : { total, active, truncated, invalid },
       );
     };
     sync();
@@ -63,6 +66,9 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
     onClose();
   };
 
+  // 只读模式：查找与跳转照常，替换那一排整排不出现（它改的是文档）
+  const canReplace = editor.isEditable;
+
   const onReplace = () => {
     if (query.trim() === "") return;
     replaceActiveMatch(editor, replacement);
@@ -73,6 +79,15 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
     const n = replaceAllMatches(editor, replacement);
     if (n > 0) toast.success(t("find.replaced", { count: String(n) }));
   };
+
+  // 表达式写错不报「无结果」：那是两件事，下面另有提示
+  const counter = info.invalid
+    ? ""
+    : info.total === 0
+      ? query
+        ? t("find.noResult")
+        : ""
+      : `${info.active + 1}/${info.total}${info.truncated ? "+" : ""}`;
 
   return (
     <div
@@ -101,13 +116,7 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
             }
           }}
         />
-        <span className="shrink-0 text-[11px] tabular-nums text-neutral-400">
-          {info.total === 0
-            ? query
-              ? t("find.noResult")
-              : ""
-            : `${info.active + 1}/${info.total}${info.truncated ? "+" : ""}`}
-        </span>
+        <span className="shrink-0 text-[11px] tabular-nums text-neutral-400">{counter}</span>
         <button
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-neutral-700 disabled:opacity-40 dark:hover:bg-neutral-800"
           title={t("find.prev")}
@@ -124,18 +133,20 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
         >
           <ChevronDown className="h-3.5 w-3.5" />
         </button>
-        <button
-          className={cn(
-            "flex h-6 w-6 shrink-0 items-center justify-center rounded",
-            showReplace
-              ? "bg-brand-100 text-brand-600"
-              : "text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-800",
-          )}
-          title={t("find.replace")}
-          onClick={() => setShowReplace((v) => !v)}
-        >
-          <Replace className="h-3.5 w-3.5" />
-        </button>
+        {canReplace && (
+          <button
+            className={cn(
+              "flex h-6 w-6 shrink-0 items-center justify-center rounded",
+              showReplace
+                ? "bg-brand-100 text-brand-600"
+                : "text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-800",
+            )}
+            title={t("find.replace")}
+            onClick={() => setShowReplace((v) => !v)}
+          >
+            <Replace className="h-3.5 w-3.5" />
+          </button>
+        )}
         <button
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-800"
           onClick={close}
@@ -163,7 +174,22 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
           />
           {t("find.wholeWord")}
         </label>
+        <label className="flex cursor-pointer items-center gap-1 text-[11px] text-neutral-500">
+          <input
+            type="checkbox"
+            className="h-3 w-3 accent-brand-600"
+            checked={regex}
+            onChange={(e) => setRegex(e.target.checked)}
+          />
+          {t("find.regex")}
+        </label>
       </div>
+
+      {info.invalid && (
+        <div className="border-t border-neutral-200 px-2 pb-1.5 text-[11px] text-red-600 dark:border-neutral-800">
+          {t("find.invalidRegex")}
+        </div>
+      )}
 
       {info.truncated && (
         <div className="border-t border-neutral-200 px-2 pb-1.5 text-[11px] text-amber-600 dark:border-neutral-800">
@@ -171,7 +197,7 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
         </div>
       )}
 
-      {showReplace && (
+      {canReplace && showReplace && (
         <div className="flex items-center gap-1 border-t border-neutral-200 px-2 py-1.5 dark:border-neutral-800">
           <Replace className="ml-1 h-3.5 w-3.5 shrink-0 text-neutral-400" />
           <input

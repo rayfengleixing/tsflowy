@@ -55,7 +55,8 @@ pub struct AiConfig {
     pub base_url: String,
     /// 模型名，例如 deepseek-chat
     pub model: String,
-    /// API Key（本地明文存储；对前端只回传掩码）
+    /// API Key 明文回退位：正常 Key 存系统凭据库，这里只留空串；凭据库不可用时才写入明文。
+    /// 无论哪种，对前端都只回传掩码。
     pub api_key: String,
     /// 请求上下文允许的最大字符数，默认 8000
     pub max_chars: u32,

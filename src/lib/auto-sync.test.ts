@@ -4,7 +4,11 @@ const invoker = vi.hoisted(() => vi.fn());
 const flushAll = vi.hoisted(() => vi.fn(() => Promise.resolve(true)));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invoker }));
-vi.mock("./close-flush", () => ({ flushAllForClose: flushAll }));
+vi.mock("./close-flush", () => ({
+  flushAllForClose: flushAll,
+  // client-log 在模块加载时登记自己，这条 mock 少一个导出就会让整串的 import 直接炸
+  registerCloseFlush: () => () => undefined,
+}));
 vi.mock("sonner", () => ({ toast: { info: vi.fn(), warning: vi.fn(), error: vi.fn(), success: vi.fn() } }));
 
 // node 测试环境没有 window/document：给 armTimer/clearTimer/armInterval 提供最小替身，

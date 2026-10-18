@@ -1,5 +1,11 @@
 import { t } from "@/lib/i18n";
-import { Section, ResetAllShortcuts, ShortcutRecorder, type ShortcutGroup } from "./settings-parts";
+import { EDITOR_SHORTCUT_IDS, GLOBAL_SHORTCUT_IDS, shortcutLabelKey, type ShortcutId } from "@/lib/shortcuts";
+import { Section, ResetAllShortcuts, ShortcutRecorder, type ShortcutGroup, type ShortcutItem } from "./settings-parts";
+
+/** 可自定义命令的清单直接由 shortcuts.ts 的分组生成：新增命令不用再在这里补一行（漏抄就等于少一个改绑入口） */
+function itemsOf(ids: ShortcutId[]): ShortcutItem[] {
+  return ids.map((id) => ({ label: t(shortcutLabelKey(id)), id }));
+}
 
 /** 快捷键总览：只读展示 + 可自定义项的录制入口（状态在 shortcuts store） */
 export function SettingsShortcuts() {
@@ -8,14 +14,8 @@ export function SettingsShortcuts() {
       titleKey: t("settings.shortcuts.global"),
       customizable: true,
       items: [
-        { label: t("settings.shortcuts.commandPalette"), id: "commandPalette" },
-        { label: t("settings.shortcuts.quickOpen"), id: "quickOpen" },
-        { label: t("settings.shortcuts.search"), id: "search" },
-        { label: t("settings.shortcuts.switchTab"), id: "switchTab" },
-        { label: t("settings.shortcuts.closeTab"), id: "closeTab" },
-        { label: t("settings.shortcuts.reopenClosedTab"), id: "reopenClosedTab" },
-        { label: t("settings.shortcuts.goBack"), id: "goBack" },
-        { label: t("settings.shortcuts.goForward"), id: "goForward" },
+        ...itemsOf(GLOBAL_SHORTCUT_IDS),
+        // 固定不可改的两条：Esc 收浮层、Ctrl+S 手动保存
         { label: t("settings.shortcuts.escape"), key: "Esc" },
         { label: t("settings.shortcuts.save"), key: "Ctrl / ⌘ + S" },
       ],
@@ -23,15 +23,7 @@ export function SettingsShortcuts() {
     {
       titleKey: t("settings.shortcuts.editor"),
       customizable: true,
-      items: [
-        { label: t("settings.shortcuts.slash"), key: "/" },
-        { label: t("settings.shortcuts.bold"), id: "bold" },
-        { label: t("settings.shortcuts.italic"), id: "italic" },
-        { label: t("settings.shortcuts.underline"), id: "underline" },
-        { label: t("settings.shortcuts.strike"), id: "strike" },
-        { label: t("settings.shortcuts.undo"), id: "undo" },
-        { label: t("settings.shortcuts.redo"), id: "redo" },
-      ],
+      items: [{ label: t("settings.shortcuts.slash"), key: "/" }, ...itemsOf(EDITOR_SHORTCUT_IDS)],
     },
   ];
 

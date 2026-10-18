@@ -70,7 +70,7 @@ pub(crate) fn make_db_snapshot(db: &Path, snap: &Path) -> Result<(), String> {
 
 /// 归档范围：完整备份（库 + 附件 + 设置/墓碑清单），或只打数据库。
 /// 迁移前留档用后者：DDL 不动附件与设置，整份复制既慢、又白占磁盘，
-/// 还会把含明文密钥的 config.json 多复制几份。
+/// 还会把 config.json（凭据库不可用时含明文 Key）多复制几份。
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BackupScope {
     Full,
@@ -165,7 +165,8 @@ pub(crate) fn write_backup_zip(
 /// 除数据库与 assets 外要一并入档的旁路文件：`(zip 条目名, 磁盘路径)`。
 /// 磁盘上不存在的直接剔除（没同步过就没有墓碑，从没改过设置也可能没有 config）：
 /// - `config.json`：放在数据目录之外的独立配置目录里。缺了它，换机恢复出来的库会配不上
-///   原来的数据目录、自动备份与同步设置。**注意**：AI 接口配置含明文 API Key，会跟着进归档。
+///   原来的数据目录、自动备份与同步设置。**注意**：Key 正常情况下只存系统凭据库、不在配置文件里，
+///   因此不会入档；只有凭据库不可用（或写入失败回退）时 config.json 才带明文 Key，此时归档跟着带一份。
 /// - `deleted-assets.txt`：附件删除墓碑清单，丢了它同步会把对侧已删的附件「复活」。
 fn sidecar_entries(data_dir: &Path) -> Vec<(String, PathBuf)> {
     [
@@ -246,7 +247,7 @@ const KEEP_PRE_MIGRATION: usize = 3;
 /// 迁移是整库唯一的不可逆写操作（DROP/重建表 + 数据规整），一旦失败或事后才发现数据被规整弄坏，
 /// 用户手边必须有原件。归档名沿用手动导出前缀，因此直接出现在设置页的备份列表里、走同一条恢复链路。
 /// 只打数据库（DatabaseOnly）：DDL 不动附件与设置，整份复制既慢又白占磁盘，
-/// 也避免把含明文密钥的 config.json 多复制几份。
+/// 也避免把 config.json（凭据库不可用时含明文 Key）多复制几份。
 pub(crate) fn capture_pre_migration(db: &Path, version: i64) -> Result<PathBuf, String> {
     let data_dir = db
         .parent()

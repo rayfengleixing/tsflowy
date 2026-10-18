@@ -1275,6 +1275,7 @@ const AI_ERROR_HINT: Record<string, MessageKey> = {
   network: "ai.errorHintNetwork",
   server: "ai.errorHintServer",
   request: "ai.errorHintRequest",
+  context_length: "ai.errorHintContextLength",
   not_configured: "ai.errorHintNotConfigured",
   cancelled: "ai.errorHintCancelled",
 };

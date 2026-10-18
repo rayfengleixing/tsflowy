@@ -156,4 +156,27 @@ describe("shortcuts store", () => {
     );
     expect(mod.findConflict("newPage", { ctrl: true, shift: false, alt: false, key: "b" })).toBeNull();
   });
+
+  it("默认表里的每条命令都排进设置页，且默认组合互不重复", async () => {
+    const {
+      DEFAULT_SHORTCUTS,
+      CUSTOMIZABLE_SHORTCUTS,
+      GLOBAL_SHORTCUT_IDS,
+      EDITOR_SHORTCUT_IDS,
+      comboEquals,
+      isBindableCombo,
+    } = await loadStore();
+    const ids = Object.keys(DEFAULT_SHORTCUTS) as (keyof typeof DEFAULT_SHORTCUTS)[];
+    // 新增命令忘了登记展示清单 → 用户改不了绑；漏进全局/编辑器分组 → 按键没人派发
+    expect(CUSTOMIZABLE_SHORTCUTS.map((c) => c.id).sort()).toEqual([...ids].sort());
+    expect([...GLOBAL_SHORTCUT_IDS, ...EDITOR_SHORTCUT_IDS].sort()).toEqual([...ids].sort());
+    // 默认值一律带修饰键：裸键默认绑定会吃掉正常输入
+    for (const id of ids) expect(isBindableCombo(DEFAULT_SHORTCUTS[id])).toBe(true);
+
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        expect(comboEquals(DEFAULT_SHORTCUTS[ids[i]], DEFAULT_SHORTCUTS[ids[j]])).toBe(false);
+      }
+    }
+  });
 });

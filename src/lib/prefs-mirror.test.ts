@@ -108,4 +108,13 @@ describe("hydratePrefs（备份里的偏好回填本机）", () => {
     };
     expect(written.prefs["tsflowy-accent"]).toBe("violet");
   });
+
+  it("编辑器模式开关在镜像名单里：换机后不会静默回到「没开过」", async () => {
+    invoker.mockResolvedValue({ "tsflowy:editor-readonly": "1", "tsflowy:editor-typewriter": "1" });
+    const { hydratePrefs } = await freshMirror();
+    await hydratePrefs();
+
+    expect(store.get("tsflowy:editor-readonly")).toBe("1");
+    expect(store.get("tsflowy:editor-typewriter")).toBe("1");
+  });
 });

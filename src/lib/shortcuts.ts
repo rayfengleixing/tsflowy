@@ -1,5 +1,5 @@
 // 可自定义的快捷键。全局命令（命令面板 / 快速打开 / 全局搜索 / 切换标签页 / 新建页面 /
-// 打开设置 / 切换主题 / 开关 AI 助手）由 App 的 window keydown 处理；编辑器内命令（加粗 / 斜体 / 下划线 /
+// 打开设置 / 切换主题 / 开关 AI 助手 / 只读·专注·打字机模式）由 App 的 window keydown 处理；编辑器内命令（加粗 / 斜体 / 下划线 /
 // 删除线 / 撤销 / 重做）由 EditorPage 的 editorProps.handleKeyDown 处理——该回调先于
 // TipTap 各扩展的内置 keymap 执行，命中即短路，因此改绑后旧默认键同样失效。
 // 两组共用同一个 store 与冲突检测，跨组也互斥。
@@ -8,6 +8,7 @@
 // 与既有快捷键表文案「Ctrl / ⌘」一致。
 
 import { create } from "zustand";
+import type { MessageKey } from "@/lib/i18n";
 
 export type ShortcutId =
   | "commandPalette"
@@ -22,6 +23,9 @@ export type ShortcutId =
   | "openSettings"
   | "toggleTheme"
   | "aiPanel"
+  | "toggleReadonly"
+  | "toggleFocus"
+  | "toggleTypewriter"
   | "bold"
   | "italic"
   | "underline"
@@ -56,6 +60,10 @@ export const DEFAULT_SHORTCUTS: Record<ShortcutId, Combo> = {
   openSettings: c(","),
   toggleTheme: c("d", { shift: true }),
   aiPanel: c("a", { shift: true }),
+  // 三种编辑器模式用 Ctrl+Alt+字母：Ctrl+Shift+R 一类是 WebView 的重载/开发快捷键，容易撞
+  toggleReadonly: c("r", { alt: true }),
+  toggleFocus: c("f", { alt: true }),
+  toggleTypewriter: c("m", { alt: true }),
   // 编辑器命令：与 TipTap 内置默认一致（strike 实为 Mod-Shift-s，非 Ctrl+Shift+X）
   bold: c("b"),
   italic: c("i"),
@@ -79,6 +87,9 @@ export const GLOBAL_SHORTCUT_IDS: ShortcutId[] = [
   "openSettings",
   "toggleTheme",
   "aiPanel",
+  "toggleReadonly",
+  "toggleFocus",
+  "toggleTypewriter",
 ];
 
 /** 编辑器组 */
@@ -100,7 +111,7 @@ export const BUILTIN_EDITOR_KEYS: { combo: Combo; id: ShortcutId }[] = [
 ];
 
 /** 可自定义的快捷键（顺序即设置页展示顺序） */
-export const CUSTOMIZABLE_SHORTCUTS: { id: ShortcutId; labelKey: string }[] = [
+export const CUSTOMIZABLE_SHORTCUTS: { id: ShortcutId; labelKey: MessageKey }[] = [
   { id: "commandPalette", labelKey: "settings.shortcuts.commandPalette" },
   { id: "quickOpen", labelKey: "settings.shortcuts.quickOpen" },
   { id: "search", labelKey: "settings.shortcuts.search" },
@@ -113,6 +124,9 @@ export const CUSTOMIZABLE_SHORTCUTS: { id: ShortcutId; labelKey: string }[] = [
   { id: "openSettings", labelKey: "settings.shortcuts.openSettings" },
   { id: "toggleTheme", labelKey: "settings.shortcuts.toggleTheme" },
   { id: "aiPanel", labelKey: "settings.shortcuts.aiPanel" },
+  { id: "toggleReadonly", labelKey: "settings.shortcuts.toggleReadonly" },
+  { id: "toggleFocus", labelKey: "settings.shortcuts.toggleFocus" },
+  { id: "toggleTypewriter", labelKey: "settings.shortcuts.toggleTypewriter" },
   { id: "bold", labelKey: "settings.shortcuts.bold" },
   { id: "italic", labelKey: "settings.shortcuts.italic" },
   { id: "underline", labelKey: "settings.shortcuts.underline" },
@@ -120,6 +134,13 @@ export const CUSTOMIZABLE_SHORTCUTS: { id: ShortcutId; labelKey: string }[] = [
   { id: "undo", labelKey: "settings.shortcuts.undo" },
   { id: "redo", labelKey: "settings.shortcuts.redo" },
 ];
+
+const LABEL_KEY_BY_ID = new Map(CUSTOMIZABLE_SHORTCUTS.map((c) => [c.id, c.labelKey]));
+
+/** 命令的展示文案键：设置页按分组拼清单时用，省得再抄一份 id→label 对照表 */
+export function shortcutLabelKey(id: ShortcutId): MessageKey {
+  return LABEL_KEY_BY_ID.get(id) ?? "settings.shortcuts";
+}
 
 const STORAGE_KEY = "tsflowy-shortcuts";
 

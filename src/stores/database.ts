@@ -8,7 +8,7 @@ import type {
   FieldType,
 } from "@/types/database";
 import { databaseApi } from "@/lib/database";
-import { newSelectOption, parseFieldOptions, sameCellValue } from "@/lib/database-values";
+import { cellWriteTypeSafe, newSelectOption, parseFieldOptions, sameCellValue } from "@/lib/database-values";
 import { renameFormulaRef } from "@/lib/database-formula";
 import { viewApi } from "@/lib/db";
 import { useRelationStore } from "@/stores/relation";
@@ -496,6 +496,13 @@ export function createDatabaseStore() {
         const prev = get().cells;
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
         if (sameCellValue(prev[rowId]?.[fieldId] ?? null, value)) return;
+        // 值形态与字段类型对不上就不落库：读的时候才会炸，写进来才是病灶
+        const field = get().fields.find((f) => f.id === fieldId);
+        if (!cellWriteTypeSafe(field, value)) {
+          logger.warn("cell write rejected: value type mismatch", fieldId, field?.field_type);
+          toast.error(t("cell.typeMismatch", { field: field?.name ?? fieldId }));
+          return;
+        }
         await databaseApi.setCell(rowId, fieldId, value);
         // 行映射整体换新：原地改旧 state 的行对象会让按引用比较的记忆化消费方漏掉更新
         set({ cells: { ...prev, [rowId]: { ...(prev[rowId] ?? {}), [fieldId]: value } } });
@@ -508,9 +515,23 @@ export function createDatabaseStore() {
           return !sameCellValue(cur[u.rowId]?.[u.fieldId] ?? null, u.value);
         });
         if (effective.length === 0) return;
-        await databaseApi.setCellsMany(effective);
+        // 批量写入（粘贴 / 批量改值）里只剔除类型不符的那几格，其余照常落库
+        const fields = get().fields;
+        const accepted = effective.filter((u) =>
+          cellWriteTypeSafe(
+            fields.find((f) => f.id === u.fieldId),
+            u.value,
+          ),
+        );
+        const skipped = effective.length - accepted.length;
+        if (skipped > 0) {
+          logger.warn("cell writes rejected: value type mismatch", skipped);
+          toast.error(t("cell.typeMismatchSkipped", { count: String(skipped) }));
+        }
+        if (accepted.length === 0) return;
+        await databaseApi.setCellsMany(accepted);
         const cells = { ...cur };
-        for (const u of effective) {
+        for (const u of accepted) {
           // 逐行浅拷贝后替换：不原地改上一份 state 里的对象
           const rowCells = { ...(cells[u.rowId] ?? {}) };
           rowCells[u.fieldId] = u.value;

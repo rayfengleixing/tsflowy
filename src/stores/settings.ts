@@ -69,6 +69,27 @@ function loadEditorWidth(): EditorWidth {
   }
 }
 
+/** 编辑器模式开关：只读与打字机跨会话保留（见 prefs-mirror 白名单） */
+const EDITOR_READONLY_KEY = "tsflowy:editor-readonly";
+const TYPEWRITER_KEY = "tsflowy:editor-typewriter";
+
+/** 缺省一律关：只读开着会挡住输入，宁可让用户多按一次，也不要开局不能打字 */
+function loadFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function persistFlag(key: string, on: boolean) {
+  try {
+    localStorage.setItem(key, on ? "1" : "0");
+  } catch {
+    /* localStorage 不可用时静默降级 */
+  }
+}
+
 interface SettingsState {
   lang: LangCode;
   theme: ThemeMode;
@@ -78,6 +99,10 @@ interface SettingsState {
   fontSize: FontSize;
   lineHeight: LineHeight;
   editorWidth: EditorWidth;
+  editorReadonly: boolean;
+  typewriter: boolean;
+  /** 专注模式：只藏本次运行的界面外壳，不做持久化（重启后看不见侧边栏会找不到退出入口） */
+  focusMode: boolean;
 
   setLang: (lang: LangCode) => void;
   setTheme: (t: ThemeMode) => void;
@@ -87,6 +112,9 @@ interface SettingsState {
   setFontSize: (s: FontSize) => void;
   setLineHeight: (l: LineHeight) => void;
   setEditorWidth: (w: EditorWidth) => void;
+  setEditorReadonly: (on: boolean) => void;
+  setTypewriter: (on: boolean) => void;
+  setFocusMode: (on: boolean) => void;
 }
 
 const ACCENT_CLASS_BY_COLOR: Record<AccentColor, { brand: string; palette: Record<50 | 100 | 500 | 600, string> }> = {
@@ -654,6 +682,9 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   fontSize: loadFontSize(),
   lineHeight: loadLineHeight(),
   editorWidth: loadEditorWidth(),
+  editorReadonly: loadFlag(EDITOR_READONLY_KEY),
+  typewriter: loadFlag(TYPEWRITER_KEY),
+  focusMode: false,
 
   setLang: (lang) => {
     set({ lang });
@@ -712,6 +743,15 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     }
     applyEditorWidthToDocument(editorWidth);
   },
+  setEditorReadonly: (editorReadonly) => {
+    set({ editorReadonly });
+    persistFlag(EDITOR_READONLY_KEY, editorReadonly);
+  },
+  setTypewriter: (typewriter) => {
+    set({ typewriter });
+    persistFlag(TYPEWRITER_KEY, typewriter);
+  },
+  setFocusMode: (focusMode) => set({ focusMode }),
 }));
 
 /** App 启动时用 settings 存储当前值立即写一次（避免第一次进入才有效果） */

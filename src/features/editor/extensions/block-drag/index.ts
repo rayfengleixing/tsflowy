@@ -117,6 +117,8 @@ export const BlockDrag = Extension.create({
 
 /** 手柄键盘交互；返回 true 表示按键已被消费 */
 function handleBlockKey(view: EditorView, event: KeyboardEvent, editor: Editor): boolean {
+  // 只读模式下按键仍会进到这里：搬移/删除整段都是改文档，一律放行透传
+  if (!editor.isEditable) return false;
   const span = BLOCK_SELECTION_KEY.getState(view.state) ?? null;
   if (event.key === "Escape") {
     if (!span) return false;
@@ -309,6 +311,11 @@ class BlockDragView {
 
   /** 普通 hover：在 editor 范围内显示手柄 */
   updateHover(e: MouseEvent) {
+    // 只读模式没有块操作可做，手柄亮着只会误导
+    if (!this.editor.isEditable) {
+      this.hideHandle();
+      return;
+    }
     const root = this.view.dom.getBoundingClientRect();
     if (
       e.clientX < root.left - 60 ||

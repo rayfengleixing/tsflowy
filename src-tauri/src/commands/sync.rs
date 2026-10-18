@@ -961,7 +961,7 @@ pub struct DbSummary {
     pub activity: Option<String>,
 }
 
-fn db_summary(path: &Path) -> DbSummary {
+pub(crate) fn db_summary(path: &Path) -> DbSummary {
     let Ok(conn) = rusqlite::Connection::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,

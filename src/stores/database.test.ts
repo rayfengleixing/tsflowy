@@ -386,3 +386,75 @@ describe("数据库 store 行回收站", () => {
     expect(store.getState().trash).toEqual([]);
   });
 });
+
+describe("database store 写入类型闸门", () => {
+  const field = (id: string, name: string, field_type: string) =>
+    ({
+      id,
+      database_view_id: "v1",
+      name,
+      field_type,
+      options: "{}",
+      width: 180,
+      is_hidden: 0,
+      position: 0,
+    }) as DatabaseField;
+
+  it("值与字段类型不符时不落库，也不写进单元格缓存", async () => {
+    const store = useDatabaseStore;
+    store.setState({ viewId: "v1", fields: [field("f-num", "价格", "number")], cells: { r1: { "f-num": 1 } } });
+
+    await store.getState().setCell("r1", "f-num", "三千");
+
+    expect(api.setCell).not.toHaveBeenCalled();
+    expect(store.getState().cells.r1["f-num"]).toBe(1);
+    expect(toastError).toHaveBeenCalledTimes(1);
+  });
+
+  it("合规值与空值照常写入；只读列不做校验", async () => {
+    const store = useDatabaseStore;
+    store.setState({
+      viewId: "v1",
+      fields: [field("f-num", "价格", "number"), field("f-total", "总价", "formula")],
+      cells: {},
+    });
+    api.setCell.mockResolvedValue(undefined);
+
+    await store.getState().setCell("r1", "f-num", 2);
+    await store.getState().setCell("r1", "f-num", null);
+    await store.getState().setCell("r1", "f-total", "文本公式值");
+
+    expect(api.setCell).toHaveBeenCalledTimes(3);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("批量写入只剔除类型不符的那几格，其余照常落库", async () => {
+    const store = useDatabaseStore;
+    store.setState({
+      viewId: "v1",
+      fields: [field("f-num", "价格", "number"), field("f-text", "备注", "text")],
+      cells: {},
+    });
+    api.setCellsMany.mockResolvedValue(1);
+
+    await store.getState().setCellsMany([
+      { rowId: "r1", fieldId: "f-num", value: "abc" },
+      { rowId: "r1", fieldId: "f-text", value: "ok" },
+    ]);
+
+    expect(api.setCellsMany).toHaveBeenCalledWith([{ rowId: "r1", fieldId: "f-text", value: "ok" }]);
+    expect(store.getState().cells.r1).toEqual({ "f-text": "ok" });
+    expect(toastError).toHaveBeenCalledTimes(1);
+  });
+
+  it("字段还没加载时不拦：交给持久层报错，别在这里误判成非法值", async () => {
+    const store = useDatabaseStore;
+    store.setState({ viewId: "v1", fields: [], cells: {} });
+    api.setCell.mockResolvedValue(undefined);
+
+    await store.getState().setCell("r1", "f-unknown", "abc");
+
+    expect(api.setCell).toHaveBeenCalledWith("r1", "f-unknown", "abc");
+    expect(toastError).not.toHaveBeenCalled();
+  });
+});

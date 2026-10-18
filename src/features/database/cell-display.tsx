@@ -1,6 +1,7 @@
 // 数据库单元格的只读展示部件（选项 / 关联 / 附件胶囊与缩略图）。
 // 从 editors.tsx 原样搬出（无逻辑/样式改动），editors.tsx 再统一转出以保持对外导出 API 不变。
 import { useEffect, useState, type ReactNode } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Check, File as FileIcon, Link2, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
 import type { CellValue, DatabaseField, FieldType, SelectOption } from "@/types/database";
@@ -13,7 +14,15 @@ import {
   ratingMax,
 } from "@/lib/database-values";
 import { isImageFile, openAttachment, resolveAssetUrl } from "@/lib/assets";
-import { relationRowIds, relationRowLabel, relationTarget, reverseRelationConfig } from "@/lib/relation";
+import { cellLinkHref, isLinkFieldType, type LinkFieldKind } from "@/lib/database-link";
+import {
+  relationRowIds,
+  relationRowLabel,
+  relationTarget,
+  reverseRelationConfig,
+  type RelationDb,
+} from "@/lib/relation";
+import { openRowInView } from "@/lib/deep-link";
 import { useRelationStore } from "@/stores/relation";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
@@ -121,24 +130,29 @@ export function SelectChips({
   );
 }
 
-/** 关联行的展示胶囊（label 由调用方解析，目标行已删时为短 id 兜底） */
+/** 关联行的展示胶囊（label 由调用方解析，目标行已删时为短 id 兜底）。
+ *  onOpen 给定时整颗胶囊可点（跳去对端那一行）；编辑态只给 onRemove，仍是不可点的 span。 */
 export function RelationChip({
   label,
   compact = false,
   onRemove,
+  onOpen,
 }: {
   label: string;
   compact?: boolean;
   onRemove?: () => void;
+  onOpen?: () => void;
 }) {
   const size = compact ? "px-1 py-[1px] text-[10px]" : "px-2 py-0.5 text-[11px]";
-  return (
-    <span
-      className={cn(
-        "inline-flex max-w-[200px] items-center gap-1 rounded-full bg-neutral-100 font-medium text-neutral-600",
-        size,
-      )}
-    >
+  const cls = cn(
+    "inline-flex max-w-[200px] items-center gap-1 rounded-full font-medium",
+    size,
+    onOpen
+      ? "bg-neutral-100 text-neutral-600 hover:bg-brand-100 hover:text-brand-600"
+      : "bg-neutral-100 text-neutral-600",
+  );
+  const body = (
+    <>
       <Link2 className="h-3 w-3 shrink-0 text-neutral-400" />
       <span className="truncate">{label}</span>
       {onRemove && (
@@ -155,8 +169,29 @@ export function RelationChip({
           <X className="h-2.5 w-2.5" />
         </button>
       )}
-    </span>
+    </>
   );
+  if (!onOpen) return <span className={cls}>{body}</span>;
+  return (
+    <button
+      type="button"
+      title={t("field.relationOpen")}
+      className={cls}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+    >
+      {body}
+    </button>
+  );
+}
+
+/** 胶囊的可点入口：对端库里确有这一行才给（行已删时点了只会打开一页空白） */
+function rowJump(viewId: string | null, db: RelationDb | undefined, id: string): (() => void) | undefined {
+  if (!viewId || !db || relationRowLabel(db, id) === null) return undefined;
+  return () => openRowInView(viewId, id);
 }
 
 /**
@@ -184,6 +219,7 @@ export function ReverseRelationChips({
           key={id}
           compact={compact}
           label={(db ? relationRowLabel(db, id) : null) ?? (db ? t("field.relationMissing") : id)}
+          onOpen={rowJump(sourceViewId, db, id)}
         />
       ))}
     </span>
@@ -214,6 +250,7 @@ export function RelationChips({
           key={id}
           compact={compact}
           label={(db ? relationRowLabel(db, id) : null) ?? (db ? t("field.relationMissing") : id)}
+          onOpen={rowJump(targetId, db, id)}
         />
       ))}
     </span>
@@ -318,6 +355,44 @@ export function AttachmentChips({ value, compact = false }: { value: CellValue; 
   );
 }
 
+/** url / email 单元格里的可点链接：点击把地址交给系统默认程序（浏览器 / 邮件客户端）。
+ *  与附件胶囊同一套手感——点文字是打开，点格子的其它位置照常进编辑。 */
+export function CellLink({ kind, value }: { kind: LinkFieldKind; value: string }) {
+  const href = cellLinkHref(kind, value);
+  const [busy, setBusy] = useState(false);
+  if (!href) {
+    // 协议不在白名单里（javascript:、file:…）或根本不成其为一个地址：退回纯文本
+    return <span className="truncate">{value}</span>;
+  }
+  const open = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await openUrl(href);
+    } catch (e) {
+      logger.error(kind === "email" ? "email cell open failed" : "url cell open failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      title={t(kind === "email" ? "email.clickToOpen" : "url.clickToOpen")}
+      className="min-w-0 truncate text-left text-[13px] text-brand-600 underline-offset-2 hover:underline disabled:opacity-60"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={(e) => {
+        e.stopPropagation();
+        void open();
+      }}
+    >
+      {value}
+    </button>
+  );
+}
+
 /** 进度单元格展示：0-100 进度条 + 右侧百分比数字。空值给 0% 灰条。 */
 export function ProgressCell({ value, compact = false }: { value: CellValue; compact?: boolean }) {
   const raw = typeof value === "number" ? value : null;
@@ -389,11 +464,17 @@ const selectDisplay = ({ field, value, onChipRemove }: CellDisplayProps, grid: b
   node: grid && isEmptyArray(value) ? gridEmpty : <SelectChips field={field} value={value} onRemove={onChipRemove} />,
   wrapClass: grid ? GRID_TRUNCATE : null,
 });
-
 const relationDisplay = ({ field, value }: CellDisplayProps, grid: boolean): CellDisplayContent => ({
   node: grid && isEmptyArray(value) ? gridEmpty : <RelationChips field={field} value={value} />,
   wrapClass: grid ? GRID_TRUNCATE : null,
 });
+
+/** 链接列（url / email）：只有解析得出安全目标时才换成可点部件，否则交回文本兜底 */
+const linkDisplay = ({ field, value }: CellDisplayProps, grid: boolean): CellDisplayContent | null => {
+  if (!isLinkFieldType(field.field_type)) return null;
+  if (typeof value !== "string" || value.trim() === "") return null;
+  return { node: <CellLink kind={field.field_type} value={value} />, wrapClass: grid ? GRID_TRUNCATE : null };
+};
 
 /** 有专用部件的类型；返回 null 表示该变体按普通文本渲染（由调用方兜底）。
  *  新增类型只需在这里补一行，表格与行详情两条路径同时生效。 */
@@ -416,6 +497,8 @@ const DEDICATED_DISPLAYS: Partial<
   single_select: selectDisplay,
   status: selectDisplay,
   multi_select: selectDisplay,
+  url: linkDisplay,
+  email: linkDisplay,
   relation: relationDisplay,
   // 反向关系是只读虚拟列：value 由调用方实时反查（来源行 id 数组），这里解析成来源行标题
   reverse_relation: ({ field, value }, grid) => ({

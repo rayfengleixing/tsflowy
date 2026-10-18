@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod desktop;
+mod logging;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,7 +10,7 @@ use std::process::Command;
 use tauri::{Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_window_state::StateFlags;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// 启动前：确定数据落点并建好联接。
 /// 默认落点就是 app_data_dir 本身（真实目录，Windows 上即 %APPDATA%\com.tsflowy.app）；
@@ -196,13 +197,19 @@ fn chrono_like_timestamp_suffix() -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Phase 4 优化 · P2#5：统一 tracing 门面（默认 info，通过环境变量 TSFLOWY_LOG=debug/trace 覆盖）
-    let _ = fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .or_else(|_| EnvFilter::try_new("info"))
-                .expect("tracing env filter"),
+    // Phase 4 优化 · P2#5：统一 tracing 门面（默认 info，通过环境变量 TSFLOWY_LOG=debug/trace 覆盖）。
+    // 两层的理由：控制台给开发看，文件给报障用——WebView2 的控制台普通用户打不开。
+    let env_filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .expect("tracing env filter");
+    let _ = tracing_subscriber::registry()
+        .with(fmt::layer().with_writer(std::io::stdout))
+        .with(
+            fmt::layer()
+                .with_writer(logging::FileWriter)
+                .with_ansi(false),
         )
+        .with(env_filter)
         .try_init();
 
     // 在 DB 打开之前，确定数据落点：自定义目录优先，否则默认落到系统「文档」目录下的 TsFlowy，
@@ -250,6 +257,8 @@ pub fn run() {
                 }
             }
             let path = dir.join(db::DB_FILE);
+            // 数据目录已确定 → 日志开始落 <数据目录>/logs/（此前的行只进控制台）
+            logging::attach(&dir);
             tracing::info!(path = %path.display(), "database file location");
             // Db::open 永不 panic：失败进 init_error，各 DB 命令返回该错误
             app.manage(db::Db::open(path));
@@ -311,6 +320,8 @@ pub fn run() {
             commands::sync::preview_sync_conflict,
             commands::sync::open_conflicts_dir,
             commands::sync::restore_sync_conflict,
+            commands::diagnostics::write_client_logs,
+            commands::diagnostics::export_diagnostics,
             commands::db::workspace_list,
             commands::db::workspace_create,
             commands::db::workspace_rename,
@@ -341,6 +352,7 @@ pub fn run() {
             commands::db::doc_save,
             commands::db::doc_list_all,
             commands::db::doc_snapshot_list,
+            commands::db::doc_snapshot_get,
             commands::db::doc_snapshot_restore,
             commands::db::mention_rebuild,
             commands::db::mention_list_backlinks,

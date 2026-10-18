@@ -483,7 +483,7 @@ interface AiState {
   /** agent 循环里正在本机执行只读检索（模型已回答完上一轮，下一轮请求还没发出） */
   retrieving: boolean;
   error: string | null;
-  /** 上一条错误的归类码（auth / rate_limit / quota / timeout / network / server / cancelled） */
+  /** 上一条错误的归类码（auth / rate_limit / quota / timeout / network / server / context_length / cancelled） */
   errorCode: string | null;
   /** 当前会话发起时所在的页面（历史会话据此标注上下文来源） */
   sessionPageId: string | null;

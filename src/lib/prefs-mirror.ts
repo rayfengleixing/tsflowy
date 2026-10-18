@@ -27,6 +27,8 @@ const MIRRORED_KEYS = [
   "tsflowy:sidebar-width",
   "tsflowy:ui:sidebar_tab",
   "tsflowy-ai-panel-width",
+  "tsflowy:editor-readonly",
+  "tsflowy:editor-typewriter",
 ];
 
 /** 回填等不到 IPC 时的上限：超了就照常渲染，偏好丢一次启动好过白屏 */
