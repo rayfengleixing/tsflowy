@@ -27,6 +27,7 @@ vi.mock("@/stores/workspace", () => ({
 vi.mock("./documents", () => ({ documentApi: { get: docGetMock } }));
 
 import { exportMarkdownFolder } from "./export-folder";
+import type { ExportManifest } from "./export-manifest";
 
 const ROOT_DOC = {
   type: "doc",
@@ -118,7 +119,13 @@ describe("exportMarkdownFolder（附件随页面落盘）", () => {
       "D:/out/项目/子页.md",
       "D:/out/项目/看板.md",
       "D:/out/散页.md",
+      "D:/out/.tsflowy-export.json",
     ]);
+    const writes = callsFor("write_text_file");
+    // 清单给导入端用来把正文里的旧 viewId 对回新建的页面
+    const manifest = JSON.parse(String(writes[writes.length - 1]?.content)) as ExportManifest;
+    expect(manifest.version).toBe(1);
+    expect(manifest.views).toMatchObject({ solo: "散页.md", board: "项目/看板.md", root: "项目/项目.md" });
     expect(callsFor("mkdir_all").map((c) => c.path)).toEqual(["D:/out/项目", "D:/out/项目/assets"]);
     // 子页与父页同目录：父页已复制过的 assets/a.png 不重复复制
     expect(callsFor("write_binary_file").map((c) => c.path)).toEqual([

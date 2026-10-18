@@ -1,6 +1,6 @@
 // 设置页的独立辅助部件：类型、常量与无外部状态依赖的展示组件。
 // 从 SettingsPage.tsx 原样搬出（无逻辑/样式改动），SettingsPage 只负责状态与编排。
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { getPresetPreview, type ThemeMode, type ThemePresetId, type AccentColor } from "@/stores/settings";
@@ -102,6 +102,19 @@ export const SYNC_SIDE_KEY: Record<ConflictFile["side"], MessageKey> = {
   unknown: "settings.syncConflictSideUnknown",
 };
 
+/** get_sync_history 返回结构：一轮同步的留档，新的在前 */
+export interface SyncHistoryEntry {
+  time: string;
+  /** none / upload / download / conflict / failed */
+  action: string;
+  duration_ms: number;
+  assets_copied: number;
+  assets_deleted: number;
+  conflicts: string[];
+  /** action=failed 时的错误信息 */
+  error: string | null;
+}
+
 /** run_sync 返回结构 */
 export interface SyncRunResult {
   action: string;
@@ -117,12 +130,31 @@ export interface SyncRunResult {
   info: SyncInfo;
 }
 
+/** preview_sync_conflict 返回结构：冲突副本与本机当前库的并排对照 */
+export interface ConflictPreview {
+  name: string;
+  side: ConflictFile["side"];
+  size: number;
+  modified: string;
+  copy: DbSummary;
+  local: DbSummary;
+}
+
+/** 单个库的粗略概况（只读统计，不是逐行 diff） */
+export interface DbSummary {
+  pages: number;
+  documents: number;
+  rows: number;
+  activity: string | null;
+}
+
 /** 同步动作 → i18n 文案 */
 export const SYNC_ACTION_KEY: Record<string, MessageKey> = {
   none: "settings.syncActionNone",
   upload: "settings.syncActionUpload",
   download: "settings.syncActionDownload",
   conflict: "settings.syncActionConflict",
+  failed: "settings.syncActionFailed",
 };
 
 /** AI 助手表单（与 AiConfig 的 snake_case 字段解耦，便于本地编辑） */
@@ -203,12 +235,101 @@ export function formatBytes(n: number): string {
   return `${(kb / 1024).toFixed(1)} MB`;
 }
 
+/** 毫秒耗时 → 一句话（同步历史里区分"秒级无变化"和"分钟级换库"） */
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms} ms`;
+  const secs = ms / 1000;
+  if (secs < 60) return `${secs.toFixed(1)} s`;
+  return `${Math.floor(secs / 60)} min ${Math.round(secs % 60)} s`;
+}
+
 /** 数据目录风险提示（云同步盘 / 与同步目录嵌套）；无风险时不渲染 */
 export function RiskNotice({ risk }: { risk: DataDirRisk | null }) {
   if (!risk) return null;
   return (
     <div className="mt-2 max-w-lg rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
       {t(risk === "cloud" ? "settings.dataDirRiskCloud" : "settings.dataDirRiskOverlap")}
+    </div>
+  );
+}
+
+/**
+ * 同步安全提示：同步文件夹里的库与附件都是明文，这是设计前提而不是缺陷——
+ * 传输与账户隔离交给网盘，本应用不做端到端加密。这里把威胁模型讲清楚，
+ * 并给出目录权限层面的兜底做法；同步目录命中云盘时额外说明云端也持有明文副本。
+ */
+export function SyncSecurityNote({ cloudDir }: { cloudDir: boolean }) {
+  return (
+    <div className="mt-3 max-w-lg space-y-1.5 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+      <p>{t("settings.syncPlaintextNote")}</p>
+      {cloudDir && (
+        <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+          {t("settings.syncDirCloudNote")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 冲突副本预览：只把「这份副本 vs 本机当前」的粗粒度统计并排列出来，
+ * 让用户在点恢复前看清两边各有什么。逐行 diff 属于记录级合并，这里不做。
+ */
+export function ConflictPreviewPanel({
+  loading,
+  error,
+  data,
+}: {
+  loading: boolean;
+  error: string | null;
+  data: ConflictPreview | null;
+}) {
+  if (loading) {
+    return <div className="mt-1.5 text-[10px] text-neutral-400">{t("settings.syncConflictPreviewLoading")}</div>;
+  }
+  if (error) {
+    return (
+      <div className="mt-1.5 text-[10px] text-red-600">
+        {t("settings.syncConflictPreviewFailed", { message: error })}
+      </div>
+    );
+  }
+  if (!data) return null;
+  const cells: { label: string; copy: string; local: string }[] = [
+    { label: t("settings.syncConflictPreviewPages"), copy: String(data.copy.pages), local: String(data.local.pages) },
+    {
+      label: t("settings.syncConflictPreviewDocs"),
+      copy: String(data.copy.documents),
+      local: String(data.local.documents),
+    },
+    { label: t("settings.syncConflictPreviewRows"), copy: String(data.copy.rows), local: String(data.local.rows) },
+    {
+      label: t("settings.syncConflictPreviewActivity"),
+      copy: data.copy.activity ?? t("settings.syncActivityUnknown"),
+      local: data.local.activity ?? t("settings.syncActivityUnknown"),
+    },
+  ];
+  return (
+    <div className="mt-1.5 rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 dark:border-neutral-700 dark:bg-neutral-900">
+      <div className="mb-1 text-[10px] text-neutral-400">
+        {t(SYNC_SIDE_KEY[data.side])} · {data.modified} · {formatBytes(data.size)}
+      </div>
+      <div className="grid grid-cols-[minmax(0,1.4fr)_1fr_1fr] gap-x-2 text-[10px]">
+        <span />
+        <span className="font-medium text-neutral-600 dark:text-neutral-300">
+          {t("settings.syncConflictPreviewCopy")}
+        </span>
+        <span className="font-medium text-neutral-600 dark:text-neutral-300">
+          {t("settings.syncConflictPreviewLocal")}
+        </span>
+        {cells.map((c) => (
+          <Fragment key={c.label}>
+            <span className="text-neutral-500 dark:text-neutral-400">{c.label}</span>
+            <span className="truncate text-neutral-700 dark:text-neutral-200">{c.copy}</span>
+            <span className="truncate text-neutral-700 dark:text-neutral-200">{c.local}</span>
+          </Fragment>
+        ))}
+      </div>
     </div>
   );
 }

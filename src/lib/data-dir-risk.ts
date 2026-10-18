@@ -41,6 +41,14 @@ function hasCloudMarker(path: string): boolean {
 export type DataDirRisk = "cloud" | "sync-overlap";
 
 /**
+ * 路径是否落在常见云盘目录里。同步文件夹命中它不算配置错误（那正是同步的用法），
+ * 但意味着明文副本会上传到云端，需要单独提示。
+ */
+export function isCloudManagedPath(path: string): boolean {
+  return hasCloudMarker(normalize(path));
+}
+
+/**
  * 判断数据目录的风险类型：互相嵌套优先于云盘提示（前者是配置错误，更要紧）。
  * 返回 null 表示未发现风险。
  */

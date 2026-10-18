@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { importMarkdownFolder } from "@/lib/import-folder";
+import { importMarkdownFolder, isRemoteFetchEnabled, setRemoteFetchEnabled } from "@/lib/import-folder";
 import { exportMarkdownFolder } from "@/lib/export-folder";
 import { flushAllForClose } from "@/lib/close-flush";
 import { t } from "@/lib/i18n";
@@ -67,6 +67,8 @@ export function SettingsBackup() {
   const [busyImport, setBusyImport] = useState(false);
   const [busyImportFolder, setBusyImportFolder] = useState(false);
   const [busyExportFolder, setBusyExportFolder] = useState(false);
+  // 导入 Markdown 时是否把正文里的远程图片下载到本机（默认开）
+  const [fetchRemote, setFetchRemote] = useState(isRemoteFetchEnabled);
   const [autoBackup, setAutoBackup] = useState<AutoBackupInfo | null>(null);
   const [busyBackupNow, setBusyBackupNow] = useState(false);
   // 数据保留策略（文档快照 + 回收站自动清空），存 Rust 侧 config.json
@@ -137,6 +139,12 @@ export function SettingsBackup() {
       } else {
         if (result.created > 0) toast.success(t("settings.importedFolder", { n: result.created }));
         if (result.failed > 0) toast.warning(t("settings.importFolderFailed", { n: result.failed }));
+        // 跨页引用能不能接回是"这库导到另一台机器还能不能用"的关键，必须让用户看见数
+        if (result.relinked_refs > 0) toast.info(t("settings.importFolderRelinked", { n: result.relinked_refs }));
+        if (result.dangling_refs > 0) toast.warning(t("settings.importFolderDangling", { n: result.dangling_refs }));
+        // 没下载成功的远程图：留着原链接，断网/换机后就会裂，必须单独报数
+        if (result.remote_failed > 0)
+          toast.warning(t("settings.importFolderRemoteFailed", { n: result.remote_failed }));
         await useWorkspaceStore.getState().reload();
       }
     } catch (e) {
@@ -344,6 +352,20 @@ export function SettingsBackup() {
             {t("settings.exportFolder")}
           </Button>
         </div>
+
+        {/* 导入时的联网收编开关：默认开，关掉后远程图片保持原链接（离线/内网环境用得上） */}
+        <label className="mt-3 flex items-center gap-2 text-xs font-medium text-neutral-800">
+          <input
+            type="checkbox"
+            checked={fetchRemote}
+            onChange={(e) => {
+              setFetchRemote(e.target.checked);
+              setRemoteFetchEnabled(e.target.checked);
+            }}
+          />
+          {t("settings.importFetchRemote")}
+        </label>
+        <p className="mt-1 max-w-lg text-[11px] text-neutral-500">{t("settings.importFetchRemoteDesc")}</p>
 
         <div className="mt-4 border-t border-neutral-200 pt-4">
           <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">

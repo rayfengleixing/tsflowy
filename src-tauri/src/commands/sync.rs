@@ -8,7 +8,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::Emitter;
 
-use super::files::{self, AppConfig};
+use super::files::{self, AppConfig, SyncHistoryEntry, SYNC_HISTORY_MAX};
 use crate::db::{Db, DbInner, SharedDb, DB_FILE};
 
 // 双向同步（#13）——「同步文件夹」方案
@@ -552,6 +552,21 @@ pub fn get_sync_info(app: tauri::AppHandle) -> Result<SyncInfo, String> {
     Ok(info_of(&files::load_app_config(&app)))
 }
 
+/// 最近若干轮同步的历史（新的在前）。手动同步与后台自动同步走同一条链路，
+/// 所以这里也是「后台那几次到底做了什么」的唯一出处。
+#[tauri::command]
+pub fn get_sync_history(app: tauri::AppHandle) -> Vec<SyncHistoryEntry> {
+    files::load_app_config(&app).sync.history
+}
+
+/// 清空同步历史（只删留档，不动同步目录里的任何数据）
+#[tauri::command]
+pub fn clear_sync_history(app: tauri::AppHandle) -> Result<(), String> {
+    let mut cfg = files::load_app_config(&app);
+    cfg.sync.history.clear();
+    files::save_app_config(&app, &cfg)
+}
+
 /// 设置同步文件夹（传空串 = 关闭同步）。
 /// 换目录或首次开启都会清掉上次同步基线：新目录的远端与本机不一定同源，
 /// 留着旧基线会把"首次要按时间取新者"误判成"本机改过"。
@@ -598,6 +613,7 @@ pub async fn run_sync(
 }
 
 fn run_sync_blocking(app: tauri::AppHandle, db: SharedDb) -> Result<SyncRunResult, String> {
+    let started = std::time::Instant::now();
     let mut cfg = files::load_app_config(&app);
     let Some(dir) = cfg.sync.dir.clone().filter(|d| !d.trim().is_empty()) else {
         return Err("sync dir not configured".to_string());
@@ -634,6 +650,20 @@ fn run_sync_blocking(app: tauri::AppHandle, db: SharedDb) -> Result<SyncRunResul
         Err(e) => {
             // 失败也要收掉前端的进度条，否则它会一直停在失败那一步
             hooks.progress(stage::DONE, 1, 1);
+            // 失败轮次同样留档：用户看到的只有「同步失败」这句 toast，
+            // 事后想知道是哪一轮、卡在哪一步只能靠这里记下的东西
+            let mut failed_cfg = files::load_app_config(&app);
+            let entry = SyncHistoryEntry {
+                time: files::format_local_time(SystemTime::now()),
+                action: "failed".to_string(),
+                duration_ms: started.elapsed().as_millis() as u64,
+                error: Some(e.clone()),
+                ..Default::default()
+            };
+            push_history(&mut failed_cfg, entry);
+            if let Err(save_err) = files::save_app_config(&app, &failed_cfg) {
+                tracing::warn!(error = %save_err, "sync: save history after failure failed");
+            }
             return Err(e);
         }
     };
@@ -646,7 +676,24 @@ fn run_sync_blocking(app: tauri::AppHandle, db: SharedDb) -> Result<SyncRunResul
     };
     cfg.sync.last_hash = last_hash;
     cfg.sync.last_action = Some(outcome.action.clone());
-    cfg.sync.last_time = Some(files::format_local_time(SystemTime::now()));
+    let now = files::format_local_time(SystemTime::now());
+    cfg.sync.last_time = Some(now.clone());
+    // 什么都没发生的一轮（周期同步最常见结果）不进历史：50 条名额会被一堆 none 挤掉，
+    // 反而把用户真正要回看的上传/下载/冲突/失败挤没了
+    if outcome.action != "none" || outcome.assets_copied > 0 || outcome.assets_deleted > 0 {
+        push_history(
+            &mut cfg,
+            SyncHistoryEntry {
+                time: now,
+                action: outcome.action.clone(),
+                duration_ms: started.elapsed().as_millis() as u64,
+                assets_copied: outcome.assets_copied,
+                assets_deleted: outcome.assets_deleted,
+                conflicts: outcome.conflicts.clone(),
+                error: None,
+            },
+        );
+    }
     // 写配置失败不该让"同步已完成"变成失败：只记日志
     if let Err(e) = files::save_app_config(&app, &cfg) {
         tracing::warn!(error = %e, "sync: save config failed");
@@ -657,6 +704,12 @@ fn run_sync_blocking(app: tauri::AppHandle, db: SharedDb) -> Result<SyncRunResul
         outcome,
         info: info_of(&cfg),
     })
+}
+
+/// 历史新的在前，超出上限的旧条目丢弃。
+fn push_history(cfg: &mut AppConfig, entry: SyncHistoryEntry) {
+    cfg.sync.history.insert(0, entry);
+    cfg.sync.history.truncate(SYNC_HISTORY_MAX);
 }
 
 /// 同步主体（与 AppHandle 解耦，便于单测）。
@@ -883,6 +936,94 @@ pub fn open_conflicts_dir(app: tauri::AppHandle) -> Result<(), String> {
     files::open_path_in_system(&path)
 }
 
+/// conflicts/ 下某个副本的路径：只接受纯文件名，拒绝任何路径成分（`..`、绝对路径、盘符）。
+fn conflict_file_path(cfg: &AppConfig, name: &str) -> Result<PathBuf, String> {
+    if name.is_empty() || Path::new(name).file_name().and_then(|s| s.to_str()) != Some(name) {
+        return Err("invalid conflict name".to_string());
+    }
+    let dir = cfg
+        .sync
+        .dir
+        .clone()
+        .filter(|d| !d.trim().is_empty())
+        .ok_or_else(|| "sync dir not configured".to_string())?;
+    Ok(sync_dir_of(&dir).join(CONFLICT_DIR).join(name))
+}
+
+/// 一份库的粗粒度概览。恢复冲突副本前，用户要判断的是"这份里有没有我本机缺的东西"，
+/// 数量对比 + 最后一次数据活动时间就够了；逐行 diff 属于记录级合并，明确不做。
+/// 表缺失/不是 SQLite 时全为 0（对照仍然显示得出来，不至于整块预览打不开）。
+#[derive(Default, Serialize)]
+pub struct DbSummary {
+    pub pages: i64,
+    pub documents: i64,
+    pub rows: i64,
+    pub activity: Option<String>,
+}
+
+fn db_summary(path: &Path) -> DbSummary {
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return DbSummary::default();
+    };
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
+    let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
+    DbSummary {
+        pages: count("SELECT COUNT(*) FROM views WHERE is_trash = 0"),
+        documents: count("SELECT COUNT(*) FROM documents"),
+        rows: count("SELECT COUNT(*) FROM database_rows WHERE is_trash = 0"),
+        activity: activity_label(db_activity_ms(path)),
+    }
+}
+
+/// 冲突副本与本机当前库的并排对照
+#[derive(Serialize)]
+pub struct ConflictPreview {
+    pub name: String,
+    /// local = 被舍弃的本机那一版，remote = 同步目录里被舍弃的那一版
+    pub side: &'static str,
+    pub size: u64,
+    pub modified: String,
+    pub copy: DbSummary,
+    pub local: DbSummary,
+}
+
+/// 预览一份冲突副本（只读，不碰本机库）：恢复按钮前先看清两边各有什么。
+#[tauri::command]
+pub async fn preview_sync_conflict(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<ConflictPreview, String> {
+    tauri::async_runtime::spawn_blocking(move || preview_conflict_blocking(&app, &name))
+        .await
+        .map_err(|e| format!("preview conflict failed: {e}"))?
+}
+
+fn preview_conflict_blocking(
+    app: &tauri::AppHandle,
+    name: &str,
+) -> Result<ConflictPreview, String> {
+    let cfg = files::load_app_config(app);
+    let path = conflict_file_path(&cfg, name)?;
+    let meta = path
+        .metadata()
+        .map_err(|_| format!("conflict file not found: {name}"))?;
+    let local_db = files::real_data_dir(app)?.join(DB_FILE);
+    Ok(ConflictPreview {
+        copy: db_summary(&path),
+        local: db_summary(&local_db),
+        modified: meta
+            .modified()
+            .map(files::format_local_time)
+            .unwrap_or_default(),
+        size: meta.len(),
+        side: conflict_side(name),
+        name: name.to_string(),
+    })
+}
+
 /// 用一份冲突副本替换本机库（与拉取同一条替换路径：关库→备份旧库→原子换库）。
 /// 换库瞬间会广播 sync:db-replaced，前端据此重载，无需等这里的返回值。
 #[tauri::command]
@@ -891,17 +1032,8 @@ pub async fn restore_sync_conflict(
     db: tauri::State<'_, Db>,
     name: String,
 ) -> Result<(), String> {
-    // 只接受 conflicts/ 下的纯文件名，拒绝任何路径成分
-    if name.is_empty()
-        || Path::new(&name).file_name().and_then(|s| s.to_str()) != Some(name.as_str())
-    {
-        return Err("invalid conflict name".to_string());
-    }
     let cfg = files::load_app_config(&app);
-    let Some(dir) = cfg.sync.dir.clone().filter(|d| !d.trim().is_empty()) else {
-        return Err("sync dir not configured".to_string());
-    };
-    let src = sync_dir_of(&dir).join(CONFLICT_DIR).join(&name);
+    let src = conflict_file_path(&cfg, &name)?;
     if !src.is_file() {
         return Err(format!("conflict file not found: {name}"));
     }
@@ -1376,5 +1508,83 @@ mod tests {
     fn sync_dir_of_nests_under_chosen_folder() {
         let p = sync_dir_of(r"D:\OneDrive\Apps");
         assert!(p.ends_with(SYNC_SUBDIR));
+    }
+
+    #[test]
+    fn history_keeps_newest_first_and_trims_the_oldest() {
+        let mut cfg = AppConfig::default();
+        for i in 0..SYNC_HISTORY_MAX + 5 {
+            push_history(
+                &mut cfg,
+                SyncHistoryEntry {
+                    time: format!("t{i}"),
+                    action: "upload".to_string(),
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(cfg.sync.history.len(), SYNC_HISTORY_MAX);
+        assert_eq!(
+            cfg.sync.history[0].time,
+            format!("t{}", SYNC_HISTORY_MAX + 4)
+        );
+    }
+
+    /// 历史是后加字段：老 config.json 里没有 history 时必须读成空表
+    #[test]
+    fn legacy_config_without_history_reads_as_empty() {
+        let cfg: AppConfig = serde_json::from_str(r#"{"sync":{"dir":"D:/s"}}"#).unwrap();
+        assert!(cfg.sync.history.is_empty());
+    }
+
+    #[test]
+    fn db_summary_counts_live_content_and_survives_junk() {
+        let base = temp_base("summary");
+        fs::create_dir_all(&base).unwrap();
+        let db = base.join("s.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE views (is_trash INTEGER);
+             CREATE TABLE documents (id TEXT);
+             CREATE TABLE database_rows (is_trash INTEGER);
+             INSERT INTO views VALUES (0),(0),(1);
+             INSERT INTO documents VALUES ('a'),('b');
+             INSERT INTO database_rows VALUES (0),(1);",
+        )
+        .unwrap();
+        drop(conn);
+        let s = db_summary(&db);
+        assert_eq!(
+            (s.pages, s.documents, s.rows),
+            (2, 2, 1),
+            "回收站里的页面/行不该算进对照"
+        );
+        assert_eq!(s.activity, None);
+
+        // 非 SQLite：全 0 而不是整块预览打不开
+        let junk = base.join("junk.db");
+        write(&junk, b"not a database");
+        let j = db_summary(&junk);
+        assert_eq!((j.pages, j.documents, j.rows), (0, 0, 0));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn conflict_file_path_rejects_any_path_component() {
+        let cfg = AppConfig {
+            sync: files::SyncConfig {
+                dir: Some(r"D:\OneDrive\Apps".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(conflict_file_path(&cfg, "local-20261015-1a2b.db").is_ok());
+        assert!(conflict_file_path(&cfg, "").is_err());
+        assert!(conflict_file_path(&cfg, "../data.db").is_err());
+        assert!(conflict_file_path(&cfg, "..\\..\\data.db").is_err());
+        assert!(conflict_file_path(&cfg, r"C:\Windows\notepad.exe").is_err());
+        assert!(conflict_file_path(&cfg, "sub/x.db").is_err());
+        // 未配置同步目录：一份副本也拿不到
+        assert!(conflict_file_path(&AppConfig::default(), "local-20261015-1a2b.db").is_err());
     }
 }

@@ -6,7 +6,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { detectDataDirRisk } from "@/lib/data-dir-risk";
+import { detectDataDirRisk, isCloudManagedPath } from "@/lib/data-dir-risk";
 import { flushAllForClose } from "@/lib/close-flush";
 import {
   onSyncProgress,
@@ -22,13 +22,26 @@ import { cn } from "@/lib/utils";
 import {
   SYNC_ACTION_KEY,
   SYNC_SIDE_KEY,
+  ConflictPreviewPanel,
   Section,
   RiskNotice,
+  SyncSecurityNote,
   formatBytes,
+  formatDuration,
   type SyncInfo,
   type SyncRunResult,
+  type SyncHistoryEntry,
   type ConflictFile,
+  type ConflictPreview,
 } from "./settings-parts";
+
+/** 一次只展开一份冲突副本的预览（拉取的是两份库的只读统计，没必要同时开多个） */
+interface PreviewState {
+  name: string;
+  loading: boolean;
+  error: string | null;
+  data: ConflictPreview | null;
+}
 
 /** 文件夹同步：选目录/手动双向同步/自动化选项/冲突副本恢复 */
 export function SettingsSync() {
@@ -40,6 +53,10 @@ export function SettingsSync() {
   const [lastConflict, setLastConflict] = useState<SyncRunResult | null>(null);
   // 冲突副本列表（进入同步区块时拉取；恢复/打开目录后刷新）
   const [conflictFiles, setConflictFiles] = useState<ConflictFile[]>([]);
+  // 最近若干轮同步的留档：手动同步和后台自动同步都写这里，回答「刚才那一次做了什么」
+  const [history, setHistory] = useState<SyncHistoryEntry[]>([]);
+  // 当前展开预览的冲突副本（同一时刻只看一份）
+  const [preview, setPreview] = useState<PreviewState | null>(null);
   // 待确认恢复的冲突副本（恢复会替换本机库，先确认）
   const [restoreTarget, setRestoreTarget] = useState<ConflictFile | null>(null);
   // 同步自动化选项（localStorage，见 lib/auto-sync.ts）
@@ -71,11 +88,41 @@ export function SettingsSync() {
           invoke<ConflictFile[]>("list_sync_conflicts")
             .then(setConflictFiles)
             .catch((e: unknown) => logger.error("failed to list sync conflicts", e));
+          invoke<SyncHistoryEntry[]>("get_sync_history")
+            .then(setHistory)
+            .catch((e: unknown) => logger.error("failed to get sync history", e));
         } else {
           setConflictFiles([]);
+          setHistory([]);
         }
       })
       .catch((e: unknown) => logger.error("failed to get sync info", e));
+  };
+
+  /** 清空历史只删 config.json 里的留档，同步文件夹与本机库都不动 */
+  const clearHistory = async () => {
+    try {
+      await invoke("clear_sync_history");
+      setHistory([]);
+      toast.success(t("settings.syncHistoryCleared"));
+    } catch (e) {
+      logger.error("clear sync history failed", e);
+      toast.error(t("error.db", { message: String(e) }));
+    }
+  };
+
+  /** 展开/收起一份冲突副本的预览：Rust 侧只读统计，不碰本机库 */
+  const togglePreview = (name: string) => {
+    if (preview?.name === name) {
+      setPreview(null);
+      return;
+    }
+    setPreview({ name, loading: true, error: null, data: null });
+    invoke<ConflictPreview>("preview_sync_conflict", { name })
+      .then((data) => setPreview((p) => (p?.name === name ? { name, loading: false, error: null, data } : p)))
+      .catch((e: unknown) =>
+        setPreview((p) => (p?.name === name ? { name, loading: false, error: String(e), data: null } : p)),
+      );
   };
 
   /** 自动化选项：存 localStorage（前端定时器读它，无需后端往返） */
@@ -154,6 +201,9 @@ export function SettingsSync() {
       invoke<ConflictFile[]>("list_sync_conflicts")
         .then(setConflictFiles)
         .catch((e: unknown) => logger.error("failed to list sync conflicts", e));
+      invoke<SyncHistoryEntry[]>("get_sync_history")
+        .then(setHistory)
+        .catch((e: unknown) => logger.error("failed to get sync history", e));
       const key = SYNC_ACTION_KEY[r.action] ?? "settings.syncActionNone";
       const extra = r.assets_copied > 0 ? ` · ${t("settings.syncAssets", { n: r.assets_copied })}` : "";
       if (r.action === "conflict") {
@@ -203,6 +253,7 @@ export function SettingsSync() {
               </Button>
             </div>
             {dataDirRisk === "sync-overlap" && <RiskNotice risk={dataDirRisk} />}
+            <SyncSecurityNote cloudDir={isCloudManagedPath(syncInfo.dir)} />
             <div className="mt-3 flex flex-wrap gap-2">
               <Button size="sm" onClick={syncNow} disabled={busySync}>
                 <RefreshCw className={cn("mr-1 h-3.5 w-3.5", busySync && "animate-spin")} />
@@ -323,6 +374,47 @@ export function SettingsSync() {
               </label>
               <p className="max-w-lg text-[11px] text-neutral-400">{t("settings.syncAutoHint")}</p>
             </div>
+            {/* 同步历史：后台自动同步没有 toast，能看到的只有这里 */}
+            {history.length > 0 && (
+              <div className="mt-3">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-[11px] font-medium text-neutral-600 dark:text-neutral-300">
+                    {t("settings.syncHistoryTitle")}
+                  </span>
+                  <button
+                    className="text-[11px] text-neutral-400 underline-offset-2 hover:text-neutral-600 hover:underline"
+                    onClick={clearHistory}
+                  >
+                    {t("settings.syncHistoryClear")}
+                  </button>
+                </div>
+                <ul className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-neutral-200 px-2 py-1.5 dark:border-neutral-700">
+                  {history.map((h, i) => {
+                    const labelKey = SYNC_ACTION_KEY[h.action] ?? "settings.syncActionNone";
+                    return (
+                      <li
+                        key={`${h.time}-${i}`}
+                        className="text-[11px] leading-snug text-neutral-600 dark:text-neutral-300"
+                      >
+                        <span className="font-mono text-neutral-400">{h.time}</span> · {t(labelKey)} ·{" "}
+                        {formatDuration(h.duration_ms)}
+                        {h.assets_copied > 0 && <> · {t("settings.syncAssets", { n: h.assets_copied })}</>}
+                        {h.assets_deleted > 0 && <> · {t("settings.syncHistoryDeleted", { n: h.assets_deleted })}</>}
+                        {h.conflicts.length > 0 && (
+                          <> · {t("settings.syncHistoryConflicts", { n: h.conflicts.length })}</>
+                        )}
+                        {h.error && (
+                          <div className="mt-0.5 break-words text-red-600 dark:text-red-400">
+                            {t("settings.syncHistoryError", { message: h.error })}
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+                <p className="mt-1 text-[10px] text-neutral-400">{t("settings.syncHistoryHint")}</p>
+              </div>
+            )}
             {conflictFiles.length > 0 && (
               <div className="mt-3">
                 <div className="mb-1 flex items-center justify-between">
@@ -335,24 +427,39 @@ export function SettingsSync() {
                 </div>
                 <ul className="divide-y divide-neutral-200 rounded-md border border-neutral-200 dark:divide-neutral-700 dark:border-neutral-700">
                   {conflictFiles.map((f) => (
-                    <li key={f.name} className="flex items-center gap-2 px-2 py-1.5">
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate font-mono text-[11px] text-neutral-700 dark:text-neutral-200">
-                          {f.name}
+                    <li key={f.name} className="px-2 py-1.5">
+                      <div className="flex items-center gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-mono text-[11px] text-neutral-700 dark:text-neutral-200">
+                            {f.name}
+                          </div>
+                          <div className="text-[10px] text-neutral-400">
+                            {t(SYNC_SIDE_KEY[f.side])} · {f.modified} · {formatBytes(f.size)}
+                            {f.activity && (
+                              <>
+                                {" "}
+                                · {t("settings.syncConflictActivity")} {f.activity}
+                              </>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-[10px] text-neutral-400">
-                          {t(SYNC_SIDE_KEY[f.side])} · {f.modified} · {formatBytes(f.size)}
-                          {f.activity && (
-                            <>
-                              {" "}
-                              · {t("settings.syncConflictActivity")} {f.activity}
-                            </>
+                        <button
+                          className="shrink-0 text-[11px] text-brand-600 hover:underline"
+                          onClick={() => togglePreview(f.name)}
+                        >
+                          {t(
+                            preview?.name === f.name
+                              ? "settings.syncConflictPreviewHide"
+                              : "settings.syncConflictPreview",
                           )}
-                        </div>
+                        </button>
+                        <Button size="sm" variant="outline" onClick={() => setRestoreTarget(f)}>
+                          {t("settings.syncConflictRestore")}
+                        </Button>
                       </div>
-                      <Button size="sm" variant="outline" onClick={() => setRestoreTarget(f)}>
-                        {t("settings.syncConflictRestore")}
-                      </Button>
+                      {preview?.name === f.name && (
+                        <ConflictPreviewPanel loading={preview.loading} error={preview.error} data={preview.data} />
+                      )}
                     </li>
                   ))}
                 </ul>

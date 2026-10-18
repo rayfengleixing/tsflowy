@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -30,6 +31,11 @@ pub struct AppConfig {
     /// 回收站自动清空策略（旧 config.json 无此字段时取默认值）
     #[serde(default)]
     pub trash: TrashConfig,
+    /// 偏好镜像：渲染进程那几个影响行为的 localStorage 键（自动同步、每日笔记、快捷键、外观）。
+    /// 它们存在 WebView 自己的用户数据目录里，不在数据目录内 → 备份里没有，换机/重装后
+    /// 自动同步会静静关着、快捷键与主题全丢。这里多存一份，config.json 是进备份包的。
+    #[serde(default)]
+    pub prefs: HashMap<String, String>,
 }
 
 /// AI 助手设置。provider / base_url / model 全部由用户填写：base_url 是否已含 /v1、
@@ -220,7 +226,32 @@ pub struct SyncConfig {
     /// 上次同步时间（本地时间串）
     #[serde(default)]
     pub last_time: Option<String>,
+    /// 最近若干轮同步的历史，新的在前（见 sync.rs 的 push_history）
+    #[serde(default)]
+    pub history: Vec<SyncHistoryEntry>,
 }
+
+/// 一轮同步的留档：设置页据此回答「上次到底同步了什么、有没有失败」，
+/// 而不是只剩一个 last_action 字符串。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SyncHistoryEntry {
+    /// 本轮结束时间（本地时间串）
+    pub time: String,
+    /// none / upload / download / conflict / failed
+    pub action: String,
+    /// 本轮耗时（毫秒）：大库同步慢到几分钟时，这里是唯一能看出来的地方
+    pub duration_ms: u64,
+    pub assets_copied: usize,
+    pub assets_deleted: usize,
+    /// 本轮新产生的冲突副本文件名（位于同步目录 conflicts/ 下）
+    pub conflicts: Vec<String>,
+    /// action=failed 时的错误信息
+    pub error: Option<String>,
+}
+
+/// 历史只留最近这么多轮：config.json 会进备份包，不能无限涨
+pub const SYNC_HISTORY_MAX: usize = 50;
 
 /// 自动备份设置。默认开启：每 24 小时打包一次 data.db 快照 + assets/ 到数据目录下的 backups/。
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -409,6 +440,28 @@ pub fn set_retention_policy(
     Ok(retention_info(&cfg))
 }
 
+/// 单个镜像值的上限：正常偏好值是几十字节的 JSON，超过说明前端把大对象（会话正文之类）
+/// 塞了进来，不能任由它把 config.json 撑爆
+const PREF_VALUE_MAX_BYTES: usize = 64 * 1024;
+
+/// 读取偏好镜像。前端在渲染首帧之前调用，用它回填本机缺失的 localStorage 键。
+#[tauri::command]
+pub fn get_prefs(app: tauri::AppHandle) -> HashMap<String, String> {
+    load_app_config(&app).prefs
+}
+
+/// 写入偏好镜像快照（整体替换：前端每次算的是白名单的全量当前值，
+/// 逐键合并反而会留下删不掉的陈旧键）
+#[tauri::command]
+pub fn set_prefs(app: tauri::AppHandle, prefs: HashMap<String, String>) -> Result<(), String> {
+    let mut cfg = load_app_config(&app);
+    cfg.prefs = prefs
+        .into_iter()
+        .filter(|(k, v)| !k.is_empty() && v.len() <= PREF_VALUE_MAX_BYTES)
+        .collect();
+    save_app_config(&app, &cfg)
+}
+
 fn retention_info(cfg: &AppConfig) -> RetentionPolicyInfo {
     let snapshot = cfg.snapshot.normalized();
     let trash = cfg.trash.normalized();
@@ -582,6 +635,30 @@ mod tests {
                 SNAPSHOT_KEEP_MAX,
                 PRE_RESTORE_KEEP_MAX
             )
+        );
+    }
+
+    /// 偏好镜像是后加的字段：旧 config.json 没有它时必须读成空表而不是报错
+    #[test]
+    fn legacy_config_without_prefs_reads_as_empty_map() {
+        let cfg: AppConfig = serde_json::from_str(r#"{"custom_data_dir":"D:/data"}"#).unwrap();
+        assert!(cfg.prefs.is_empty());
+        let round: AppConfig = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert!(round.prefs.is_empty());
+    }
+
+    #[test]
+    fn prefs_round_trip_keeps_every_key() {
+        let mut cfg = AppConfig::default();
+        cfg.prefs.insert(
+            "tsflowy:auto-sync".to_string(),
+            "{\"periodic\":true}".to_string(),
+        );
+        let parsed: AppConfig =
+            serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(
+            parsed.prefs.get("tsflowy:auto-sync").map(String::as_str),
+            Some("{\"periodic\":true}")
         );
     }
 

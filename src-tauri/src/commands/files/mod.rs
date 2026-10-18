@@ -19,10 +19,12 @@ pub mod secret;
 // —— 配置读写（config.json）——
 pub use config::{
     app_config_dir_raw, config_file_path, load_config_raw, AiConfig, AiProfile, AiQuickAction,
-    AppConfig, AutoBackupConfig, SnapshotConfig, SyncConfig, TrashConfig,
-    AI_CTX_MAX_MESSAGES_DEFAULT, AI_CTX_TOKEN_BUDGET_DEFAULT,
+    AppConfig, AutoBackupConfig, SnapshotConfig, SyncConfig, SyncHistoryEntry, TrashConfig,
+    AI_CTX_MAX_MESSAGES_DEFAULT, AI_CTX_TOKEN_BUDGET_DEFAULT, SYNC_HISTORY_MAX,
 };
-pub use config::{get_retention_policy, set_retention_policy, RetentionPolicyInfo};
+pub use config::{
+    get_prefs, get_retention_policy, set_prefs, set_retention_policy, RetentionPolicyInfo,
+};
 pub(crate) use config::{load_app_config, save_app_config};
 
 // —— 数据目录解析 / 迁移 / 自定义目录命令 ——
@@ -37,8 +39,8 @@ pub use data_dir::{
 // —— assets 资源读写 ——
 pub(crate) use asset::ASSETS_DIR;
 pub use asset::{
-    mkdir_all, open_asset, read_asset_bytes, read_text_file, save_asset, save_asset_bytes,
-    write_binary_file, write_text_file,
+    fetch_remote_asset, mkdir_all, open_asset, read_asset_bytes, read_text_file, save_asset,
+    save_asset_bytes, write_binary_file, write_text_file,
 };
 
 // —— 备份导出 / 导入 ——
@@ -92,8 +94,9 @@ pub(crate) fn ensure_dialog_authorized(app: &tauri::AppHandle, path: &str) -> Re
 // `generate_handler![commands::files::<name>]` 展开出的 `commands::files::__cmd__<name>` 将无法解析。
 #[doc(hidden)]
 pub use asset::{
-    __cmd__mkdir_all, __cmd__open_asset, __cmd__read_asset_bytes, __cmd__read_text_file,
-    __cmd__save_asset, __cmd__save_asset_bytes, __cmd__write_binary_file, __cmd__write_text_file,
+    __cmd__fetch_remote_asset, __cmd__mkdir_all, __cmd__open_asset, __cmd__read_asset_bytes,
+    __cmd__read_text_file, __cmd__save_asset, __cmd__save_asset_bytes, __cmd__write_binary_file,
+    __cmd__write_text_file, __tauri_command_name_fetch_remote_asset,
     __tauri_command_name_mkdir_all, __tauri_command_name_open_asset,
     __tauri_command_name_read_asset_bytes, __tauri_command_name_read_text_file,
     __tauri_command_name_save_asset, __tauri_command_name_save_asset_bytes,
@@ -116,8 +119,9 @@ pub use backup::{
 };
 #[doc(hidden)]
 pub use config::{
-    __cmd__get_retention_policy, __cmd__set_retention_policy,
-    __tauri_command_name_get_retention_policy, __tauri_command_name_set_retention_policy,
+    __cmd__get_prefs, __cmd__get_retention_policy, __cmd__set_prefs, __cmd__set_retention_policy,
+    __tauri_command_name_get_prefs, __tauri_command_name_get_retention_policy,
+    __tauri_command_name_set_prefs, __tauri_command_name_set_retention_policy,
 };
 #[doc(hidden)]
 pub use data_dir::{

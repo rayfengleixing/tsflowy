@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectDataDirRisk } from "./data-dir-risk";
+import { detectDataDirRisk, isCloudManagedPath } from "./data-dir-risk";
 
 describe("detectDataDirRisk", () => {
   it("flags data dirs inside a cloud-sync folder", () => {
@@ -25,5 +25,14 @@ describe("detectDataDirRisk", () => {
   it("prefers the overlap warning and ignores empty input", () => {
     expect(detectDataDirRisk("C:\\OneDrive", "C:\\OneDrive")).toBe("sync-overlap");
     expect(detectDataDirRisk("   ")).toBeNull();
+  });
+});
+
+describe("isCloudManagedPath", () => {
+  it("recognises cloud folders by path segment, not substring", () => {
+    expect(isCloudManagedPath("D:\\OneDrive\\TsFlowySync")).toBe(true);
+    expect(isCloudManagedPath("D:\\Nutstore\\同步")).toBe(true);
+    expect(isCloudManagedPath("D:\\megaphone\\TsFlowySync")).toBe(false);
+    expect(isCloudManagedPath("")).toBe(false);
   });
 });

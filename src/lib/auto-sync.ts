@@ -130,6 +130,7 @@ const WRITE_COMMANDS = new Set([
   "csv_import",
   "save_asset",
   "save_asset_bytes",
+  "fetch_remote_asset",
   "write_text_file",
   "write_binary_file",
   "mkdir_all",

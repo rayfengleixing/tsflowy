@@ -5,6 +5,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { collectAssetPaths, copyAssetsForExport, createExportAssetContext } from "./assets";
 import { collectDatabaseViewIds, databaseViewToMarkdown } from "./db-transfer";
 import { documentApi } from "./documents";
+import { EXPORT_MANIFEST_FILE, type ExportManifest } from "./export-manifest";
 import { buildFrontmatter } from "./frontmatter";
 import { jsonToMarkdown } from "./markdown";
 import { logger } from "./logger";
@@ -25,6 +26,9 @@ import { parseViewTags, type ViewNode } from "@/types/models";
 //   4. 写文件走自定义 Rust 命令 write_text_file / mkdir_all（同 CSV 导出），
 //      不受 fs 插件 scope 限制。
 //   5. 顺序导出（读文档 + 写盘），避免并发写 SQLite 触发 SQLITE_BUSY。
+//   6. 根目录再写一份 MANIFEST_FILE：正文里的跨页引用写的是**本库 viewId**
+//      （@[标题](view:id)、→[表名](db:id)），换库后这些 id 全部指向不存在的东西。
+//      把 viewId → 相对路径 记下来，导入端据此把引用接回新建出来的页面。
 //
 // 文件名净化：替换 Windows 非法字符、规避保留设备名；同目录重名追加 " (n)"。
 
@@ -57,11 +61,14 @@ export async function exportMarkdownFolder(): Promise<ExportFolderResult | null>
   let total = 0;
   let exported = 0;
   let failed = 0;
-  // 整库共用一份复制状态：同一目录里多页引用同一附件时只复制一次
+  // 同一目录里多页引用同一附件时只复制一次
   const assetCtx = createExportAssetContext();
+  /** viewId → 相对导出根目录的 .md 路径，跨库导入时靠它把引用接回（见 MANIFEST_FILE） */
+  const refManifest: Record<string, string> = {};
 
   const writeDoc = async (node: ViewNode, file: string): Promise<void> => {
     total++;
+    refManifest[node.id] = file.startsWith(`${root}/`) ? file.slice(root.length + 1) : file;
     try {
       const fm = buildFrontmatter({
         title: node.name,
@@ -125,5 +132,10 @@ export async function exportMarkdownFolder(): Promise<ExportFolderResult | null>
   };
 
   await walk(tree, root);
+  // 清单写在最后：中途失败时不会留下一个声称"全部导出成功"的半截清单
+  await invoke<void>("write_text_file", {
+    path: `${root}/${EXPORT_MANIFEST_FILE}`,
+    content: JSON.stringify({ version: 1, views: refManifest } satisfies ExportManifest),
+  });
   return { total, exported, failed };
 }

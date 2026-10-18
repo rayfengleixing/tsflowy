@@ -8,7 +8,7 @@ import { t } from "./i18n";
 import { collectAssetPaths, copyAssetsForExport, isLibraryAssetPath } from "./assets";
 import { attachmentKindOf } from "./attachment-kind";
 import { databaseApi } from "./database";
-import { tableToTextMatrix, toMarkdownTable } from "./db-transfer";
+import { collectDatabaseViewIds, databaseViewToMarkdown, tableToTextMatrix, toMarkdownTable } from "./db-transfer";
 import { viewApi } from "./db";
 import { documentApi } from "./documents";
 import { alignValueOf, calloutColorOf, columnRatioOf, jsonToMarkdown } from "./markdown";
@@ -311,6 +311,20 @@ async function exportDatabasePage(viewId: string, viewName: string, format: "mar
   return true;
 }
 
+/** 预取正文引用到的数据库表：jsonToMarkdown 是同步的，表格文本必须先异步读好再传入 */
+async function collectEmbeddedTables(doc: JSONContent): Promise<Record<string, string>> {
+  const tables: Record<string, string> = {};
+  for (const viewId of collectDatabaseViewIds(doc)) {
+    try {
+      tables[viewId] = await databaseViewToMarkdown(viewId, false);
+    } catch (e) {
+      // 一张表读不出来不影响整页导出，退化成 db: 指针即可
+      logger.warn("export-page", "embedded database table export failed", viewId, e);
+    }
+  }
+  return tables;
+}
+
 export async function exportPage(viewId: string, viewName: string, format: "markdown" | "html"): Promise<void> {
   // 打开的文档可能还有防抖窗口（800ms）内未落库的改动：先冲刷挂起写，否则导出的是库里的旧内容
   await flushAllForClose();
@@ -336,7 +350,10 @@ export async function exportPage(viewId: string, viewName: string, format: "mark
   const ext = format === "markdown" ? "md" : "html";
   // Markdown：复用 markdown.ts 的 jsonToMarkdown（支持 callout/toggle/columns/math 等高级块）
   // HTML：用本地 jsonToHTML（自包含样式，补 escape 防 XSS）
-  const content = format === "markdown" ? jsonToMarkdown(doc) : jsonToHTML(doc.content ?? [], viewName);
+  // 内嵌数据库块在正文里只是一个 db: 指针，不预取表文本的话导出的单页就只剩一行链接（整库导出已预取）
+  const tables = format === "markdown" ? await collectEmbeddedTables(doc) : {};
+  const content =
+    format === "markdown" ? jsonToMarkdown(doc, { databaseTables: tables }) : jsonToHTML(doc.content ?? [], viewName);
   const assetPaths = collectAssetPaths(doc);
 
   // 带附件时导出到目录：导出内容写的是 assets/xxx 相对路径，附件必须落到同一个目录下才点得开。

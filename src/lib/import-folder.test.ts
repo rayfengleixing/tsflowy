@@ -24,7 +24,17 @@ vi.mock("./db", () => ({
 }));
 vi.mock("./documents", () => ({ documentApi: { save: docSaveMock } }));
 
-import { importMarkdownFolder } from "./import-folder";
+import { importMarkdownFolder, setRemoteFetchEnabled } from "./import-folder";
+
+/** 开关值存在内存里：用例用 setRemoteFetchEnabled 切换，不必碰真实 WebView 存储 */
+const prefs = new Map<string, string>();
+Object.defineProperty(globalThis, "localStorage", {
+  configurable: true,
+  value: {
+    getItem: (key: string) => prefs.get(key) ?? null,
+    setItem: (key: string, value: string) => void prefs.set(key, value),
+  },
+});
 
 const ROOT = "D:/src";
 const dir = (name: string) => ({ name, isDirectory: true, isFile: false });
@@ -74,18 +84,34 @@ describe("importMarkdownFolder（本地图片/附件收编）", () => {
     viewSetTagsMock.mockResolvedValue(undefined);
     viewSetFavoriteMock.mockResolvedValue(undefined);
     docSaveMock.mockResolvedValue(undefined);
+    prefs.clear();
+    setRemoteFetchEnabled(true);
   });
 
-  /** save_asset 成功时返回 assets/<序号>.<原扩展名>；missing 里的源路径模拟磁盘上已不存在 */
-  function mockSaveAsset(missing: string[] = []) {
+  /**
+   * save_asset / fetch_remote_asset 成功时返回 assets/<序号>.<原扩展名>。
+   * missing = 磁盘上已不存在的源路径，remoteMissing = 下载失败的远程 URL。
+   */
+  function mockSaveAsset(missing: string[] = [], remoteMissing: string[] = []) {
     let n = 0;
+    const next = (src: string) => `assets/${++n}.${src.slice(src.lastIndexOf(".") + 1)}`;
     invokeMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "fetch_remote_asset") {
+        const url = String(args?.url);
+        if (remoteMissing.includes(url)) return Promise.reject(new Error(`${url} returned HTTP 404`));
+        return Promise.resolve(next(url.split("?")[0]));
+      }
       if (cmd !== "save_asset") return Promise.resolve(undefined);
       const sourcePath = String(args?.sourcePath);
       if (missing.includes(sourcePath)) return Promise.reject(new Error(`source file not found: ${sourcePath}`));
-      return Promise.resolve(`assets/${++n}.${sourcePath.slice(sourcePath.lastIndexOf(".") + 1)}`);
+      return Promise.resolve(next(sourcePath));
     });
   }
+
+  const fetchedUrls = (): string[] =>
+    invokeMock.mock.calls
+      .filter((c) => c[0] === "fetch_remote_asset")
+      .map((c) => String((c[1] as { url: string }).url));
 
   it("相对路径图片复制进本机 assets/ 并改写引用", async () => {
     mockSaveAsset();
@@ -93,7 +119,14 @@ describe("importMarkdownFolder（本地图片/附件收编）", () => {
     TEXTS[`${ROOT}/readme.md`] = "![同一张图](note/imgs/a.png)\n";
 
     const result = await importMarkdownFolder("ws-1");
-    expect(result).toEqual({ total: 2, created: 2, failed: 0 });
+    expect(result).toEqual({
+      total: 2,
+      created: 2,
+      failed: 0,
+      relinked_refs: 0,
+      dangling_refs: 0,
+      remote_failed: 0,
+    });
 
     // 相对各自 md 所在目录解析，同一源文件跨文档也只复制一次
     expect(copiedSources()).toEqual([`${ROOT}/note/imgs/a.png`]);
@@ -110,15 +143,50 @@ describe("importMarkdownFolder（本地图片/附件收编）", () => {
     expect(saved(0)).toContain('"src":"assets/1.png"');
   });
 
-  it("远程 URL、data URI 与普通链接保持原样，不收编", async () => {
+  it("远程 http(s) 图片下载到本机收编，data URI 与普通链接保持原样", async () => {
     mockSaveAsset();
     TEXTS[`${ROOT}/note/page.md`] =
       "![远程](https://cdn.example.com/x.png)\n![内联](data:image/png;base64,AAAA)\n[站点](https://example.com)\n";
-    await importMarkdownFolder("ws-1");
-    expect(copiedSources()).toEqual([]);
+    const result = await importMarkdownFolder("ws-1");
+
+    expect(fetchedUrls()).toEqual(["https://cdn.example.com/x.png"]);
     const json = saved(0);
-    expect(json).toContain("https://cdn.example.com/x.png");
+    expect(json).toContain('"src":"assets/1.png"');
+    // data URI 自带内容，普通链接不是图片：都不该联网
     expect(json).toContain("data:image/png;base64,AAAA");
+    expect(json).toContain("https://example.com");
+    expect(result.remote_failed).toBe(0);
+  });
+
+  it("关掉开关后不发起任何下载，远程图片保留原链接", async () => {
+    mockSaveAsset();
+    setRemoteFetchEnabled(false);
+    TEXTS[`${ROOT}/note/page.md`] = "![远程](https://cdn.example.com/x.png)\n";
+
+    const result = await importMarkdownFolder("ws-1");
+    expect(fetchedUrls()).toEqual([]);
+    expect(saved(0)).toContain("https://cdn.example.com/x.png");
+    expect(result.remote_failed).toBe(0);
+  });
+
+  it("下载失败的远程图片保留原链接并计入 remote_failed，本文照常导入", async () => {
+    mockSaveAsset([], ["https://cdn.example.com/gone.png"]);
+    TEXTS[`${ROOT}/note/page.md`] = "# 裂图页\n\n![没了](https://cdn.example.com/gone.png)\n";
+
+    const result = await importMarkdownFolder("ws-1");
+    expect(result.created).toBe(2);
+    expect(result.failed).toBe(0);
+    expect(result.remote_failed).toBe(1);
+    expect(saved(0)).toContain("https://cdn.example.com/gone.png");
+  });
+
+  it("同一远程 URL 被多处引用时只下载一次", async () => {
+    mockSaveAsset();
+    TEXTS[`${ROOT}/note/page.md`] = "![一](https://cdn.example.com/x.png)![二](https://cdn.example.com/x.png)\n";
+
+    await importMarkdownFolder("ws-1");
+    expect(fetchedUrls()).toEqual(["https://cdn.example.com/x.png"]);
+    expect(saved(0)).not.toContain("https://cdn.example.com/x.png");
   });
 
   it("越出源目录的引用不收编（对话框未授权该路径）", async () => {
@@ -184,7 +252,14 @@ describe("importMarkdownFolder（本地图片/附件收编）", () => {
       "---\ntitle: 任务\nlayout: grid\n---\n# 任务\n\n| 标题 | 数量 | 状态 |\n| --- | --- | --- |\n| 写周报 | 3 | 进行中 |\n| 复盘 | 1 | 已完成 |\n";
 
     const result = await importMarkdownFolder("ws-1");
-    expect(result).toEqual({ total: 3, created: 3, failed: 0 });
+    expect(result).toEqual({
+      total: 3,
+      created: 3,
+      failed: 0,
+      relinked_refs: 0,
+      dangling_refs: 0,
+      remote_failed: 0,
+    });
 
     const gridIndex = viewCreateMock.mock.calls.findIndex((c) => (c[0] as { layout: string }).layout === "grid");
     expect(gridIndex).toBeGreaterThanOrEqual(0);
@@ -217,9 +292,46 @@ describe("importMarkdownFolder（本地图片/附件收编）", () => {
     const result = await importMarkdownFolder("ws-1");
     const names = viewCreateMock.mock.calls.map((c) => (c[0] as { name: string }).name);
     expect(names.filter((n) => n === "项目")).toHaveLength(1);
-    expect(result).toEqual({ total: 4, created: 4, failed: 0 });
+    expect(result).toEqual({
+      total: 4,
+      created: 4,
+      failed: 0,
+      relinked_refs: 0,
+      dangling_refs: 0,
+      remote_failed: 0,
+    });
     // 父页正文落在目录页自己身上，而不是又一个同名子页
     const parentSave = docSaveMock.mock.calls.find((c) => String(c[1]).includes("父页正文"));
     expect(parentSave).toBeDefined();
+  });
+
+  /** 导出清单在：正文里的旧库 viewId 对回本次新建的 id */
+  it("按清单把跨页引用接回新建的页面，找不到的降为空 id", async () => {
+    mockSaveAsset();
+    TEXTS[`${ROOT}/note/page.md`] = "# 页\n\n正文\n";
+    TEXTS[`${ROOT}/readme.md`] = "提到 @[页](view:old-1) 和 @[丢失页](view:old-404)\n";
+    TEXTS[`${ROOT}/.tsflowy-export.json`] = JSON.stringify({
+      version: 1,
+      views: { "old-1": "note/page.md", "old-404": "gone.md" },
+    });
+
+    const result = await importMarkdownFolder("ws-1");
+    // walkMd 先深后广：note/page.md 是第 0 个落库文档，readme.md 第 1 个
+    const readme = saved(1);
+    expect(readme).toContain('"id":"v2"');
+    expect(readme).toContain('"id":""');
+    expect(result).toMatchObject({ relinked_refs: 1, dangling_refs: 1 });
+  });
+
+  /** 老导出目录没有清单：退化成按页面标题匹配，标题重复时不猜 */
+  it("没有清单时按标题兜底接回", async () => {
+    mockSaveAsset();
+    TEXTS[`${ROOT}/note/page.md`] = "# 页\n\n正文\n";
+    TEXTS[`${ROOT}/readme.md`] = "提到 @[页](view:old-1)\n";
+
+    const result = await importMarkdownFolder("ws-1");
+
+    expect(saved(1)).toContain('"id":"v2"');
+    expect(result).toMatchObject({ relinked_refs: 1, dangling_refs: 0 });
   });
 });

@@ -5,6 +5,7 @@ const openMock = vi.hoisted(() => vi.fn());
 const writeMock = vi.hoisted(() => vi.fn());
 const docGetMock = vi.hoisted(() => vi.fn());
 const invokeMock = vi.hoisted(() => vi.fn());
+const dbTableMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save: saveMock, open: openMock }));
 vi.mock("@tauri-apps/plugin-fs", () => ({ writeTextFile: writeMock }));
@@ -13,6 +14,10 @@ vi.mock("html-to-image", () => ({ toBlob: vi.fn() }));
 vi.mock("@/stores/editor", () => ({ useEditorStore: { getState: () => ({ editor: null }) } }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("./documents", () => ({ documentApi: { get: docGetMock } }));
+vi.mock("./db-transfer", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("./db-transfer")>();
+  return { ...mod, databaseViewToMarkdown: dbTableMock };
+});
 
 import { exportPage } from "./export-page";
 
@@ -107,6 +112,8 @@ describe("exportPage（HTML 格式）", () => {
     writeMock.mockReset();
     docGetMock.mockReset();
     invokeMock.mockReset();
+    dbTableMock.mockReset();
+    dbTableMock.mockResolvedValue("");
     saveMock.mockResolvedValue("D:/out/test.html");
     openMock.mockResolvedValue("D:/out");
     writeMock.mockResolvedValue(undefined);
@@ -177,6 +184,8 @@ describe("exportPage（Markdown 格式）", () => {
     writeMock.mockReset();
     docGetMock.mockReset();
     invokeMock.mockReset();
+    dbTableMock.mockReset();
+    dbTableMock.mockResolvedValue("");
     saveMock.mockResolvedValue("D:/out/test.md");
     openMock.mockResolvedValue("D:/out");
     writeMock.mockResolvedValue(undefined);
@@ -196,6 +205,26 @@ describe("exportPage（Markdown 格式）", () => {
     expect(md).toContain("<!-- columns (2) -->");
     expect(md).toContain("<!-- /columns -->");
     expect(md).toContain("<!-- outline block -->");
+  });
+
+  it("内嵌数据库表连同行内容一起导出，不只是 db: 指针", async () => {
+    dbTableMock.mockResolvedValue("| 任务 | 状态 |\n| --- | --- |\n| 写码 | 进行中 |\n");
+    docGetMock.mockResolvedValue(JSON.stringify(RICH_DOC));
+    await exportPage("v1", "测试页", "markdown");
+
+    expect(dbTableMock).toHaveBeenCalledWith("db-1", false);
+    const md = writeMock.mock.calls[0]?.[1] as string;
+    expect(md).toContain("→[任务表](db:db-1)");
+    expect(md).toContain("| 写码 | 进行中 |");
+  });
+
+  it("某张表读失败时整页导出不中断，退化为指针", async () => {
+    dbTableMock.mockRejectedValue(new Error("db is locked"));
+    docGetMock.mockResolvedValue(JSON.stringify(RICH_DOC));
+    await expect(exportPage("v1", "测试页", "markdown")).resolves.toBeUndefined();
+
+    const md = writeMock.mock.calls[0]?.[1] as string;
+    expect(md).toContain("→[任务表](db:db-1)");
   });
 });
 
