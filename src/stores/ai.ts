@@ -28,10 +28,13 @@ import {
 import { getAiEditor, getAiEditorForView, type AiEditRevert } from "@/lib/ai-editor";
 import {
   buildEditSystemPrompt,
+  buildNoContextSystemPrompt,
   CHAT_ONLY_SYSTEM_PROMPT,
+  CTX_SCOPE_PAGE_ONLY_NOTE,
   extractCalls,
   hideEditBlock,
   retrievalResultMessage,
+  RETRIEVAL_BLOCKED_BY_SCOPE_NOTE,
   RETRIEVAL_TOOLS,
   validateCall,
   type AiCall,
@@ -550,6 +553,8 @@ interface AiState {
   rejectAction: (messageId: string, index: number) => void;
   /** 切换模型档位（会持久化到配置） */
   switchProfile: (id: string) => Promise<void>;
+  /** 切换上下文范围（full / page_only / off，会持久化到配置） */
+  setCtxScope: (scope: string) => Promise<void>;
   /** 执行用户在设置里自定义的快捷指令 */
   runQuickAction: (action: AiQuickActionDef) => Promise<void>;
   /** 从上一条被中断的回答接着往下生成 */
@@ -726,20 +731,66 @@ export const useAiStore = create<AiState>()((set, get) => {
   };
 
   /**
+   * 上下文范围（配置项 ctx_scope）：只认 page_only / off，其余按 full。
+   * 没有可编辑文档时 page_only 与 full 等价——「本页」根本不存在，
+   * 此时关掉检索只会让模型一个字都拿不到。
+   */
+  const ctxScope = (): "full" | "page_only" | "off" => {
+    const s = get().config?.ctx_scope;
+    if (s === "off") return "off";
+    if (s === "page_only" && getAiEditor()) return "page_only";
+    return "full";
+  };
+
+  /**
+   * 面板里「只改一个字段」的整份回写载荷：`ai_save_config` 是覆盖式保存，
+   * 少带一个字段就等于把它悄悄重置成默认值，所以载荷统一由这里生成、只叠增量。
+   * profiles 不带 api_key 字段 → Rust 侧按 id 保留各档原有 Key；apiKey=null 表示不改全局 Key。
+   */
+  const configPayload = (c: AiConfig, over: Record<string, unknown>) => ({
+    enabled: c.enabled,
+    provider: c.provider,
+    protocol: c.protocol,
+    baseUrl: c.base_url,
+    model: c.model,
+    maxChars: c.max_chars,
+    confirmEdit: c.confirm_edit,
+    temperature: c.temperature,
+    thinking: c.thinking,
+    ctxTokenBudget: c.ctx_token_budget,
+    ctxMaxMessages: c.ctx_max_messages,
+    ctxScope: c.ctx_scope,
+    maxTokens: c.max_tokens,
+    systemPrompt: c.system_prompt,
+    profiles: c.profiles,
+    activeProfile: c.active_profile,
+    quickActions: c.quick_actions,
+    useTools: c.use_tools,
+    priceInput: c.price_input,
+    priceOutput: c.price_output,
+    apiKey: null,
+    ...over,
+  });
+
+  /**
    * system prompt：有可编辑文档时下发编辑协议 + 当前文档上下文（AI 自主修改的基础），
    * 没有文档时退化为纯问答，避免模型凭空产出编辑指令。
+   * off 档只给协议、不给文档内容；page_only 档在协议后追加「别发检索请求」的范围说明。
    */
   const systemMessage = (): AiChatMessage => {
     const bridge = getAiEditor();
+    const scope = ctxScope();
     if (!bridge) return { role: "system", content: CHAT_ONLY_SYSTEM_PROMPT };
+    if (scope === "off") return { role: "system", content: buildNoContextSystemPrompt(true) };
     const limit = maxChars();
+    const prompt = buildEditSystemPrompt({
+      title: bridge.getPageTitle(),
+      selection: bridge.getSelectionText().slice(0, limit),
+      pageText: bridge.getPageText().slice(0, limit),
+    });
     return {
       role: "system",
-      content: buildEditSystemPrompt({
-        title: bridge.getPageTitle(),
-        selection: bridge.getSelectionText().slice(0, limit),
-        pageText: bridge.getPageText().slice(0, limit),
-      }),
+      content: scope === "page_only" ? `${prompt}\n\n${CTX_SCOPE_PAGE_ONLY_NOTE}` : prompt,
     };
   };
 
@@ -979,17 +1030,17 @@ export const useAiStore = create<AiState>()((set, get) => {
     return await landAction(record);
   };
 
-  /** 收尾：正文剥掉指令块，写动作逐条预览落地；检索达到轮次上限时在正文后说明 */
+  /** 收尾：正文剥掉指令块，写动作逐条预览落地；检索被丢弃（轮次上限 / 范围关闭）时在正文后说明 */
   const finalizeAssistant = async (
     assistantId: string,
     turnId: number,
     full: string,
     writes: AiWriteCall[],
     malformed: boolean,
-    droppedRetrievals: number,
+    droppedNote: string,
   ) => {
     const display = extractCalls(full).display;
-    const note = droppedRetrievals > 0 ? `\n\n${t("ai.searchRoundLimit", { max: MAX_AGENT_ROUNDS })}` : "";
+    const note = droppedNote ? `\n\n${droppedNote}` : "";
     if (writes.length === 0) {
       set((s) => ({
         messages: s.messages.map((m) =>
@@ -1066,7 +1117,8 @@ export const useAiStore = create<AiState>()((set, get) => {
       flush();
     };
     // 工具定义只在服务商支持函数调用时下发；不支持时模型走文本协议块，能力等价
-    const tools = get().config?.use_tools ? aiToolSpecs() : undefined;
+    // 「仅本页」档连只读检索一起关掉：工具不下发，文本块那条路在 runStream 里同样拒执行
+    const tools = get().config?.use_tools && ctxScope() !== "page_only" ? aiToolSpecs() : undefined;
     await aiChat(
       outgoing,
       (ev: AiChatEvent) => {
@@ -1124,14 +1176,16 @@ export const useAiStore = create<AiState>()((set, get) => {
     // usage 是「本轮合计」：先清零，多轮往返才不会被上一轮的用量掺进来
     // retrieving 一并清掉：被停的旧循环可能还挂在检索 await 上，标志是它留下的旧值
     set({ usage: null, retrieving: false });
-    // @ 引用的文档要先读盘转文本，再随 system 一起下发
-    let outgoing = requestMessages(assistantId, await buildReferenceContext());
+    // 范围在一轮对话开始时定一次：中途改设置不该让同一轮的前后半段口径不一致
+    const scope = ctxScope();
+    // @ 引用的文档要先读盘转文本，再随 system 一起下发；「仅本页」档不带其它文档
+    let outgoing = requestMessages(assistantId, scope === "page_only" ? "" : await buildReferenceContext());
     // 选中内容只随本轮生效：消息组装完就清掉，下一轮不再重复带
     if (get().pendingContext) set({ pendingContext: null });
     const writes: AiWriteCall[] = [];
     let lastFull = "";
     let malformed = false;
-    let droppedRetrievals = 0;
+    let droppedNote = "";
     let cancelled = false;
     let failed: { message: string; code: string | null } | null = null;
     try {
@@ -1150,9 +1204,21 @@ export const useAiStore = create<AiState>()((set, get) => {
         for (const x of items) if (isWriteCall(x.call)) writes.push(x.call);
         const retrievals = items.filter((x) => isRetrievalCall(x.call));
         if (retrievals.length === 0) break;
+        // 「仅本页」档：检索一概不执行。工具没下发，但文本协议块仍可能出现（模型照旧想查），
+        // 这里把原因回灌再要一轮答案，否则正文会停在「我先查一下」这种半句话
+        if (scope === "page_only") {
+          droppedNote = t("ai.searchScopeBlocked");
+          outgoing = [
+            ...outgoing,
+            { role: "assistant", content: result.full },
+            { role: "system" as const, content: RETRIEVAL_BLOCKED_BY_SCOPE_NOTE },
+          ];
+          set((s) => ({ messages: s.messages.map((m) => (m.id === assistantId ? { ...m, content: "" } : m)) }));
+          continue;
+        }
         // 往返已到上限：不再执行检索（结果没机会进答案），只在正文后说明一句
         if (round + 1 >= MAX_AGENT_ROUNDS) {
-          droppedRetrievals = retrievals.length;
+          droppedNote = t("ai.searchRoundLimit", { max: MAX_AGENT_ROUNDS });
           break;
         }
         // 此处到 set(retrieving:true) 之间没有 await：停止只可能发生在 await 边界，检查一次即够
@@ -1203,7 +1269,7 @@ export const useAiStore = create<AiState>()((set, get) => {
       } else if (cancelled) {
         settleIncomplete(assistantId, "stopped");
       } else {
-        await finalizeAssistant(assistantId, turnId, lastFull, writes, malformed, droppedRetrievals);
+        await finalizeAssistant(assistantId, turnId, lastFull, writes, malformed, droppedNote);
       }
     } catch (e) {
       // 起手就失败（未配置 / 命令报错）：没有归类码，界面按通用错误处理
@@ -1567,37 +1633,28 @@ export const useAiStore = create<AiState>()((set, get) => {
       persistSessions();
     },
 
-    // 切换档位：只改 active_profile，其余配置原样回传（apiKey 传 null 表示不改动已保存的 Key；
-    // 档位对象不带 api_key 字段，Rust 侧按 id 保留各档原有 Key）
+    // 切换档位：只改 active_profile，其余配置原样回传
     switchProfile: async (id) => {
       const c = get().config;
       if (!c) return;
       try {
-        await aiSaveConfig({
-          enabled: c.enabled,
-          provider: c.provider,
-          protocol: c.protocol,
-          baseUrl: c.base_url,
-          model: c.model,
-          maxChars: c.max_chars,
-          confirmEdit: c.confirm_edit,
-          temperature: c.temperature,
-          thinking: c.thinking,
-          ctxTokenBudget: c.ctx_token_budget,
-          ctxMaxMessages: c.ctx_max_messages,
-          maxTokens: c.max_tokens,
-          systemPrompt: c.system_prompt,
-          profiles: c.profiles,
-          activeProfile: id,
-          quickActions: c.quick_actions,
-          useTools: c.use_tools,
-          priceInput: c.price_input,
-          priceOutput: c.price_output,
-          apiKey: null,
-        });
+        await aiSaveConfig(configPayload(c, { activeProfile: id }));
         set({ config: await aiGetConfig() });
       } catch (e) {
         logger.error("ai switch profile failed", e);
+        toast.error(t("ai.errorPrefix", { message: String(e) }));
+      }
+    },
+
+    // 上下文范围：面板顶部就能改，改完立即生效（下一轮请求按新范围组装）
+    setCtxScope: async (scope) => {
+      const c = get().config;
+      if (!c || c.ctx_scope === scope) return;
+      try {
+        await aiSaveConfig(configPayload(c, { ctxScope: scope }));
+        set({ config: await aiGetConfig() });
+      } catch (e) {
+        logger.error("ai set context scope failed", e);
         toast.error(t("ai.errorPrefix", { message: String(e) }));
       }
     },

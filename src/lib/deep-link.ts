@@ -48,11 +48,11 @@ export function rowPermalink(viewId: string, rowId: string): string {
   return `tsflowy://page/${encodeURIComponent(viewId)}?row=${encodeURIComponent(rowId)}`;
 }
 
-/** 站内跳行（关联 / 反向关系胶囊）：打开对端库并定位那一行。
+/** 站内跳行（关联 / 反向关系胶囊）：打开对端库并定位那一行；不传 rowId 就只定位到页。
  *  走与深链同一条排队逻辑——目标页此刻不在树里（比如刚被关掉）也会等它出现再打开，
  *  而不是静默什么都不做。 */
-export function openRowInView(viewId: string, rowId: string): void {
-  openViewWhenReady({ viewId, rowId });
+export function openRowInView(viewId: string, rowId?: string | null): void {
+  openViewWhenReady({ viewId, rowId: rowId ?? null });
 }
 
 /** 深链可能在树加载完成前到达（冷启动）：排队，树里出现该页面即打开；返回取消函数 */

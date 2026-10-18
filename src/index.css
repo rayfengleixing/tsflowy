@@ -621,3 +621,91 @@ body,
 .find-hit-active {
   background-color: rgba(249, 115, 22, 0.5);
 }
+
+/* 代码高亮的暗色配色：highlight.js 的 github.css 只给浅色，深色主题下几乎看不清。
+   取值对齐同包的 github-dark；背景留透，由各处的 pre 自己决定。 */
+.dark .hljs {
+  color: #c9d1d9;
+  background: transparent;
+}
+.dark .hljs-doctag,
+.dark .hljs-keyword,
+.dark .hljs-meta .hljs-keyword,
+.dark .hljs-template-tag,
+.dark .hljs-template-variable,
+.dark .hljs-type,
+.dark .hljs-variable.language_ {
+  color: #ff7b72;
+}
+.dark .hljs-title,
+.dark .hljs-title.class_,
+.dark .hljs-title.class_.inherited__,
+.dark .hljs-title.function_ {
+  color: #d2a8ff;
+}
+.dark .hljs-attr,
+.dark .hljs-attribute,
+.dark .hljs-literal,
+.dark .hljs-meta,
+.dark .hljs-number,
+.dark .hljs-operator,
+.dark .hljs-variable,
+.dark .hljs-selector-attr,
+.dark .hljs-selector-class,
+.dark .hljs-selector-id {
+  color: #79c0ff;
+}
+.dark .hljs-regexp,
+.dark .hljs-string,
+.dark .hljs-meta .hljs-string {
+  color: #a5d6ff;
+}
+.dark .hljs-built_in,
+.dark .hljs-symbol {
+  color: #ffa657;
+}
+.dark .hljs-comment,
+.dark .hljs-code,
+.dark .hljs-formula {
+  color: #8b949e;
+}
+.dark .hljs-name,
+.dark .hljs-quote,
+.dark .hljs-selector-tag,
+.dark .hljs-selector-pseudo {
+  color: #7ee787;
+}
+.dark .hljs-subst,
+.dark .hljs-emphasis,
+.dark .hljs-strong {
+  color: #c9d1d9;
+}
+.dark .hljs-section {
+  color: #1f6feb;
+  font-weight: bold;
+}
+.dark .hljs-bullet {
+  color: #f2cc60;
+}
+.dark .hljs-emphasis {
+  font-style: italic;
+}
+.dark .hljs-strong {
+  font-weight: bold;
+}
+.dark .hljs-addition {
+  color: #aff5b4;
+  background-color: #033a16;
+}
+.dark .hljs-deletion {
+  color: #ffdcd7;
+  background-color: #67060c;
+}
+
+/* AI 答案里的独立公式：占一行居中，长公式横向滚动而不是撑破侧栏 */
+.ai-math-block {
+  display: block;
+  margin: 0.4em 0;
+  overflow-x: auto;
+  text-align: center;
+}

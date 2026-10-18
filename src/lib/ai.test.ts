@@ -97,6 +97,7 @@ describe("aiSaveConfig 入参", () => {
       thinking: "off",
       ctxTokenBudget: 5000,
       ctxMaxMessages: 12,
+      ctxScope: "page_only",
       maxTokens: 0,
       systemPrompt: "",
       profiles: [],
@@ -115,6 +116,7 @@ describe("aiSaveConfig 入参", () => {
     expect(cfg.thinking).toBe("off");
     expect(cfg.ctx_token_budget).toBe(5000);
     expect(cfg.ctx_max_messages).toBe(12);
+    expect(cfg.ctx_scope).toBe("page_only");
   });
 
   it("档位草稿 Key 按 aiProfileKeyInput 口径转成 api_key 字段", async () => {
@@ -130,6 +132,7 @@ describe("aiSaveConfig 入参", () => {
       thinking: "auto",
       ctxTokenBudget: 3000,
       ctxMaxMessages: 40,
+      ctxScope: "full",
       maxTokens: 0,
       systemPrompt: "",
       profiles: [

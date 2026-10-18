@@ -76,6 +76,10 @@ pub struct AiConfig {
     /// 上下文消息条数上限：历史消息回截的最少条数目标。0 或缺省时用默认值。
     #[serde(default = "default_ctx_max_messages")]
     pub ctx_max_messages: u32,
+    /// 随请求下发的上下文范围：full = 当前页全文 + @ 引用 + 检索（历史行为）；
+    /// page_only = 只带当前页，禁用 @ 引用与检索；off = 不带当前文档，@ 引用与检索照常。
+    #[serde(default = "default_ctx_scope")]
+    pub ctx_scope: String,
     /// 单次回答的最大 token 数；0 表示不限制（用服务端默认）
     #[serde(default)]
     pub max_tokens: u32,
@@ -128,6 +132,10 @@ fn default_confirm_edit() -> bool {
     true
 }
 
+fn default_ctx_scope() -> String {
+    "full".to_string()
+}
+
 impl Default for AiConfig {
     fn default() -> Self {
         Self {
@@ -143,6 +151,7 @@ impl Default for AiConfig {
             thinking: default_thinking(),
             ctx_token_budget: default_ctx_token_budget(),
             ctx_max_messages: default_ctx_max_messages(),
+            ctx_scope: default_ctx_scope(),
             max_tokens: 0,
             system_prompt: String::new(),
             profiles: Vec::new(),

@@ -166,6 +166,8 @@ pub struct AiConfigPublic {
     pub ctx_token_budget: u32,
     /// 上下文消息条数上限
     pub ctx_max_messages: u32,
+    /// 随请求下发的上下文范围：full / page_only / off
+    pub ctx_scope: String,
     /// 最大 token 数，0 表示不限制
     pub max_tokens: u32,
     /// 用户追加的自定义系统提示
@@ -233,6 +235,9 @@ pub struct AiConfigInput {
     pub ctx_token_budget: u32,
     #[serde(default)]
     pub ctx_max_messages: u32,
+    /// 上下文范围：非 page_only / off 的任何值都归一为 full（与 thinking 同一套路）
+    #[serde(default)]
+    pub ctx_scope: String,
     pub max_tokens: u32,
     pub system_prompt: String,
     /// 档位整体覆盖（前端编辑后整份传回）
@@ -273,6 +278,16 @@ pub struct AiQuickActionInput {
 
 // ---------- 命令 ----------
 
+/// 上下文范围归一：只认 full / page_only / off（大小写不敏感），其余回落 full。
+/// 这是「少带上下文」的开关，脏值宁可退回默认行为，也不要让请求什么上下文都不带。
+fn normalize_ctx_scope(raw: &str) -> &'static str {
+    match raw.to_ascii_lowercase().as_str() {
+        "page_only" => "page_only",
+        "off" => "off",
+        _ => "full",
+    }
+}
+
 /// 读取 AI 配置（掩码返回，不泄露 key）
 #[tauri::command]
 pub fn ai_get_config(app: tauri::AppHandle) -> Result<AiConfigPublic, String> {
@@ -311,6 +326,8 @@ pub fn ai_save_config(app: tauri::AppHandle, cfg: AiConfigInput) -> Result<(), S
     } else {
         cfg.ctx_max_messages.clamp(1, 500)
     };
+    // 上下文范围只认三档，脏值一律回落 full：这是「少带上下文」的开关，宁可退回默认行为
+    ai.ctx_scope = normalize_ctx_scope(&cfg.ctx_scope).to_string();
     ai.max_tokens = cfg.max_tokens;
     ai.system_prompt = cfg.system_prompt;
     // 档位 Key 是逐档密文：入参 api_key=None 表示「不改该档 Key」，按 id 从旧配置带回。
@@ -787,6 +804,7 @@ fn public_of(
         thinking: ai.thinking.clone(),
         ctx_token_budget: ai.ctx_token_budget,
         ctx_max_messages: ai.ctx_max_messages,
+        ctx_scope: ai.ctx_scope.clone(),
         max_tokens: ai.max_tokens,
         system_prompt: ai.system_prompt.clone(),
         profiles: ai
@@ -1666,9 +1684,19 @@ data: [DONE]
         assert_eq!(ai.thinking, "auto");
         assert_eq!(ai.ctx_token_budget, files::AI_CTX_TOKEN_BUDGET_DEFAULT);
         assert_eq!(ai.ctx_max_messages, files::AI_CTX_MAX_MESSAGES_DEFAULT);
+        assert_eq!(ai.ctx_scope, "full");
         let p = &ai.profiles[0];
         assert_eq!(p.protocol, "");
         assert_eq!(p.api_key, "");
+    }
+
+    #[test]
+    fn ctx_scope_falls_back_to_full_on_any_unknown_value() {
+        assert_eq!(normalize_ctx_scope("page_only"), "page_only");
+        assert_eq!(normalize_ctx_scope("OFF"), "off");
+        // 脏值不能变成「什么都不带」：默认行为是少带而不是漏带上下文
+        assert_eq!(normalize_ctx_scope(""), "full");
+        assert_eq!(normalize_ctx_scope("everything"), "full");
     }
 
     #[test]

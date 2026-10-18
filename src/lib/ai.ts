@@ -25,6 +25,8 @@ export interface AiConfig {
   ctx_token_budget: number;
   /** 上下文消息条数上限 */
   ctx_max_messages: number;
+  /** 随请求下发的上下文范围：full / page_only / off */
+  ctx_scope: string;
   /** 最大 token 数，0 表示不限制 */
   max_tokens: number;
   /** 用户追加的自定义系统提示 */
@@ -282,6 +284,8 @@ export async function aiSaveConfig(input: {
   thinking: string;
   ctxTokenBudget: number;
   ctxMaxMessages: number;
+  /** "full" | "page_only" | "off"，其它值由 Rust 侧归一为 full */
+  ctxScope: string;
   maxTokens: number;
   systemPrompt: string;
   profiles: AiProfile[];
@@ -308,6 +312,7 @@ export async function aiSaveConfig(input: {
       thinking: input.thinking,
       ctx_token_budget: input.ctxTokenBudget,
       ctx_max_messages: input.ctxMaxMessages,
+      ctx_scope: input.ctxScope,
       max_tokens: input.maxTokens,
       system_prompt: input.systemPrompt,
       profiles: input.profiles,

@@ -1061,6 +1061,13 @@ export const zh = {
   "ai.fallbackTitle": "AI 对话",
   "ai.toolRunning": "正在检索本库资料…",
   "ai.searchRoundLimit": "（已达到单次提问的检索上限 {max} 轮，剩余检索请求未执行）",
+  "ai.searchScopeBlocked": "（本次上下文范围为「仅本页」，检索请求未执行，答案只依据当前文档）",
+  "ai.ctxScopeTitle": "每次请求带多少本库内容给模型；改动即时生效，下一轮问答按新范围组装",
+  "ai.ctxScopeFull": "上下文：全部",
+  "ai.ctxScopePageOnly": "上下文：仅本页",
+  "ai.ctxScopeOff": "上下文：已关闭",
+  "ai.citationOpen": "点击打开这一页",
+  "ai.mermaidRenderFailed": "图表渲染失败，下面显示其源码",
   "ai.toolNameApplyEdit": "修改文档",
   "ai.toolNameCreatePage": "新建页面",
   "ai.toolNameSetPageTitle": "修改标题",
@@ -1158,6 +1165,12 @@ export const zh = {
   "settings.aiThinkingDesc":
     "默认不发送任何推理参数，跟随服务商行为。选「显式关闭」时：Anthropic 下发 thinking=disabled，Gemini 下发 thinkingBudget=0；OpenAI 兼容端点各家方言不一，无法安全下发，此设置对其无效。",
   "settings.aiCtxBudget": "上下文 token 预算",
+  "settings.aiCtxScope": "上下文范围",
+  "settings.aiCtxScopeFull": "全部（当前页正文 + @ 引用 + 检索）",
+  "settings.aiCtxScopePageOnly": "仅本页（只带当前文档，不检索、不带 @ 引用）",
+  "settings.aiCtxScopeOff": "关闭上下文（不带当前文档，检索照常）",
+  "settings.aiCtxScopeDesc":
+    "决定每次提问随问题一起带出去多少本地内容：整页正文最费 token，也最可能把没打算给模型看的段落带出去。「关闭上下文」只关当前文档；你在编辑器里选中的文字、以及用 @ 主动引用的文档仍会带上，那是你自己给的。面板顶部也能随时切。",
   "settings.aiCtxMaxMessages": "上下文消息条数上限",
   "settings.aiCtxDesc":
     "长对话重发时按估算 token 从最新往回截断旧消息，超出预算的最早消息不会发送（默认 {budget} token / {messages} 条）。",

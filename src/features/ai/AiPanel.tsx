@@ -145,6 +145,7 @@ export function AiPanel() {
   const sessionsShown = useAiStore((s) => s.sessionsShown);
   const loadMoreSessions = useAiStore((s) => s.loadMoreSessions);
   const switchProfile = useAiStore((s) => s.switchProfile);
+  const setCtxScope = useAiStore((s) => s.setCtxScope);
   const runQuickAction = useAiStore((s) => s.runQuickAction);
   const continueGenerate = useAiStore((s) => s.continueGenerate);
   const send = useAiStore((s) => s.send);
@@ -795,6 +796,18 @@ export function AiPanel() {
                 ))}
               </select>
             )}
+            {/* 上下文范围：面板里直接切，省得为「别带我这页内容」跑一趟设置页 */}
+            <select
+              value={["page_only", "off"].includes(config.ctx_scope) ? config.ctx_scope : "full"}
+              onChange={(e) => void setCtxScope(e.target.value)}
+              disabled={streaming}
+              title={t("ai.ctxScopeTitle")}
+              className="h-6 max-w-[9rem] rounded-md border border-neutral-200 bg-white px-1 text-[11px] text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+            >
+              <option value="full">{t("ai.ctxScopeFull")}</option>
+              <option value="page_only">{t("ai.ctxScopePageOnly")}</option>
+              <option value="off">{t("ai.ctxScopeOff")}</option>
+            </select>
             <QuickButton
               icon={<FileText className="h-3 w-3" />}
               label={t("ai.summarize")}

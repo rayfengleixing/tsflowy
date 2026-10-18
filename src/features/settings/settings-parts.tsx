@@ -176,6 +176,8 @@ export interface AiFormState {
   ctxTokenBudget: number;
   /** 上下文消息条数上限 */
   ctxMaxMessages: number;
+  /** 上下文范围："full" | "page_only" | "off" */
+  ctxScope: string;
   /** 最大 token 数，0 表示不限制 */
   maxTokens: number;
   /** 追加的自定义系统提示 */

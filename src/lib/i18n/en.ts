@@ -1101,6 +1101,14 @@ export const en: Record<MessageKey, string> = {
   "ai.fallbackTitle": "AI chat",
   "ai.toolRunning": "Searching your workspace…",
   "ai.searchRoundLimit": "(Retrieval stopped at the {max}-round limit; the remaining requests were not run)",
+  "ai.searchScopeBlocked":
+    "(Context scope is “This page only”, so retrieval requests were not run; the answer uses the current document only)",
+  "ai.ctxScopeTitle": "How much of this workspace travels with each request; takes effect on the next turn",
+  "ai.ctxScopeFull": "Context: everything",
+  "ai.ctxScopePageOnly": "Context: this page only",
+  "ai.ctxScopeOff": "Context: off",
+  "ai.citationOpen": "Click to open this page",
+  "ai.mermaidRenderFailed": "Diagram failed to render; showing its source below",
   "ai.toolNameApplyEdit": "document change",
   "ai.toolNameCreatePage": "page creation",
   "ai.toolNameSetPageTitle": "title change",
@@ -1202,6 +1210,12 @@ export const en: Record<MessageKey, string> = {
   "settings.aiThinkingDesc":
     "By default no reasoning parameter is sent and the provider decides. With “force off”: Anthropic gets thinking=disabled, Gemini gets thinkingBudget=0. OpenAI-compatible endpoints each use their own dialect, so this setting has no effect there.",
   "settings.aiCtxBudget": "Context token budget",
+  "settings.aiCtxScope": "Context scope",
+  "settings.aiCtxScopeFull": "Everything (current page + @ mentions + retrieval)",
+  "settings.aiCtxScopePageOnly": "This page only (no retrieval, no @ mentions)",
+  "settings.aiCtxScopeOff": "No document context (retrieval still available)",
+  "settings.aiCtxScopeDesc":
+    "How much local content travels with each question. Full page text costs the most tokens and may carry paragraphs you never meant to share. “No document context” only drops the current document; text selected in the editor and documents you @-mention still travel, since you asked for them. The panel header can switch this at any time.",
   "settings.aiCtxMaxMessages": "Max context messages",
   "settings.aiCtxDesc":
     "Long chats are trimmed from the newest backwards by estimated tokens; the oldest messages beyond the budget are not sent (defaults: {budget} tokens / {messages} messages).",

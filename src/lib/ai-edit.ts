@@ -139,6 +139,28 @@ export function retrievalResultMessage(results: { tool: string; result: string }
   return `【检索结果】以下是前端执行你的检索请求得到的真实数据，请据此继续完成用户的任务：\n${body}`;
 }
 
+/**
+ * 「仅本页」范围的补充说明：本轮只以当前文档为上下文，检索工具与 @ 引用都不下发。
+ * 必须先说清楚——模型照旧输出检索请求块时，前端只能拒执行，答案会停在「我先查一下」。
+ */
+export const CTX_SCOPE_PAGE_ONLY_NOTE = `【上下文范围】本次只以【当前文档】为上下文：
+检索工具（search_workspace / list_pages / get_page_content / list_database_fields / query_database）
+与 @ 引用其它文档都已关闭，请勿输出检索请求块；信息不够就直接告诉用户缺什么，不要凭空补。`;
+
+/** 「关闭上下文」范围：当前文档一个字都不下发，但仍有一篇打开的文档可作为编辑目标 */
+const CTX_SCOPE_OFF_NOTE = `【上下文范围】用户已关闭当前文档上下文：本次请求不含当前文档的标题、选区与正文。
+需要它的内容时请让用户重新开启上下文，或用检索工具（照常可用）按页面 id 取；
+编辑类动作仍可用，但你不了解现有正文，改动前先说明意图、优先用 append_to_document 这类不依赖原文的 op。`;
+
+/** 「仅本页」档拒执行检索请求时回灌给模型的话：不说清原因，它下一轮还会照旧要查 */
+export const RETRIEVAL_BLOCKED_BY_SCOPE_NOTE = `【说明】本次按「仅本页」范围运行，检索不可用，上面那些检索请求没有被执行。
+请只依据【当前文档】直接作答；确实缺信息就告诉用户缺什么，或让用户在助手面板把上下文范围改成「全部」。`;
+
+/** 关闭当前文档上下文时的 system prompt：协议照常下发，只换成「文档内容未提供」这一段 */
+export function buildNoContextSystemPrompt(hasEditableDoc: boolean): string {
+  return `${PROTOCOL}\n${hasEditableDoc ? CTX_SCOPE_OFF_NOTE : NO_DOC_NOTE}`;
+}
+
 /** 组装 system prompt：动作协议 + 当前文档上下文 */
 export function buildEditSystemPrompt(ctx: AiEditContext): string {
   const target = ctx.selection

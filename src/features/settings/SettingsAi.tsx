@@ -41,6 +41,7 @@ export function SettingsAi() {
     thinking: "auto",
     ctxTokenBudget: 3000,
     ctxMaxMessages: 40,
+    ctxScope: "full",
     maxTokens: 0,
     systemPrompt: "",
     profiles: [],
@@ -82,6 +83,7 @@ export function SettingsAi() {
       thinking: c.thinking,
       ctxTokenBudget: c.ctx_token_budget,
       ctxMaxMessages: c.ctx_max_messages,
+      ctxScope: c.ctx_scope,
       maxTokens: c.max_tokens,
       systemPrompt: c.system_prompt,
       profiles: c.profiles,
@@ -109,6 +111,7 @@ export function SettingsAi() {
       thinking: next.thinking,
       ctxTokenBudget: next.ctxTokenBudget,
       ctxMaxMessages: next.ctxMaxMessages,
+      ctxScope: next.ctxScope,
       maxTokens: next.maxTokens,
       systemPrompt: next.systemPrompt,
       // 档位 Key 走草稿：留空的草稿 → api_key=null（Rust 侧按 id 保留原 Key）
@@ -439,6 +442,22 @@ export function SettingsAi() {
             <option value="off">{t("settings.aiThinkingOff")}</option>
           </select>
           <p className="max-w-80 text-[11px] text-neutral-500">{t("settings.aiThinkingDesc")}</p>
+        </div>
+      </Row>
+
+      {/* 上下文范围 */}
+      <Row label={t("settings.aiCtxScope")}>
+        <div className="flex flex-col gap-1">
+          <select
+            value={["page_only", "off"].includes(aiForm.ctxScope) ? aiForm.ctxScope : "full"}
+            onChange={(e) => saveAi({ ctxScope: e.target.value })}
+            className="w-fit rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs outline-none focus:border-brand-500"
+          >
+            <option value="full">{t("settings.aiCtxScopeFull")}</option>
+            <option value="page_only">{t("settings.aiCtxScopePageOnly")}</option>
+            <option value="off">{t("settings.aiCtxScopeOff")}</option>
+          </select>
+          <p className="max-w-80 text-[11px] text-neutral-500">{t("settings.aiCtxScopeDesc")}</p>
         </div>
       </Row>
 

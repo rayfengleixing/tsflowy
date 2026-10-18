@@ -6,7 +6,7 @@ import type { StoredSession } from "@/stores/ai";
 // （落库时机、token 预算截断、停止后动作竞态、agent 多步循环、会话归档/显示窗口）。
 
 const M = vi.hoisted(() => ({
-  aiChat: vi.fn((_msgs: unknown, _onEvent: unknown) => Promise.resolve()),
+  aiChat: vi.fn((_msgs: unknown, _onEvent: unknown, _tools?: unknown) => Promise.resolve()),
   aiCancel: vi.fn(() => Promise.resolve()),
   aiGetConfig: vi.fn((): Promise<unknown> => Promise.resolve({})),
   aiSaveConfig: vi.fn((_input: Record<string, unknown>) => Promise.resolve()),
@@ -92,6 +92,7 @@ function defaultConfig(overrides: Partial<AiConfig> = {}): AiConfig {
     thinking: "auto",
     ctx_token_budget: 3000,
     ctx_max_messages: 40,
+    ctx_scope: "full",
     max_tokens: 0,
     system_prompt: "",
     profiles: [],
@@ -410,6 +411,87 @@ describe("ai store：agent 多步循环", () => {
     store.getState().undoAction(msg.id, 0);
     expect(M.undoAiEdit).toHaveBeenCalled();
     expect(store.getState().messages[1].actions![0].undone).toBe(true);
+  });
+});
+
+describe("ai store：上下文范围开关", () => {
+  const callBlock = (json: string) => `\`\`\`tsflowy-call\n${json}\n\`\`\``;
+  const docWithText = (text: string) =>
+    JSON.stringify({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] });
+
+  it("关闭上下文：协议照发，当前文档一个字都不带", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ ctx_scope: "off" }) });
+    const msgs = await completeTurn(store, "总结一下");
+    const sys = msgs[0].content;
+    expect(sys).toContain("TsFlowy"); // 动作协议仍在（建页 / 改表 / 检索都要用）
+    expect(sys).not.toContain("整页文本"); // 编辑器桥里的正文没进来
+    expect(sys).toContain("用户已关闭当前文档上下文");
+  });
+
+  it("仅本页：带当前页全文，但不下发工具、也不读 @ 引用的文档", async () => {
+    M.workspaceState.tree = [{ id: "v-report", name: "周报", layout: "document", children: [] }];
+    M.documentGet.mockImplementation(() => Promise.resolve(docWithText("正文A")));
+    const store = await loadConfiguredStore({
+      config: defaultConfig({ use_tools: true, ctx_scope: "page_only" }),
+    });
+    const msgs = await completeTurn(store, "@周报 里有什么");
+    expect(msgs[0].content).toContain("整页文本");
+    expect(msgs[0].content).toContain("【上下文范围】本次只以【当前文档】为上下文");
+    expect(msgs.some((m) => m.content.includes("正文A"))).toBe(false);
+    expect(M.documentGet).not.toHaveBeenCalled();
+    // 第三参是工具定义：仅本页档不下发，模型没有检索可用
+    expect(M.aiChat.mock.calls[0][2]).toBeUndefined();
+  });
+
+  it("全部范围且开了 function calling 时工具照常下发（对照「仅本页」不下发）", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ use_tools: true }) });
+    await completeTurn(store, "q");
+    expect(M.aiChat.mock.calls[0][2]).toEqual([]);
+  });
+
+  it("仅本页时模型照旧发检索块：不执行、把原因回灌再要一轮，正文后说明", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ ctx_scope: "page_only" }) });
+    const p = store.getState().send("查点别的");
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(1));
+    streamHandlers[0]({ type: "done", full: `我先查。\n\n${callBlock('{"tool":"list_pages","args":{}}')}` });
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(2));
+    expect(M.runRetrievalCall).not.toHaveBeenCalled();
+    const second = M.aiChat.mock.calls[1][0] as AiChatMessage[];
+    expect(second[second.length - 1]?.content).toContain("仅本页");
+    streamHandlers[1]({ type: "done", full: "只根据这一页作答" });
+    await p;
+    const msg = store.getState().messages[1];
+    expect(msg.content).toContain("只根据这一页作答");
+    expect(msg.content).toContain("ai.searchScopeBlocked");
+  });
+
+  it("没有可编辑文档时「仅本页」按全部处理（此时关掉检索就什么都没有了）", async () => {
+    const store = await loadConfiguredStore({
+      config: defaultConfig({ use_tools: true, ctx_scope: "page_only" }),
+      bridgeNull: true,
+    });
+    const msgs = await completeTurn(store, "q");
+    expect(msgs[0].content).toContain("没有打开中的可编辑文档");
+    expect(M.aiChat.mock.calls[0][2]).toEqual([]);
+  });
+
+  it("setCtxScope 只改范围：其余字段原样回传（覆盖式保存，漏一个字段就等于把它重置）", async () => {
+    const store = await loadConfiguredStore({
+      config: defaultConfig({ thinking: "off", ctx_token_budget: 5000, use_tools: true }),
+    });
+    await store.getState().setCtxScope("page_only");
+    const input = M.aiSaveConfig.mock.calls[0][0];
+    expect(input.ctxScope).toBe("page_only");
+    expect(input.thinking).toBe("off");
+    expect(input.ctxTokenBudget).toBe(5000);
+    expect(input.useTools).toBe(true);
+    expect(input.apiKey).toBeNull();
+  });
+
+  it("范围没变时不写盘", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ ctx_scope: "off" }) });
+    await store.getState().setCtxScope("off");
+    expect(M.aiSaveConfig).not.toHaveBeenCalled();
   });
 });
 
@@ -1569,6 +1651,7 @@ describe("ai store：档位切换回传整份配置", () => {
     expect(input.thinking).toBe("off");
     expect(input.ctxTokenBudget).toBe(5000);
     expect(input.ctxMaxMessages).toBe(12);
+    expect(input.ctxScope).toBe("full");
     const saved = input.profiles as Record<string, unknown>[];
     expect(saved[0]).toMatchObject({ id: "p1", model: "m-strong", protocol: "anthropic" });
     // 掩码字段不回传成 Key；缺 api_key 即「Rust 侧按 id 保留原 Key」的语义
