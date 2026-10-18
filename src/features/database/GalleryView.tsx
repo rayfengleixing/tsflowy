@@ -132,6 +132,7 @@ export function GalleryView({
             <span className="text-neutral-500">{t("gallery.coverField")}:</span>
             <select
               className="bg-transparent text-xs outline-none"
+              aria-label={t("gallery.coverField")}
               value={coverFieldId ?? ""}
               onChange={(e) => changeCoverField(e.target.value || null)}
             >

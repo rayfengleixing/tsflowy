@@ -92,6 +92,7 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
   return (
     <div
       data-testid="find-bar"
+      role="search"
       aria-label={t("find.title")}
       className="absolute right-4 top-2 z-40 w-[420px] max-w-[calc(100%-2rem)] rounded-lg border border-neutral-300 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-900"
       onKeyDown={(e) => {
@@ -107,6 +108,7 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
           ref={inputRef}
           className="h-7 min-w-0 flex-1 rounded-md border border-neutral-300 px-2 text-[12px] outline-none focus:border-brand-500 dark:border-neutral-700 dark:bg-neutral-900"
           placeholder={t("find.placeholder")}
+          aria-label={t("find.title")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -120,6 +122,7 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
         <button
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-neutral-700 disabled:opacity-40 dark:hover:bg-neutral-800"
           title={t("find.prev")}
+          aria-label={t("find.prev")}
           disabled={info.total === 0}
           onClick={() => gotoFindMatch(editor, info.active - 1)}
         >
@@ -128,6 +131,7 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
         <button
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-neutral-700 disabled:opacity-40 dark:hover:bg-neutral-800"
           title={t("find.next")}
+          aria-label={t("find.next")}
           disabled={info.total === 0}
           onClick={() => gotoFindMatch(editor, info.active + 1)}
         >
@@ -142,6 +146,7 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
                 : "text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-800",
             )}
             title={t("find.replace")}
+            aria-label={t("find.replace")}
             onClick={() => setShowReplace((v) => !v)}
           >
             <Replace className="h-3.5 w-3.5" />
@@ -149,6 +154,7 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
         )}
         <button
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-800"
+          aria-label={t("find.close")}
           onClick={close}
         >
           <X className="h-3.5 w-3.5" />
@@ -203,6 +209,7 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
           <input
             className="h-7 min-w-0 flex-1 rounded-md border border-neutral-300 px-2 text-[12px] outline-none focus:border-brand-500 dark:border-neutral-700 dark:bg-neutral-900"
             placeholder={t("find.replacePlaceholder")}
+            aria-label={t("find.replace")}
             value={replacement}
             onChange={(e) => setReplacement(e.target.value)}
             onKeyDown={(e) => {
@@ -215,6 +222,7 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
           <button
             className="flex h-7 shrink-0 items-center gap-1 rounded px-2 text-[12px] text-neutral-600 hover:bg-neutral-200 disabled:opacity-40 dark:text-neutral-300 dark:hover:bg-neutral-800"
             title={t("find.replace")}
+            aria-label={t("find.replace")}
             disabled={info.total === 0}
             onClick={onReplace}
           >
@@ -224,6 +232,7 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
           <button
             className="flex h-7 shrink-0 items-center gap-1 rounded px-2 text-[12px] text-neutral-600 hover:bg-neutral-200 disabled:opacity-40 dark:text-neutral-300 dark:hover:bg-neutral-800"
             title={t("find.replaceAll")}
+            aria-label={t("find.replaceAll")}
             disabled={info.total === 0}
             onClick={onReplaceAll}
           >

@@ -94,6 +94,7 @@ export function TagPanel({ onFilter }: TagPanelProps) {
                       autoFocus
                       className="h-[26px] min-w-0 flex-1 rounded border border-neutral-300 bg-white px-1.5 text-[12px] outline-none focus:border-brand-500"
                       placeholder={t("tag.renamePlaceholder")}
+                      aria-label={t("tag.rename")}
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
                       onKeyDown={(e) => {
@@ -104,6 +105,7 @@ export function TagPanel({ onFilter }: TagPanelProps) {
                     <button
                       className="rounded p-0.5 text-neutral-500 hover:bg-neutral-300/60 hover:text-neutral-800"
                       title={t("common.done")}
+                      aria-label={t("common.done")}
                       onClick={() => commitRename(path)}
                     >
                       <Check className="h-3.5 w-3.5" />
@@ -111,6 +113,7 @@ export function TagPanel({ onFilter }: TagPanelProps) {
                     <button
                       className="rounded p-0.5 text-neutral-500 hover:bg-neutral-300/60 hover:text-neutral-800"
                       title={t("common.cancel")}
+                      aria-label={t("common.cancel")}
                       onClick={() => setEditing(null)}
                     >
                       <X className="h-3.5 w-3.5" />
@@ -128,6 +131,7 @@ export function TagPanel({ onFilter }: TagPanelProps) {
                       <button
                         className="shrink-0 rounded p-0.5 text-neutral-400 hover:bg-neutral-300/60 hover:text-neutral-700"
                         title={open ? t("tag.collapse") : t("tag.expand")}
+                        aria-label={open ? t("tag.collapse") : t("tag.expand")}
                         onClick={() => toggleCollapse(path)}
                       >
                         {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
@@ -138,6 +142,7 @@ export function TagPanel({ onFilter }: TagPanelProps) {
                     <button
                       className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
                       title={t("tag.filterHint")}
+                      aria-label={t("tag.filterHint")}
                       onClick={() => applyFilter(path)}
                     >
                       <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
@@ -156,6 +161,7 @@ export function TagPanel({ onFilter }: TagPanelProps) {
                       <button
                         className="rounded p-0.5 text-neutral-500 hover:bg-neutral-300/60 hover:text-neutral-800"
                         title={t("tag.changeColor")}
+                        aria-label={t("tag.changeColor")}
                         onClick={() => setColorFor(colorFor === path ? null : path)}
                       >
                         <Palette className="h-3.5 w-3.5" />
@@ -163,6 +169,7 @@ export function TagPanel({ onFilter }: TagPanelProps) {
                       <button
                         className="rounded p-0.5 text-neutral-500 hover:bg-neutral-300/60 hover:text-neutral-800"
                         title={t("tag.rename")}
+                        aria-label={t("tag.rename")}
                         onClick={() => startRename(path)}
                       >
                         <Pencil className="h-3.5 w-3.5" />
@@ -170,6 +177,7 @@ export function TagPanel({ onFilter }: TagPanelProps) {
                       <button
                         className="rounded p-0.5 text-neutral-500 hover:bg-neutral-300/60 hover:text-destructive"
                         title={t("tag.delete")}
+                        aria-label={t("tag.delete")}
                         onClick={() => setPendingDelete(node)}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -193,6 +201,7 @@ export function TagPanel({ onFilter }: TagPanelProps) {
                           ...(c === color ? { boxShadow: `0 0 0 2px ${tagTint(c, "66")}` } : {}),
                         }}
                         title={c}
+                        aria-label={t("tag.color", { color: c })}
                         onClick={() => {
                           void setTagColor(path, c);
                           setColorFor(null);

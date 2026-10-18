@@ -1031,7 +1031,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
           滚动条由 index.css 按 data-editor-scroll 隐藏 */}
       <div ref={scrollRef} data-editor-scroll className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto px-6 py-4" style={{ maxWidth: "var(--tiptap-max-width, 800px)" }}>
-          <EditorContent editor={editor} />
+          <EditorContent editor={editor} aria-label={t("editor.documentAria")} />
           {/* 只读模式收掉三个改结构的浮层入口（拖拽手柄由 block-drag 自己按 isEditable 隐藏） */}
           {!editorReadonly && (
             <>
@@ -1081,6 +1081,8 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
                       {rows.slice(0, 3).map((r) => (
                         <li
                           key={r.id}
+                          role="button"
+                          aria-label={t("backlinks.contextLabel")}
                           className="cursor-pointer rounded px-1.5 py-0.5 text-[12px] text-neutral-600 hover:bg-neutral-100"
                           onClick={() => useWorkspaceStore.getState().openView(srcId)}
                           title={t("backlinks.contextLabel")}

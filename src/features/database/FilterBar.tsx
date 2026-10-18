@@ -75,6 +75,7 @@ function DateOperandInput({ value, onChange }: FilterOperandProps) {
     <>
       <select
         className={SELECT_CLS}
+        aria-label={t("filter.date.mode")}
         value={isRel ? "rel" : "abs"}
         onChange={(e) => onChange(e.target.value === "rel" ? makeRelativeOperand("today") : null)}
       >
@@ -85,6 +86,7 @@ function DateOperandInput({ value, onChange }: FilterOperandProps) {
         <>
           <select
             className={SELECT_CLS}
+            aria-label={t("filter.date.preset")}
             value={relKey}
             onChange={(e) => onChange(makeRelativeOperand(e.target.value as RelativeDateKey, days))}
           >
@@ -99,6 +101,7 @@ function DateOperandInput({ value, onChange }: FilterOperandProps) {
               type="number"
               min={1}
               max={3650}
+              aria-label={t("filter.date.days")}
               className="h-7 w-16 rounded-md border border-neutral-300 px-2 text-[12px] outline-none focus:border-brand-500"
               value={days}
               onChange={(e) => {
@@ -112,6 +115,7 @@ function DateOperandInput({ value, onChange }: FilterOperandProps) {
       {!isRel && (
         <input
           type="date"
+          aria-label={t("filter.date.value")}
           className="h-7 rounded-md border border-neutral-300 px-2 text-[12px] outline-none focus:border-brand-500"
           value={absText}
           onChange={(e) => onChange(e.target.value || null)}
@@ -155,6 +159,7 @@ function RelationOperandInput({ field, value, getDb, onChange }: FilterOperandPr
               <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-neutral-400" />
               <input
                 autoFocus
+                aria-label={t("field.relationSearch")}
                 className="h-7 w-full rounded-md border border-neutral-200 pl-7 pr-2 text-[13px] outline-none placeholder:text-neutral-400 focus:border-brand-500"
                 placeholder={t("field.relationSearch")}
                 value={query}
@@ -208,6 +213,7 @@ function SelectOperand({ options, value, onChange }: FilterOperandProps) {
   return (
     <select
       className={SELECT_CLS}
+      aria-label={t("filter.value")}
       value={typeof value === "string" ? value : ""}
       onChange={(e) => onChange(e.target.value || null)}
     >
@@ -227,6 +233,7 @@ function NumberOperand({ draft, onDraft, onChange }: FilterOperandProps) {
     <input
       type="number"
       step="any"
+      aria-label={t("filter.value")}
       className="h-7 w-28 rounded-md border border-neutral-300 px-2 text-[12px] outline-none focus:border-brand-500"
       value={draft}
       onChange={(e) => {
@@ -249,6 +256,7 @@ function RatingOperand({ options, value, onChange }: FilterOperandProps) {
   return (
     <select
       className={SELECT_CLS}
+      aria-label={t("filter.value")}
       value={typeof value === "number" ? String(value) : ""}
       onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
     >
@@ -266,6 +274,7 @@ function RatingOperand({ options, value, onChange }: FilterOperandProps) {
 function TextOperand({ draft, onDraft, onChange }: FilterOperandProps) {
   return (
     <input
+      aria-label={t("filter.value")}
       className="h-7 w-36 rounded-md border border-neutral-300 px-2 text-[12px] outline-none focus:border-brand-500"
       value={draft}
       onChange={(e) => {
@@ -314,10 +323,10 @@ function ModeToggle({ mode, onChange }: { mode: FilterMode; onChange: (m: Filter
     );
   return (
     <div className="flex shrink-0 items-center gap-1">
-      <button className={btn("and")} onClick={() => onChange("and")}>
+      <button className={btn("and")} aria-label={t("filter.mode.and")} onClick={() => onChange("and")}>
         AND
       </button>
-      <button className={btn("or")} onClick={() => onChange("or")}>
+      <button className={btn("or")} aria-label={t("filter.mode.or")} onClick={() => onChange("or")}>
         OR
       </button>
     </div>
@@ -345,6 +354,7 @@ function FilterLeafRow({
     <div className="flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-2 py-1">
       <select
         className="h-7 max-w-36 rounded border-none bg-transparent text-[12px] outline-none"
+        aria-label={t("filter.field")}
         value={spec.field_id}
         onChange={(e) => {
           const nf = fields.find((f) => f.id === e.target.value);
@@ -360,6 +370,7 @@ function FilterLeafRow({
       </select>
       <select
         className="h-7 rounded border border-neutral-200 bg-white px-1.5 text-[12px] outline-none focus:border-brand-500"
+        aria-label={t("filter.opLabel")}
         value={spec.op}
         onChange={(e) => onPatch({ op: e.target.value as FilterOp })}
       >
@@ -374,6 +385,7 @@ function FilterLeafRow({
       )}
       <button
         className="flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-red-500"
+        aria-label={t("filter.remove")}
         onClick={onRemove}
       >
         <Trash2 className="h-3.5 w-3.5" />
@@ -444,6 +456,7 @@ function FilterGroupRow({ group, depth, actions }: { group: FilterGroup; depth: 
       )}
       <button
         className="flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-red-500"
+        aria-label={t("filter.removeGroup")}
         onClick={() => actions.removeNode(group.id)}
       >
         <Trash2 className="h-3.5 w-3.5" />
@@ -507,6 +520,7 @@ export function FilterBar(props: {
       </Button>
       <button
         className="ml-auto flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200"
+        aria-label={t("filter.close")}
         onClick={onClose}
       >
         <X className="h-4 w-4" />

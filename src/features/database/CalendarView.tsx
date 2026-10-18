@@ -178,6 +178,7 @@ export function CalendarView({
             <span className="text-neutral-500">{t("calendar.dateBy")}:</span>
             <select
               className="bg-transparent text-xs outline-none"
+              aria-label={t("calendar.dateBy")}
               value={dateFieldId ?? ""}
               onChange={(e) => changeDateField(e.target.value || null)}
             >
@@ -191,13 +192,21 @@ export function CalendarView({
           </div>
 
           <div className="flex items-center gap-0.5 rounded-md border border-neutral-300 bg-white text-xs">
-            <button className="rounded-l-md px-2 py-1 text-neutral-600 hover:bg-neutral-100" onClick={gotoPrevMonth}>
+            <button
+              className="rounded-l-md px-2 py-1 text-neutral-600 hover:bg-neutral-100"
+              aria-label={t("calendar.prevMonth")}
+              onClick={gotoPrevMonth}
+            >
               <ChevronLeft className="h-3.5 w-3.5" />
             </button>
             <span className="px-2 font-medium text-neutral-800">
               {year} / {String(month).padStart(2, "0")}
             </span>
-            <button className="px-2 py-1 text-neutral-600 hover:bg-neutral-100" onClick={gotoNextMonth}>
+            <button
+              className="px-2 py-1 text-neutral-600 hover:bg-neutral-100"
+              aria-label={t("calendar.nextMonth")}
+              onClick={gotoNextMonth}
+            >
               <ChevronRight className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -303,6 +312,7 @@ export function CalendarView({
                           className="hidden rounded p-0.5 text-neutral-400 hover:bg-neutral-200 hover:text-neutral-600 group-hover/row:inline-flex dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
                           onClick={() => addRowAtDate(date)}
                           title={t("calendar.addRow")}
+                          aria-label={t("calendar.addRow")}
                         >
                           <Plus className="h-3 w-3" />
                         </button>

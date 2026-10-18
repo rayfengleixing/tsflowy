@@ -52,13 +52,20 @@ export function DailyNoteButton() {
             data-testid="daily-note-picker"
             className="flex h-full items-center gap-1 rounded-md px-1.5 text-[11px] text-neutral-500 hover:bg-neutral-300/70"
             title={t("daily.pickDate")}
+            aria-label={t("daily.pickDate")}
           >
             <span className="tabular-nums">{shortDateKey(today)}</span>
             <ChevronDown className="h-3 w-3" />
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-60 gap-2">
-          <Input type="date" value={picked} onChange={(e) => setPicked(e.target.value)} className="h-8 text-[12px]" />
+          <Input
+            type="date"
+            aria-label={t("daily.pickDate")}
+            value={picked}
+            onChange={(e) => setPicked(e.target.value)}
+            className="h-8 text-[12px]"
+          />
           <p className="text-[11px] text-neutral-500">
             {pickedDate ? `${picked} ${weekdayLabel(pickedDate, lang)}` : t("daily.badDate")}
           </p>

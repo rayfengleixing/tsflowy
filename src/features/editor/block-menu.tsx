@@ -446,6 +446,8 @@ export function BlockMenu() {
     return (
       <div
         ref={boxRef}
+        role="toolbar"
+        aria-label={t("blockMenu.title")}
         className="fixed z-[60] w-[284px] rounded-lg border border-neutral-200 bg-white py-1.5 shadow-2xl dark:border-neutral-700 dark:bg-neutral-900"
         style={{ left, top }}
         onMouseDown={(e) => e.preventDefault()}
@@ -496,6 +498,8 @@ export function BlockMenu() {
   return (
     <div
       ref={boxRef}
+      role="toolbar"
+      aria-label={t("blockMenu.title")}
       className="fixed z-[60] w-[284px] rounded-lg border border-neutral-200 bg-white py-1.5 shadow-2xl dark:border-neutral-700 dark:bg-neutral-900"
       style={{ left, top }}
       onMouseDown={(e) => e.preventDefault()}

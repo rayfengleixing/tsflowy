@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { syncNativeLang } from "@/lib/app-shell";
 import { LANGUAGES, type LangCode } from "@/lib/i18n/languages";
 
 export type ThemeMode = "light" | "dark" | "system";
@@ -690,6 +691,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     set({ lang });
     persist(LANG_KEY, lang);
     applyLangToDocument(lang);
+    syncNativeLang(lang);
   },
   setTheme: (theme) => {
     set({ theme });
@@ -758,6 +760,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
 export function bootstrapVisualSettings() {
   const s = useSettingsStore.getState();
   applyLangToDocument(s.lang);
+  syncNativeLang(s.lang);
   applyThemePresetToDocument(s.themePreset);
   applyAccentToDocument(s.accent);
   applyFontToDocument(s.font);

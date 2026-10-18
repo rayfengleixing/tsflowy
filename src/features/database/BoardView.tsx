@@ -184,6 +184,7 @@ export function BoardView({
             <span className="text-neutral-500">{t("board.groupBy")}:</span>
             <select
               className="bg-transparent text-xs outline-none"
+              aria-label={t("board.groupBy")}
               value={groupFieldId ?? ""}
               onChange={(e) => changeGroupField(e.target.value || null)}
             >
@@ -283,6 +284,7 @@ export function BoardView({
                   <div className="flex items-center gap-2 border-b border-neutral-200 px-2 py-2">
                     <button
                       className="rounded p-0.5 text-neutral-500 hover:bg-neutral-200/60"
+                      aria-label={t(collapsed ? "board.expandGroup" : "board.collapseGroup")}
                       onClick={() => {
                         const next = new Set(collapsedGroups);
                         if (collapsed) next.delete(group.key);
@@ -309,6 +311,7 @@ export function BoardView({
                       className="rounded p-0.5 text-neutral-500 hover:bg-neutral-200/60"
                       onClick={() => addCardInGroup(group.key)}
                       title={t("board.addCard")}
+                      aria-label={t("board.addCard")}
                     >
                       <Plus className="h-3.5 w-3.5" />
                     </button>
@@ -360,6 +363,7 @@ export function BoardView({
                 <div className="flex gap-1">
                   <input
                     autoFocus
+                    aria-label={t("board.addGroupPlaceholder")}
                     className="flex-1 rounded border border-neutral-300 bg-white px-2 py-1 text-xs outline-none focus:border-brand-500"
                     placeholder={t("board.addGroupPlaceholder")}
                     value={newGroupName}

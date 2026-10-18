@@ -1055,6 +1055,7 @@ export function GridView({
               <button
                 className="flex h-5 w-5 items-center justify-center rounded text-brand-500 hover:bg-brand-100 dark:hover:bg-brand-500/20"
                 title={t("row.selectionClear")}
+                aria-label={t("row.selectionClear")}
                 onClick={() => setCheckedRows(new Set())}
               >
                 <X className="h-3.5 w-3.5" />
@@ -1075,6 +1076,7 @@ export function GridView({
                     <span className="text-neutral-500">{t(level === 0 ? "grid.groupBy" : "grid.thenBy")}:</span>
                     <select
                       className="bg-transparent text-xs outline-none"
+                      aria-label={t(level === 0 ? "grid.groupBy" : "grid.thenBy")}
                       value={id}
                       onChange={(e) => setGroupLevels(groupFieldIds.map((x, i) => (i === level ? e.target.value : x)))}
                     >
@@ -1089,6 +1091,7 @@ export function GridView({
                     <button
                       className="flex h-4 w-4 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-red-500"
                       title={t("grid.removeGroup")}
+                      aria-label={t("grid.removeGroup")}
                       onClick={() => setGroupLevels(groupFieldIds.filter((_, i) => i !== level))}
                     >
                       <X className="h-3 w-3" />
@@ -1101,6 +1104,7 @@ export function GridView({
                   className="h-6 rounded-md border border-dashed border-neutral-300 bg-transparent px-1.5 text-xs text-neutral-500 outline-none hover:border-brand-500"
                   value=""
                   title={t("grid.addGroup")}
+                  aria-label={t("grid.addGroup")}
                   onChange={(e) => e.target.value && setGroupLevels([...groupFieldIds, e.target.value])}
                 >
                   <option value="">{t("grid.groupBy")}</option>
@@ -1209,6 +1213,7 @@ export function GridView({
                 <button
                   className="mx-auto flex h-4 w-4 items-center justify-center rounded text-neutral-500 hover:text-brand-600 dark:text-neutral-400"
                   title={t("row.selectAll")}
+                  aria-label={t("row.selectAll")}
                   onClick={toggleSelectAll}
                 >
                   {allSelected ? (
@@ -1319,6 +1324,9 @@ export function GridView({
                     {/* 列宽拖拽手柄 */}
                     <div
                       data-testid={"resize-" + field.id}
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label={t("grid.resizeColumn")}
                       className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-brand-500/60"
                       onMouseDown={(e) => startColumnResize(e, field.id, field.width)}
                     />

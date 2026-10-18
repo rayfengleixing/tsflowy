@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAiStore } from "@/stores/ai";
-import { t } from "@/lib/i18n";
+import { t, type MessageKey } from "@/lib/i18n";
 import { clampFloatToEditor, getEditorViewportRect } from "./float-clamp";
 
 // 选中文本浮动工具栏（项目说明书 8.3）。
@@ -26,28 +26,36 @@ import { clampFloatToEditor, getEditorViewportRect } from "./float-clamp";
 // 经验 1490687：所有交互按钮必须 onMouseDown 阻止默认，否则点击会让编辑器失焦而丢失选区。
 
 const TEXT_COLORS = [
-  { name: "default", value: "inherit", swatch: "border-neutral-300 bg-white text-neutral-700" },
-  { name: "blue", value: "#0092D6", swatch: "bg-[#0092D6]" },
-  { name: "red", value: "#D92D20", swatch: "bg-[#D92D20]" },
-  { name: "green", value: "#12B76A", swatch: "bg-[#12B76A]" },
-  { name: "orange", value: "#F79009", swatch: "bg-[#F79009]" },
-  { name: "purple", value: "#9E77ED", swatch: "bg-[#9E77ED]" },
-  { name: "gray", value: "#6F748C", swatch: "bg-[#6F748C]" },
+  { labelKey: "float.colorName.default", value: "inherit", swatch: "border-neutral-300 bg-white text-neutral-700" },
+  { labelKey: "float.colorName.blue", value: "#0092D6", swatch: "bg-[#0092D6]" },
+  { labelKey: "float.colorName.red", value: "#D92D20", swatch: "bg-[#D92D20]" },
+  { labelKey: "float.colorName.green", value: "#12B76A", swatch: "bg-[#12B76A]" },
+  { labelKey: "float.colorName.orange", value: "#F79009", swatch: "bg-[#F79009]" },
+  { labelKey: "float.colorName.purple", value: "#9E77ED", swatch: "bg-[#9E77ED]" },
+  { labelKey: "float.colorName.gray", value: "#6F748C", swatch: "bg-[#6F748C]" },
 ] as const;
 
 const HIGHLIGHT_COLORS = [
-  { name: "none", value: "transparent", swatch: "border border-dashed border-neutral-300 bg-white" },
-  { name: "yellow", value: "#FEF3C7", swatch: "bg-[#FEF3C7]" },
-  { name: "blue", value: "#E3F6FF", swatch: "bg-[#E3F6FF]" },
-  { name: "green", value: "#D1FAE5", swatch: "bg-[#D1FAE5]" },
-  { name: "pink", value: "#FCE7F3", swatch: "bg-[#FCE7F3]" },
-  { name: "purple", value: "#EDE9FE", swatch: "bg-[#EDE9FE]" },
+  {
+    labelKey: "float.highlightName.none",
+    value: "transparent",
+    swatch: "border border-dashed border-neutral-300 bg-white",
+  },
+  { labelKey: "float.highlightName.yellow", value: "#FEF3C7", swatch: "bg-[#FEF3C7]" },
+  { labelKey: "float.highlightName.blue", value: "#E3F6FF", swatch: "bg-[#E3F6FF]" },
+  { labelKey: "float.highlightName.green", value: "#D1FAE5", swatch: "bg-[#D1FAE5]" },
+  { labelKey: "float.highlightName.pink", value: "#FCE7F3", swatch: "bg-[#FCE7F3]" },
+  { labelKey: "float.highlightName.purple", value: "#EDE9FE", swatch: "bg-[#EDE9FE]" },
 ] as const;
 
 // 供块菜单（block-menu.tsx）复用
 export { TEXT_COLORS, HIGHLIGHT_COLORS, SwatchPalette, IconBtn };
 
-type SwatchPal = readonly { readonly name: string; readonly value: string; readonly swatch: string }[];
+type SwatchPal = readonly {
+  readonly labelKey: MessageKey;
+  readonly value: string;
+  readonly swatch: string;
+}[];
 
 function IconBtn(props: {
   title: string;
@@ -60,6 +68,7 @@ function IconBtn(props: {
     <button
       type="button"
       title={props.title}
+      aria-label={props.title}
       disabled={props.disabled}
       onMouseDown={(e) => e.preventDefault()}
       onClick={props.onClick}
@@ -138,9 +147,10 @@ function SwatchPalette<T extends SwatchPal>(props: {
       <div className="flex gap-1.5">
         {palette.map((c) => (
           <button
-            key={c.name + c.value}
+            key={c.labelKey + c.value}
             type="button"
-            title={c.name}
+            title={t(c.labelKey)}
+            aria-label={t(c.labelKey)}
             className={cn(
               "flex h-6 w-6 items-center justify-center rounded-full border border-neutral-200",
               c.swatch,
@@ -190,6 +200,7 @@ function LinkPopover(props: {
         value={value}
         onChange={(e) => setValue(e.target.value)}
         placeholder={t("float.linkPlaceholder")}
+        aria-label={t("float.link")}
         className="h-7 w-56 rounded border-none bg-transparent px-2 text-[13px] outline-none placeholder:text-neutral-400"
         onKeyDown={(e) => {
           if (e.key === "Enter") props.onSubmit(value.trim() || null);
@@ -361,6 +372,8 @@ export function FloatingMenu(props: { editor: Editor | undefined }) {
   return (
     <div
       ref={boxRef}
+      role="toolbar"
+      aria-label={t("float.title")}
       style={{
         position: "fixed",
         left: `${placed?.x ?? coord.x}px`,

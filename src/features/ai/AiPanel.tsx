@@ -492,12 +492,17 @@ export function AiPanel() {
   return (
     <div
       data-testid="ai-panel"
+      role="complementary"
+      aria-label={t("ai.title")}
       className="relative flex h-full shrink-0 flex-col border-l border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900"
       style={{ width }}
     >
       <div
         className="absolute inset-y-0 left-0 z-10 w-1 cursor-col-resize bg-transparent transition-colors hover:bg-brand-400"
         title={t("ai.dragHint")}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t("ai.dragHint")}
         onMouseDown={startDrag}
       />
 
@@ -569,6 +574,7 @@ export function AiPanel() {
                 value={historyQuery}
                 onChange={(e) => setHistoryQuery(e.target.value)}
                 placeholder={t("ai.searchSessions")}
+                aria-label={t("ai.searchSessions")}
                 className="min-w-0 flex-1 bg-transparent text-[12px] text-neutral-700 outline-none placeholder:text-neutral-400 dark:text-neutral-200"
               />
             </div>
@@ -604,6 +610,7 @@ export function AiPanel() {
                           if (e.key === "Enter") commitRename(sess.id);
                           else if (e.key === "Escape") setRenamingId(null);
                         }}
+                        aria-label={t("ai.renameSessionField")}
                         className="mx-1.5 my-0.5 min-w-0 flex-1 rounded border border-brand-500 bg-white px-1.5 py-1 text-[12px] text-neutral-700 outline-none dark:bg-neutral-900 dark:text-neutral-200"
                       />
                     ) : (
@@ -786,6 +793,7 @@ export function AiPanel() {
                 onChange={(e) => void switchProfile(e.target.value)}
                 disabled={streaming}
                 title={t("settings.aiProfiles")}
+                aria-label={t("settings.aiProfiles")}
                 className="h-6 max-w-[9rem] rounded-md border border-neutral-200 bg-white px-1 text-[11px] text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
               >
                 <option value="">{t("ai.profileDefault")}</option>
@@ -802,6 +810,7 @@ export function AiPanel() {
               onChange={(e) => void setCtxScope(e.target.value)}
               disabled={streaming}
               title={t("ai.ctxScopeTitle")}
+              aria-label={t("ai.ctxScopeTitle")}
               className="h-6 max-w-[9rem] rounded-md border border-neutral-200 bg-white px-1 text-[11px] text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
             >
               <option value="full">{t("ai.ctxScopeFull")}</option>
@@ -960,6 +969,7 @@ export function AiPanel() {
                 type="file"
                 accept={AI_IMAGE_ACCEPT}
                 multiple
+                aria-hidden="true"
                 className="hidden"
                 onChange={(e) => {
                   const files = Array.from(e.target.files ?? []);

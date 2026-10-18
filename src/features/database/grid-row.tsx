@@ -197,6 +197,7 @@ export function renderGridRow(row: DatabaseRow, ctx: GridRowContext, hier?: Grid
               <button
                 className="flex h-4 w-4 items-center justify-center rounded text-brand-600 hover:bg-brand-100 dark:hover:bg-brand-500/10"
                 title={t("row.select")}
+                aria-label={t("row.select")}
                 onClick={(e) => {
                   e.stopPropagation();
                   toggleRowChecked(row.id);
@@ -209,6 +210,7 @@ export function renderGridRow(row: DatabaseRow, ctx: GridRowContext, hier?: Grid
                 <button
                   className="hidden h-4 w-4 items-center justify-center rounded text-neutral-300 hover:text-brand-600 group-hover/row:flex dark:text-neutral-600"
                   title={t("row.select")}
+                  aria-label={t("row.select")}
                   onClick={(e) => {
                     e.stopPropagation();
                     toggleRowChecked(row.id);
@@ -226,6 +228,7 @@ export function renderGridRow(row: DatabaseRow, ctx: GridRowContext, hier?: Grid
         <button
           className="absolute right-0.5 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-neutral-400 hover:bg-red-100 hover:text-red-500 group-hover/row:flex dark:hover:bg-red-500/10"
           title={t("row.delete")}
+          aria-label={t("row.delete")}
           onClick={() => setDeleteRowTarget(row)}
         >
           <Trash2 className="h-3 w-3" />
@@ -257,6 +260,7 @@ export function renderGridRow(row: DatabaseRow, ctx: GridRowContext, hier?: Grid
                 type="button"
                 className="ml-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-brand-600"
                 title={t("row.openDetail")}
+                aria-label={t("row.openDetail")}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -324,6 +328,7 @@ export function renderGridRow(row: DatabaseRow, ctx: GridRowContext, hier?: Grid
                     data-testid="toggle-row-children"
                     className="mr-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700"
                     title={t(hier.collapsed ? "row.expandChildren" : "row.collapseChildren")}
+                    aria-label={t(hier.collapsed ? "row.expandChildren" : "row.collapseChildren")}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={(e) => {
                       e.stopPropagation();

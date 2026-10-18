@@ -7,7 +7,9 @@ import {
   flattenTree,
   flattenVisibleTree,
   isDescendant,
+  pruneSubtreeSelection,
   siblingIds,
+  visibleRangeSelection,
 } from "./tree";
 import type { View } from "@/types/models";
 
@@ -84,6 +86,49 @@ describe("flattenVisibleTree", () => {
 
   it("展开集合里的无关 id 不影响结果", () => {
     expect(shape(["ghost"])).toEqual(["a@0", "d@0"]);
+  });
+});
+
+describe("visibleRangeSelection", () => {
+  const tree = buildTree([v("a", null, 0), v("b", "a", 0), v("c", "b", 0), v("d", null, 1)]);
+  const rows = flattenVisibleTree(tree, new Set(["a", "b"]));
+
+  it("按可见行顺序取闭区间，反向点选也从小到大", () => {
+    expect(visibleRangeSelection(rows, "a", "c")).toEqual(["a", "b", "c"]);
+    expect(visibleRangeSelection(rows, "d", "b")).toEqual(["b", "c", "d"]);
+  });
+
+  it("anchor 与 target 同一行时只回一行", () => {
+    expect(visibleRangeSelection(rows, "b", "b")).toEqual(["b"]);
+  });
+
+  it("无 anchor（首次点选）只回目标行", () => {
+    expect(visibleRangeSelection(rows, null, "c")).toEqual(["c"]);
+  });
+
+  it("anchor 不在当前可见行里（折叠后）退回目标行，不误选隐藏节点", () => {
+    const collapsed = flattenVisibleTree(tree, new Set());
+    expect(collapsed.map((r) => r.node.id)).toEqual(["a", "d"]);
+    expect(visibleRangeSelection(collapsed, "c", "a")).toEqual(["a"]);
+    expect(visibleRangeSelection(collapsed, "a", "d")).toEqual(["a", "d"]);
+  });
+});
+
+describe("pruneSubtreeSelection", () => {
+  const tree = buildTree([v("a", null, 0), v("b", "a", 0), v("c", "b", 0), v("d", null, 1)]);
+
+  it("父子都在选区时只保留最上层，整棵子树跟着走", () => {
+    expect(pruneSubtreeSelection(tree, ["a", "b", "c", "d"])).toEqual(["a", "d"]);
+  });
+
+  it("只裁掉祖先被选中的项，兄弟与深层后代不受影响", () => {
+    expect(pruneSubtreeSelection(tree, ["b", "c", "d"])).toEqual(["b", "d"]);
+    expect(pruneSubtreeSelection(tree, ["d"])).toEqual(["d"]);
+  });
+
+  it("保留项仍按原选区顺序输出（不是树里的顺序）", () => {
+    expect(pruneSubtreeSelection(tree, ["d", "b", "c"])).toEqual(["d", "b"]);
+    expect(pruneSubtreeSelection(tree, ["d", "c", "b", "a"])).toEqual(["d", "a"]);
   });
 });
 

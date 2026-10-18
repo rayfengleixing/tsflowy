@@ -1,10 +1,11 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { Sidebar } from "@/features/sidebar/Sidebar";
-import { TabBar } from "@/features/tabs/TabBar";
+import { TabBar, panelDomId, tabDomId } from "@/features/tabs/TabBar";
 import { PlaceholderPage } from "@/features/placeholder/PlaceholderPage";
 import { AiPanel } from "@/features/ai/AiPanel";
 import { DbUnavailable, type DbHealth } from "@/features/errors/DbUnavailable";
 import { CommandPalette } from "@/features/search/CommandPalette";
+import { crashRestartRound } from "@/lib/app-shell";
 import { DatabaseViewPicker } from "@/features/editor/DatabaseViewPicker";
 import { EmojiPickerDialog } from "@/features/editor/EmojiPickerDialog";
 import { RouteErrorBoundary } from "@/components/error-boundary";
@@ -24,6 +25,7 @@ import { toast } from "sonner";
 import { t, useLanguage } from "@/lib/i18n";
 import { flushAllForClose, registerCloseFlush } from "@/lib/close-flush";
 import { startAutoSync } from "@/lib/auto-sync";
+import { startUpdateChecks } from "@/lib/update-check";
 import { probeDbHealthOnStartup } from "@/lib/db-health";
 import { startSyncEvents } from "@/lib/sync-events";
 import { flushPendingUiPersist } from "@/stores/workspace";
@@ -67,6 +69,16 @@ function renderView(view: ViewNode | null) {
   return <PlaceholderPage />;
 }
 
+/**
+ * 主内容区与标签的配对语义。有对应标签时是 tabpanel（读屏器能把「标签 → 内容」连起来念），
+ * 专注模式藏掉了标签栏、或当前没有页面时退回 main 地标 —— 不能让 aria-labelledby 指向此刻不存在的元素。
+ */
+function tabPanel(viewId: string | null, hasTabs: boolean) {
+  return viewId && hasTabs
+    ? { role: "tabpanel" as const, id: panelDomId(viewId), "aria-labelledby": tabDomId(viewId) }
+    : { role: "main" as const };
+}
+
 /** 分栏单侧顶部条：显示页面图标与名称；副栏额外提供互换/取消并排 */
 function PaneHeader({ view, onSwap, onClose }: { view: ViewNode | null; onSwap?: () => void; onClose?: () => void }) {
   return (
@@ -98,7 +110,7 @@ function PaneHeader({ view, onSwap, onClose }: { view: ViewNode | null; onSwap?:
 }
 
 /** 并排对照：左栏 = 当前视图，右栏 = 副视图，中间可拖拽调整比例 */
-function SplitView({ left, right }: { left: ViewNode | null; right: ViewNode }) {
+function SplitView({ left, right, hasTabs }: { left: ViewNode | null; right: ViewNode; hasTabs: boolean }) {
   const splitRatio = useWorkspaceStore((s) => s.splitRatio);
   const setSplitRatio = useWorkspaceStore((s) => s.setSplitRatio);
   const swapSplit = useWorkspaceStore((s) => s.swapSplit);
@@ -124,17 +136,24 @@ function SplitView({ left, right }: { left: ViewNode | null; right: ViewNode }) 
     <div ref={containerRef} className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-col" style={{ width: `${splitRatio * 100}%` }}>
         <PaneHeader view={left} />
-        <div className="min-h-0 flex-1 overflow-hidden">{renderView(left)}</div>
+        <div className="min-h-0 flex-1 overflow-hidden" {...tabPanel(left?.id ?? null, hasTabs)}>
+          {renderView(left)}
+        </div>
       </div>
       <div
         data-testid="split-divider"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t("split.dragHint")}
         className="w-1 shrink-0 cursor-col-resize bg-neutral-200 transition-colors hover:bg-brand-400 dark:bg-neutral-700"
         title={t("split.dragHint")}
         onMouseDown={startDrag}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <PaneHeader view={right} onSwap={swapSplit} onClose={closeSplit} />
-        <div className="min-h-0 flex-1 overflow-hidden">{renderView(right)}</div>
+        <div className="min-h-0 flex-1 overflow-hidden" role="region" aria-label={t("split.sidePane")}>
+          {renderView(right)}
+        </div>
       </div>
     </div>
   );
@@ -221,6 +240,27 @@ function App() {
     if (!ready) return;
     void probeDbHealthOnStartup();
   }, [ready]);
+
+  // 自动检查更新（默认关，设置 → 软件更新 里开）：偏好为关时这里不排任何定时器、不联网
+  useEffect(() => {
+    if (!ready) return;
+    startUpdateChecks();
+  }, [ready]);
+
+  // 本次进程是崩溃后自动拉起来的：告诉用户一句，并给个去日志/看开关的入口。
+  // 不挂 ready 依赖——「上一轮崩了」是进程级事实，工作区加载快慢不该改变它何时出声。
+  useEffect(() => {
+    void crashRestartRound().then((round) => {
+      if (round <= 0) return;
+      toast.error(t("app.crashRestarted", { round }), {
+        duration: 0,
+        action: {
+          label: t("settings.updateGoSettings"),
+          onClick: () => useWorkspaceStore.getState().setRoute("settings"),
+        },
+      });
+    });
+  }, []);
 
   // 全局快捷键（可在 设置 → 快捷键 里自定义）：
   // 命令面板 / 快速打开 · 全局搜索 · 切换标签页；Esc 固定不可改（关闭浮层）
@@ -443,7 +483,13 @@ function App() {
                 ) : (
                   <>
                     {!focusChrome && <TabBar />}
-                    {splitView ? <SplitView left={view} right={splitView} /> : renderView(view)}
+                    {splitView ? (
+                      <SplitView left={view} right={splitView} hasTabs={!focusChrome} />
+                    ) : (
+                      <div className="flex min-h-0 flex-1 flex-col" {...tabPanel(view?.id ?? null, !focusChrome)}>
+                        {renderView(view)}
+                      </div>
+                    )}
                   </>
                 )}
               </Suspense>

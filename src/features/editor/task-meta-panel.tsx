@@ -100,6 +100,7 @@ export function TaskMetaPanel({ editor, listPos }: { editor: Editor; listPos: nu
           type="text"
           value={assignee}
           placeholder={t("taskMeta.assigneePlaceholder")}
+          aria-label={t("taskMeta.assignee")}
           onChange={(e) => setAssignee(e.target.value)}
           onBlur={(e) => applyAssignee(e.target.value)}
           onKeyDown={(e) => {

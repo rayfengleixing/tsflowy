@@ -2,6 +2,7 @@ mod commands;
 mod db;
 mod desktop;
 mod logging;
+mod startup;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -212,6 +213,9 @@ pub fn run() {
         .with(env_filter)
         .try_init();
 
+    // 崩溃后自动重启的实例：等上一个进程真的退出完再往下建窗（详见 startup::settle_before_restart）
+    startup::settle_before_restart();
+
     // 在 DB 打开之前，确定数据落点：自定义目录优先，否则默认落到系统「文档」目录下的 TsFlowy，
     // 并把默认 app_data_dir 建为指向它的 junction（老版本的旧数据自动迁移过去）。
     let result = tauri::Builder::default()
@@ -259,6 +263,8 @@ pub fn run() {
             let path = dir.join(db::DB_FILE);
             // 数据目录已确定 → 日志开始落 <数据目录>/logs/（此前的行只进控制台）
             logging::attach(&dir);
+            // panic 钩子要往日志文件里写，必须在 attach 之后装
+            startup::install_panic_hook(app.handle().clone());
             tracing::info!(path = %path.display(), "database file location");
             // Db::open 永不 panic：失败进 init_error，各 DB 命令返回该错误
             app.manage(db::Db::open(path));
@@ -400,6 +406,10 @@ pub fn run() {
             commands::ai::ai_list_models,
             commands::ai::ai_chat,
             commands::ai::ai_cancel,
+            desktop::set_lang,
+            startup::get_autostart,
+            startup::set_autostart,
+            startup::crash_restart_round,
         ])
         .run(tauri::generate_context!());
 

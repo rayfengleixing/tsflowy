@@ -4925,6 +4925,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "walkdir",
+ "winreg",
  "zip 0.6.6",
 ]
 

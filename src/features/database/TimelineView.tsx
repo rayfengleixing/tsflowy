@@ -287,6 +287,7 @@ export function TimelineView({
             <span className="text-neutral-500 dark:text-neutral-400">{t("timeline.startField")}:</span>
             <select
               className="bg-transparent text-xs outline-none"
+              aria-label={t("timeline.startField")}
               value={startFieldId ?? ""}
               onChange={(e) => changeStartField(e.target.value || null)}
             >
@@ -305,6 +306,7 @@ export function TimelineView({
               <span className="text-neutral-500 dark:text-neutral-400">{t("timeline.endField")}:</span>
               <select
                 className="bg-transparent text-xs outline-none"
+                aria-label={t("timeline.endField")}
                 value={endFieldId ?? ""}
                 onChange={(e) => changeEndField(e.target.value || null)}
               >
@@ -324,6 +326,7 @@ export function TimelineView({
             <span className="text-neutral-500 dark:text-neutral-400">{t("timeline.scale")}:</span>
             <select
               className="bg-transparent text-xs outline-none"
+              aria-label={t("timeline.scale")}
               value={scaleMode}
               onChange={(e) => setScaleMode(e.target.value as ScaleMode)}
             >

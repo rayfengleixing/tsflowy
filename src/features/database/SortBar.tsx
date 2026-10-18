@@ -46,6 +46,7 @@ export function SortBar(props: {
             <span className="text-[11px] text-neutral-400">{index + 1}</span>
             <select
               className="h-7 max-w-36 rounded border-none bg-transparent text-[12px] outline-none"
+              aria-label={t("sort.field")}
               value={s.field_id}
               onChange={(e) => update(s.field_id, { field_id: e.target.value })}
             >
@@ -65,6 +66,7 @@ export function SortBar(props: {
             </button>
             <button
               className="flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-red-500"
+              aria-label={t("sort.remove")}
               onClick={() => remove(s.field_id)}
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -79,6 +81,7 @@ export function SortBar(props: {
       </Button>
       <button
         className="ml-auto flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200"
+        aria-label={t("sort.close")}
         onClick={onClose}
       >
         <X className="h-4 w-4" />

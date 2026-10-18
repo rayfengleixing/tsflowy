@@ -144,14 +144,15 @@ export const createTreeSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (
     await patchTree(set, get);
   },
 
-  createView: async ({ parentId, layout, template }) => {
+  createView: async ({ parentId, layout, template, name }) => {
     const ws = get().currentWorkspaceId;
     if (!ws) return null;
-    const name = t("common.untitled");
+    const given = name?.trim() ?? "";
+    const title = given !== "" ? given : t("common.untitled");
     const view = await viewApi.create({
       workspace_id: ws,
       parent_id: parentId,
-      name,
+      name: title,
       layout,
     });
     if (layout === "grid") {
@@ -165,7 +166,7 @@ export const createTreeSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (
     // 页面模板：文档布局按所选模板预填正文（首行 H1 = 页面名 + 分割线 + 模板块）
     if (layout === "document" && template) {
       try {
-        const doc = buildPageTemplate(template, name, useSettingsStore.getState().lang);
+        const doc = buildPageTemplate(template, title, useSettingsStore.getState().lang);
         if (doc) await documentApi.save(view.id, JSON.stringify(doc));
       } catch (e) {
         logger.error("WorkspaceStore.createView", "seed page template failed", view.id, e);

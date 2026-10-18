@@ -62,7 +62,10 @@ export function SpaceSwitcher() {
       <div className="flex h-8 items-center px-2">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex h-7 w-full items-center gap-1.5 rounded-md px-1.5 text-[13px] font-medium text-neutral-800 hover:bg-neutral-300/60">
+            <button
+              className="flex h-7 w-full items-center gap-1.5 rounded-md px-1.5 text-[13px] font-medium text-neutral-800 hover:bg-neutral-300/60"
+              aria-label={t("space.switch", { name: current?.name ?? "…" })}
+            >
               <span className="min-w-0 flex-1 truncate text-left">{current?.name ?? "…"}</span>
               <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
             </button>
@@ -114,6 +117,7 @@ export function SpaceSwitcher() {
             autoFocus
             value={newName}
             placeholder={t("sidebar.newSpace")}
+            aria-label={t("sidebar.newSpace")}
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitCreate()}
           />
@@ -135,6 +139,7 @@ export function SpaceSwitcher() {
           <Input
             autoFocus
             value={renameName}
+            aria-label={t("workspace.renameField")}
             onChange={(e) => setRenameName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitRename()}
           />

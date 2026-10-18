@@ -55,6 +55,7 @@ export function Sidebar() {
   return (
     <aside
       ref={asideRef}
+      aria-label={t("sidebar.panel")}
       className="relative flex shrink-0 flex-col border-r border-neutral-300 bg-sidebar text-sidebar-foreground"
       style={{ width: sidebarWidth }}
     >
@@ -139,6 +140,9 @@ export function Sidebar() {
       {/* 拖拽调宽手柄 */}
       <div
         data-testid="sidebar-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t("sidebar.resize")}
         className="absolute -right-[2px] top-0 h-full w-[5px] cursor-col-resize hover:bg-brand-500/40"
         onMouseDown={() => setResizing(true)}
       />

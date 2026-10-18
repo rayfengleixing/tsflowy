@@ -97,7 +97,11 @@ export function ViewChips({
   };
 
   return (
-    <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto rounded-md border border-neutral-300 bg-white text-xs">
+    <div
+      role="tablist"
+      aria-label={t("dbView.list")}
+      className="flex min-w-0 items-center gap-0.5 overflow-x-auto rounded-md border border-neutral-300 bg-white text-xs"
+    >
       {views.map((view) => {
         const active = view.id === activeId;
         const derived = view.id !== source.id;
@@ -113,6 +117,7 @@ export function ViewChips({
             {renaming === view.id ? (
               <input
                 autoFocus
+                aria-label={t("dbView.renameField")}
                 className="w-24 rounded border border-brand-500 px-1 text-xs outline-none"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -141,6 +146,7 @@ export function ViewChips({
               <button
                 className="flex h-4 w-4 shrink-0 cursor-default items-center justify-center rounded text-neutral-400 opacity-0 transition pointer-events-none group-hover/chip:pointer-events-auto group-hover/chip:opacity-100 hover:bg-red-100 hover:text-red-500"
                 title={t("dbView.delete")}
+                aria-label={t("dbView.delete")}
                 onClick={() => void remove(view)}
               >
                 <X className="h-3 w-3" />
@@ -156,6 +162,7 @@ export function ViewChips({
           <button
             className="flex h-6 w-6 shrink-0 items-center justify-center text-neutral-500 hover:bg-neutral-100"
             title={t("dbView.new")}
+            aria-label={t("dbView.new")}
           >
             <Plus className="h-3.5 w-3.5" />
           </button>

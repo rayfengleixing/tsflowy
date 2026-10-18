@@ -54,6 +54,7 @@ export function FieldMenu(props: {
         <DropdownMenuTrigger asChild>
           <button
             data-testid="field-menu"
+            aria-label={t("field.menu")}
             className="flex h-5 w-5 items-center justify-center rounded text-neutral-400 hover:bg-neutral-300/70 hover:text-neutral-600"
             onClick={(e) => e.stopPropagation()}
           >

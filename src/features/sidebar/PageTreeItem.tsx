@@ -42,15 +42,31 @@ interface PageTreeItemProps {
   depth: number;
   draggingId: string | null;
   dropHint: DropHint | null;
+  /** 多选选区内的行 */
+  selected: boolean;
+  /** 是否参与 Tab 顺序（roving tabindex：整棵树只有一个行可 Tab 进入） */
+  tabbable: boolean;
+  /** 供父组件在键盘导航时按 id 找回并聚焦这一行 */
+  registerRow: (id: string, el: HTMLElement | null) => void;
   /** 行 mousedown：左键且不在交互控件上时由父组件启动拖拽会话 */
   onRowMouseDown: (id: string, e: React.MouseEvent) => void;
-  /** 行点击（未形成拖拽时打开页面） */
-  onRowClick: (id: string) => void;
+  /** 行点击（未形成拖拽时打开页面；Ctrl/Shift 点选改选区） */
+  onRowClick: (id: string, e: React.MouseEvent) => void;
 }
 
 const INDENT = 16; // 每级缩进（说明书 6.2：内容左边距 16px）
 
-export function PageTreeItem({ node, depth, draggingId, dropHint, onRowMouseDown, onRowClick }: PageTreeItemProps) {
+export function PageTreeItem({
+  node,
+  depth,
+  draggingId,
+  dropHint,
+  selected,
+  tabbable,
+  registerRow,
+  onRowMouseDown,
+  onRowClick,
+}: PageTreeItemProps) {
   // 每树节点一份订阅：用原子 selector（含布尔派生），任一 store 字段变化只重渲受影响节点而非整棵树
   const isExpanded = useWorkspaceStore((s) => s.expanded.has(node.id));
   const isActive = useWorkspaceStore((s) => s.currentViewId === node.id);
@@ -100,15 +116,25 @@ export function PageTreeItem({ node, depth, draggingId, dropHint, onRowMouseDown
       <div className="relative h-[30px]">
         <div
           data-tree-row={node.id}
+          ref={(el) => registerRow(node.id, el)}
+          role="treeitem"
+          aria-level={depth + 1}
+          aria-selected={selected || isActive}
+          aria-expanded={hasChildren ? isExpanded : undefined}
+          tabIndex={tabbable ? 0 : -1}
           className={
-            "group relative flex h-[30px] cursor-pointer items-center gap-1 pr-1 select-none " +
-            (isActive ? "bg-brand-100 " : "hover:bg-neutral-300/40 ") +
+            "group relative flex h-[30px] cursor-pointer items-center gap-1 pr-1 select-none outline-none " +
+            (isActive
+              ? "bg-brand-100 "
+              : selected
+                ? "bg-brand-100 "
+                : "hover:bg-neutral-300/40 focus-visible:bg-neutral-300/40 ") +
             (hintFor === "inside" ? "bg-brand-100 ring-1 ring-brand-500" : "") +
             (draggingId === node.id ? " opacity-40" : "")
           }
           style={{ paddingLeft: 16 + depth * INDENT }}
           onMouseDown={(e) => onRowMouseDown(node.id, e)}
-          onClick={() => onRowClick(node.id)}
+          onClick={(e) => onRowClick(node.id, e)}
         >
           {isActive && <div className="absolute left-0 top-0 h-full w-[3px] bg-brand-500" />}
           {hintFor === "before" && <div className="absolute -top-[1px] left-0 right-0 h-[2px] bg-brand-500" />}
@@ -151,6 +177,7 @@ export function PageTreeItem({ node, depth, draggingId, dropHint, onRowMouseDown
                 data-testid="row-add"
                 className="flex h-5 w-5 items-center justify-center rounded text-neutral-500 hover:bg-neutral-300"
                 title={t("tree.addSubpage")}
+                aria-label={t("tree.addSubpage")}
                 onClick={(e) => e.stopPropagation()}
               >
                 <Plus className="h-3.5 w-3.5" />

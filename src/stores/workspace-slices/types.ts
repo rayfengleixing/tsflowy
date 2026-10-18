@@ -39,7 +39,13 @@ export interface WorkspaceState {
   setWorkspaceIcon: (id: string, icon: string | null) => Promise<void>;
   deleteWorkspace: (id: string) => Promise<void>;
 
-  createView: (opts: { parentId: string | null; layout: LayoutType; template?: string }) => Promise<View | null>;
+  createView: (opts: {
+    parentId: string | null;
+    layout: LayoutType;
+    template?: string;
+    /** 页面名；省略（或全空白）时落「无标题」。命令面板的「新建页面“xxx”」走这里 */
+    name?: string;
+  }) => Promise<View | null>;
   /** 复制页面整棵子树（子页面、正文、属性、数据库数据），副本排在同级末尾并自动打开 */
   duplicateView: (id: string) => Promise<void>;
   renameView: (id: string, name: string) => Promise<void>;

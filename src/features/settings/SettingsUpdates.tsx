@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
+import { autoUpdateCheckEnabled, setAutoUpdateCheckEnabled } from "@/lib/update-check";
 import { cn } from "@/lib/utils";
 import { Section, updateErrorMessage } from "./settings-parts";
 
@@ -17,6 +18,7 @@ export function SettingsUpdates() {
     "idle",
   );
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+  const [autoCheck, setAutoCheck] = useState(autoUpdateCheckEnabled);
   const updateRef = useRef<Awaited<ReturnType<typeof check>> | null>(null);
 
   const checkForUpdates = async () => {
@@ -81,6 +83,18 @@ export function SettingsUpdates() {
           {updateState === "installing" ? t("settings.updateInstalling") : null}
         </span>
       </div>
+      <label className="mt-3 flex items-center gap-2 text-[12px] text-neutral-700 dark:text-neutral-200">
+        <input
+          type="checkbox"
+          checked={autoCheck}
+          onChange={(e) => {
+            setAutoUpdateCheckEnabled(e.target.checked);
+            setAutoCheck(e.target.checked);
+          }}
+        />
+        {t("settings.autoUpdateCheck")}
+      </label>
+      <p className="mt-1 text-[11px] text-neutral-400">{t("settings.autoUpdateCheckDesc")}</p>
     </Section>
   );
 }

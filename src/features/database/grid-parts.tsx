@@ -24,6 +24,7 @@ export function RenameInput(props: { initial: string; onCommit: (name: string) =
   return (
     <input
       autoFocus
+      aria-label={t("field.renameField")}
       className="absolute inset-x-1 top-1/2 h-6 -translate-y-1/2 rounded border border-brand-500 bg-white px-1.5 text-[12px] outline-none"
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
@@ -80,6 +81,7 @@ export function AddFieldButton(props: { onConfigure: (field: DatabaseField) => v
         data-testid="add-field"
         className="flex h-8 w-8 items-center justify-center text-neutral-500 hover:bg-neutral-300/50"
         title={t("field.new")}
+        aria-label={t("field.new")}
         onClick={() => setOpen(true)}
       >
         <Plus className="h-4 w-4" />
@@ -137,6 +139,7 @@ export function CellDisplay({
           type="button"
           className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-400 hover:bg-neutral-200 hover:text-brand-600"
           title={t("row.openDetail")}
+          aria-label={t("row.openDetail")}
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {
             e.stopPropagation();

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
+  ArrowLeftRight,
   CalendarDays,
   Clock,
   CornerDownLeft,
@@ -46,9 +47,18 @@ function modeStateLabel(on: boolean): string {
   return on ? t("mode.on") : t("mode.off");
 }
 
-/** 面板里的一行：动作 / 历史查询 / 最近访问 / 搜索命中，↑↓ 走的就是这条扁平序列 */
+/** 参数化命令：把输入框里那串字当参数用（新建页面「x」、切换到空间「x」） */
+interface ParamCommand {
+  id: string;
+  label: string;
+  icon: ReactNode;
+  run: () => void;
+}
+
+/** 面板里的一行：动作 / 参数化命令 / 历史查询 / 最近访问 / 搜索命中，↑↓ 走的就是这条扁平序列 */
 type Row =
   | { kind: "action"; action: PaletteAction }
+  | { kind: "param"; cmd: ParamCommand }
   | { kind: "query"; text: string }
   | { kind: "recent"; view: View }
   | { kind: "hit"; hit: SearchHit };
@@ -58,6 +68,8 @@ export function CommandPalette() {
   const paletteOpen = useWorkspaceStore((s) => s.paletteOpen);
   const closePalette = useWorkspaceStore((s) => s.closePalette);
   const currentWorkspaceId = useWorkspaceStore((s) => s.currentWorkspaceId);
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace);
   const openView = useWorkspaceStore((s) => s.openView);
   const openSearch = useWorkspaceStore((s) => s.openSearch);
   const createView = useWorkspaceStore((s) => s.createView);
@@ -179,22 +191,70 @@ export function CommandPalette() {
     );
   }, [actions, parsedQuery, trimmed]);
 
+  /**
+   * 参数化命令：把当前输入当参数。排在搜索结果之后——用户多半是想跳转，
+   * 造页面/换空间是同一句话的另一种用法，不该抢在命中前面。
+   * 「切换到空间」只有名字对得上某个空间时才出现，否则它是条执行不了的死命令。
+   */
+  const paramCommands = useMemo<ParamCommand[]>(() => {
+    if (!trimmed) return [];
+    const out: ParamCommand[] = [
+      {
+        id: "newPageNamed",
+        label: t("palette.cmd.newPageNamed", { name: trimmed }),
+        icon: <FilePlus className="h-4 w-4" />,
+        run: () => {
+          createView({ parentId: null, layout: "document", name: trimmed }).catch((e: unknown) => {
+            logger.error("palette.newPageNamed", e);
+            toast.error(t("error.db", { message: String(e) }));
+          });
+        },
+      },
+    ];
+    const target = workspaces.find(
+      (w) => w.id !== currentWorkspaceId && w.name.toLowerCase().includes(trimmed.toLowerCase()),
+    );
+    if (target) {
+      out.push({
+        id: "switchWorkspace",
+        label: t("palette.cmd.switchWorkspace", { name: target.name }),
+        icon: <ArrowLeftRight className="h-4 w-4" />,
+        run: () => {
+          switchWorkspace(target.id).catch((e: unknown) => {
+            logger.error("palette.switchWorkspace", e);
+            toast.error(t("error.db", { message: String(e) }));
+          });
+        },
+      });
+    }
+    return out;
+  }, [trimmed, createView, currentWorkspaceId, switchWorkspace, workspaces]);
+
   // 动作在前、搜索结果在后；空查询时补上「最近搜索 / 最近访问」——启动器不再是一张白纸
   const rows = useMemo<Row[]>(() => {
     const actionRows: Row[] = actionMatches.map((action) => ({ kind: "action", action }));
-    if (trimmed) return [...actionRows, ...results.map((hit): Row => ({ kind: "hit", hit }))];
+    if (trimmed)
+      return [
+        ...actionRows,
+        ...results.map((hit): Row => ({ kind: "hit", hit })),
+        ...paramCommands.map((cmd): Row => ({ kind: "param", cmd })),
+      ];
     return [
       ...actionRows,
       ...history.map((text): Row => ({ kind: "query", text })),
       ...recent.map((view): Row => ({ kind: "recent", view })),
     ];
-  }, [actionMatches, results, history, recent, trimmed]);
+  }, [actionMatches, results, history, recent, trimmed, paramCommands]);
 
   const runRow = (row: Row) => {
     switch (row.kind) {
       case "action":
         closePalette();
         row.action.run();
+        break;
+      case "param":
+        closePalette();
+        row.cmd.run();
         break;
       case "query":
         setQuery(row.text);
@@ -280,6 +340,7 @@ export function CommandPalette() {
   const sections = useMemo(() => {
     const titleOf: Record<Row["kind"], string> = {
       action: t("palette.actions.title"),
+      param: t("palette.cmd.title"),
       query: t("search.history"),
       recent: t("search.recent"),
       hit: t("search.results"),
@@ -364,6 +425,23 @@ export function CommandPalette() {
                     </button>
                   );
                 }
+                if (row.kind === "param") {
+                  return (
+                    <button
+                      key={row.cmd.id}
+                      data-testid={"palette-cmd-" + row.cmd.id}
+                      data-active={index === active}
+                      className={rowClass(index)}
+                      onMouseEnter={() => setActive(index)}
+                      onClick={() => runRow(row)}
+                    >
+                      <span className="flex w-5 shrink-0 items-center justify-center text-neutral-500">
+                        {row.cmd.icon}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[13px] text-neutral-800">{row.cmd.label}</span>
+                    </button>
+                  );
+                }
                 if (row.kind === "query") {
                   return (
                     <button
@@ -425,7 +503,7 @@ export function CommandPalette() {
               })}
             </div>
           ))}
-          {trimmed !== "" && results.length === 0 && (
+          {trimmed !== "" && results.length === 0 && paramCommands.length === 0 && (
             <div className="flex h-16 items-center justify-center gap-2 text-[13px] text-neutral-400">
               {actionMatches.length === 0 && <FileSearch className="h-4 w-4" />}
               {t("search.noResults", { query })}

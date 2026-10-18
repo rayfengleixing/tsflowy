@@ -103,6 +103,36 @@ export function isDescendant(nodes: ViewNode[], ancestorId: string, targetId: st
   return flattenTree([node]).some((n) => n.id === targetId && n.id !== ancestorId);
 }
 
+/**
+ * Shift 点选：按「当前可见行的顺序」取 anchor..target 的闭区间。
+ * 端点不在可见行里（被折叠或被标签过滤藏起来）就退回只选 target，
+ * 免得隔着一段折叠区把整支没打算动的子树圈进选区。
+ */
+export function visibleRangeSelection(rows: VisibleTreeRow[], anchorId: string | null, targetId: string): string[] {
+  const ids = rows.map((r) => r.node.id);
+  const to = ids.indexOf(targetId);
+  const from = anchorId === null ? -1 : ids.indexOf(anchorId);
+  if (from < 0 || to < 0) return [targetId];
+  const [lo, hi] = from <= to ? [from, to] : [to, from];
+  return ids.slice(lo, hi + 1);
+}
+
+/**
+ * 批量移动的选区收敛：父子都在选区时只搬父页（整棵子树跟着走）。
+ * 否则「先搬父、再单独搬子」会把刚归位的子页从父页里拆出去，最终形态取决于两次写谁后落地。
+ */
+export function pruneSubtreeSelection(tree: ViewNode[], ids: string[]): string[] {
+  const set = new Set(ids);
+  return ids.filter((id) => {
+    let parentId = findNode(tree, id)?.parent_id ?? null;
+    while (parentId !== null) {
+      if (set.has(parentId)) return false;
+      parentId = findNode(tree, parentId)?.parent_id ?? null;
+    }
+    return true;
+  });
+}
+
 /** 返回 parentId 下除 movedId 外的兄弟 id 列表（按 position 排序） */
 export function siblingIds(views: View[], parentId: string | null, movedId?: string): string[] {
   return views

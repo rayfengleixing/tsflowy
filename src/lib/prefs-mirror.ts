@@ -14,6 +14,8 @@ import { logger } from "./logger";
 const MIRRORED_KEYS = [
   "tsflowy:auto-sync",
   "tsflowy:daily-notes",
+  "tsflowy:update-check",
+  "tsflowy:crash-restart",
   "tsflowy:import-fetch-remote",
   "tsflowy-shortcuts",
   "tsflowy-theme",
