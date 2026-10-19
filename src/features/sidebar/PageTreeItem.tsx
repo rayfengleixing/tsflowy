@@ -132,9 +132,12 @@ export function PageTreeItem({
           tabIndex={tabbable ? 0 : -1}
           className={
             "group relative flex h-[30px] cursor-pointer items-center gap-1 pr-1 select-none outline-none " +
-            (isActive
-              ? "bg-brand-100 "
-              : selected
+            /* 选中态不能和「当前页」共用 bg-brand-100：那样选中正在看的这一页时肉眼零变化。
+               半透明 brand-500 在浅色侧栏是可辨的淡蓝、深色下也不会变成白板（.dark 只兜底 neutral 系），
+               当前页仍由左侧 3px 竖条表示 */
+            (selected
+              ? "bg-brand-500/25 "
+              : isActive
                 ? "bg-brand-100 "
                 : "hover:bg-neutral-300/40 focus-visible:bg-neutral-300/40 ") +
             (hintFor === "inside" ? "bg-brand-100 ring-1 ring-brand-500" : "") +
