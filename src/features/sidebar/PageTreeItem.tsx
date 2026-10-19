@@ -32,6 +32,7 @@ import { HistoryDialog } from "@/components/history-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { DropZone } from "@/lib/tree";
 import { exportPage } from "@/lib/export-page";
+import { isInsidePopup } from "@/lib/radix-popup";
 import { t } from "@/lib/i18n";
 
 export interface DropHint {
@@ -143,6 +144,7 @@ export function PageTreeItem({
           onMouseDown={(e) => onRowMouseDown(node.id, e)}
           onClick={(e) => onRowClick(node.id, e)}
           onContextMenu={(e) => {
+            if (isInsidePopup(e.target)) return; // 弹层（图标选择器等）里的右键不该再把行菜单顶开
             e.preventDefault(); // 顶掉浏览器默认右键菜单
             setMenuOpen(true);
           }}

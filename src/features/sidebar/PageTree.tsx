@@ -16,6 +16,7 @@ import {
   type VisibleTreeRow,
 } from "@/lib/tree";
 import { t } from "@/lib/i18n";
+import { isInsidePopup } from "@/lib/radix-popup";
 import { tagColor, tagTint } from "@/lib/tags";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
@@ -258,6 +259,9 @@ export function PageTree() {
 
   /** 行点击：Ctrl/Cmd 加选、Shift 连选，普通点击清空选区并打开页面 */
   const onRowClick = (id: string, e: React.MouseEvent) => {
+    // 行菜单 / 图标选择器是行的 React 后代，菜单项的点击会冒泡到这里；
+    // 不挡回来，右键「选择」刚把这页加进选区就被当成普通点击清空了
+    if (isInsidePopup(e.target)) return;
     setFocusedId(id);
     if (suppressClickRef.current) return;
     if (e.shiftKey) {
@@ -282,6 +286,7 @@ export function PageTree() {
   /** 行 mousedown：左键且不在交互控件上时记下潜在拖拽会话（选区留到真的拖动或点击时才动） */
   const onRowMouseDown = (id: string, e: React.MouseEvent) => {
     if (e.button !== 0) return;
+    if (isInsidePopup(e.target)) return;
     if ((e.target as HTMLElement).closest("button, input, a, [role=button]")) return;
     e.preventDefault(); // 防止拖拽选中文本
     // 先按当前选区算好这一拖搬哪些（选区里的行 → 整组；否则只搬它自己）
