@@ -1,13 +1,13 @@
 import { invoke } from "@/lib/invoke";
 import { logger } from "./logger";
 
-// 原生壳层（Windows 菜单栏 + 系统托盘）的文案在 Rust 侧，不在 React 树里，
-// 前端 i18n 切换碰不到它 —— 只能把当前语言报过去，让壳层按语言重建菜单。
+// 原生壳层（系统托盘）的文案在 Rust 侧，不在 React 树里，
+// 前端 i18n 切换碰不到它 —— 只能把当前语言报过去，让壳层按语言重建托盘菜单。
 // set_lang 不在 auto-sync 的写命令白名单里，走统一 invoke 入口不会误触发同步。
 
-/** 切换语言时同步原生菜单与托盘；失败只记日志，界面切换不该被系统控件拖住 */
+/** 切换语言时同步托盘文案；失败只记日志，界面切换不该被系统控件拖住 */
 export function syncNativeLang(lang: string): void {
-  invoke("set_lang", { lang }).catch((e: unknown) => logger.warn("shell", "native menu refresh failed", e));
+  invoke("set_lang", { lang }).catch((e: unknown) => logger.warn("shell", "tray labels refresh failed", e));
 }
 
 // ——— 开机自启 ———

@@ -1,50 +1,26 @@
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use tauri::{AppHandle, Manager, WebviewWindow};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 pub const DEEP_LINK_SCHEME: &str = "tsflowy";
 pub const TRAY_ID: &str = "tsflowy-tray";
 
-/// 壳层（原生菜单 + 托盘）的文案表。
-/// 网页端文案在 i18n 目录里，但菜单是系统控件、前端渲染不到，只能在这里存一份；
+/// 壳层（系统托盘）的文案表。
+/// 网页端文案在 i18n 目录里，但托盘菜单是系统控件、前端渲染不到，只能在这里存一份；
 /// 新增条目时记得同步 `src/lib/i18n/zh.ts` 里对应的界面说法。
 #[derive(Clone, Copy)]
 struct ShellLabels {
-    file: &'static str,
-    edit: &'static str,
-    view: &'static str,
-    window: &'static str,
-    new_page: &'static str,
-    settings: &'static str,
-    quit: &'static str,
-    palette: &'static str,
     tray_toggle: &'static str,
     tray_quit: &'static str,
 }
 
 const LABELS_ZH: ShellLabels = ShellLabels {
-    file: "文件",
-    edit: "编辑",
-    view: "视图",
-    window: "窗口",
-    new_page: "新建页面",
-    settings: "设置…",
-    quit: "退出",
-    palette: "命令面板 / 全局搜索",
     tray_toggle: "显示/隐藏主窗口",
     tray_quit: "退出 TsFlowy",
 };
 
 const LABELS_EN: ShellLabels = ShellLabels {
-    file: "File",
-    edit: "Edit",
-    view: "View",
-    window: "Window",
-    new_page: "New page",
-    settings: "Settings…",
-    quit: "Quit",
-    palette: "Command palette / Search",
     tray_toggle: "Show/Hide main window",
     tray_quit: "Quit TsFlowy",
 };
@@ -59,61 +35,19 @@ fn labels_for(lang: &str) -> ShellLabels {
     }
 }
 
-fn build_menu(app: &AppHandle, labels: ShellLabels) -> tauri::Result<Menu<tauri::Wry>> {
-    let new_page = MenuItem::with_id(app, "menu:new-page", labels.new_page, true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "menu:settings", labels.settings, true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "menu:quit", labels.quit, true, None::<&str>)?;
-    let file = Submenu::with_items(
-        app,
-        labels.file,
-        true,
-        &[
-            &new_page,
-            &settings,
-            &PredefinedMenuItem::separator(app)?,
-            &quit,
-        ],
-    )?;
-    let edit = Submenu::with_items(
-        app,
-        labels.edit,
-        true,
-        &[
-            &PredefinedMenuItem::undo(app, None)?,
-            &PredefinedMenuItem::redo(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::cut(app, None)?,
-            &PredefinedMenuItem::copy(app, None)?,
-            &PredefinedMenuItem::paste(app, None)?,
-            &PredefinedMenuItem::select_all(app, None)?,
-        ],
-    )?;
-    let palette = MenuItem::with_id(app, "menu:palette", labels.palette, true, None::<&str>)?;
-    let view = Submenu::with_items(app, labels.view, true, &[&palette])?;
-    let window_menu = Submenu::with_items(
-        app,
-        labels.window,
-        true,
-        &[
-            &PredefinedMenuItem::minimize(app, None)?,
-            &PredefinedMenuItem::close_window(app, None)?,
-        ],
-    )?;
-    Menu::with_items(app, &[&file, &edit, &view, &window_menu])
-}
-
 fn build_tray_menu(app: &AppHandle, labels: ShellLabels) -> tauri::Result<Menu<tauri::Wry>> {
     let toggle = MenuItem::with_id(app, "tray:toggle", labels.tray_toggle, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "tray:quit", labels.tray_quit, true, None::<&str>)?;
     Menu::with_items(app, &[&toggle, &quit])
 }
 
-/// 按语言重建菜单与托盘菜单。菜单事件走的是 app 级 handler 且 id 不变，重建后无需重新注册。
+/// 按语言重建托盘菜单。托盘事件走的是 app 级 handler 且 id 不变，重建后无需重新注册。
+/// 窗口不挂原生菜单栏（Tauri 只在 macOS 造默认菜单，Windows 上不 set_menu 就没有）：
+/// 原文件/编辑/视图/窗口那套在前端都有等价入口 —— `Ctrl+N` 新建、`Ctrl+,` 设置、`Ctrl+K` 命令面板、
+/// 撤销与剪贴板由编辑器和 WebView 自己接，最小化 / 关闭在标题栏，退出走 X 或托盘。
 pub fn apply_labels(app: &AppHandle, lang: &str) -> tauri::Result<()> {
-    let labels = labels_for(lang);
-    app.set_menu(build_menu(app, labels)?)?;
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        tray.set_menu(Some(build_tray_menu(app, labels)?))?;
+        tray.set_menu(Some(build_tray_menu(app, labels_for(lang))?))?;
     }
     Ok(())
 }
@@ -131,7 +65,7 @@ fn startup_lang(app: &AppHandle) -> String {
 /// 前端切换语言时同步壳层文案（参数是 `LangCode` 原文，识别不了就退回中文）
 #[tauri::command]
 pub fn set_lang(app: AppHandle, lang: String) -> Result<(), String> {
-    apply_labels(&app, &lang).map_err(|e| format!("refresh native menu failed: {e}"))
+    apply_labels(&app, &lang).map_err(|e| format!("refresh tray labels failed: {e}"))
 }
 
 /// 从第二个实例转发的 argv 里提取 tsflowy:// 深链 URL（Windows 协议触发时 exe 被再次启动，
@@ -166,24 +100,19 @@ fn toggle_main_window(app: &AppHandle) {
     }
 }
 
-/// 托盘「退出」与菜单「退出」：走 Window::close() 触发 CloseRequested，
+/// 托盘「退出」：走 Window::close() 触发 CloseRequested，
 /// 由前端 onCloseRequested 完成挂起写入冲刷后再 destroy，与点 X 关窗同一条路径。
-/// 从托盘退出时先唤起窗口，避免冲刷失败后的确认对话框落在隐藏窗口里不可见。
-fn quit_via_close(app: &AppHandle, reveal_first: bool) {
+/// 退出前先唤起窗口，避免冲刷失败后的确认对话框落在隐藏窗口里不可见。
+fn quit_via_close(app: &AppHandle) {
     if let Some(win) = main_window(app) {
-        if reveal_first {
-            reveal_window(&win);
-        }
+        reveal_window(&win);
         let _ = win.close();
     }
 }
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
-    // ——— 原生菜单栏（Windows）：文案按启动时记下的语言，之后由 set_lang 命令跟随切换 ———
+    // ——— 系统托盘：文案按启动时记下的语言，之后由 set_lang 命令跟随切换 ———
     let lang = startup_lang(app);
-    apply_labels(app, &lang)?;
-
-    // ——— 系统托盘 ———
     let tray_menu = build_tray_menu(app, labels_for(&lang))?;
     let mut tray = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("TsFlowy")
@@ -207,18 +136,13 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     // TrayIcon 被 drop 会移除托盘图标，必须由状态持有
     app.manage(tray);
 
-    // 菜单事件统一走全局 handler：tray:* 在 Rust 侧处理（退出经由 CloseRequested 冲刷路径），
-    // menu:* 转 emit 给前端调用现成动作
+    // 托盘菜单事件在 Rust 侧处理（退出经由 CloseRequested 冲刷路径）
     let handler_app = app.clone();
     app.on_menu_event(move |_app, event| {
         let id = event.id.as_ref();
         match id {
-            "menu:new-page" | "menu:settings" | "menu:palette" => {
-                let _ = handler_app.emit(id, ());
-            }
-            "menu:quit" => quit_via_close(&handler_app, false),
             "tray:toggle" => toggle_main_window(&handler_app),
-            "tray:quit" => quit_via_close(&handler_app, true),
+            "tray:quit" => quit_via_close(&handler_app),
             _ => {}
         }
     });
@@ -285,11 +209,11 @@ mod tests {
 
     #[test]
     fn shell_labels_follow_lang_prefix() {
-        assert_eq!(labels_for("en-US").quit, "Quit");
+        assert_eq!(labels_for("en-US").tray_quit, "Quit TsFlowy");
         assert_eq!(labels_for("en-GB").tray_toggle, "Show/Hide main window");
-        assert_eq!(labels_for("zh-CN").quit, "退出");
+        assert_eq!(labels_for("zh-CN").tray_quit, "退出 TsFlowy");
         // 未设置、或认不出的语言退回中文（与界面默认语言一致）
-        assert_eq!(labels_for("").new_page, "新建页面");
-        assert_eq!(labels_for("fr-FR").new_page, "新建页面");
+        assert_eq!(labels_for("").tray_toggle, "显示/隐藏主窗口");
+        assert_eq!(labels_for("fr-FR").tray_toggle, "显示/隐藏主窗口");
     }
 }

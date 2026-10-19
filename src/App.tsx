@@ -30,7 +30,6 @@ import { probeDbHealthOnStartup } from "@/lib/db-health";
 import { startSyncEvents } from "@/lib/sync-events";
 import { flushPendingUiPersist } from "@/stores/workspace";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@/lib/invoke";
 import { requestEscapeClose } from "@/lib/escape-close";
 import { setupDeepLink } from "@/lib/deep-link";
@@ -412,21 +411,6 @@ function App() {
       disposed = true;
       unregisterUi();
       void listening.then((unlisten) => unlisten());
-    };
-  }, []);
-
-  // 原生菜单栏项（Rust 侧 emit 同名事件，见 src-tauri/src/desktop.rs）→ 现成前端动作
-  useEffect(() => {
-    const handlers: Record<string, () => void> = {
-      "menu:new-page": () => {
-        void useWorkspaceStore.getState().createView({ parentId: null, layout: "document" });
-      },
-      "menu:settings": () => useWorkspaceStore.getState().setRoute("settings"),
-      "menu:palette": () => useWorkspaceStore.getState().openPalette(),
-    };
-    const unlisteners = Object.entries(handlers).map(([event, handler]) => listen(event, handler));
-    return () => {
-      for (const p of unlisteners) void p.then((un) => un());
     };
   }, []);
 

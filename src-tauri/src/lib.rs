@@ -274,9 +274,9 @@ pub fn run() {
             if let Err(e) = app.deep_link().register_all() {
                 tracing::warn!(error = %e, "deep-link: register configured schemes failed");
             }
-            // 托盘 + 原生菜单栏 + 全局快捷键
+            // 托盘 + 全局快捷键（窗口不带原生菜单栏，入口都在前端）
             if let Err(e) = desktop::setup(app.handle()) {
-                tracing::warn!(error = %e, "desktop shell setup (tray/menu/shortcut) failed");
+                tracing::warn!(error = %e, "desktop shell setup (tray/shortcut) failed");
             }
             Ok(())
         })

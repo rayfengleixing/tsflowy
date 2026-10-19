@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Star, StarOff, Trash2, X } from "lucide-react";
+import { Star, X } from "lucide-react";
 import { parseViewTags } from "@/types/models";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PageTreeItem, type DropHint } from "./PageTreeItem";
@@ -30,7 +30,8 @@ const VIRTUAL_OVERSCAN = 12;
 
 /** 页面树：展平成同级行渲染（跟随展开状态）+ 大列表窗口化。
  *  鼠标事件链拖拽（HTML5 drag 在 WebView2 下不可靠，与编辑器块拖拽同方案），行仍带 data-tree-row。
- *  顶部含收藏区（跨目录快速入口）、标签过滤行（点击按标签过滤树）与多选选区条（批量收藏 / 删除）。
+ *  顶部含收藏区（跨目录快速入口）与标签过滤行（点击按标签过滤树）。
+ *  多选（右键菜单「选择」/ Ctrl / Shift / Ctrl+A）后，在选中的行上右键 → 菜单的收藏 / 删除对整组生效。
  *  行是 role=treeitem（层级用 aria-level 表达），方向键走 roving tabindex。 */
 export function PageTree() {
   const tree = useWorkspaceStore((s) => s.tree);
@@ -139,11 +140,6 @@ export function PageTree() {
       ro.disconnect();
     };
   }, [virtual, measureWindow]);
-
-  // 选区条出现/消失会改变列表在滚动内容里的 y 偏移，而窗口是按这个偏移换算的 → 重测
-  useEffect(() => {
-    if (virtual) measureWindow();
-  }, [virtual, measureWindow, selection.size]);
 
   const onMoveFail = useCallback((e: unknown) => {
     logger.error("move view failed", e);
@@ -306,6 +302,14 @@ export function PageTree() {
     });
   }, []);
 
+  /** 行右键：落在选区外（或选区只有一页）时先清掉旧选区，让菜单里的操作和肉眼看到的选中状态一致 */
+  const onRowContextMenu = useCallback((id: string) => {
+    const sel = selectionRef.current;
+    if (sel.has(id) && sel.size > 1) return;
+    setSelection(new Set());
+    setAnchorId(id);
+  }, []);
+
   const registerRow = useCallback((id: string, el: HTMLElement | null) => {
     if (el) rowEls.current.set(id, el);
     else rowEls.current.delete(id);
@@ -345,6 +349,14 @@ export function PageTree() {
       }
     },
     [batchIds],
+  );
+
+  /** 右键菜单里的批量收藏 / 取消收藏 */
+  const runBatchFavorite = useCallback(
+    (favorite: boolean) => {
+      void runBatch((id) => setViewFavorite(id, favorite));
+    },
+    [runBatch, setViewFavorite],
   );
 
   /** 树内键盘导航：↑↓/Home/End 移动焦点，Shift+方向键扩选，←→收起/展开，Enter 打开，Ctrl+A 全选，Del 批量删 */
@@ -388,7 +400,7 @@ export function PageTree() {
 
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      // 与单击打开一致：打开这一页就把选区清空，不让选区条挂在屏幕上
+      // 与单击打开一致：打开这一页就把选区清空，别让涂色一直挂在树上
       setAnchorId(id);
       setSelection(new Set());
       openView(id);
@@ -429,11 +441,16 @@ export function PageTree() {
       draggingId={draggingId}
       dropHint={dropHint}
       selected={selection.has(r.node.id)}
+      /** 这一行处在多页选区里 → 菜单的收藏 / 删除改成对整组生效（0 = 单页操作） */
+      batchCount={selection.size > 1 && selection.has(r.node.id) ? batchIds.length : 0}
       tabbable={r.node.id === tabbableId}
       registerRow={registerRow}
       onRowMouseDown={onRowMouseDown}
       onRowClick={onRowClick}
+      onRowContextMenu={onRowContextMenu}
       onToggleSelect={toggleSelect}
+      onBatchFavorite={runBatchFavorite}
+      onBatchDelete={() => setConfirmBatchDelete(true)}
     />
   );
 
@@ -488,50 +505,6 @@ export function PageTree() {
                 </button>
               );
             })}
-          </div>
-        )}
-
-        {/* 多选选区操作条：右键菜单「选择」、Ctrl/Shift 点选、Ctrl+A 全选或方向键扩选后出现 */}
-        {selection.size > 0 && (
-          <div className="mb-1.5 flex flex-wrap items-center gap-1 rounded-md bg-brand-50 px-1.5 py-1">
-            <span className="mr-auto text-[11px] text-neutral-600">
-              {t("tree.selectionCount", { count: selection.size })}
-            </span>
-            <button
-              data-testid="tree-batch-favorite"
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-neutral-600 hover:bg-brand-100"
-              onClick={() => void runBatch((id) => setViewFavorite(id, true))}
-            >
-              <Star className="h-3 w-3" />
-              {t("tree.batchFavorite")}
-            </button>
-            <button
-              data-testid="tree-batch-unfavorite"
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-neutral-600 hover:bg-brand-100"
-              onClick={() => void runBatch((id) => setViewFavorite(id, false))}
-            >
-              <StarOff className="h-3 w-3" />
-              {t("tree.batchUnfavorite")}
-            </button>
-            <button
-              data-testid="tree-batch-delete"
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-destructive hover:bg-destructive/10"
-              onClick={() => setConfirmBatchDelete(true)}
-            >
-              <Trash2 className="h-3 w-3" />
-              {t("tree.batchDelete")}
-            </button>
-            <button
-              data-testid="tree-clear-selection"
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-neutral-500 hover:bg-brand-100"
-              onClick={() => {
-                setSelection(new Set());
-                setAnchorId(null);
-              }}
-            >
-              <X className="h-3 w-3" />
-              {t("tree.clearSelection")}
-            </button>
           </div>
         )}
 

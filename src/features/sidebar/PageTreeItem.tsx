@@ -17,6 +17,7 @@ import {
   Plus,
   Square,
   Star,
+  StarOff,
   Tag,
   Trash2,
   Download,
@@ -47,6 +48,8 @@ interface PageTreeItemProps {
   dropHint: DropHint | null;
   /** 多选选区内的行 */
   selected: boolean;
+  /** 这一行所在的多页选区要批量处理的项数；> 0 时菜单的收藏 / 删除对整组生效 */
+  batchCount: number;
   /** 是否参与 Tab 顺序（roving tabindex：整棵树只有一个行可 Tab 进入） */
   tabbable: boolean;
   /** 供父组件在键盘导航时按 id 找回并聚焦这一行 */
@@ -55,8 +58,14 @@ interface PageTreeItemProps {
   onRowMouseDown: (id: string, e: React.MouseEvent) => void;
   /** 行点击：普通点击打开页面（只有真的搬动过才被拖拽吞掉），Ctrl/Shift 点选改选区 */
   onRowClick: (id: string, e: React.MouseEvent) => void;
+  /** 行右键：父组件据此决定菜单是单页还是整组操作，然后打开本行菜单 */
+  onRowContextMenu: (id: string) => void;
   /** 右键菜单「选择 / 取消选择」：把这一页加进或移出多选选区，不动已选的其他页 */
   onToggleSelect: (id: string) => void;
+  /** 整组收藏 / 取消收藏 */
+  onBatchFavorite: (favorite: boolean) => void;
+  /** 整组删除（父组件弹确认框） */
+  onBatchDelete: () => void;
 }
 
 const INDENT = 16; // 每级缩进（说明书 6.2：内容左边距 16px）
@@ -67,11 +76,15 @@ export function PageTreeItem({
   draggingId,
   dropHint,
   selected,
+  batchCount,
   tabbable,
   registerRow,
   onRowMouseDown,
   onRowClick,
+  onRowContextMenu,
   onToggleSelect,
+  onBatchFavorite,
+  onBatchDelete,
 }: PageTreeItemProps) {
   // 每树节点一份订阅：用原子 selector（含布尔派生），任一 store 字段变化只重渲受影响节点而非整棵树
   const isExpanded = useWorkspaceStore((s) => s.expanded.has(node.id));
@@ -149,6 +162,7 @@ export function PageTreeItem({
           onContextMenu={(e) => {
             if (isInsidePopup(e.target)) return; // 弹层（图标选择器等）里的右键不该再把行菜单顶开
             e.preventDefault(); // 顶掉浏览器默认右键菜单
+            onRowContextMenu(node.id);
             setMenuOpen(true);
           }}
         >
@@ -228,10 +242,23 @@ export function PageTreeItem({
                   <Pencil className="mr-2 h-3.5 w-3.5" />
                   {t("tree.rename")}
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => void setViewFavorite(node.id, !isFavorite)}>
-                  <Star className={"mr-2 h-3.5 w-3.5 " + (isFavorite ? "fill-brand-500 text-brand-500" : "")} />
-                  {isFavorite ? t("tree.unfavorite") : t("tree.favorite")}
-                </DropdownMenuItem>
+                {batchCount > 0 ? (
+                  <>
+                    <DropdownMenuItem data-testid="row-batch-favorite" onSelect={() => onBatchFavorite(true)}>
+                      <Star className="mr-2 h-3.5 w-3.5" />
+                      {t("tree.batchFavorite", { count: batchCount })}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem data-testid="row-batch-unfavorite" onSelect={() => onBatchFavorite(false)}>
+                      <StarOff className="mr-2 h-3.5 w-3.5" />
+                      {t("tree.batchUnfavorite", { count: batchCount })}
+                    </DropdownMenuItem>
+                  </>
+                ) : (
+                  <DropdownMenuItem onSelect={() => void setViewFavorite(node.id, !isFavorite)}>
+                    <Star className={"mr-2 h-3.5 w-3.5 " + (isFavorite ? "fill-brand-500 text-brand-500" : "")} />
+                    {isFavorite ? t("tree.unfavorite") : t("tree.favorite")}
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem onSelect={() => setTagEditorOpen(true)}>
                   <Tag className="mr-2 h-3.5 w-3.5" />
                   {t("tree.editTags")}
@@ -257,13 +284,24 @@ export function PageTreeItem({
                   <Download className="mr-2 h-3.5 w-3.5" />
                   {t("tree.exportHtml")}
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onSelect={() => setConfirmDelete(true)}
-                >
-                  <Trash2 className="mr-2 h-3.5 w-3.5" />
-                  {t("tree.delete")}
-                </DropdownMenuItem>
+                {batchCount > 0 ? (
+                  <DropdownMenuItem
+                    data-testid="row-batch-delete"
+                    className="text-destructive focus:text-destructive"
+                    onSelect={onBatchDelete}
+                  >
+                    <Trash2 className="mr-2 h-3.5 w-3.5" />
+                    {t("tree.batchDelete", { count: batchCount })}
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onSelect={() => setConfirmDelete(true)}
+                  >
+                    <Trash2 className="mr-2 h-3.5 w-3.5" />
+                    {t("tree.delete")}
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </span>
