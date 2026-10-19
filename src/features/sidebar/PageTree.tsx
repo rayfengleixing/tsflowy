@@ -45,7 +45,7 @@ export function PageTree() {
   const deleteView = useWorkspaceStore((s) => s.deleteView);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropHint, setDropHint] = useState<DropHint | null>(null);
-  /** 多选选区（Ctrl 加选 / Shift 连选 / 方向键扩选）；批量操作后清空 */
+  /** 多选选区（右键菜单「选择」/ Ctrl 加选 / Shift 连选 / 方向键扩选）；批量操作后清空 */
   const [selection, setSelection] = useState<Set<string>>(new Set());
   /** Shift 连选与扩选的锚点行 */
   const [anchorId, setAnchorId] = useState<string | null>(null);
@@ -57,7 +57,7 @@ export function PageTree() {
   const rowEls = useRef(new Map<string, HTMLElement>());
   /** 拖拽会话（mousedown 记录 → mousemove 超阈值进入拖拽 → mouseup 落点）；ids 是这一拖要搬的整组 */
   const sessionRef = useRef<{ id: string; ids: string[]; startX: number; startY: number; moved: boolean } | null>(null);
-  /** 拖拽落点后的同帧 click 抑制 */
+  /** 真的搬动过之后抑制同帧 click（未搬成则不抑制，让 click 走打开） */
   const suppressClickRef = useRef(false);
   /** window 级监听里要读最新选区，但监听不该因选区变化反复重挂 */
   const selectionRef = useRef(selection);
@@ -194,6 +194,11 @@ export function PageTree() {
         // 5px 阈值内视为点击（不进入拖拽）
         if (Math.abs(e.clientX - s.startX) + Math.abs(e.clientY - s.startY) < 5) return;
         s.moved = true;
+        // 确认是在拖了才把这一组涂成选中项：mousedown 就涂色的话，手抖一下看起来像「只选中没打开」
+        if (!selectionRef.current.has(s.id)) {
+          setSelection(new Set(s.ids));
+          setAnchorId(s.id);
+        }
         setDraggingId(s.id);
       }
       const row = rowAt(e.target);
@@ -217,8 +222,7 @@ export function PageTree() {
       sessionRef.current = null;
       if (!s) return;
       if (!s.moved) return; // 未拖动：交给行 onClick 打开页面
-      suppressClickRef.current = true;
-      setTimeout(() => (suppressClickRef.current = false));
+      let dropped = false;
       const row = rowAt(e.target);
       if (row?.dataset.treeRow) {
         const targetId = row.dataset.treeRow;
@@ -226,10 +230,19 @@ export function PageTree() {
           const zone = zoneForEl(row, e.clientY);
           if (zone === "inside") expand(targetId);
           void handleDrop(s.ids, targetId, zone);
+          dropped = true;
         }
       } else if (containerRef.current?.contains(e.target as Node)) {
         // 树容器空白处落点 → 整组移到根级末尾
         void handleDropAtRoot(s.ids);
+        dropped = true;
+      }
+      // 吞掉这次 click 的两种情况：真搬动了；指针已经离开按下时那一行（认真的拖拽，
+      // 哪怕落点非法没搬成，也不该顺手打开落点处的页面）。
+      // 留在原行又没搬成 = 只是手抖超过阈值，必须放行 click，否则就成了「第一下只选中，第二下才打开」
+      if (dropped || row?.dataset.treeRow !== s.id) {
+        suppressClickRef.current = true;
+        setTimeout(() => (suppressClickRef.current = false));
       }
       setDraggingId(null);
       setDropHint(null);
@@ -266,20 +279,27 @@ export function PageTree() {
     openView(id);
   };
 
-  /** 行 mousedown：左键且不在交互控件上时启动潜在拖拽会话 */
+  /** 行 mousedown：左键且不在交互控件上时记下潜在拖拽会话（选区留到真的拖动或点击时才动） */
   const onRowMouseDown = (id: string, e: React.MouseEvent) => {
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest("button, input, a, [role=button]")) return;
     e.preventDefault(); // 防止拖拽选中文本
     // 先按当前选区算好这一拖搬哪些（选区里的行 → 整组；否则只搬它自己）
     const ids = movingIds(id);
-    // 拖一条没选中的行：视觉上先把它变成唯一选中项，Ctrl/Shift 点选交给 click 处理
-    if (!e.ctrlKey && !e.metaKey && !e.shiftKey && !selectionRef.current.has(id)) {
-      setSelection(new Set([id]));
-      setAnchorId(id);
-    }
     sessionRef.current = { id, ids, startX: e.clientX, startY: e.clientY, moved: false };
   };
+
+  /** 右键菜单里的「选择 / 取消选择」：加撤这一页但不清空已有选区，与 Ctrl 点选同义 */
+  const toggleSelect = useCallback((id: string) => {
+    setAnchorId(id);
+    setFocusedId(id);
+    setSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   const registerRow = useCallback((id: string, el: HTMLElement | null) => {
     if (el) rowEls.current.set(id, el);
@@ -363,8 +383,9 @@ export function PageTree() {
 
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
+      // 与单击打开一致：打开这一页就把选区清空，不让选区条挂在屏幕上
       setAnchorId(id);
-      setSelection(new Set([id]));
+      setSelection(new Set());
       openView(id);
       return;
     }
@@ -407,6 +428,7 @@ export function PageTree() {
       registerRow={registerRow}
       onRowMouseDown={onRowMouseDown}
       onRowClick={onRowClick}
+      onToggleSelect={toggleSelect}
     />
   );
 
@@ -464,7 +486,7 @@ export function PageTree() {
           </div>
         )}
 
-        {/* 多选选区操作条：Ctrl/Shift 点选、Ctrl+A 全选或方向键扩选后出现 */}
+        {/* 多选选区操作条：右键菜单「选择」、Ctrl/Shift 点选、Ctrl+A 全选或方向键扩选后出现 */}
         {selection.size > 0 && (
           <div className="mb-1.5 flex flex-wrap items-center gap-1 rounded-md bg-brand-50 px-1.5 py-1">
             <span className="mr-auto text-[11px] text-neutral-600">

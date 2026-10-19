@@ -86,6 +86,8 @@ export const en: Record<MessageKey, string> = {
   "split.dragHint": "Drag to resize both panes",
   "tree.noTagMatch": "No pages with this tag",
   "tree.list": "Page tree",
+  "tree.select": "Select",
+  "tree.deselect": "Deselect",
   "tree.selectionCount": "{count} selected",
   "tree.batchFavorite": "Favorite",
   "tree.batchUnfavorite": "Unfavorite",

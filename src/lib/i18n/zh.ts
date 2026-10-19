@@ -83,6 +83,8 @@ export const zh = {
   "split.dragHint": "拖动调整两栏宽度",
   "tree.noTagMatch": "没有带此标签的页面",
   "tree.list": "页面树",
+  "tree.select": "选择",
+  "tree.deselect": "取消选择",
   "tree.selectionCount": "已选 {count} 项",
   "tree.batchFavorite": "收藏",
   "tree.batchUnfavorite": "取消收藏",

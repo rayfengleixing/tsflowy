@@ -7,6 +7,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  CheckSquare,
   ChevronRight,
   Columns2,
   Copy,
@@ -14,6 +15,7 @@ import {
   MoreHorizontal,
   Pencil,
   Plus,
+  Square,
   Star,
   Tag,
   Trash2,
@@ -50,8 +52,10 @@ interface PageTreeItemProps {
   registerRow: (id: string, el: HTMLElement | null) => void;
   /** 行 mousedown：左键且不在交互控件上时由父组件启动拖拽会话 */
   onRowMouseDown: (id: string, e: React.MouseEvent) => void;
-  /** 行点击（未形成拖拽时打开页面；Ctrl/Shift 点选改选区） */
+  /** 行点击：普通点击打开页面（只有真的搬动过才被拖拽吞掉），Ctrl/Shift 点选改选区 */
   onRowClick: (id: string, e: React.MouseEvent) => void;
+  /** 右键菜单「选择 / 取消选择」：把这一页加进或移出多选选区，不动已选的其他页 */
+  onToggleSelect: (id: string) => void;
 }
 
 const INDENT = 16; // 每级缩进（说明书 6.2：内容左边距 16px）
@@ -66,6 +70,7 @@ export function PageTreeItem({
   registerRow,
   onRowMouseDown,
   onRowClick,
+  onToggleSelect,
 }: PageTreeItemProps) {
   // 每树节点一份订阅：用原子 selector（含布尔派生），任一 store 字段变化只重渲受影响节点而非整棵树
   const isExpanded = useWorkspaceStore((s) => s.expanded.has(node.id));
@@ -84,6 +89,8 @@ export function PageTreeItem({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  /** 行菜单（⋯ 与右键共用这一个实例）：右键在行内任意位置都能打开，定位靠 ⋯ 按钮 */
+  const [menuOpen, setMenuOpen] = useState(false);
   const isFavorite = node.is_favorite === 1;
 
   const commitRename = async () => {
@@ -135,6 +142,10 @@ export function PageTreeItem({
           style={{ paddingLeft: 16 + depth * INDENT }}
           onMouseDown={(e) => onRowMouseDown(node.id, e)}
           onClick={(e) => onRowClick(node.id, e)}
+          onContextMenu={(e) => {
+            e.preventDefault(); // 顶掉浏览器默认右键菜单
+            setMenuOpen(true);
+          }}
         >
           {isActive && <div className="absolute left-0 top-0 h-full w-[3px] bg-brand-500" />}
           {hintFor === "before" && <div className="absolute -top-[1px] left-0 right-0 h-[2px] bg-brand-500" />}
@@ -183,7 +194,7 @@ export function PageTreeItem({
                 <Plus className="h-3.5 w-3.5" />
               </button>
             </NewPageMenu>
-            <DropdownMenu>
+            <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
               <DropdownMenuTrigger asChild>
                 <button
                   data-testid="row-menu"
@@ -195,6 +206,14 @@ export function PageTreeItem({
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem data-testid="row-toggle-select" onSelect={() => onToggleSelect(node.id)}>
+                  {selected ? (
+                    <CheckSquare className="mr-2 h-3.5 w-3.5 text-brand-500" />
+                  ) : (
+                    <Square className="mr-2 h-3.5 w-3.5" />
+                  )}
+                  {t(selected ? "tree.deselect" : "tree.select")}
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={() => {
                     setEditName(node.name);
