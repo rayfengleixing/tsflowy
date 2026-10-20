@@ -315,8 +315,8 @@ pub fn restore_field_values(conn: &Connection, field_id: &str) -> Result<i64, St
     let Some((from_type, from_options, values_json)) = snap else {
         return Err(format!("字段 {field_id} 没有可还原的列值留存"));
     };
-    let cells: Vec<(String, String)> = serde_json::from_str(&values_json)
-        .map_err(|e| format!("解析列值留存失败：{e}"))?;
+    let cells: Vec<(String, String)> =
+        serde_json::from_str(&values_json).map_err(|e| format!("解析列值留存失败：{e}"))?;
 
     let tx = conn
         .unchecked_transaction()
@@ -344,7 +344,8 @@ pub fn restore_field_values(conn: &Connection, field_id: &str) -> Result<i64, St
         params![field_id],
     )
     .map_err(dberr("restore field values (drop snapshot)"))?;
-    tx.commit().map_err(dberr("restore field values (commit)"))?;
+    tx.commit()
+        .map_err(dberr("restore field values (commit)"))?;
     Ok(restored)
 }
 
@@ -1164,8 +1165,14 @@ mod tests {
 
         assert_eq!(restore_field_values(&conn, "f1").unwrap(), 2);
         let back = &list_fields(&conn, "v1").unwrap()[0];
-        assert_eq!(back.field_type, definition_before.field_type, "类型要换回去");
-        assert_eq!(back.options, definition_before.options, "options 也要换回去");
+        assert_eq!(
+            back.field_type, definition_before.field_type,
+            "类型要换回去"
+        );
+        assert_eq!(
+            back.options, definition_before.options,
+            "options 也要换回去"
+        );
         let values: Vec<String> = cells_of(&conn, "f1").into_iter().map(|c| c.value).collect();
         assert_eq!(values, vec![r#""甲""#.to_string(), r#""乙""#.to_string()]);
 

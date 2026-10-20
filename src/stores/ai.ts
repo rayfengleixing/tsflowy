@@ -44,7 +44,15 @@ import {
   type RetrievalCall,
   type RetrievalKind,
 } from "@/lib/ai-edit";
-import { aiToolSpecs, resolvePage, runRetrievalCall, runWriteAction } from "@/lib/ai-tools";
+import {
+  aiToolSpecs,
+  resolvePage,
+  runRetrievalCall,
+  runUndoPlan,
+  runWriteAction,
+  sanitizeUndoPlan,
+  type UndoPlan,
+} from "@/lib/ai-tools";
 import { applyEditToDocJson, asDoc, type LocateFailure } from "@/lib/ai-locate";
 import { parseMentions } from "@/lib/ai-mention";
 import { estimateTokens, tailTokens } from "@/lib/ai-tokens";
@@ -87,6 +95,11 @@ export interface AiActionRecord {
   detail?: string;
   /** 撤销句柄（含改前快照），仅当前编辑器实例内有效，不参与持久化 */
   revert?: AiEditRevert;
+  /**
+   * 页面/表数据写动作的逆操作计划：纯数据，随会话 JSON 落库，
+   * 所以重启后这一张卡片仍然可以撤销（与 revert 是两套机制）。
+   */
+  undo?: UndoPlan;
 }
 
 export interface AiMessage {
@@ -146,6 +159,10 @@ function summaryOf(call: AiWriteCall): string {
       return t("ai.actionSummaryRename", { page: call.args.page, title: call.args.title });
     case "add_database_row":
       return t("ai.actionSummaryAddRow", { database: call.args.database });
+    case "update_database_row":
+      return t("ai.actionSummaryUpdateRow", { database: call.args.database, row: call.args.row });
+    case "delete_database_row":
+      return t("ai.actionSummaryDeleteRow", { database: call.args.database, row: call.args.row });
   }
 }
 
@@ -191,8 +208,9 @@ const DEFAULT_MAX_CHARS = 8000;
 /**
  * 一次提问内允许的最大模型往返次数：每轮模型可以要求若干次只读检索，
  * 前端执行后把结果喂回模型继续。上限用来兜住「模型反复要求检索却收敛不了」的情况。
+ * 实际值取设置里的 agent_rounds（弱模型常在第 4 轮前收敛不了，写死只能少查或一直转圈），这只是兜底。
  */
-const MAX_AGENT_ROUNDS = 4;
+export const DEFAULT_AGENT_ROUNDS = 4;
 
 export const AI_WIDTH_LIMITS = { min: MIN_WIDTH, max: MAX_WIDTH };
 
@@ -309,8 +327,9 @@ function sessionTitle(messages: AiMessage[]): string {
 const RESTORABLE_STATES: readonly AiEditState[] = ["pending", "applied", "rejected", "unavailable", "malformed"];
 
 /**
- * 恢复一张动作卡片。撤销按钮依赖 revert 句柄，这里刻意不恢复它：
+ * 恢复一张动作卡片。apply_edit 的撤销依赖 revert 句柄，这里刻意不恢复它：
  * 重启后编辑器 undo 栈已空，撤销会错伤无关内容。
+ * 页面/表数据动作的 undo 是纯数据逆操作，照原样恢复 —— 这正是它能跨重启撤销的原因。
  */
 function sanitizeAction(raw: unknown, pageId: string | null): AiActionRecord | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -321,6 +340,7 @@ function sanitizeAction(raw: unknown, pageId: string | null): AiActionRecord | n
   const call = validateCall(a.call);
   // 只读检索不产生卡片，历史里出现这种脏数据直接丢掉
   if (!call || isRetrievalCall(call)) return null;
+  const undo = sanitizeUndoPlan(a.undo);
   const record: AiActionRecord = {
     tool: call.tool,
     call,
@@ -332,6 +352,7 @@ function sanitizeAction(raw: unknown, pageId: string | null): AiActionRecord | n
     ...(a.undone === true ? { undone: true } : {}),
     ...(text(a.pageName) ? { pageName: text(a.pageName) } : {}),
     ...(text(a.detail) ? { detail: text(a.detail) } : {}),
+    ...(undo ? { undo } : {}),
   };
   // 恢复出的待确认改文档没写落点时，钉回会话发起的那一页：
   // 否则用户切到别的页面点「应用」，改动会落到当前打开的文档上
@@ -545,8 +566,8 @@ interface AiState {
   setSessionArchived: (id: string, archived: boolean) => void;
   /** 给一条回答打分，再点同向取消 */
   rateMessage: (messageId: string, rating: "up" | "down") => void;
-  /** 撤销某条回复里某个动作造成的文档改动（仅编辑器内落地过的可撤销） */
-  undoAction: (messageId: string, index: number) => void;
+  /** 撤销某条回复里某个动作造成的改动（表/页面按逆操作计划，文档按编辑器快照） */
+  undoAction: (messageId: string, index: number) => Promise<void>;
   /** 执行待确认的动作（设置开启「改前确认」后由用户触发） */
   applyAction: (messageId: string, index: number) => Promise<void>;
   /** 忽略待确认的动作 */
@@ -730,6 +751,24 @@ export const useAiStore = create<AiState>()((set, get) => {
     return configured && configured > 0 ? configured : DEFAULT_MAX_CHARS;
   };
 
+  /** 一次提问允许的模型往返轮数（配置项 agent_rounds），兜底 4 轮 */
+  const agentRounds = () => {
+    const configured = get().config?.agent_rounds;
+    return configured && configured > 0 ? configured : DEFAULT_AGENT_ROUNDS;
+  };
+
+  /**
+   * 撞上下文上限后补发用的历史预算：砍一半。低于 500 token 就不值得再试——
+   * 截到那种长度的对话根本接不上，不如直接把报错交给用户。
+   */
+  const halvedContextBudget = (): number | null => {
+    const cfg = get().config;
+    const current =
+      cfg?.ctx_token_budget && cfg.ctx_token_budget > 0 ? cfg.ctx_token_budget : DEFAULT_HISTORY_TOKEN_BUDGET;
+    const next = Math.floor(current / 2);
+    return next < 500 ? null : next;
+  };
+
   /**
    * 上下文范围（配置项 ctx_scope）：只认 page_only / off，其余按 full。
    * 没有可编辑文档时 page_only 与 full 等价——「本页」根本不存在，
@@ -768,6 +807,10 @@ export const useAiStore = create<AiState>()((set, get) => {
     useTools: c.use_tools,
     priceInput: c.price_input,
     priceOutput: c.price_output,
+    agentRounds: c.agent_rounds,
+    firstByteTimeout: c.first_byte_timeout,
+    idleTimeout: c.idle_timeout,
+    streamRetries: c.stream_retries,
     apiKey: null,
     ...over,
   });
@@ -795,7 +838,7 @@ export const useAiStore = create<AiState>()((set, get) => {
   };
 
   /** 组装发给服务端的消息：system + 参考文档 + 历史对话（排除空的助手占位） */
-  const requestMessages = (assistantId: string, referenceContext = ""): AiChatMessage[] => {
+  const requestMessages = (assistantId: string, referenceContext = "", budgetOverride?: number): AiChatMessage[] => {
     const history = get()
       .messages.filter((m) => m.id !== assistantId && (m.content.trim().length > 0 || m.images?.length))
       .map((m) => ({
@@ -805,10 +848,14 @@ export const useAiStore = create<AiState>()((set, get) => {
         ...(m.images?.length ? { images: m.images.map((i) => ({ path: i.path })) } : {}),
       }));
     // 长对话防超限：按估算 token 从最新往前收进预算，放不下的早期轮次丢弃。
-    // 预算与条数上限可在设置里配置，非法/缺省值回落默认。
+    // 预算与条数上限可在设置里配置，非法/缺省值回落默认；budgetOverride 用于撞上限后的降预算补发。
     const cfg = get().config;
     const tokenBudget =
-      cfg?.ctx_token_budget && cfg.ctx_token_budget > 0 ? cfg.ctx_token_budget : DEFAULT_HISTORY_TOKEN_BUDGET;
+      budgetOverride && budgetOverride > 0
+        ? budgetOverride
+        : cfg?.ctx_token_budget && cfg.ctx_token_budget > 0
+          ? cfg.ctx_token_budget
+          : DEFAULT_HISTORY_TOKEN_BUDGET;
     const maxHistory =
       cfg?.ctx_max_messages && cfg.ctx_max_messages > 0 ? cfg.ctx_max_messages : DEFAULT_HISTORY_MAX_MESSAGES;
     const kept: AiChatMessage[] = [];
@@ -1005,7 +1052,15 @@ export const useAiStore = create<AiState>()((set, get) => {
       return { ...rec, state: "unavailable", pageName: node.name, detail: done.reason };
     }
     const outcome = await runWriteAction(call);
-    if (outcome.ok) return { ...rec, state: "applied", detail: outcome.detail };
+    if (outcome.ok) {
+      return {
+        ...rec,
+        state: "applied",
+        detail: outcome.detail,
+        // 换逆操作计划要换掉旧的：上一次落地留下的计划撤销的是上一次的改动
+        ...(outcome.undo ? { undo: outcome.undo } : {}),
+      };
+    }
     return { ...rec, state: "unavailable", detail: outcome.detail };
   };
 
@@ -1178,8 +1233,11 @@ export const useAiStore = create<AiState>()((set, get) => {
     set({ usage: null, retrieving: false });
     // 范围在一轮对话开始时定一次：中途改设置不该让同一轮的前后半段口径不一致
     const scope = ctxScope();
+    // 轮次上限也在本轮开始时取一次：中途改设置不该让同一轮的前后半段口径不一致
+    const roundLimit = agentRounds();
     // @ 引用的文档要先读盘转文本，再随 system 一起下发；「仅本页」档不带其它文档
-    let outgoing = requestMessages(assistantId, scope === "page_only" ? "" : await buildReferenceContext());
+    const referenceContext = scope === "page_only" ? "" : await buildReferenceContext();
+    let outgoing = requestMessages(assistantId, referenceContext);
     // 选中内容只随本轮生效：消息组装完就清掉，下一轮不再重复带
     if (get().pendingContext) set({ pendingContext: null });
     const writes: AiWriteCall[] = [];
@@ -1188,8 +1246,16 @@ export const useAiStore = create<AiState>()((set, get) => {
     let droppedNote = "";
     let cancelled = false;
     let failed: { message: string; code: string | null } | null = null;
+    /**
+     * 模型窗口比配置的上下文预算小时，服务端直接报超限。这里最多降预算补发两次（每次砍一半），
+     * 让用户至少能把这一问问完；一旦检索结果已经拼进 outgoing 就不再重建（重建会丢掉检索内容），
+     * 预算低于 500 token 也停手——截到那种长度的对话接不上，不如把报错交给用户。
+     */
+    let contextShrinks = 0;
+    let outgoingGrew = false;
+    let shrinkNote = "";
     try {
-      for (let round = 0; round < MAX_AGENT_ROUNDS; round++) {
+      for (let round = 0; round < roundLimit; round++) {
         if (cancelledByUser()) {
           cancelled = true;
           break;
@@ -1198,6 +1264,19 @@ export const useAiStore = create<AiState>()((set, get) => {
         lastFull = result.full;
         cancelled = result.cancelled;
         failed = result.failed;
+        if (!cancelled && failed?.code === "context_length" && !outgoingGrew && contextShrinks < 2) {
+          const smaller = halvedContextBudget();
+          if (smaller !== null) {
+            contextShrinks++;
+            shrinkNote = t("ai.contextBudgetRetried", { budget: smaller });
+            outgoing = requestMessages(assistantId, referenceContext, smaller);
+            failed = null;
+            lastFull = "";
+            // 半截的回答不能和重发后的答案叠在一起，与检索轮一样清空
+            set((s) => ({ messages: s.messages.map((m) => (m.id === assistantId ? { ...m, content: "" } : m)) }));
+            continue;
+          }
+        }
         if (cancelled || failed) break;
         const { items, malformed: bad } = collectCalls(result.refs, result.full);
         malformed = malformed || bad;
@@ -1213,12 +1292,13 @@ export const useAiStore = create<AiState>()((set, get) => {
             { role: "assistant", content: result.full },
             { role: "system" as const, content: RETRIEVAL_BLOCKED_BY_SCOPE_NOTE },
           ];
+          outgoingGrew = true;
           set((s) => ({ messages: s.messages.map((m) => (m.id === assistantId ? { ...m, content: "" } : m)) }));
           continue;
         }
         // 往返已到上限：不再执行检索（结果没机会进答案），只在正文后说明一句
-        if (round + 1 >= MAX_AGENT_ROUNDS) {
-          droppedNote = t("ai.searchRoundLimit", { max: MAX_AGENT_ROUNDS });
+        if (round + 1 >= roundLimit) {
+          droppedNote = t("ai.searchRoundLimit", { max: roundLimit });
           break;
         }
         // 此处到 set(retrieving:true) 之间没有 await：停止只可能发生在 await 边界，检查一次即够
@@ -1260,6 +1340,7 @@ export const useAiStore = create<AiState>()((set, get) => {
           { role: "assistant", content: result.full, ...(toolMode ? { tool_calls: toolRefs } : {}) },
           ...(toolMode ? toolMsgs : [{ role: "system" as const, content: retrievalResultMessage(plain) }]),
         ];
+        outgoingGrew = true;
         // 下一轮的答案才是给用户看的：本轮文本（多半只是「我先查一下」）清掉，免得两轮内容叠在一起
         set((s) => ({ messages: s.messages.map((m) => (m.id === assistantId ? { ...m, content: "" } : m)) }));
       }
@@ -1269,7 +1350,9 @@ export const useAiStore = create<AiState>()((set, get) => {
       } else if (cancelled) {
         settleIncomplete(assistantId, "stopped");
       } else {
-        await finalizeAssistant(assistantId, turnId, lastFull, writes, malformed, droppedNote);
+        // 降预算补发成功时也要告诉用户这次是按更小的上下文答的，否则他会以为历史全在
+        const note = [droppedNote, shrinkNote].filter(Boolean).join("\n");
+        await finalizeAssistant(assistantId, turnId, lastFull, writes, malformed, note);
       }
     } catch (e) {
       // 起手就失败（未配置 / 命令报错）：没有归类码，界面按通用错误处理
@@ -1582,23 +1665,38 @@ export const useAiStore = create<AiState>()((set, get) => {
       await get().send(t(QUICK_PROMPT_KEY[kind], { content }));
     },
 
-    // 撤销 AI 的自动改写：按改前快照精确回滚，撤不动时明确告知而不是静默撤掉用户的编辑
-    undoAction: (messageId, index) => {
-      const bridge = getAiEditor();
+    // 撤销一个已落地的动作：页面/表数据按落库时留下的逆操作计划回滚（重启后仍撤得动），
+    // 文档编辑按当前编辑器 undo 栈里的改前快照回滚，撤不动时明确告知而不是静默撤掉用户的编辑
+    undoAction: async (messageId, index) => {
       const rec = get().messages.find((m) => m.id === messageId)?.actions?.[index];
-      if (!bridge || !rec?.revert) return;
+      if (!rec) return;
+      const markUndone = () => {
+        set((s) => ({
+          messages: s.messages.map((m) =>
+            m.id === messageId && m.actions
+              ? { ...m, actions: m.actions.map((a, i) => (i === index ? { ...a, undone: true } : a)) }
+              : m,
+          ),
+        }));
+        persistSessions();
+      };
+      if (rec.undo) {
+        const done = await runUndoPlan(rec.undo);
+        if (!done.ok) {
+          toast.error(done.detail);
+          return;
+        }
+        toast.success(done.detail);
+        markUndone();
+        return;
+      }
+      const bridge = getAiEditor();
+      if (!bridge || !rec.revert) return;
       if (!bridge.undoAiEdit(rec.revert)) {
         toast.error(t("ai.undoFailed"));
         return;
       }
-      set((s) => ({
-        messages: s.messages.map((m) =>
-          m.id === messageId && m.actions
-            ? { ...m, actions: m.actions.map((a, i) => (i === index ? { ...a, undone: true } : a)) }
-            : m,
-        ),
-      }));
-      persistSessions();
+      markUndone();
     },
 
     // 用户在 diff 预览后点「应用」：这才真正写数据（文档 / 页面 / 表格）

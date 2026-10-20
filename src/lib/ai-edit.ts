@@ -35,7 +35,7 @@ export interface AiEditAnchor {
   text?: string;
 }
 
-/** 模型下发的一个动作（文档编辑 / 建页 / 改名 / 加行 / 只读检索） */
+/** 模型下发的一个动作（文档编辑 / 建页 / 改名 / 表行增删改 / 只读检索） */
 export type AiCall =
   | {
       tool: "apply_edit";
@@ -44,6 +44,8 @@ export type AiCall =
   | { tool: "create_page"; args: { title: string; content?: string; parent_page?: string } }
   | { tool: "set_page_title"; args: { page: string; title: string } }
   | { tool: "add_database_row"; args: { database: string; cells?: Record<string, unknown> } }
+  | { tool: "update_database_row"; args: { database: string; row: string; cells?: Record<string, unknown> } }
+  | { tool: "delete_database_row"; args: { database: string; row: string } }
   | { tool: RetrievalKind; args: Record<string, unknown> };
 
 /** 只读检索类工具：前端就地执行、把结果喂回模型，不产生确认卡片 */
@@ -61,7 +63,14 @@ export const RETRIEVAL_TOOLS: readonly RetrievalKind[] = [
 /** 只读检索动作本体 */
 export type RetrievalCall = Extract<AiCall, { tool: RetrievalKind }>;
 
-export const WRITE_TOOLS = ["apply_edit", "create_page", "set_page_title", "add_database_row"] as const;
+export const WRITE_TOOLS = [
+  "apply_edit",
+  "create_page",
+  "set_page_title",
+  "add_database_row",
+  "update_database_row",
+  "delete_database_row",
+] as const;
 export type WriteTool = (typeof WRITE_TOOLS)[number];
 
 /** 会改动用户数据的动作（其余为只读检索） */
@@ -95,7 +104,9 @@ const PROTOCOL = `你是 TsFlowy 笔记应用内置的助手，可以直接操�
 \`\`\`
 
 tool 只能取：apply_edit（改文档）/ create_page（建页面，args: title, content?, parent_page?）/
-set_page_title（改页面标题，args: page, title）/ add_database_row（加表行，args: database, cells 字段名→值）。
+set_page_title（改页面标题，args: page, title）/ add_database_row（加表行，args: database, cells 字段名→值）/
+update_database_row（改已有表行，args: database, row, cells 字段名→新值）/
+delete_database_row（删表行，args: database, row；进回收站，用户可撤销）。
 apply_edit 的 op 只能取：
 - replace_selection：替换用户当前选中的文字（用户没有选中时退化为在光标处插入）。最常用。
 - insert_at_cursor：在光标处插入
@@ -104,7 +115,9 @@ apply_edit 的 op 只能取：
 - replace_under_heading：替换某标题之下的整节内容（标题本身不动），args 需带 anchor.heading
 - replace_text：替换定位到的原文，args 需带 anchor.text（文档中确实存在的一段文字）
 - apply_edit 可选带 view_id：作用于其它页面（按页面 id）；缺省为当前页面。
-create_page / set_page_title / add_database_row 可选带 view_id 参数以定位页面，缺省按标题/表名匹配。
+create_page 的 parent_page、set_page_title 的 page、各表动作的 database 都可写页面 id 或标题；表名有重名时用 id。
+改/删表行前先用 query_database 取行：结果每行第一列就是 row（行 id），把它原样填进 args.row，
+不要凭标题猜行——同名或相近的行猜错就改错了数据。
 
 【检索请求】
 需要更多信息时（全库搜索、浏览页面列表、读取某页正文、查看表结构、查询表数据），
@@ -115,7 +128,7 @@ create_page / set_page_title / add_database_row 可选带 view_id 参数以定�
 \`\`\`
 
 tool 只能取：search_workspace（args: query）/ list_pages（无参数）/ get_page_content（args: page）/
-list_database_fields（args: database）/ query_database（args: database, 可选 limit）。
+list_database_fields（args: database）/ query_database（args: database, 可选 limit；返回每行第一列是行 id）。
 
 注意：文档第一行是标题（不能改动），第二行是分割线；不要试图改动这两行。
 content 用 Markdown 语法书写；summary 是一句话中文说明，会展示给用户。
@@ -191,6 +204,11 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+/** 模型给的 cells 参数：非对象（含数组以外的一切脏值）按未提供处理 */
+function optionalCells(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+}
+
 /** 校验并规整单个动作；不合法返回 null */
 export function validateCall(value: unknown): AiCall | null {
   if (typeof value !== "object" || value === null) return null;
@@ -241,9 +259,22 @@ export function validateCall(value: unknown): AiCall | null {
     case "add_database_row": {
       const database = optionalString(args.database);
       if (!database) return null;
-      const cells =
-        typeof args.cells === "object" && args.cells !== null ? (args.cells as Record<string, unknown>) : undefined;
+      const cells = optionalCells(args.cells);
       return { tool: "add_database_row", args: { database, ...(cells ? { cells } : {}) } };
+    }
+    case "update_database_row": {
+      const database = optionalString(args.database);
+      // row 缺失一律拒绝：没有行引用就只能靠猜，猜错改的是用户的数据
+      const row = optionalString(args.row);
+      const cells = optionalCells(args.cells);
+      if (!database || !row) return null;
+      return { tool: "update_database_row", args: { database, row, ...(cells ? { cells } : {}) } };
+    }
+    case "delete_database_row": {
+      const database = optionalString(args.database);
+      const row = optionalString(args.row);
+      if (!database || !row) return null;
+      return { tool: "delete_database_row", args: { database, row } };
     }
     default:
       if (RETRIEVAL_TOOLS.includes(tool as RetrievalKind)) {

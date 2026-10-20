@@ -2,12 +2,42 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
   updateFieldOptions: vi.fn((_id: string, _options: { options: SelectOption[] }): Promise<void> => Promise.resolve()),
+  listFields: vi.fn((): Promise<unknown[]> => Promise.resolve([])),
+  listRows: vi.fn((): Promise<unknown[]> => Promise.resolve([])),
+  loadCells: vi.fn((): Promise<Record<string, Record<string, unknown>>> => Promise.resolve({})),
+  createRow: vi.fn((): Promise<{ id: string }> => Promise.resolve({ id: "r-new" })),
+  deleteRow: vi.fn(() => Promise.resolve()),
+  restoreRow: vi.fn(() => Promise.resolve()),
+  purgeRow: vi.fn(() => Promise.resolve()),
+  setCell: vi.fn(() => Promise.resolve()),
+  setCellsMany: vi.fn((): Promise<number> => Promise.resolve(0)),
 }));
 
-vi.mock("./database", () => ({ databaseApi: api }));
+const view = vi.hoisted(() => ({
+  create: vi.fn((): Promise<{ id: string }> => Promise.resolve({ id: "v-new" })),
+  softDelete: vi.fn(() => Promise.resolve()),
+}));
 
-import { coerceCell } from "./ai-tools";
+const ws = vi.hoisted(() => ({
+  currentWorkspaceId: "w1",
+  currentViewId: null as string | null,
+  tree: [] as unknown[],
+  renameView: vi.fn(() => Promise.resolve()),
+  reload: vi.fn(() => Promise.resolve()),
+}));
+
+const relation = vi.hoisted(() => ({ invalidate: vi.fn() }));
+
+vi.mock("./database", () => ({ databaseApi: api }));
+vi.mock("./db", () => ({ viewApi: view }));
+vi.mock("./documents", () => ({ documentApi: { get: () => Promise.resolve(null), save: () => Promise.resolve() } }));
+vi.mock("@/stores/workspace", () => ({ useWorkspaceStore: { getState: () => ws } }));
+vi.mock("@/stores/relation", () => ({ useRelationStore: { getState: () => relation } }));
+
+import { coerceCell, runUndoPlan, runWriteAction, sanitizeUndoPlan } from "./ai-tools";
+import { onDatabaseChanged } from "./database-changed";
 import type { DatabaseField, FieldType, SelectOption } from "@/types/database";
+import type { ViewNode } from "@/types/models";
 
 const field = (type: FieldType, options = "{}"): DatabaseField => ({
   id: "f1",
@@ -73,5 +103,130 @@ describe("coerceCell", () => {
     for (const type of ["formula", "rollup", "relation"] as FieldType[]) {
       expect(await coerceCell(field(type), "任意")).toBeNull();
     }
+  });
+});
+
+const col = (id: string, name: string, type: FieldType = "text", options = "{}"): DatabaseField => ({
+  id,
+  database_view_id: "v1",
+  name,
+  field_type: type,
+  options,
+  width: 120,
+  is_hidden: 0,
+  position: 0,
+});
+
+const tableNode = { id: "v1", name: "任务", layout: "table", extra: "{}", children: [] } as unknown as ViewNode;
+
+describe("AI 写动作的逆操作计划", () => {
+  beforeEach(() => {
+    ws.tree = [tableNode];
+    ws.currentViewId = null;
+    ws.reload.mockClear();
+    relation.invalidate.mockClear();
+    api.listFields.mockResolvedValue([col("f1", "标题"), col("f2", "数量", "number")]);
+    api.listRows.mockResolvedValue([{ id: "r1" }, { id: "r2" }]);
+    api.loadCells.mockResolvedValue({ r1: { f1: "写周报" }, r2: { f1: "写周报" } });
+    api.createRow.mockResolvedValue({ id: "r-new" });
+    for (const fn of [api.setCell, api.setCellsMany, api.deleteRow, api.restoreRow, api.purgeRow]) fn.mockClear();
+    view.create.mockResolvedValue({ id: "v-new" });
+    view.softDelete.mockClear();
+  });
+
+  it("改行：记下改前的值，撤销清单按原值盖回", async () => {
+    api.loadCells.mockResolvedValue({ r1: { f1: "旧标题" } });
+    const out = await runWriteAction({
+      tool: "update_database_row",
+      args: { database: "任务", row: "r1", cells: { 标题: "新标题" } },
+    });
+    expect(out.ok).toBe(true);
+    expect(api.setCell).toHaveBeenCalledWith("r1", "f1", "新标题");
+    expect(out.undo).toEqual({
+      kind: "reset_cells",
+      database: "v1",
+      items: [{ row_id: "r1", field_id: "f1", value: "旧标题" }],
+    });
+    await runUndoPlan(out.undo!);
+    expect(api.setCellsMany).toHaveBeenCalledWith([{ rowId: "r1", fieldId: "f1", value: "旧标题" }]);
+  });
+
+  it("行引用可以是全库唯一的单元格文本；命中多行时一行都不许动", async () => {
+    api.loadCells.mockResolvedValue({ r1: { f1: "甲" }, r2: { f1: "乙" } });
+    const out = await runWriteAction({ tool: "delete_database_row", args: { database: "任务", row: "甲" } });
+    expect(api.deleteRow).toHaveBeenCalledWith("r1");
+    expect(out.undo).toEqual({ kind: "restore_row", database: "v1", row_id: "r1" });
+
+    api.deleteRow.mockClear();
+    api.loadCells.mockResolvedValue({ r1: { f1: "同名" }, r2: { f1: "同名" } });
+    const bad = await runWriteAction({ tool: "delete_database_row", args: { database: "任务", row: "同名" } });
+    expect(bad.ok).toBe(false);
+    expect(api.deleteRow).not.toHaveBeenCalled();
+  });
+
+  it("一格都没写成时不算成功，也不留下撤不动的空计划", async () => {
+    const out = await runWriteAction({
+      tool: "update_database_row",
+      args: { database: "任务", row: "r1", cells: { 不存在的字段: "x" } },
+    });
+    expect(out.ok).toBe(false);
+    expect(out.undo).toBeUndefined();
+    expect(api.setCell).not.toHaveBeenCalled();
+  });
+
+  it("加行的撤销是彻底删掉，删行的撤销是从回收站找回", async () => {
+    const added = await runWriteAction({ tool: "add_database_row", args: { database: "任务" } });
+    expect(added.undo).toEqual({ kind: "purge_row", database: "v1", row_id: "r-new" });
+    await runUndoPlan(added.undo!);
+    expect(api.purgeRow).toHaveBeenCalledWith("r-new");
+
+    await runUndoPlan({ kind: "restore_row", database: "v1", row_id: "r1" });
+    expect(api.restoreRow).toHaveBeenCalledWith("r1");
+  });
+
+  it("建页的撤销是移入回收站并刷新页面树", async () => {
+    const out = await runWriteAction({ tool: "create_page", args: { title: "新页" } });
+    expect(out.undo).toEqual({ kind: "remove_view", view_id: "v-new" });
+    await runUndoPlan(out.undo!);
+    expect(view.softDelete).toHaveBeenCalledWith("v-new");
+    expect(ws.reload).toHaveBeenCalledTimes(2); // 建页刷一次，撤销再刷一次
+  });
+
+  it("改库会通知正显示这张表的页面，解绑后不再打扰", async () => {
+    const seen: string[][] = [];
+    const off = onDatabaseChanged((ids) => seen.push(ids));
+    await runWriteAction({ tool: "add_database_row", args: { database: "任务" } });
+    expect(seen).toEqual([["v1"]]);
+    off();
+    await runWriteAction({ tool: "delete_database_row", args: { database: "任务", row: "r1" } });
+    expect(seen).toHaveLength(1);
+    expect(relation.invalidate).toHaveBeenCalledWith(["v1"]);
+  });
+});
+
+describe("sanitizeUndoPlan", () => {
+  it("认识的动作原样恢复", () => {
+    expect(sanitizeUndoPlan({ kind: "purge_row", database: "v1", row_id: "r1" })).toEqual({
+      kind: "purge_row",
+      database: "v1",
+      row_id: "r1",
+    });
+    expect(
+      sanitizeUndoPlan({ kind: "reset_cells", database: "v1", items: [{ row_id: "r1", field_id: "f1", value: null }] }),
+    ).toEqual({ kind: "reset_cells", database: "v1", items: [{ row_id: "r1", field_id: "f1", value: null }] });
+  });
+
+  it("形状不对、缺 id、条目全脏都按不可撤销处理", () => {
+    expect(sanitizeUndoPlan(undefined)).toBeUndefined();
+    expect(sanitizeUndoPlan("purge_row")).toBeUndefined();
+    expect(sanitizeUndoPlan({ kind: "drop_table", database: "v1" })).toBeUndefined();
+    expect(sanitizeUndoPlan({ kind: "purge_row", database: "v1" })).toBeUndefined();
+    expect(sanitizeUndoPlan({ kind: "rename_view", view_id: "v1", name: "" })).toBeUndefined();
+    expect(
+      sanitizeUndoPlan({ kind: "reset_cells", database: "v1", items: [{ row_id: "", field_id: "f1", value: "x" }] }),
+    ).toBeUndefined();
+    expect(
+      sanitizeUndoPlan({ kind: "reset_cells", database: "v1", items: [{ row_id: "r1", field_id: "f1", value: {} }] }),
+    ).toBeUndefined();
   });
 });

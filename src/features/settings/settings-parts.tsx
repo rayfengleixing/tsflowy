@@ -194,6 +194,14 @@ export interface AiFormState {
   priceInput: number;
   /** 输出 token 单价（每 100 万 token） */
   priceOutput: number;
+  /** 单次提问的模型往返（检索）轮数上限；0 = 回落默认 */
+  agentRounds: number;
+  /** 等模型首帧的秒数；0 = 回落默认 */
+  firstByteTimeout: number;
+  /** 流式帧间静默秒数；0 = 回落默认 */
+  idleTimeout: number;
+  /** 开流前重试次数；0 = 明确不重试 */
+  streamRetries: number;
 }
 
 /** AI 服务商预设 → i18n 文案 */

@@ -19,16 +19,25 @@ use super::files::{self, secret, AiConfig};
 /// 流式请求的「世代」计数：ai_cancel 自增后，正在跑的 ai_chat 会发现自己记录的世代已过期而中断。
 static AI_GENERATION: AtomicU64 = AtomicU64::new(0);
 
-/// 等待首个响应帧的上限：连上之后服务商迟迟不吐第一个字节（队列排队、鉴权卡住等）时及时报错。
-const FIRST_CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
-/// 两帧之间的静默上限。推理型模型会先长时间输出 reasoning，期间帧不断，因此给得较宽。
-const IDLE_CHUNK_TIMEOUT: Duration = Duration::from_secs(120);
 /// 连通性测试的整体上限：只要服务端 30 秒内没给出完整响应就判定不可用。
 const TEST_TIMEOUT: Duration = Duration::from_secs(30);
-/// 流开始前的重试次数：建连失败与 429 / 5xx 各最多再试 2 次。
-const PRE_STREAM_RETRIES: u32 = 2;
-/// 重试退避时长（第 1、2 次重试各用一档）
+/// 重试退避时长（第 1、2 次重试各用一档，更多的重试次数复用最长那档）
 const RETRY_BACKOFFS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
+
+/// 首帧等待上限：配置给的是秒，0 或脏值回落到缺省档，不让一次误填变成「永远等不到」或「瞬间超时」。
+fn first_chunk_timeout(ai: &AiConfig) -> Duration {
+    Duration::from_secs(ai.first_byte_timeout.clamp(1, 600) as u64)
+}
+
+/// 帧间静默上限（秒），同样带下限/上限夹取
+fn idle_chunk_timeout(ai: &AiConfig) -> Duration {
+    Duration::from_secs(ai.idle_timeout.clamp(5, 1800) as u64)
+}
+
+/// 第 n 次重试的退避时长：超过档数后复用最后一档（重试越多等得越久，但不要指数爆炸）
+fn backoff(attempt: u32) -> Duration {
+    RETRY_BACKOFFS[(attempt as usize).min(RETRY_BACKOFFS.len() - 1)]
+}
 
 /// 未配置 AI 时的统一错误文案（前后端约定）。
 /// 本地模型（Ollama / LM Studio 等）无需 API Key，因此就绪判断只要求 Base URL + 模型。
@@ -184,6 +193,14 @@ pub struct AiConfigPublic {
     pub price_input: f64,
     /// 输出 token 单价（每 100 万 token）
     pub price_output: f64,
+    /// 一次提问内的模型往返上限（agent 检索轮次）
+    pub agent_rounds: u32,
+    /// 首帧等待上限（秒）
+    pub first_byte_timeout: u32,
+    /// 帧间静默上限（秒）
+    pub idle_timeout: u32,
+    /// 流开始前的重试次数
+    pub stream_retries: u32,
     pub has_api_key: bool,
     pub api_key_masked: String,
     /// true = 凭据库不可用（或明文清不掉），Key 目前以明文存在 config.json
@@ -250,7 +267,21 @@ pub struct AiConfigInput {
     pub price_input: f64,
     #[serde(default)]
     pub price_output: f64,
+    /// 0 = 回落默认值（保存时归一）
+    #[serde(default)]
+    pub agent_rounds: u32,
+    #[serde(default)]
+    pub first_byte_timeout: u32,
+    #[serde(default)]
+    pub idle_timeout: u32,
+    /// 注意：这里 0 是「明确不重试」，与其它几项「0=默认」不同——重试次数本来就允许关掉
+    #[serde(default = "default_stream_retries_input")]
+    pub stream_retries: u32,
     pub api_key: Option<String>,
+}
+
+fn default_stream_retries_input() -> u32 {
+    files::AI_STREAM_RETRIES_DEFAULT
 }
 
 #[derive(Deserialize)]
@@ -288,6 +319,27 @@ fn normalize_ctx_scope(raw: &str) -> &'static str {
     }
 }
 
+/// 网络与 agent 循环参数归一：0 视为「未设置」回落默认（`stream_retries` 例外，0 = 明确不重试），
+/// 其余夹到可用范围。本地模型冷启动可能要几十秒、自建网关会反复 429，这几项写死时用户只能等报错。
+fn normalize_runtime_tuning(cfg: &AiConfigInput, ai: &mut AiConfig) {
+    ai.agent_rounds = if cfg.agent_rounds == 0 {
+        files::AI_AGENT_ROUNDS_DEFAULT
+    } else {
+        cfg.agent_rounds.clamp(1, 12)
+    };
+    ai.first_byte_timeout = if cfg.first_byte_timeout == 0 {
+        files::AI_FIRST_BYTE_TIMEOUT_DEFAULT
+    } else {
+        cfg.first_byte_timeout.clamp(1, 600)
+    };
+    ai.idle_timeout = if cfg.idle_timeout == 0 {
+        files::AI_IDLE_TIMEOUT_DEFAULT
+    } else {
+        cfg.idle_timeout.clamp(5, 1800)
+    };
+    ai.stream_retries = cfg.stream_retries.min(5);
+}
+
 /// 读取 AI 配置（掩码返回，不泄露 key）
 #[tauri::command]
 pub fn ai_get_config(app: tauri::AppHandle) -> Result<AiConfigPublic, String> {
@@ -301,6 +353,8 @@ pub fn ai_get_config(app: tauri::AppHandle) -> Result<AiConfigPublic, String> {
 pub fn ai_save_config(app: tauri::AppHandle, cfg: AiConfigInput) -> Result<(), String> {
     let mut app_cfg = files::load_app_config(&app);
     let mut ai = app_cfg.ai.take().unwrap_or_default();
+    // 先归一网络与 agent 调参：下面开始逐字段搬移 cfg（部分移动之后就再也借不到完整的 cfg 了）
+    normalize_runtime_tuning(&cfg, &mut ai);
     ai.enabled = cfg.enabled;
     ai.provider = cfg.provider;
     // 归一小写存着，识别时少一次比较；空串就是「自动」
@@ -548,8 +602,9 @@ async fn stream_once(
     // 协议差异（地址、鉴权头、请求体形态）全部收在 ai_protocol，这里只负责传输与取消
     let protocol = ai_protocol::Protocol::resolve(&ai.protocol, &ai.base_url);
     let (endpoint, body) = ai_protocol::chat(ai, protocol, messages, tools, true);
-    // 流开始前允许重试：建连失败 / 429 / 5xx 各退避再试，最多 PRE_STREAM_RETRIES 次。
+    // 流开始前允许重试：建连失败 / 429 / 5xx 各退避再试，次数由配置（网络慢的服务商可以调大）。
     // 进入流式阶段后绝不重试——内容可能已经吐给前端，重试会造成重复输出。
+    let retries = ai.stream_retries.min(5);
     let resp = {
         let mut attempt: u32 = 0;
         loop {
@@ -564,8 +619,8 @@ async fn stream_once(
                 .await;
             match sent {
                 Err(e) => {
-                    if attempt < PRE_STREAM_RETRIES && !cancelled(generation) {
-                        tokio::time::sleep(RETRY_BACKOFFS[attempt as usize]).await;
+                    if attempt < retries && !cancelled(generation) {
+                        tokio::time::sleep(backoff(attempt)).await;
                         attempt += 1;
                         continue;
                     }
@@ -582,14 +637,11 @@ async fn stream_once(
                     }
                     // 429 优先尊重服务端的 Retry-After，其余按固定退避；读正文前取头
                     let wait = if retryable_status(status) {
-                        retry_after(&r, RETRY_BACKOFFS[attempt.min(1) as usize])
+                        retry_after(&r, backoff(attempt))
                     } else {
                         Duration::ZERO
                     };
-                    if attempt < PRE_STREAM_RETRIES
-                        && retryable_status(status)
-                        && !cancelled(generation)
-                    {
+                    if attempt < retries && retryable_status(status) && !cancelled(generation) {
                         tokio::time::sleep(wait).await;
                         attempt += 1;
                         continue;
@@ -622,9 +674,9 @@ async fn stream_once(
 
     loop {
         let wait = if awaiting_first {
-            FIRST_CHUNK_TIMEOUT
+            first_chunk_timeout(ai)
         } else {
-            IDLE_CHUNK_TIMEOUT
+            idle_chunk_timeout(ai)
         };
         // 没有总超时（长回答可能持续数分钟），但任何一段「静默」都必须在上限内出新帧，
         // 否则视为网络假死，主动报错而不是让用户面对一个永远转圈的界面。
@@ -632,10 +684,14 @@ async fn stream_once(
             Ok(Some(item)) => item,
             Ok(None) => break,
             Err(_) => {
+                // 文案里的秒数取实际生效值：让用户自己调过之后还报「30 秒」会误导排查
                 let message = if awaiting_first {
-                    "等待模型首个响应超时（30 秒），请检查网络或服务商状态后重试"
+                    format!(
+                        "等待模型首个响应超时（{} 秒），可在设置里调大首帧等待，或检查网络与服务商状态",
+                        wait.as_secs()
+                    )
                 } else {
-                    "模型响应中断超过 120 秒，已停止等待"
+                    format!("模型响应中断超过 {} 秒，已停止等待", wait.as_secs())
                 };
                 let _ = on_event.send(AiEvent::Error {
                     message: message.to_string(),
@@ -805,6 +861,10 @@ fn public_of(
         ctx_token_budget: ai.ctx_token_budget,
         ctx_max_messages: ai.ctx_max_messages,
         ctx_scope: ai.ctx_scope.clone(),
+        agent_rounds: ai.agent_rounds,
+        first_byte_timeout: ai.first_byte_timeout,
+        idle_timeout: ai.idle_timeout,
+        stream_retries: ai.stream_retries,
         max_tokens: ai.max_tokens,
         system_prompt: ai.system_prompt.clone(),
         profiles: ai
@@ -1309,6 +1369,58 @@ fn build_client() -> Result<reqwest::Client, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 一份只关心网络调参的输入：其余字段取「够用就行」的值
+    fn tuning_input(json: &str) -> AiConfigInput {
+        let full = format!(
+            r#"{{"enabled":true,"provider":"custom","protocol":"","base_url":"https://api.example.com",
+               "model":"m","max_chars":8000,"confirm_edit":true,"temperature":0.7,"max_tokens":0,
+               "system_prompt":"","profiles":[],"active_profile":"","quick_actions":[],"use_tools":false,{json}}}"#
+        );
+        serde_json::from_str(&full).expect("测试用的配置 JSON 应能解析")
+    }
+
+    #[test]
+    fn runtime_tuning_falls_back_to_defaults_on_zero_and_clamps_extremes() {
+        // 全 0：除 stream_retries 之外都回落默认值（老配置 JSON 里根本没有这几项，走 serde 默认）
+        let cfg = tuning_input(
+            r#""agent_rounds":0,"first_byte_timeout":0,"idle_timeout":0,"stream_retries":0"#,
+        );
+        let mut ai = AiConfig::default();
+        normalize_runtime_tuning(&cfg, &mut ai);
+        assert_eq!(ai.agent_rounds, files::AI_AGENT_ROUNDS_DEFAULT);
+        assert_eq!(ai.first_byte_timeout, files::AI_FIRST_BYTE_TIMEOUT_DEFAULT);
+        assert_eq!(ai.idle_timeout, files::AI_IDLE_TIMEOUT_DEFAULT);
+        // 重试次数上的 0 是用户明确表达「别重试」，不能被当成「未设置」又变回 2
+        assert_eq!(ai.stream_retries, 0);
+
+        // 极端值夹住：填 99999 秒不该让界面永远转圈，填 12 轮以上只是烧钱
+        let big = tuning_input(
+            r#""agent_rounds":99,"first_byte_timeout":99999,"idle_timeout":99999,"stream_retries":99"#,
+        );
+        let mut ai2 = AiConfig::default();
+        normalize_runtime_tuning(&big, &mut ai2);
+        assert_eq!(ai2.agent_rounds, 12);
+        assert_eq!(ai2.first_byte_timeout, 600);
+        assert_eq!(ai2.idle_timeout, 1800);
+        assert_eq!(ai2.stream_retries, 5);
+
+        // 本地模型冷启动要 90 秒：这类值原样保留
+        let slow = tuning_input(
+            r#""agent_rounds":8,"first_byte_timeout":90,"idle_timeout":300,"stream_retries":4"#,
+        );
+        let mut ai3 = AiConfig::default();
+        normalize_runtime_tuning(&slow, &mut ai3);
+        assert_eq!(
+            (
+                ai3.agent_rounds,
+                ai3.first_byte_timeout,
+                ai3.idle_timeout,
+                ai3.stream_retries
+            ),
+            (8, 90, 300, 4)
+        );
+    }
 
     #[test]
     fn image_media_type_recognizes_supported_extensions() {

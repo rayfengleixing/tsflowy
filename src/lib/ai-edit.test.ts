@@ -109,6 +109,20 @@ describe("extractCalls", () => {
     expect(extractCalls(block('{"tool":"set_page_title","args":{"page":"a"}}')).calls).toHaveLength(0);
   });
 
+  it("改/删表行：没有 row 引用一律拒，猜行会改到别人的数据", () => {
+    expect(
+      extractCalls(block('{"tool":"update_database_row","args":{"database":"任务","cells":{"状态":"完成"}}}')).calls,
+    ).toHaveLength(0);
+    expect(extractCalls(block('{"tool":"delete_database_row","args":{"database":"任务"}}')).malformed).toBe(true);
+    const r = extractCalls(
+      block('{"tool":"update_database_row","args":{"database":"任务","row":"r1","cells":{"状态":"完成"}}}'),
+    );
+    expect(r.calls[0]).toEqual({
+      tool: "update_database_row",
+      args: { database: "任务", row: "r1", cells: { 状态: "完成" } },
+    });
+  });
+
   it("apply_edit 的 anchor 与 view_id 原样带出，空白锚点丢弃", () => {
     const r = extractCalls(
       block(

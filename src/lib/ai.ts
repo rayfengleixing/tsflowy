@@ -41,6 +41,14 @@ export interface AiConfig {
   price_input: number;
   /** 输出 token 单价（每 100 万 token） */
   price_output: number;
+  /** 一次提问内的模型往返上限（agent 检索轮次），Rust 侧夹到 1–12 */
+  agent_rounds: number;
+  /** 首帧等待上限（秒），本地模型冷启动要调大 */
+  first_byte_timeout: number;
+  /** 流式帧间静默上限（秒） */
+  idle_timeout: number;
+  /** 流开始前的重试次数，0 = 明确不重试 */
+  stream_retries: number;
   has_api_key: boolean;
   api_key_masked: string;
   /** true = 系统凭据库不可用（或明文清不掉），Key 目前明文存于 config.json */
@@ -295,6 +303,14 @@ export async function aiSaveConfig(input: {
   /** token 单价（每 100 万 token），0 = 未填价、不做费用估算 */
   priceInput: number;
   priceOutput: number;
+  /** agent 检索轮次上限；0 = 交给 Rust 回落默认 */
+  agentRounds: number;
+  /** 首帧等待秒数；0 = 回落默认 */
+  firstByteTimeout: number;
+  /** 帧间静默秒数；0 = 回落默认 */
+  idleTimeout: number;
+  /** 流开始前重试次数；0 = 不重试（与上面三项的「0=默认」不同） */
+  streamRetries: number;
   apiKey: string | null;
 }): Promise<void> {
   // 顶层参数名走 Tauri 的 camelCase 映射，但结构体内部字段由 serde 按 Rust 原名反序列化，
@@ -321,6 +337,10 @@ export async function aiSaveConfig(input: {
       use_tools: input.useTools,
       price_input: input.priceInput,
       price_output: input.priceOutput,
+      agent_rounds: input.agentRounds,
+      first_byte_timeout: input.firstByteTimeout,
+      idle_timeout: input.idleTimeout,
+      stream_retries: input.streamRetries,
       api_key: input.apiKey,
     },
   });

@@ -8,6 +8,7 @@ import type {
   FieldType,
 } from "@/types/database";
 import { databaseApi } from "@/lib/database";
+import { onDatabaseChanged } from "@/lib/database-changed";
 import { cellWriteTypeSafe, newSelectOption, parseFieldOptions, sameCellValue } from "@/lib/database-values";
 import { renameFormulaRef } from "@/lib/database-formula";
 import { viewApi } from "@/lib/db";
@@ -146,6 +147,21 @@ function hasDuplicateName(fields: DatabaseField[], name: string, exceptId: strin
 }
 
 export type DatabaseStore = ReturnType<typeof createDatabaseStore>;
+
+/**
+ * 把一份 store 实例接到「外部改库」通知上：AI 的写动作直接调 databaseApi 落数据，
+ * 界面这侧没有任何操作会触发重取，不接就会出现「点了应用、表格却没变」。
+ * 由页面挂载时订阅、卸载时解绑：写在 store 工厂里的话，StrictMode 的二次挂载会把它解掉且不再接回。
+ */
+export function bindDatabaseChanges(store: DatabaseStore): () => void {
+  return onDatabaseChanged((hosts) => {
+    const state = store.getState();
+    const view = state.view;
+    // 派生视图的数据挂在宿主上，按宿主 id 比对
+    if (!view || !hosts.includes(view.source_id ?? view.id)) return;
+    state.reload().catch((e: unknown) => logger.warn("database.external-reload", e));
+  });
+}
 
 /** 新建一个数据库 store 实例：每个数据库页（DatabasePage）持有一份，并排时互不干扰 */
 export function createDatabaseStore() {

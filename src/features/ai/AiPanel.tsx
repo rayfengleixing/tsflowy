@@ -305,7 +305,7 @@ export function AiPanel() {
       branch: (id) => branchFrom(id),
       rate: (id, rating) => rateMessage(id, rating),
       writeBack,
-      undo: (msgId, index) => undoAction(msgId, index),
+      undo: (msgId, index) => void undoAction(msgId, index),
       apply: (msgId, index) => void applyAction(msgId, index),
       reject: (msgId, index) => rejectAction(msgId, index),
       viewDiff: (msgId, index, record) => setDiff({ id: msgId, index, record }),
@@ -1045,6 +1045,8 @@ const TOOL_LABEL: Record<AiActionRecord["tool"], MessageKey> = {
   create_page: "ai.toolNameCreatePage",
   set_page_title: "ai.toolNameSetPageTitle",
   add_database_row: "ai.toolNameAddDatabaseRow",
+  update_database_row: "ai.toolNameUpdateDatabaseRow",
+  delete_database_row: "ai.toolNameDeleteDatabaseRow",
   invalid: "ai.toolNameInvalid",
 };
 
@@ -1172,7 +1174,8 @@ const MessageBubble = memo(function MessageBubble({
             {a.state === "pending" && (
               <MiniButton label={t("ai.rejectEdit")} onClick={() => api.reject(message.id, i)} />
             )}
-            {a.state === "applied" && !a.undone && a.revert && (
+            {/* revert = 编辑器 undo 栈快照（只在当前实例内有效）；undo = 随会话落库的逆操作计划，重启后仍可撤 */}
+            {a.state === "applied" && !a.undone && (a.revert ?? a.undo) && (
               <MiniButton label={t("ai.undoEdit")} onClick={() => api.undo(message.id, i)} />
             )}
           </div>

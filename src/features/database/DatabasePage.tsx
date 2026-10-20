@@ -4,7 +4,7 @@ import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { patchViewConfig, readViewConfig } from "@/lib/view-config";
 import { toast } from "sonner";
-import { createDatabaseStore } from "@/stores/database";
+import { bindDatabaseChanges, createDatabaseStore } from "@/stores/database";
 import { DatabaseStoreProvider } from "@/stores/database-context";
 import { BoardView } from "./BoardView";
 import { CalendarView } from "./CalendarView";
@@ -59,6 +59,9 @@ export function DatabasePage({ view }: { view: View }) {
       alive = false;
     };
   }, [view.id]);
+
+  // AI 的写动作是直接落库的，不接这条通知就得让用户手动切视图才看得到新行
+  useEffect(() => bindDatabaseChanges(store), [store]);
 
   // 宿主那一行以树快照为准：侧边栏改名后标签立刻跟上（重取只在换页时发生）
   const views = rows.map((v) => (v.id === view.id ? view : v));

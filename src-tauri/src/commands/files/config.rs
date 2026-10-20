@@ -106,6 +106,18 @@ pub struct AiConfig {
     /// 输出 token 单价（每 100 万 token）
     #[serde(default)]
     pub price_output: f64,
+    /// 一次提问内允许的模型往返上限（每轮检索往返算一次）。0 或缺省时用默认值。
+    #[serde(default = "default_agent_rounds")]
+    pub agent_rounds: u32,
+    /// 等待首个响应帧的上限（秒）：本地模型冷加载可能要几十秒，写死 30 秒会让用户以为配置坏了。
+    #[serde(default = "default_first_byte_timeout")]
+    pub first_byte_timeout: u32,
+    /// 两帧之间的静默上限（秒）：超过即判定假死并报错，不给「永远转圈的界面」。
+    #[serde(default = "default_idle_timeout")]
+    pub idle_timeout: u32,
+    /// 流开始前的重试次数（建连失败 / 429 / 5xx）。0 = 明确不重试。
+    #[serde(default = "default_stream_retries")]
+    pub stream_retries: u32,
 }
 
 fn default_temperature() -> f64 {
@@ -127,6 +139,28 @@ fn default_ctx_max_messages() -> u32 {
 /// 上下文预算默认值：前端 store 与保存时归零回落共用同一口径
 pub const AI_CTX_TOKEN_BUDGET_DEFAULT: u32 = 3000;
 pub const AI_CTX_MAX_MESSAGES_DEFAULT: u32 = 40;
+
+fn default_agent_rounds() -> u32 {
+    AI_AGENT_ROUNDS_DEFAULT
+}
+
+fn default_first_byte_timeout() -> u32 {
+    AI_FIRST_BYTE_TIMEOUT_DEFAULT
+}
+
+fn default_idle_timeout() -> u32 {
+    AI_IDLE_TIMEOUT_DEFAULT
+}
+
+fn default_stream_retries() -> u32 {
+    AI_STREAM_RETRIES_DEFAULT
+}
+
+/// 网络与 agent 循环默认值：前端设置页与保存时的归零回落共用同一口径
+pub const AI_AGENT_ROUNDS_DEFAULT: u32 = 4;
+pub const AI_FIRST_BYTE_TIMEOUT_DEFAULT: u32 = 30;
+pub const AI_IDLE_TIMEOUT_DEFAULT: u32 = 120;
+pub const AI_STREAM_RETRIES_DEFAULT: u32 = 2;
 
 fn default_confirm_edit() -> bool {
     true
@@ -160,6 +194,10 @@ impl Default for AiConfig {
             use_tools: false,
             price_input: 0.0,
             price_output: 0.0,
+            agent_rounds: default_agent_rounds(),
+            first_byte_timeout: default_first_byte_timeout(),
+            idle_timeout: default_idle_timeout(),
+            stream_retries: default_stream_retries(),
         }
     }
 }

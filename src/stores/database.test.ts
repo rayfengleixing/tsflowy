@@ -22,7 +22,8 @@ vi.mock("@/lib/database", () => ({ databaseApi: api }));
 vi.mock("@/lib/view-config", () => ({ readViewConfig: () => ({}), patchViewConfig: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn() } }));
 
-import { useDatabaseStore } from "@/stores/database";
+import { bindDatabaseChanges, createDatabaseStore, useDatabaseStore } from "@/stores/database";
+import { notifyDatabaseChanged } from "@/lib/database-changed";
 import type { DatabaseField, DatabaseRow, DatabaseTrashRow } from "@/types/database";
 import type { View } from "@/types/models";
 
@@ -456,5 +457,28 @@ describe("database store 写入类型闸门", () => {
 
     expect(api.setCell).toHaveBeenCalledWith("r1", "f-unknown", "abc");
     expect(toastError).not.toHaveBeenCalled();
+  });
+});
+
+describe("外部改库通知（AI 的写动作绕开本 store 直接落库）", () => {
+  it("只有正显示这张表的实例重取，解绑之后不再被打扰", async () => {
+    const store = createDatabaseStore();
+    api.listFields.mockResolvedValue([]);
+    api.listRows.mockResolvedValue([]);
+    api.loadCells.mockResolvedValue({});
+    await store.getState().load(view("host1"));
+    expect(api.listFields).toHaveBeenCalledTimes(1);
+
+    const off = bindDatabaseChanges(store);
+    notifyDatabaseChanged(["别的表"]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.listFields).toHaveBeenCalledTimes(1);
+
+    notifyDatabaseChanged(["host1"]);
+    await vi.waitFor(() => expect(api.listFields).toHaveBeenCalledTimes(2));
+    off();
+    notifyDatabaseChanged(["host1"]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.listFields).toHaveBeenCalledTimes(2);
   });
 });

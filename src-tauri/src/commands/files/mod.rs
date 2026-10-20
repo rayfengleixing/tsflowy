@@ -27,6 +27,10 @@ pub use config::{
     RetentionPolicyInfo,
 };
 pub(crate) use config::{load_app_config, save_app_config};
+pub use config::{
+    AI_AGENT_ROUNDS_DEFAULT, AI_FIRST_BYTE_TIMEOUT_DEFAULT, AI_IDLE_TIMEOUT_DEFAULT,
+    AI_STREAM_RETRIES_DEFAULT,
+};
 
 // —— 数据目录解析 / 迁移 / 自定义目录命令 ——
 pub(crate) use data_dir::{app_data_dir, open_path_in_system, timestamp_suffix};

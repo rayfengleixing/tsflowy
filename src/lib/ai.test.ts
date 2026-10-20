@@ -106,6 +106,10 @@ describe("aiSaveConfig 入参", () => {
       useTools: false,
       priceInput: 2,
       priceOutput: 8,
+      agentRounds: 6,
+      firstByteTimeout: 90,
+      idleTimeout: 300,
+      streamRetries: 4,
       apiKey: null,
     });
     const cfg = (invokeMock.mock.calls[0][1] as { cfg: Record<string, unknown> }).cfg;
@@ -117,6 +121,10 @@ describe("aiSaveConfig 入参", () => {
     expect(cfg.ctx_token_budget).toBe(5000);
     expect(cfg.ctx_max_messages).toBe(12);
     expect(cfg.ctx_scope).toBe("page_only");
+    expect(cfg.agent_rounds).toBe(6);
+    expect(cfg.first_byte_timeout).toBe(90);
+    expect(cfg.idle_timeout).toBe(300);
+    expect(cfg.stream_retries).toBe(4);
   });
 
   it("档位草稿 Key 按 aiProfileKeyInput 口径转成 api_key 字段", async () => {
@@ -160,6 +168,10 @@ describe("aiSaveConfig 入参", () => {
       useTools: false,
       priceInput: 0,
       priceOutput: 0,
+      agentRounds: 4,
+      firstByteTimeout: 30,
+      idleTimeout: 120,
+      streamRetries: 2,
       apiKey: null,
     });
     const cfg = (invokeMock.mock.calls[0][1] as { cfg: Record<string, unknown> }).cfg;

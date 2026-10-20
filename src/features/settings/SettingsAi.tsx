@@ -50,6 +50,10 @@ export function SettingsAi() {
     useTools: false,
     priceInput: 0,
     priceOutput: 0,
+    agentRounds: 4,
+    firstByteTimeout: 30,
+    idleTimeout: 120,
+    streamRetries: 2,
   });
   const [aiApiKey, setAiApiKey] = useState("");
   // 档位专用 Key 草稿（按档位 id）：保存成功后清空，留空的草稿表示「不修改该档 Key」
@@ -92,6 +96,10 @@ export function SettingsAi() {
       useTools: c.use_tools,
       priceInput: c.price_input,
       priceOutput: c.price_output,
+      agentRounds: c.agent_rounds,
+      firstByteTimeout: c.first_byte_timeout,
+      idleTimeout: c.idle_timeout,
+      streamRetries: c.stream_retries,
     });
   };
 
@@ -129,6 +137,10 @@ export function SettingsAi() {
       useTools: next.useTools,
       priceInput: next.priceInput,
       priceOutput: next.priceOutput,
+      agentRounds: next.agentRounds,
+      firstByteTimeout: next.firstByteTimeout,
+      idleTimeout: next.idleTimeout,
+      streamRetries: next.streamRetries,
       apiKey: apiKey.trim() === "" ? null : apiKey,
     });
     const c = await aiGetConfig();
@@ -460,6 +472,59 @@ export function SettingsAi() {
           <p className="max-w-80 text-[11px] text-neutral-500">{t("settings.aiCtxScopeDesc")}</p>
         </div>
       </Row>
+
+      {/* 网络与 agent 循环参数：本地模型 / 自建网关慢时唯一的自救口子 */}
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Row label={t("settings.aiAgentRounds")}>
+          <input
+            type="number"
+            min={0}
+            max={12}
+            step={1}
+            value={aiForm.agentRounds}
+            onChange={(e) => setAiForm((f) => ({ ...f, agentRounds: Math.trunc(Number(e.target.value)) }))}
+            onBlur={() => saveAiQuietly()}
+            className={AI_NUM_INPUT}
+          />
+        </Row>
+        <Row label={t("settings.aiStreamRetries")}>
+          <input
+            type="number"
+            min={0}
+            max={5}
+            step={1}
+            value={aiForm.streamRetries}
+            onChange={(e) => setAiForm((f) => ({ ...f, streamRetries: Math.trunc(Number(e.target.value)) }))}
+            onBlur={() => saveAiQuietly()}
+            className={AI_NUM_INPUT}
+          />
+        </Row>
+        <Row label={t("settings.aiFirstByteTimeout")}>
+          <input
+            type="number"
+            min={0}
+            max={600}
+            step={5}
+            value={aiForm.firstByteTimeout}
+            onChange={(e) => setAiForm((f) => ({ ...f, firstByteTimeout: Math.trunc(Number(e.target.value)) }))}
+            onBlur={() => saveAiQuietly()}
+            className={AI_NUM_INPUT}
+          />
+        </Row>
+        <Row label={t("settings.aiIdleTimeout")}>
+          <input
+            type="number"
+            min={0}
+            max={1800}
+            step={10}
+            value={aiForm.idleTimeout}
+            onChange={(e) => setAiForm((f) => ({ ...f, idleTimeout: Math.trunc(Number(e.target.value)) }))}
+            onBlur={() => saveAiQuietly()}
+            className={AI_NUM_INPUT}
+          />
+        </Row>
+      </div>
+      <p className="-mt-2 text-[11px] text-neutral-400">{t("settings.aiTuningDesc")}</p>
 
       {/* 自定义系统提示 */}
       <div>

@@ -25,6 +25,7 @@ const M = vi.hoisted(() => ({
   documentSave: vi.fn(() => Promise.resolve()),
   runRetrievalCall: vi.fn(() => Promise.resolve("检索桩结果")),
   runWriteAction: vi.fn((): Promise<unknown> => Promise.resolve({ ok: true, detail: "已执行" })),
+  runUndoPlan: vi.fn((): Promise<unknown> => Promise.resolve({ ok: true, detail: "已撤销" })),
   resolvePage: vi.fn((): unknown => null),
   applyEditToDocJson: vi.fn((): unknown => ({ ok: false, reason: "bad_structure" })),
   toastError: vi.fn(),
@@ -61,7 +62,10 @@ vi.mock("@/lib/ai-tools", () => ({
   aiToolSpecs: () => [],
   runRetrievalCall: M.runRetrievalCall,
   runWriteAction: M.runWriteAction,
+  runUndoPlan: M.runUndoPlan,
   resolvePage: M.resolvePage,
+  // 逆操作计划是纯数据，形状校验由 ai-tools 自己的单测覆盖；这里原样放行
+  sanitizeUndoPlan: (v: unknown) => v,
 }));
 vi.mock("@/lib/ai-locate", () => ({
   asDoc: (raw: unknown) => (Array.isArray(raw) ? { type: "doc", content: raw } : raw),
@@ -101,6 +105,10 @@ function defaultConfig(overrides: Partial<AiConfig> = {}): AiConfig {
     use_tools: false,
     price_input: 0,
     price_output: 0,
+    agent_rounds: 4,
+    first_byte_timeout: 30,
+    idle_timeout: 120,
+    stream_retries: 2,
     has_api_key: true,
     api_key_masked: "sk-***",
     ...overrides,
@@ -135,6 +143,7 @@ async function loadStore(opts: LoadOptions = {}) {
   M.docSearchSnippets.mockImplementation(() => Promise.resolve([] as string[]));
   M.runRetrievalCall.mockImplementation(() => Promise.resolve("检索桩结果"));
   M.runWriteAction.mockImplementation(() => Promise.resolve({ ok: true, detail: "已执行" }));
+  M.runUndoPlan.mockImplementation(() => Promise.resolve({ ok: true, detail: "已撤销" }));
   M.resolvePage.mockImplementation(() => null);
   M.applyEditToDocJson.mockImplementation(() => ({ ok: false, reason: "bad_structure" }));
   streamHandlers = [];
@@ -364,6 +373,51 @@ describe("ai store：agent 多步循环", () => {
     expect(msg.content).toContain("ai.searchRoundLimit");
   });
 
+  it("轮次上限取自配置：agent_rounds=2 时只跑两轮就收尾", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ agent_rounds: 2 }) });
+    const p = store.getState().send("一直查");
+    for (let round = 0; round < 2; round++) {
+      await vi.waitFor(() => expect(streamHandlers.length).toBe(round + 1));
+      streamHandlers[round]({ type: "done", full: `第${round}轮\n\n${callBlock('{"tool":"list_pages","args":{}}')}` });
+    }
+    await p;
+    // 只有第 1 轮的检索有机会进下一轮提问
+    expect(M.runRetrievalCall).toHaveBeenCalledTimes(1);
+    const msg = store.getState().messages[1];
+    expect(msg.content).toContain("第1轮");
+    expect(msg.content).toContain("ai.searchRoundLimit");
+  });
+
+  it("首轮报上下文超限：砍半预算自动补发一次", async () => {
+    const store = await loadConfiguredStore();
+    const p = store.getState().send("q");
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(1));
+    streamHandlers[0]({ type: "chunk", delta: "半截答案" });
+    await vi.waitFor(() => expect(store.getState().messages[1].content).toBe("半截答案"));
+    streamHandlers[0]({ type: "error", message: "上下文超长", code: "context_length" });
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(2));
+    streamHandlers[1]({ type: "done", full: "重发后的答案" });
+    await p;
+    const s = store.getState();
+    expect(s.error).toBeNull();
+    // 默认预算 3000 → 补发用 1500；重发前那句半截答案不能留在正文里
+    expect(s.messages[1].content).toContain("重发后的答案");
+    expect(s.messages[1].content).not.toContain("半截答案");
+    expect(s.messages[1].content).toContain("ai.contextBudgetRetried");
+    expect(s.messages[1].actions).toBeUndefined();
+  });
+
+  it("超限补发后仍超限：报错照旧交给用户，不无限重试", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ ctx_token_budget: 800 }) });
+    const p = store.getState().send("q");
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(1));
+    // 800 砍半是 400，低于 500 token 的下限：不值得再试，直接报错
+    streamHandlers[0]({ type: "error", message: "上下文超长", code: "context_length" });
+    await p;
+    expect(M.aiChat).toHaveBeenCalledTimes(1);
+    expect(store.getState().errorCode).toBe("context_length");
+  });
+
   it("多个写动作各一张卡片：确认其中一个不影响其它", async () => {
     const store = await loadConfiguredStore();
     const full = [
@@ -408,9 +462,48 @@ describe("ai store：agent 多步循环", () => {
     feed({ type: "done", full: EDIT_FULL });
     await p;
     const msg = store.getState().messages[1];
-    store.getState().undoAction(msg.id, 0);
+    await store.getState().undoAction(msg.id, 0);
     expect(M.undoAiEdit).toHaveBeenCalled();
     expect(store.getState().messages[1].actions![0].undone).toBe(true);
+  });
+
+  it("表数据写动作记下逆操作计划，撤销按数据回滚而不是碰编辑器", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ confirm_edit: false }) });
+    M.resolvePage.mockImplementation(() => ({ id: "v1", name: "任务", layout: "table" }));
+    const plan = { kind: "purge_row", database: "v1", row_id: "r9" };
+    M.runWriteAction.mockImplementation(() => Promise.resolve({ ok: true, detail: "已加一行", undo: plan }));
+    const { p, feed } = await startTurn(store, "加一行");
+    feed({
+      type: "done",
+      full: `好\n\n\`\`\`tsflowy-edit\n{"tool":"add_database_row","args":{"database":"任务"}}\n\`\`\``,
+    });
+    await p;
+    const msg = store.getState().messages[1];
+    expect(msg.actions![0].state).toBe("applied");
+    expect(msg.actions![0].undo).toEqual(plan);
+    await store.getState().undoAction(msg.id, 0);
+    expect(M.runUndoPlan).toHaveBeenCalledWith(plan);
+    expect(store.getState().messages[1].actions![0].undone).toBe(true);
+    expect(M.undoAiEdit).not.toHaveBeenCalled();
+  });
+
+  it("逆操作执行失败：不标记已撤销，把原因反馈给用户", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ confirm_edit: false }) });
+    M.resolvePage.mockImplementation(() => ({ id: "v1", name: "任务", layout: "table" }));
+    M.runWriteAction.mockImplementation(() =>
+      Promise.resolve({ ok: true, detail: "已加一行", undo: { kind: "purge_row", database: "v1", row_id: "r9" } }),
+    );
+    const { p, feed } = await startTurn(store, "加一行");
+    feed({
+      type: "done",
+      full: `好\n\n\`\`\`tsflowy-edit\n{"tool":"add_database_row","args":{"database":"任务"}}\n\`\`\``,
+    });
+    await p;
+    M.runUndoPlan.mockImplementation(() => Promise.resolve({ ok: false, detail: "那一行已经不在回收站里了" }));
+    const msg = store.getState().messages[1];
+    await store.getState().undoAction(msg.id, 0);
+    expect(M.toastError).toHaveBeenCalledWith("那一行已经不在回收站里了");
+    expect(store.getState().messages[1].actions![0].undone).toBeUndefined();
   });
 });
 
@@ -970,6 +1063,38 @@ describe("ai store：动作卡片随会话恢复", () => {
     // 恢复只重建卡片，不会替用户把改动写进文档
     expect(M.applyEdit).not.toHaveBeenCalled();
     expect(M.runWriteAction).not.toHaveBeenCalled();
+  });
+
+  it("表数据动作的逆操作计划随会话恢复：重启后这张卡片仍然撤得动", async () => {
+    const store = await loadStore();
+    const row = actionRow("p1");
+    row.messages = JSON.stringify([
+      { id: "u1", role: "user", content: "加一行" },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "回答",
+        actions: [
+          {
+            tool: "add_database_row",
+            call: { tool: "add_database_row", args: { database: "任务" } },
+            op: null,
+            summary: "在「任务」新增一行",
+            content: "",
+            before: "",
+            state: "applied",
+            detail: "已新增一行",
+            undo: { kind: "purge_row", database: "v1", row_id: "r9" },
+          },
+        ],
+      },
+    ]);
+    M.aiSessionList.mockResolvedValue([row]);
+    await store.getState().loadSessions();
+    expect(store.getState().messages[1].actions![0].undo).toEqual({ kind: "purge_row", database: "v1", row_id: "r9" });
+    await store.getState().undoAction("a1", 0);
+    expect(M.runUndoPlan).toHaveBeenCalledWith({ kind: "purge_row", database: "v1", row_id: "r9" });
+    expect(store.getState().messages[1].actions![0].undone).toBe(true);
   });
 
   it("会话没有关联页面：不补 view_id，应用时仍按当前打开的文档处理", async () => {
@@ -1639,6 +1764,8 @@ describe("ai store：档位切换回传整份配置", () => {
         thinking: "off",
         ctx_token_budget: 5000,
         ctx_max_messages: 12,
+        agent_rounds: 7,
+        stream_retries: 5,
         profiles,
         active_profile: "p1",
       }),
@@ -1652,6 +1779,9 @@ describe("ai store：档位切换回传整份配置", () => {
     expect(input.ctxTokenBudget).toBe(5000);
     expect(input.ctxMaxMessages).toBe(12);
     expect(input.ctxScope).toBe("full");
+    // 网络调优参数同理由整份回写带回：漏一项就等于把它悄悄重置成默认
+    expect(input.agentRounds).toBe(7);
+    expect(input.streamRetries).toBe(5);
     const saved = input.profiles as Record<string, unknown>[];
     expect(saved[0]).toMatchObject({ id: "p1", model: "m-strong", protocol: "anthropic" });
     // 掩码字段不回传成 Key；缺 api_key 即「Rust 侧按 id 保留原 Key」的语义

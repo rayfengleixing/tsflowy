@@ -3,8 +3,10 @@
 // 分两类：
 // - 只读取证（search_workspace / list_pages / get_page_content / list_database_fields / query_database）：
 //   模型在作答前调用，前端执行后把结果原样喂回模型（agent 循环），不产生确认卡片。
-// - 写动作（create_page / set_page_title / add_database_row）：改动用户数据，默认走确认卡片，
-//   用户点「应用」或设置关闭确认时才真正执行（文档编辑 apply_edit 走 ai-editor/ai-locate，不在这里）。
+// - 写动作（create_page / set_page_title / add_database_row / update_database_row / delete_database_row）：
+//   改动用户数据，默认走确认卡片，用户点「应用」或设置关闭确认时才真正执行
+//   （文档编辑 apply_edit 走 ai-editor/ai-locate，不在这里）。
+//   每个写动作成功时返回一份 UndoPlan（纯数据逆操作），落进会话 JSON 后重启也能撤销。
 //
 // 之所以在前端执行：页面树、文档、数据库的权威状态与写入串行化都在前端 store/lib 里，
 // Rust 侧再实现一套等于把同一份业务规则抄两遍。
@@ -14,6 +16,7 @@ import { docSearchSnippets, type AiToolSpec } from "./ai";
 import { markdownToNodes } from "./ai-locate";
 import { viewApi } from "./db";
 import { databaseApi } from "./database";
+import { notifyDatabaseChanged } from "./database-changed";
 import { cellWriteTypeSafe, formatCellValue, newSelectOption, parseFieldOptions } from "./database-values";
 import { documentApi } from "./documents";
 import { fieldKind } from "./field-kinds";
@@ -153,12 +156,14 @@ async function runRetrievalTool(name: string, args: Record<string, unknown>, lim
         typeof args.limit === "number" && args.limit > 0 ? Math.floor(args.limit) : MAX_QUERY_ROWS,
       );
       const shown = rows.slice(0, take);
-      const header = fields.map((f) => f.name).join(" | ");
+      // 行 id 打在每行开头：模型要改/删某一行时得能说清是哪一行，否则 update/delete 只能靠文本猜
+      const header = `${t("ai.toolRowIdColumn")} | ${fields.map((f) => f.name).join(" | ")}`;
       const body = shown
-        .map((r) =>
-          fields
-            .map((f) => formatCellValue(f.field_type, cellMap[r.id]?.[f.id] ?? null, parseFieldOptions(f.options)))
-            .join(" | "),
+        .map(
+          (r) =>
+            `${r.id} | ${fields
+              .map((f) => formatCellValue(f.field_type, cellMap[r.id]?.[f.id] ?? null, parseFieldOptions(f.options)))
+              .join(" | ")}`,
         )
         .join("\n");
       return `${t("ai.toolRows", { shown: shown.length, total: rows.length })}\n${header}\n${body}`;
@@ -168,12 +173,69 @@ async function runRetrievalTool(name: string, args: Record<string, unknown>, lim
   }
 }
 
-/** 写动作的执行结果：detail 是给模型/界面看的说明 */
+/**
+ * 写动作的逆操作计划：纯数据（不是闭包），所以能随会话 JSON 落库，
+ * 重启后仍然可撤销 —— 这与文档编辑的 revert（只在当前编辑器实例的 undo 栈里有效）是两套机制。
+ * 每条都只描述「把这份数据改回去」，不依赖撤销时刻的界面状态。
+ */
+export type UndoPlan =
+  | { kind: "remove_view"; view_id: string }
+  | { kind: "rename_view"; view_id: string; name: string }
+  | { kind: "purge_row"; database: string; row_id: string }
+  | { kind: "restore_row"; database: string; row_id: string }
+  | { kind: "reset_cells"; database: string; items: { row_id: string; field_id: string; value: CellValue }[] };
+
+/** 写动作的执行结果：detail 是给模型/界面看的说明，undo 是「撤销这次改动」的逆操作 */
 export interface WriteOutcome {
   ok: boolean;
   detail: string;
   /** 新建页面/行成功时的 id，供界面上提供「打开」入口 */
   id?: string;
+  undo?: UndoPlan;
+}
+
+/**
+ * 从会话 JSON 里恢复逆操作计划：形状不认识的（含旧会话根本没写这个字段）一律按不可撤销处理。
+ * 这里是外部数据入口，字段必须逐个验类型——计划里的 id 会直接喂给写库的 API。
+ */
+export function sanitizeUndoPlan(raw: unknown): UndoPlan | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const o = raw as Record<string, unknown>;
+  const id = (v: unknown) => (typeof v === "string" && v ? v : "");
+  const database = id(o.database);
+  const rowId = id(o.row_id);
+  switch (o.kind) {
+    case "remove_view": {
+      const viewId = id(o.view_id);
+      return viewId ? { kind: "remove_view", view_id: viewId } : undefined;
+    }
+    case "rename_view": {
+      const viewId = id(o.view_id);
+      const name = id(o.name);
+      return viewId && name ? { kind: "rename_view", view_id: viewId, name } : undefined;
+    }
+    case "purge_row":
+    case "restore_row":
+      return database && rowId ? { kind: o.kind, database, row_id: rowId } : undefined;
+    case "reset_cells": {
+      if (!database || !Array.isArray(o.items)) return undefined;
+      const items = o.items.flatMap((x) => {
+        if (typeof x !== "object" || x === null) return [];
+        const i = x as Record<string, unknown>;
+        const oneRow = id(i.row_id);
+        const fieldId = id(i.field_id);
+        // value 允许 null（撤销就是把这格清空），其余按 CellValue 的几种形态收
+        const v = i.value;
+        const valueOk =
+          v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean" || Array.isArray(v);
+        return oneRow && fieldId && valueOk ? [{ row_id: oneRow, field_id: fieldId, value: v as CellValue }] : [];
+      });
+      // 一条都不剩就别留个空壳计划：卡片上会出现按了没反应的撤销按钮
+      return items.length > 0 ? { kind: "reset_cells", database, items } : undefined;
+    }
+    default:
+      return undefined;
+  }
 }
 
 function newDocumentJson(title: string, contentMarkdown: string): JSONContent {
@@ -223,6 +285,8 @@ async function createPage(args: { title: string; content?: string; parent_page?:
       parent: parentId ? t("ai.actionCreatedChild", { name: parentName }) : t("ai.actionCreatedRoot"),
     }),
     id: view.id,
+    // 撤销 AI 建的页 = 进回收站（软删），与用户手动删页同一条语义：还能再找回，不是二次销毁
+    undo: { kind: "remove_view", view_id: view.id },
   };
 }
 
@@ -230,7 +294,11 @@ async function setPageTitle(args: { page: string; title: string }): Promise<Writ
   const node = resolvePage(args.page);
   if (!node) return { ok: false, detail: t("ai.toolPageNotFound", { ref: args.page }) };
   await useWorkspaceStore.getState().renameView(node.id, args.title);
-  return { ok: true, detail: t("ai.actionRenamed", { from: node.name, to: args.title }) };
+  return {
+    ok: true,
+    detail: t("ai.actionRenamed", { from: node.name, to: args.title }),
+    undo: { kind: "rename_view", view_id: node.id, name: node.name },
+  };
 }
 
 /** 模型给的任意 JSON 值 → 文本：对象走 JSON 形式，避免 String() 得到 [object Object] */
@@ -321,7 +389,7 @@ async function addDatabaseRow(args: { database: string; cells?: Record<string, u
   const skipped: string[] = [];
   const rejected: string[] = [];
   for (const [key, value] of Object.entries(args.cells ?? {})) {
-    const field = byName.get(key.trim().toLowerCase()) ?? fields.find((f) => f.id === key);
+    const field = pickField(fields, byName, key);
     if (!field) {
       skipped.push(key);
       continue;
@@ -341,6 +409,7 @@ async function addDatabaseRow(args: { database: string; cells?: Record<string, u
     (rejected.length > 0 ? t("ai.actionCellsRejected", { fields: rejected.join(", ") }) : "");
   // 绕开了 database store 的写入口：手动失效 relation 缓存，否则其它库的关联/汇总列看不到这条新行
   useRelationStore.getState().invalidate([node.id]);
+  notifyDatabaseChanged([node.id]);
   return {
     ok: true,
     id: row.id,
@@ -348,13 +417,132 @@ async function addDatabaseRow(args: { database: string; cells?: Record<string, u
       database: node.name,
       fields: written.join(", ") || t("ai.actionRowEmpty"),
     })}${tail}`,
+    // 撤销 AI 加的行 = 彻底删掉它（这行是本次动作凭空造的，进回收站只是留一堆空行垃圾）
+    undo: { kind: "purge_row", database: node.id, row_id: row.id },
+  };
+}
+
+/**
+ * 行引用 → 行 id：先按 id 精确命中，再把引用当作「某一格的文本值」找唯一匹配。
+ * 模型手里只有 query_database 输出的行 id，但它常常顺手写回标题之类，
+ * 因此两条都支持；匹配到多行时必须报错，选错行改的是用户的数据。
+ */
+async function resolveRowId(node: ViewNode, ref: string): Promise<{ row_id: string } | { error: string }> {
+  const rows = await databaseApi.listRows(node.id);
+  const byId = rows.find((r) => r.id === ref);
+  if (byId) return { row_id: byId.id };
+  const wanted = ref.trim().toLowerCase();
+  if (!wanted) return { error: t("ai.toolRowNotFound", { ref }) };
+  const cells = (await databaseApi.loadCells(node.id)) as Record<string, Record<string, CellValue> | undefined>;
+  const matches = rows.filter((r) =>
+    Object.values(cells[r.id] ?? {}).some((v) => typeof v === "string" && v.trim().toLowerCase() === wanted),
+  );
+  if (matches.length === 1) return { row_id: matches[0].id };
+  return {
+    error:
+      matches.length > 1
+        ? t("ai.toolRowAmbiguous", { ref, count: String(matches.length) })
+        : t("ai.toolRowNotFound", { ref }),
+  };
+}
+
+/** 写一格并记下它改前的值（撤销时按这份清单原样盖回去） */
+async function writeCellWithUndo(
+  rowId: string,
+  current: Record<string, CellValue>,
+  field: DatabaseField,
+  raw: unknown,
+): Promise<{ ok: true; reset: { row_id: string; field_id: string; value: CellValue } } | { ok: false }> {
+  const cell = await coerceCell(field, raw);
+  // 与 add_database_row 共用同一道闸门：模型给数字列塞文本、给日期列塞散文时拒写
+  if (isReadonlyType(field.field_type) || !cellWriteTypeSafe(field, cell)) return { ok: false };
+  const reset = { row_id: rowId, field_id: field.id, value: current[field.id] ?? null };
+  await databaseApi.setCell(rowId, field.id, cell);
+  return { ok: true, reset };
+}
+
+/** 找字段：模型给的是字段名（大小写/空白宽容），也接受直接给字段 id */
+function pickField(
+  fields: DatabaseField[],
+  byName: Map<string, DatabaseField>,
+  key: string,
+): DatabaseField | undefined {
+  return byName.get(key.trim().toLowerCase()) ?? fields.find((f) => f.id === key);
+}
+
+/** 改已有行的若干单元格：与加行的差别只在「先读旧值，撤销时写回旧值」 */
+async function updateDatabaseRow(args: {
+  database: string;
+  row: string;
+  cells?: Record<string, unknown>;
+}): Promise<WriteOutcome> {
+  const node = resolvePage(args.database);
+  if (!node) return { ok: false, detail: t("ai.toolPageNotFound", { ref: args.database }) };
+  const found = await resolveRowId(node, args.row);
+  if ("error" in found) return { ok: false, detail: found.error };
+  const fields = await databaseApi.listFields(node.id);
+  const byName = new Map(fields.map((f) => [f.name.trim().toLowerCase(), f]));
+  const current =
+    ((await databaseApi.loadCells(node.id)) as Record<string, Record<string, CellValue> | undefined>)[found.row_id] ??
+    {};
+  const written: string[] = [];
+  const skipped: string[] = [];
+  const rejected: string[] = [];
+  const resets: { row_id: string; field_id: string; value: CellValue }[] = [];
+  for (const [key, value] of Object.entries(args.cells ?? {})) {
+    const field = pickField(fields, byName, key);
+    if (!field) {
+      skipped.push(key);
+      continue;
+    }
+    const done = await writeCellWithUndo(found.row_id, current, field, value);
+    if (!done.ok) {
+      rejected.push(field.name);
+      continue;
+    }
+    resets.push(done.reset);
+    written.push(field.name);
+  }
+  const tail =
+    (skipped.length > 0 ? t("ai.actionCellsSkipped", { fields: skipped.join(", ") }) : "") +
+    (rejected.length > 0 ? t("ai.actionCellsRejected", { fields: rejected.join(", ") }) : "");
+  if (written.length === 0) {
+    // 一格都没写成不能报「成功」：卡片会显示已更新，而用户的表什么都没变
+    return { ok: false, detail: `${t("ai.actionNothingWritten")}${tail}` };
+  }
+  useRelationStore.getState().invalidate([node.id]);
+  notifyDatabaseChanged([node.id]);
+  return {
+    ok: true,
+    id: found.row_id,
+    detail: `${t("ai.actionRowUpdated", { database: node.name, fields: written.join(", ") })}${tail}`,
+    undo: { kind: "reset_cells", database: node.id, items: resets },
+  };
+}
+
+/** 删一行：走回收站（与用户手动删行同一条路径），撤销即 restore 回原位置 */
+async function deleteDatabaseRow(args: { database: string; row: string }): Promise<WriteOutcome> {
+  const node = resolvePage(args.database);
+  if (!node) return { ok: false, detail: t("ai.toolPageNotFound", { ref: args.database }) };
+  const found = await resolveRowId(node, args.row);
+  if ("error" in found) return { ok: false, detail: found.error };
+  await databaseApi.deleteRow(found.row_id);
+  useRelationStore.getState().invalidate([node.id]);
+  notifyDatabaseChanged([node.id]);
+  return {
+    ok: true,
+    id: found.row_id,
+    detail: t("ai.actionRowDeleted", { database: node.name }),
+    undo: { kind: "restore_row", database: node.id, row_id: found.row_id },
   };
 }
 
 export type WriteCall =
   | { tool: "create_page"; args: { title: string; content?: string; parent_page?: string } }
   | { tool: "set_page_title"; args: { page: string; title: string } }
-  | { tool: "add_database_row"; args: { database: string; cells?: Record<string, unknown> } };
+  | { tool: "add_database_row"; args: { database: string; cells?: Record<string, unknown> } }
+  | { tool: "update_database_row"; args: { database: string; row: string; cells?: Record<string, unknown> } }
+  | { tool: "delete_database_row"; args: { database: string; row: string } };
 
 /** 写动作分发（文档编辑 apply_edit 由 stores/ai.ts 走编辑器/JSON 路径，不从这里过） */
 export async function runWriteAction(call: WriteCall): Promise<WriteOutcome & { id?: string }> {
@@ -366,9 +554,56 @@ export async function runWriteAction(call: WriteCall): Promise<WriteOutcome & { 
         return await setPageTitle(call.args);
       case "add_database_row":
         return await addDatabaseRow(call.args);
+      case "update_database_row":
+        return await updateDatabaseRow(call.args);
+      case "delete_database_row":
+        return await deleteDatabaseRow(call.args);
     }
   } catch (e) {
     logger.error("ai-tools: write action failed", call.tool, e);
+    return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * 执行逆操作计划（用户点「撤销」）。与 runWriteAction 一样把界面刷新做掉：
+ * 树的变动走 workspace.reload，表的变动走 notifyDatabaseChanged + relation 失效。
+ */
+export async function runUndoPlan(plan: UndoPlan): Promise<WriteOutcome> {
+  try {
+    switch (plan.kind) {
+      case "remove_view": {
+        await viewApi.softDelete(plan.view_id);
+        await useWorkspaceStore.getState().reload();
+        return { ok: true, detail: t("ai.undoPageRemoved") };
+      }
+      case "rename_view": {
+        await useWorkspaceStore.getState().renameView(plan.view_id, plan.name);
+        return { ok: true, detail: t("ai.undoTitleRestored", { name: plan.name }) };
+      }
+      case "purge_row": {
+        await databaseApi.purgeRow(plan.row_id);
+        useRelationStore.getState().invalidate([plan.database]);
+        notifyDatabaseChanged([plan.database]);
+        return { ok: true, detail: t("ai.undoRowRemoved") };
+      }
+      case "restore_row": {
+        await databaseApi.restoreRow(plan.row_id);
+        useRelationStore.getState().invalidate([plan.database]);
+        notifyDatabaseChanged([plan.database]);
+        return { ok: true, detail: t("ai.undoRowRestored") };
+      }
+      case "reset_cells": {
+        await databaseApi.setCellsMany(
+          plan.items.map((i) => ({ rowId: i.row_id, fieldId: i.field_id, value: i.value })),
+        );
+        useRelationStore.getState().invalidate([plan.database]);
+        notifyDatabaseChanged([plan.database]);
+        return { ok: true, detail: t("ai.undoCellsRestored", { n: String(plan.items.length) }) };
+      }
+    }
+  } catch (e) {
+    logger.error("ai-tools: undo plan failed", plan.kind, e);
     return { ok: false, detail: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -438,6 +673,31 @@ const TOOL_DEFS: { name: string; description: string; parameters: Record<string,
         cells: { type: "object", description: "字段名 → 值" },
       },
       required: ["database"],
+    },
+  },
+  {
+    name: "update_database_row",
+    description: "修改某个表格里已存在的行，只改 cells 里给出的字段。先用 query_database 拿 row。",
+    parameters: {
+      type: "object",
+      properties: {
+        database: { type: "string", description: "表页面 id 或标题" },
+        row: { type: "string", description: "行 id（query_database 每行第一列）；也接受全库唯一的单元格文本" },
+        cells: { type: "object", description: "字段名 → 新值" },
+      },
+      required: ["database", "row"],
+    },
+  },
+  {
+    name: "delete_database_row",
+    description: "删除某个表格里的一行（进回收站，可撤销）。删前先确认行找对了。",
+    parameters: {
+      type: "object",
+      properties: {
+        database: { type: "string", description: "表页面 id 或标题" },
+        row: { type: "string", description: "行 id，或全库唯一的单元格文本" },
+      },
+      required: ["database", "row"],
     },
   },
   {
