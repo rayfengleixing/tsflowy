@@ -8,6 +8,7 @@ import {
   blockSelectionPlugin,
   blockSpanAt,
   buildSpanDeleteTr,
+  buildSpanDuplicateTr,
   buildSpanMoveTr,
   expandSpan,
   isProtectedPos,
@@ -279,5 +280,32 @@ describe("选中状态的存活", () => {
     const inTitle = caret.apply(caret.tr.setSelection(TextSelection.create(caret.doc, 1)));
     expect(spanForAction(inTitle)).toBeNull(); // 光标在 H1：不动结构
     expect(spanForAction(select(caret, span))).toEqual(span);
+  });
+});
+
+describe("buildSpanDuplicateTr：整段就地多插一份", () => {
+  it("复制插在区间之后，原文顺序不动", () => {
+    const state = plainState();
+    const tr = buildSpanDuplicateTr(state, { from: 3, to: 9, count: 2 })!;
+    expect(body(tr.doc)).toEqual(["a", "b", "c", "b", "c", "d"]);
+  });
+
+  it("区间末尾就是文档末尾时照样能插（contentMatchAt 取的是 childCount 位）", () => {
+    const state = plainState();
+    const tr = buildSpanDuplicateTr(state, { from: 6, to: state.doc.content.size, count: 2 })!;
+    expect(body(tr.doc)).toEqual(["a", "b", "c", "d", "c", "d"]);
+  });
+
+  it("选区跟着搬到副本上，连按重复改的是刚插出来的那份", () => {
+    const base = plainState();
+    const state = base.apply(base.tr.setMeta(BLOCK_SELECTION_META, { from: 3, to: 9, count: 2 }));
+    const tr = buildSpanDuplicateTr(state, { from: 3, to: 9, count: 2 })!;
+    expect(BLOCK_SELECTION_KEY.getState(state.apply(tr))).toEqual({ from: 9, to: 15, count: 2 });
+  });
+
+  it("保护区起点、以及夹着半个块的区间都拒绝", () => {
+    const locked = lockedState();
+    expect(buildSpanDuplicateTr(locked, { from: 0, to: 5, count: 2 })).toBeNull();
+    expect(buildSpanDuplicateTr(plainState(), { from: 3, to: 8, count: 2 })).toBeNull();
   });
 });

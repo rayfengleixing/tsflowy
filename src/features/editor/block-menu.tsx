@@ -2,7 +2,6 @@
 // 由 block-drag 扩展在"点击手柄（未拖拽）"时派发 BLOCK_MENU_EVENT 打开，fixed 定位在块旁。
 import { useEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/core";
-import { DOMSerializer } from "@tiptap/pm/model";
 import { toast } from "sonner";
 import {
   AlignCenter,
@@ -14,6 +13,7 @@ import {
   ChevronDown,
   Code2,
   Copy,
+  CopyPlus,
   Heading1,
   Heading2,
   Heading3,
@@ -35,7 +35,8 @@ import { cn } from "@/lib/utils";
 import { t, type MessageKey } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { expandContainerToTextBlocks } from "./block-convert";
-import { deleteBlockSpan, moveBlockSpan } from "./block-ops";
+import { blocksToHtml, writeBlockClipboard } from "./block-clipboard";
+import { copyBlockSpan, cutBlockSpan, deleteBlockSpan, duplicateBlockSpan, moveBlockSpan } from "./block-ops";
 import { BLOCK_SELECTION_META, type BlockSpan } from "./extensions/block-selection";
 import { TEXT_COLORS, HIGHLIGHT_COLORS, SwatchPalette, IconBtn } from "./floating-menu";
 import { clampXToEditor } from "./float-clamp";
@@ -81,39 +82,10 @@ const CONTAINER_TYPES = new Set([
 
 const MENU_WIDTH = 284;
 
-/** 块级复制 / 剪切：纯文本之外再写一份 text/html，否则粘回编辑器（或别的富文本工具）只剩一段没了结构的文字；
- *  图片这类 atom 块的纯文本本来就是空的，HTML 是它唯一能被复制出去的形态。
- *  HTML 走各节点自己的 renderHTML，碰到没定义序列化器的节点会抛，那就退回只给纯文本。 */
+/** 块级复制 / 剪切：序列化与降级都走 block-clipboard，单块和多选粘出来的结构必须一致 */
 async function copyBlock(editor: Editor, pos: number, plain: string): Promise<void> {
   const node = editor.state.doc.nodeAt(pos);
-  let html: string | null = null;
-  if (node) {
-    try {
-      const dom = DOMSerializer.fromSchema(editor.schema).serializeNode(node);
-      const box = document.createElement("div");
-      if (typeof dom === "string") box.textContent = dom;
-      else box.append(dom);
-      html = box.innerHTML;
-    } catch (e) {
-      logger.warn("block html serialize failed", e);
-    }
-  }
-  if (!html) {
-    await navigator.clipboard.writeText(plain);
-    return;
-  }
-  try {
-    await navigator.clipboard.write([
-      new ClipboardItem({
-        "text/plain": new Blob([plain], { type: "text/plain" }),
-        "text/html": new Blob([html], { type: "text/html" }),
-      }),
-    ]);
-  } catch (e) {
-    // WebView2 里没有 ClipboardItem、或写入被拒：退化成纯文本，不能让整个复制失败
-    logger.warn("clipboard write failed, fallback to plain text", e);
-    await navigator.clipboard.writeText(plain);
-  }
+  await writeBlockClipboard(plain, node ? blocksToHtml(editor, [node]) : null);
 }
 
 interface ConvertItem {
@@ -475,6 +447,36 @@ export function BlockMenu() {
             }
           >
             <ArrowDown className="h-4 w-4" />
+          </IconBtn>
+          <IconBtn
+            title={t("block.copySelected")}
+            onClick={() =>
+              act(() => {
+                void copyBlockSpan(editor, span);
+              })
+            }
+          >
+            <Copy className="h-4 w-4" />
+          </IconBtn>
+          <IconBtn
+            title={t("block.cutSelected")}
+            onClick={() =>
+              act(() => {
+                void cutBlockSpan(editor, span);
+              })
+            }
+          >
+            <Scissors className="h-4 w-4" />
+          </IconBtn>
+          <IconBtn
+            title={t("block.duplicateSelected")}
+            onClick={() =>
+              act(() => {
+                if (!duplicateBlockSpan(editor, span)) toast.info(t("block.duplicateBlocked"));
+              })
+            }
+          >
+            <CopyPlus className="h-4 w-4" />
           </IconBtn>
           <IconBtn title={t("block.deleteSelected")} onClick={() => act(() => void deleteBlockSpan(editor, span))}>
             <Trash2 className="h-4 w-4" />

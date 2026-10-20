@@ -144,6 +144,22 @@ export function buildSpanDeleteTr(state: EditorState, span: BlockSpan): Transact
   return tr;
 }
 
+/** 把整段原样再多插一份，插在区间之后；选区跟着搬到副本上，方便连按重复或就地改副本 */
+export function buildSpanDuplicateTr(state: EditorState, span: BlockSpan): Transaction | null {
+  const doc = state.doc;
+  if (span.to > doc.content.size || doc.nodeAt(span.from) === null) return null;
+  if (isProtectedPos(doc, span.from)) return null;
+  const copied = doc.slice(span.from, span.to);
+  if (copied.openStart !== 0 || copied.openEnd !== 0) return null;
+  const tr = state.tr;
+  const $t = tr.doc.resolve(span.to);
+  if (!$t.parent.contentMatchAt($t.index()).matchFragment(copied.content)) return null;
+  tr.insert(span.to, copied.content);
+  const size = span.to - span.from;
+  tr.setMeta(BLOCK_SELECTION_META, { from: span.to, to: span.to + size, count: span.count });
+  return tr;
+}
+
 /** 当前要动哪个区间：有多选就用多选，否则退回光标所在的单个顶层块 */
 export function spanForAction(state: EditorState): BlockSpan | null {
   const stored = BLOCK_SELECTION_KEY.getState(state);

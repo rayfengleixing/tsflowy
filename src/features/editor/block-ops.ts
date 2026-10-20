@@ -6,8 +6,10 @@ import { toast } from "sonner";
 
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
+import { copyRangeToClipboard } from "@/features/editor/block-clipboard";
 import {
   buildSpanDeleteTr,
+  buildSpanDuplicateTr,
   buildSpanMoveTr,
   spanMoveTarget,
   type BlockSpan,
@@ -24,11 +26,11 @@ export function moveBlockSpan(editor: Editor, span: BlockSpan, dir: -1 | 1): boo
 }
 
 /** 删掉整段并给一条可撤销的 toast：区间删除没有 Ctrl+Z 的心理预期，必须当场能回退 */
-export function deleteBlockSpan(editor: Editor, span: BlockSpan): boolean {
+function landSpanDelete(editor: Editor, span: BlockSpan, detail: string): boolean {
   const tr = buildSpanDeleteTr(editor.state, span);
   if (!tr) return false;
   editor.view.dispatch(tr);
-  toast.success(t("block.deletedCount", { count: span.count }), {
+  toast.success(detail, {
     action: {
       label: t("block.undo"),
       onClick: () => {
@@ -41,5 +43,31 @@ export function deleteBlockSpan(editor: Editor, span: BlockSpan): boolean {
       },
     },
   });
+  return true;
+}
+
+export function deleteBlockSpan(editor: Editor, span: BlockSpan): boolean {
+  return landSpanDelete(editor, span, t("block.deletedCount", { count: span.count }));
+}
+
+/** 复制整段：区间夹着半个块（选区落进容器内部）时拒绝，不偷偷补结构 */
+export async function copyBlockSpan(editor: Editor, span: BlockSpan): Promise<boolean> {
+  const ok = await copyRangeToClipboard(editor, span.from, span.to);
+  if (ok) toast.success(t("block.copiedCount", { count: span.count }));
+  return ok;
+}
+
+/** 剪切 = 先写进剪贴板再删；写入失败就什么都不动，否则用户失去的块回不来 */
+export async function cutBlockSpan(editor: Editor, span: BlockSpan): Promise<boolean> {
+  if (!(await copyRangeToClipboard(editor, span.from, span.to))) return false;
+  return landSpanDelete(editor, span, t("block.cutCount", { count: span.count }));
+}
+
+/** 整段就地多插一份，选区跟着搬到副本上（撤销走 Ctrl+Z，不占 toast） */
+export function duplicateBlockSpan(editor: Editor, span: BlockSpan): boolean {
+  const tr = buildSpanDuplicateTr(editor.state, span);
+  if (!tr) return false;
+  editor.view.dispatch(tr.scrollIntoView());
+  toast.success(t("block.duplicatedCount", { count: span.count }));
   return true;
 }
