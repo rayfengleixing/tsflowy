@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Check, Plus, ExternalLink, LayoutList } from "lucide-react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
+import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
 import { NO_GROUP, cellValueForGroup, defaultBoardField, groupRowsForBoard } from "@/lib/board-calendar";
@@ -44,6 +45,8 @@ export function BoardView({
   onGoGrid?: () => void;
 }) {
   const store = useDbStore();
+  // 筛选/排序条（与表格视图同一份按视图持久化的配置）
+  const bar = useQueryBar();
   const load = useDbStore((s) => s.load);
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
@@ -179,6 +182,7 @@ export function BoardView({
         <div className="flex min-w-0 flex-1 items-center">{tabs}</div>
 
         <div className="flex shrink-0 items-center gap-1">
+          <QueryButtons bar={bar} />
           {/* 分组字段切换 */}
           <div className="flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700">
             <span className="text-neutral-500">{t("board.groupBy")}:</span>
@@ -230,6 +234,8 @@ export function BoardView({
           </Button>
         </div>
       </div>
+
+      <QueryPanels bar={bar} />
 
       {/* 空态：没有单选字段 */}
       {!groupField ? (

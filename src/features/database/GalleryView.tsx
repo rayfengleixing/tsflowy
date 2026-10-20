@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ImageOff, LayoutList, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
+import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
 import { attachmentRefs, formatCellValue, parseFieldOptions } from "@/lib/database-values";
@@ -46,6 +47,8 @@ export function GalleryView({
   onGoGrid?: () => void;
 }) {
   const store = useDbStore();
+  // 筛选/排序条（与表格视图同一份按视图持久化的配置）
+  const bar = useQueryBar();
   const load = useDbStore((s) => s.load);
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
@@ -128,6 +131,7 @@ export function GalleryView({
         <div className="flex min-w-0 flex-1 items-center">{tabs}</div>
 
         <div className="flex shrink-0 items-center gap-1">
+          <QueryButtons bar={bar} />
           <div className="flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700">
             <span className="text-neutral-500">{t("gallery.coverField")}:</span>
             <select
@@ -176,6 +180,8 @@ export function GalleryView({
           </Button>
         </div>
       </div>
+
+      <QueryPanels bar={bar} />
 
       {!coverField ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">

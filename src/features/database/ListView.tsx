@@ -2,6 +2,7 @@ import { useEffect, useMemo } from "react";
 import { ExternalLink, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
+import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
@@ -34,6 +35,8 @@ export function ListView({
   tabs?: React.ReactNode;
 }) {
   const store = useDbStore();
+  // 筛选/排序条（与表格视图同一份按视图持久化的配置）
+  const bar = useQueryBar();
   const load = useDbStore((s) => s.load);
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
@@ -84,6 +87,7 @@ export function ListView({
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-neutral-200 px-6">
         <div className="flex min-w-0 flex-1 items-center">{tabs}</div>
         <div className="flex shrink-0 items-center gap-2">
+          <QueryButtons bar={bar} />
           <span className="text-xs text-neutral-400">{displayRows.length}</span>
           <Button variant="ghost" size="sm" onClick={() => void addRow()}>
             <Plus className="h-3.5 w-3.5" />
@@ -91,6 +95,8 @@ export function ListView({
           </Button>
         </div>
       </div>
+
+      <QueryPanels bar={bar} />
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto">
         {displayRows.length === 0 ? (

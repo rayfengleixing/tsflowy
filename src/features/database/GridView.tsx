@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   Archive,
-  ArrowUpDown,
   CheckSquare,
   Copy,
   Download,
   FileUp,
   FileSpreadsheet,
-  Filter,
   GripVertical,
   Palette,
   Square,
@@ -24,7 +22,7 @@ import { useDbStore, useDbStoreApi } from "@/stores/database-context";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { viewApi, newId } from "@/lib/db";
 import { isOptionBearing, formatCellValue, parseFieldOptions } from "@/lib/database-values";
-import { MAX_GROUP_DEPTH, cellAt, countFilterLeaves, type SortSpec } from "@/lib/database-query";
+import { MAX_GROUP_DEPTH, cellAt, type SortSpec } from "@/lib/database-query";
 import type { AggregateFn } from "@/lib/database-aggregate";
 import { buildCondIndex, type CondFormatRule } from "@/lib/database-cond-format";
 import {
@@ -57,8 +55,7 @@ import {
 import { hierarchyLines, parentCandidates } from "@/lib/database-hierarchy";
 import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
-import { FilterBar } from "./FilterBar";
-import { SortBar } from "./SortBar";
+import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { AggregateMenu } from "./AggregateMenu";
 import { useRowFocus } from "./rowFocus";
 import { RowDetailPanel } from "./RowDetail";
@@ -104,15 +101,14 @@ export function GridView({
   const store = useDbStore();
   const storeApi = useDbStoreApi();
   const load = useDbStore((s) => s.load);
-  const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
+  const { fields, rows, cells, loading, sorts, rowDetail } = store;
   const { closeRowDetail } = store;
 
   const [editing, setEditing] = useState<{ rowId: string; fieldId: string } | null>(null);
   const [renamingField, setRenamingField] = useState<string | null>(null);
   const [optionsEditorFor, setOptionsEditorFor] = useState<DatabaseField | null>(null);
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
-  const [filterOpen, setFilterOpen] = useState(false);
-  const [sortOpen, setSortOpen] = useState(false);
+  const bar = useQueryBar();
   // 待确认删除的行（删行=进回收站，确认后仍可在「回收站」里恢复）
   const [deleteRowTarget, setDeleteRowTarget] = useState<DatabaseRow | null>(null);
   const [rowTrashOpen, setRowTrashOpen] = useState(false);
@@ -1137,32 +1133,7 @@ export function GridView({
               <span className="ml-1 rounded-full bg-brand-500 px-1.5 text-[10px] text-white">{condFormats.length}</span>
             )}
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setFilterOpen((v) => !v)}
-            className={cn(filterOpen && "bg-brand-100 text-brand-600")}
-          >
-            <Filter className="h-3.5 w-3.5" />
-            {t("filter.title")}
-            {countFilterLeaves(filters) > 0 && (
-              <span className="ml-1 rounded-full bg-brand-500 px-1.5 text-[10px] text-white">
-                {countFilterLeaves(filters)}
-              </span>
-            )}
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setSortOpen((v) => !v)}
-            className={cn(sortOpen && "bg-brand-100 text-brand-600")}
-          >
-            <ArrowUpDown className="h-3.5 w-3.5" />
-            {t("sort.title")}
-            {sorts.length > 0 && (
-              <span className="ml-1 rounded-full bg-brand-500 px-1.5 text-[10px] text-white">{sorts.length}</span>
-            )}
-          </Button>
+          <QueryButtons bar={bar} />
           <Button variant="ghost" size="sm" onClick={importCsv}>
             <FileUp className="h-3.5 w-3.5" />
             {t("csv.import")}
@@ -1178,19 +1149,7 @@ export function GridView({
         </div>
       </div>
 
-      {filterOpen && (
-        <FilterBar
-          fields={fields}
-          filters={filters}
-          mode={filterMode}
-          onChange={store.setFilters}
-          onClose={() => setFilterOpen(false)}
-        />
-      )}
-
-      {sortOpen && (
-        <SortBar fields={fields} sorts={sorts} onChange={store.setSorts} onClose={() => setSortOpen(false)} />
-      )}
+      <QueryPanels bar={bar} />
 
       {/* 表格（横向滚动；TSV 剪贴板粘贴见 onPasteTsv） */}
       <div
