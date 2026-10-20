@@ -11,8 +11,8 @@ use tauri::State;
 
 use crate::db::{
     self, BacklinkRow, CellLoadRow, CellSetIn, CsvFieldIn, CsvRowIn, DatabaseFieldRow,
-    DatabaseRowRow, Db, DocRowOut, MatchedDocOut, MentionRowIn, PagePropertyOut, SearchRowOut,
-    TrashRowOut, ViewRow, WorkspaceRow,
+    DatabaseRowRow, Db, DocRowOut, MatchedDocOut, MentionRowIn, PagePropertyOut, RelationPairOut,
+    SearchRowOut, TrashRowOut, ViewRow, WorkspaceRow,
 };
 
 // ---------- 命令入口参数校验 ----------
@@ -635,6 +635,29 @@ pub async fn field_update_options(
 ) -> Result<(), String> {
     let conn = db.write_conn()?;
     db::database::update_field_options(&conn, &field_id, &options)
+}
+
+/// 关联列选定/改指目标表：在对端建（或复用）那条反向关系列，返回写回后的本列 + 反向列 id。
+/// 两张表的写入必须原子，所以不能拆成「前端先 field_update_options 再建列」两步。
+#[tauri::command]
+pub async fn field_pair_relation(
+    db: State<'_, Db>,
+    field_id: String,
+    target_view_id: String,
+    reverse_id: String,
+    reverse_name: String,
+) -> Result<RelationPairOut, String> {
+    check_id(&field_id)?;
+    check_id(&reverse_id)?;
+    check_name(&reverse_name)?;
+    let conn = db.write_conn()?;
+    db::database::pair_relation_field(
+        &conn,
+        &field_id,
+        &target_view_id,
+        &reverse_id,
+        &reverse_name,
+    )
 }
 
 #[tauri::command]

@@ -6,6 +6,7 @@ const api = vi.hoisted(() => ({
   loadCells: vi.fn(),
   renameField: vi.fn(),
   updateFieldOptions: vi.fn(),
+  pairRelationTarget: vi.fn(),
   setCell: vi.fn(),
   deleteRow: vi.fn(),
   deleteRows: vi.fn(),
@@ -17,12 +18,14 @@ const api = vi.hoisted(() => ({
   setCellsMany: vi.fn(),
 }));
 const toastError = vi.hoisted(() => vi.fn());
+const toastSuccess = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/database", () => ({ databaseApi: api }));
 vi.mock("@/lib/view-config", () => ({ readViewConfig: () => ({}), patchViewConfig: vi.fn() }));
-vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { error: toastError, success: toastSuccess } }));
 
 import { bindDatabaseChanges, createDatabaseStore, useDatabaseStore } from "@/stores/database";
+import { useRelationStore } from "@/stores/relation";
 import { notifyDatabaseChanged } from "@/lib/database-changed";
 import type { DatabaseField, DatabaseRow, DatabaseTrashRow } from "@/types/database";
 import type { View } from "@/types/models";
@@ -480,5 +483,91 @@ describe("外部改库通知（AI 的写动作绕开本 store 直接落库）", 
     notifyDatabaseChanged(["host1"]);
     await new Promise((r) => setTimeout(r, 0));
     expect(api.listFields).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("关联列改目标表：与对端反向列一起落库", () => {
+  const relField = (target: string): DatabaseField => ({
+    id: "f-rel",
+    database_view_id: "v1",
+    name: "项目",
+    field_type: "relation",
+    options: JSON.stringify({ kind: "relation", target_view_id: target }),
+    width: 180,
+    is_hidden: 0,
+    position: 0,
+  });
+
+  /** Rust 侧写回后的本列（target_view_id 已折算成宿主 id，paired_field_id 由它生成） */
+  const pairedField = (reverseId: string): DatabaseField => ({
+    ...relField("v2"),
+    options: JSON.stringify({ kind: "relation", target_view_id: "v2", paired_field_id: reverseId }),
+  });
+
+  const optionsIn = (field: DatabaseField): Record<string, unknown> =>
+    JSON.parse(field.options) as Record<string, unknown>;
+
+  const arm = (fields: DatabaseField[]) => {
+    useRelationStore.setState({ data: { v2: { fields: [], rows: [], cells: {} } }, revision: 0 });
+    useDatabaseStore.setState({ viewId: "v1", view: view("v1"), fields, cells: {}, rows: [] });
+  };
+
+  it("走配对命令而不是单独写本列（两步写会留半配对）", async () => {
+    const store = useDatabaseStore;
+    arm([relField("")]);
+    api.pairRelationTarget.mockImplementation((_f: string, _t: string, reverseId: string) =>
+      Promise.resolve({ relation_field: pairedField(reverseId), reverse_field_id: reverseId }),
+    );
+
+    await store.getState().updateFieldOptions("f-rel", { kind: "relation", target_view_id: "v2" });
+
+    expect(api.updateFieldOptions).not.toHaveBeenCalled();
+    const [fieldId, targetViewId, reverseId, reverseName] = api.pairRelationTarget.mock.calls[0] as [
+      string,
+      string,
+      string,
+      string,
+    ];
+    expect([fieldId, targetViewId, reverseName]).toEqual(["f-rel", "v2", "项目"]); // 反向列沿用本列名
+    expect(typeof reverseId).toBe("string");
+    expect(optionsIn(store.getState().fields[0]).paired_field_id).toBe(reverseId);
+    // 对端表多了一条列：它在 relation 缓存里的旧快照必须失效
+    expect(useRelationStore.getState().data.v2).toBeUndefined();
+    expect(toastSuccess).toHaveBeenCalledWith(expect.stringContaining("项目"));
+  });
+
+  it("复用对端已有反向列时不提示「已新建」", async () => {
+    const store = useDatabaseStore;
+    arm([relField("v2")]);
+    api.pairRelationTarget.mockResolvedValue({ relation_field: pairedField("rv-old"), reverse_field_id: "rv-old" });
+
+    await store.getState().updateFieldOptions("f-rel", { kind: "relation", target_view_id: "v2" });
+
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(store.getState().fields[0].id).toBe("f-rel");
+  });
+
+  it("配对失败保留原配置，不乐观写入新目标", async () => {
+    const store = useDatabaseStore;
+    const original = relField("");
+    arm([original]);
+    api.pairRelationTarget.mockRejectedValue(new Error("目标表不存在"));
+
+    await store.getState().updateFieldOptions("f-rel", { kind: "relation", target_view_id: "v9" });
+
+    expect(toastError).toHaveBeenCalledWith(expect.stringContaining("目标表不存在"));
+    expect(store.getState().fields[0]).toBe(original);
+    expect(optionsIn(store.getState().fields[0]).target_view_id).toBe("");
+  });
+
+  it("未选目标表时仍按普通 options 保存（没有对端可配对）", async () => {
+    const store = useDatabaseStore;
+    arm([relField("v2")]);
+    api.updateFieldOptions.mockResolvedValue(undefined);
+
+    await store.getState().updateFieldOptions("f-rel", { kind: "relation", target_view_id: "" });
+
+    expect(api.pairRelationTarget).not.toHaveBeenCalled();
+    expect(api.updateFieldOptions).toHaveBeenCalledTimes(1);
   });
 });

@@ -137,7 +137,7 @@ export type FieldOptions =
   | { kind: "rating"; max: number } // rating 字段：满星数（默认 5）
   | { kind: "date"; include_time: boolean }
   | { kind: "formula"; formula: string } // 公式表达式，字段引用用 {字段名}
-  | { kind: "relation"; target_view_id: string } // 引用的目标视图（宿主 view id）
+  | { kind: "relation"; target_view_id: string; paired_field_id?: string } // 引用的目标视图（宿主 view id）+ 对端自动配出来的反向列
   | {
       kind: "rollup";
       relation_field_id: string; // 本表上的 relation 字段

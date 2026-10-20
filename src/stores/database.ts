@@ -11,7 +11,7 @@ import { databaseApi } from "@/lib/database";
 import { onDatabaseChanged } from "@/lib/database-changed";
 import { cellWriteTypeSafe, newSelectOption, parseFieldOptions, sameCellValue } from "@/lib/database-values";
 import { renameFormulaRef } from "@/lib/database-formula";
-import { viewApi } from "@/lib/db";
+import { newId, viewApi } from "@/lib/db";
 import { useRelationStore } from "@/stores/relation";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
@@ -144,6 +144,36 @@ async function clearRemovedOptionRefs(
 function hasDuplicateName(fields: DatabaseField[], name: string, exceptId: string | null): boolean {
   const key = name.trim().toLowerCase();
   return fields.some((f) => f.id !== exceptId && f.name.trim().toLowerCase() === key);
+}
+
+/**
+ * 关联列选定/改指目标表：本列 options 与对端的反向关系列必须一起落库，所以走单命令事务，
+ * 而不是「先写本列、再建对端列」两步——中间失败就留下指向对端、对端没有回指列的半配对。
+ * 传进去的 reverseId 只在这次真的建了新列时才落库：返回值里的反向列 id 等于它 = 新建，否则是复用旧列。
+ * 失败不做乐观更新：半配对的列在界面上看着正常、数据其实没写，比一条报错更难查。
+ */
+async function pairRelationTarget(
+  set: (partial: Partial<DatabaseState>) => void,
+  get: () => DatabaseState,
+  field: DatabaseField,
+  targetViewId: string,
+) {
+  const reverseId = newId();
+  let out: Awaited<ReturnType<typeof databaseApi.pairRelationTarget>>;
+  try {
+    out = await databaseApi.pairRelationTarget(field.id, targetViewId, reverseId, field.name);
+  } catch (err) {
+    logger.error("relation.pair", err);
+    toast.error(t("field.pairFailed", { message: String(err) }));
+    return;
+  }
+  set({ fields: get().fields.map((f) => (f.id === field.id ? out.relation_field : f)) });
+  // 目标表多了一条（或换了）反向列：它在 relation 缓存里的快照要重拉，否则对端看不到新列
+  const targetHost = parseFieldOptions(out.relation_field.options);
+  if (targetHost.kind === "relation" && targetHost.target_view_id) {
+    useRelationStore.getState().invalidate([targetHost.target_view_id]);
+  }
+  if (out.reverse_field_id === reverseId) toast.success(t("field.reverseCreated", { name: field.name }));
 }
 
 export type DatabaseStore = ReturnType<typeof createDatabaseStore>;
@@ -371,6 +401,12 @@ export function createDatabaseStore() {
 
       updateFieldOptions: async (id, options) => {
         const before = get().fields.find((f) => f.id === id);
+        // 关联列的所有 options 保存都改走配对命令：它写的就是同一份 options（外加 paired_field_id），
+        // 绕过去单独保存会把配对信息静默抹掉，下次改目标表就会重复建列。
+        if (before?.field_type === "relation" && options.kind === "relation" && options.target_view_id) {
+          await pairRelationTarget(set, get, before, options.target_view_id);
+          return;
+        }
         await databaseApi.updateFieldOptions(id, options);
         set({ fields: get().fields.map((f) => (f.id === id ? { ...f, options: JSON.stringify(options) } : f)) });
         if (!before) return;

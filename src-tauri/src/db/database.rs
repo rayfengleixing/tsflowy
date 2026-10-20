@@ -1,7 +1,8 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::models::{
-    CellLoadRow, CellSetIn, CsvFieldIn, CsvRowIn, DatabaseFieldRow, DatabaseRowRow, TrashRowOut,
+    CellLoadRow, CellSetIn, CsvFieldIn, CsvRowIn, DatabaseFieldRow, DatabaseRowRow,
+    RelationPairOut, TrashRowOut,
 };
 use super::views::data_view_id;
 use super::views::trash::{purge_within, with_recursive_subtree};
@@ -158,12 +159,201 @@ pub fn rename_field(conn: &Connection, field_id: &str, name: &str) -> Result<(),
 }
 
 pub fn delete_field(conn: &Connection, field_id: &str) -> Result<(), String> {
-    conn.execute(
+    // 关联列删掉时，它自动配出去、且对端没改过配置的反向列一并删掉：
+    // 反向列的来源字段就是这条关联列，留着只会变成一排恒为空的僵尸列。
+    let paired = untouched_paired_reverse(conn, field_id)?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(dberr("delete field"))?;
+    if let Some(pid) = paired {
+        tx.execute("DELETE FROM database_fields WHERE id = ?1", params![pid])
+            .map_err(dberr("delete field (paired reverse)"))?; // cells 同样 FK 级联
+    }
+    tx.execute(
         "DELETE FROM database_fields WHERE id = ?1",
         params![field_id],
     )
     .map_err(dberr("delete field"))?; // cells 经 FK 级联
+    tx.commit().map_err(dberr("delete field (commit)"))?;
     Ok(())
+}
+
+/// 这条字段自动配对出去、且对端没改过配置的反向列 id；没有则 None。
+/// 「没改过」只看到 options 层面：对端一旦重指了来源表/来源字段就不再是我们的配对。
+fn untouched_paired_reverse(conn: &Connection, field_id: &str) -> Result<Option<String>, String> {
+    let own: Option<(String, String)> = conn
+        .query_row(
+            "SELECT database_view_id, options FROM database_fields WHERE id = ?1",
+            params![field_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(dberr("delete field (read paired)"))?;
+    let Some((own_view_id, options)) = own else {
+        return Ok(None);
+    };
+    let Some(paired_id) = paired_field_id(&options) else {
+        return Ok(None);
+    };
+    let source_host = data_view_id(conn, &own_view_id)?;
+    let back: Option<String> = conn
+        .query_row(
+            "SELECT options FROM database_fields WHERE id = ?1",
+            params![&paired_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(dberr("delete field (read reverse)"))?;
+    let Some(reverse_options) = back else {
+        return Ok(None);
+    };
+    Ok(untouched_reverse_options(&reverse_options, &source_host, field_id).then_some(paired_id))
+}
+
+/// 关联列 options 里的 paired_field_id（缺省/空串都算没配对）
+fn paired_field_id(options: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(options)
+        .ok()?
+        .get("paired_field_id")?
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// 反向关系列的 options 是否仍然「只回指 source_view_id 的 source_field_id」——
+/// 也就是建出来之后没人动过配置。配对/解配对只敢碰这种列。
+fn untouched_reverse_options(options: &str, source_view_id: &str, source_field_id: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(options) else {
+        return false;
+    };
+    let read = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    read("kind").as_deref() == Some("reverse_relation")
+        && read("source_view_id").as_deref() == Some(source_view_id)
+        && read("source_field_id").as_deref() == Some(source_field_id)
+}
+
+/// 关联列选定/改指目标表：在对端表建一条反向关系列，并把 paired_field_id 写回本列。
+/// 两张表的写入必须在一个事务里——只成功一半就留下「本列指向对端、对端没有回指列」的半配对。
+/// 已经配对且对端没改过配置时复用那条列：反复打开字段设置不该堆出一排同义列。
+/// 换目标表时旧的反向列保持原样（它可能已被改名、被公式引用），只把配对指针挪到新列上。
+pub fn pair_relation_field(
+    conn: &Connection,
+    field_id: &str,
+    target_view_id: &str,
+    reverse_id: &str,
+    reverse_name: &str,
+) -> Result<RelationPairOut, String> {
+    let (own_view_id, field_type, options): (String, String, String) = conn
+        .query_row(
+            "SELECT database_view_id, field_type, options FROM database_fields WHERE id = ?1",
+            params![field_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(dberr("pair relation (read field)"))?
+        .ok_or_else(|| format!("配对反向列失败：字段 {field_id} 不存在"))?;
+    if field_type != "relation" {
+        return Err(format!("字段 {field_id} 不是关联列，不能配对反向列"));
+    }
+    if target_view_id.trim().is_empty() {
+        return Err("关联列还没有选择目标表，不能配对反向列".to_string());
+    }
+    let source_host = data_view_id(conn, &own_view_id)?;
+    let target_host = data_view_id(conn, target_view_id)?;
+    // data_view_id 对不存在的视图原样返回，所以目标表是否真存在要单独确认一次
+    let target_exists: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM views WHERE id = ?1",
+            params![&target_host],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(dberr("pair relation (check target)"))?;
+    if target_exists.is_none() {
+        return Err(format!("配对反向列失败：目标表 {target_view_id} 不存在"));
+    }
+
+    let existing_paired = paired_field_id(&options);
+    // 旧的配对列三种去处：仍在本次目标表里、且没人改过配置 → 复用；
+    // 是我们建出来但已经换到别的表了 → 删掉（指向的关联列不再落在它头上，留着只会是一排恒空僵尸列）；
+    // 配置被改过 → 原样留着（可能已被改名或被公式引用，动它等于毁用户的数据）。
+    let mut reuse_reverse_id = String::new();
+    let mut stale_reverse_id: Option<String> = None;
+    if let Some(paired_id) = existing_paired {
+        let existing: Option<(String, String)> = conn
+            .query_row(
+                "SELECT database_view_id, options FROM database_fields WHERE id = ?1",
+                params![&paired_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(dberr("pair relation (read paired)"))?;
+        if let Some((vid, opts)) = existing {
+            if untouched_reverse_options(&opts, &source_host, field_id) {
+                if vid == target_host {
+                    reuse_reverse_id = paired_id;
+                } else {
+                    stale_reverse_id = Some(paired_id);
+                }
+            }
+        }
+    }
+
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(dberr("pair relation"))?;
+    if let Some(sid) = &stale_reverse_id {
+        tx.execute("DELETE FROM database_fields WHERE id = ?1", params![sid])
+            .map_err(dberr("pair relation (drop stale reverse)"))?; // cells 经 FK 级联
+    }
+    let reverse_field_id = if !reuse_reverse_id.is_empty() {
+        reuse_reverse_id
+    } else {
+        let reverse_options = serde_json::json!({
+            "kind": "reverse_relation",
+            "source_view_id": source_host,
+            "source_field_id": field_id,
+        })
+        .to_string();
+        let position = next_position(&tx, "database_fields", &target_host)?;
+        tx.execute(
+            "INSERT INTO database_fields(id, database_view_id, name, field_type, options, width, is_hidden, position)
+             VALUES (?1, ?2, ?3, 'reverse_relation', ?4, 180, 0, ?5)",
+            params![reverse_id, target_host, reverse_name, reverse_options, position],
+        )
+        .map_err(dberr("pair relation (create reverse)"))?;
+        reverse_id.to_string()
+    };
+    let relation_options = serde_json::json!({
+        "kind": "relation",
+        "target_view_id": target_host,
+        "paired_field_id": reverse_field_id,
+    })
+    .to_string();
+    tx.execute(
+        "UPDATE database_fields SET options = ?1 WHERE id = ?2",
+        params![relation_options, field_id],
+    )
+    .map_err(dberr("pair relation (write options)"))?;
+    tx.commit().map_err(dberr("pair relation (commit)"))?;
+
+    let relation_field = conn
+        .query_row(
+            "SELECT id, database_view_id, name, field_type, options, width, is_hidden, position
+             FROM database_fields WHERE id = ?1",
+            params![field_id],
+            field_from_row,
+        )
+        .map_err(dberr("pair relation (reload field)"))?;
+    Ok(RelationPairOut {
+        relation_field,
+        reverse_field_id,
+    })
 }
 
 pub fn set_field_width(conn: &Connection, field_id: &str, width: i64) -> Result<(), String> {
@@ -1243,6 +1433,201 @@ mod tests {
         delete_field(&conn, "f1").unwrap();
         assert!(list_fields(&conn, "v1").unwrap().is_empty());
         assert!(load_cells(&conn, "v1").unwrap().is_empty());
+    }
+
+    // ---------- 关联列自动配对反向列 ----------
+
+    fn add_view(conn: &Connection, id: &str, name: &str, source_id: Option<&str>) {
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at, source_id)
+             VALUES (?1, 'w1', NULL, ?2, 'grid', '{}', 0, 1, 1, ?3)",
+            params![id, name, source_id],
+        )
+        .unwrap();
+    }
+
+    fn options_of(conn: &Connection, field_id: &str) -> serde_json::Value {
+        let raw: String = conn
+            .query_row(
+                "SELECT options FROM database_fields WHERE id = ?1",
+                params![field_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        serde_json::from_str(&raw).unwrap()
+    }
+
+    fn count_fields(conn: &Connection, view_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM database_fields WHERE database_view_id = ?1",
+            params![view_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn view_of_field(conn: &Connection, field_id: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT database_view_id FROM database_fields WHERE id = ?1",
+            params![field_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .unwrap()
+    }
+
+    #[test]
+    fn pair_relation_creates_reverse_column_on_target() {
+        let conn = setup();
+        add_view(&conn, "v2", "对端", None);
+        create_field(&conn, "v1", "f1", "relation", Some("项目")).unwrap();
+
+        let out = pair_relation_field(&conn, "f1", "v2", "rv1", "反向").unwrap();
+
+        assert_eq!(out.reverse_field_id, "rv1");
+        assert_eq!(
+            out.relation_field.options,
+            options_of(&conn, "f1").to_string()
+        );
+        let rel = options_of(&conn, "f1");
+        assert_eq!(rel["kind"], "relation");
+        assert_eq!(rel["target_view_id"], "v2");
+        assert_eq!(rel["paired_field_id"], "rv1");
+        // 反向列落在目标表上，类型与配置都要能直接被反向关系渲染认账
+        assert_eq!(view_of_field(&conn, "rv1").as_deref(), Some("v2"));
+        let rev = options_of(&conn, "rv1");
+        assert_eq!(rev["kind"], "reverse_relation");
+        assert_eq!(rev["source_view_id"], "v1");
+        assert_eq!(rev["source_field_id"], "f1");
+        let rev_type: String = conn
+            .query_row(
+                "SELECT field_type FROM database_fields WHERE id = 'rv1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rev_type, "reverse_relation");
+        assert_eq!(count_fields(&conn, "v2"), 1);
+    }
+
+    #[test]
+    fn pair_relation_reuses_untouched_reverse_column() {
+        let conn = setup();
+        add_view(&conn, "v2", "对端", None);
+        create_field(&conn, "v1", "f1", "relation", Some("项目")).unwrap();
+        pair_relation_field(&conn, "f1", "v2", "rv1", "反向").unwrap();
+
+        // 反复打开字段设置（或同一次会话里再保存一遍）不该在对端堆出同义列
+        let out = pair_relation_field(&conn, "f1", "v2", "rv2", "反向").unwrap();
+        assert_eq!(out.reverse_field_id, "rv1");
+        assert_eq!(options_of(&conn, "f1")["paired_field_id"], "rv1");
+        assert_eq!(count_fields(&conn, "v2"), 1);
+        assert_eq!(view_of_field(&conn, "rv2"), None);
+    }
+
+    #[test]
+    fn pair_retarget_drops_the_zombie_reverse_column() {
+        let conn = setup();
+        add_view(&conn, "v2", "旧对端", None);
+        add_view(&conn, "v3", "新对端", None);
+        create_field(&conn, "v1", "f1", "relation", Some("项目")).unwrap();
+        pair_relation_field(&conn, "f1", "v2", "rv1", "反向").unwrap();
+
+        let out = pair_relation_field(&conn, "f1", "v3", "rv2", "反向").unwrap();
+
+        assert_eq!(out.reverse_field_id, "rv2");
+        assert_eq!(view_of_field(&conn, "rv1"), None, "改指后旧反向列已失效");
+        assert_eq!(count_fields(&conn, "v2"), 0);
+        assert_eq!(view_of_field(&conn, "rv2").as_deref(), Some("v3"));
+        assert_eq!(options_of(&conn, "f1")["target_view_id"], "v3");
+    }
+
+    #[test]
+    fn pair_retarget_keeps_a_customized_reverse_column() {
+        let conn = setup();
+        add_view(&conn, "v2", "旧对端", None);
+        add_view(&conn, "v3", "新对端", None);
+        create_field(&conn, "v1", "f1", "relation", Some("项目")).unwrap();
+        pair_relation_field(&conn, "f1", "v2", "rv1", "反向").unwrap();
+        // 用户改了这条反向列的配置（这里改成指向另一个来源字段）：它已经是用户的数据，不能删
+        update_field_options(
+            &conn,
+            "rv1",
+            r#"{"kind":"reverse_relation","source_view_id":"v1","source_field_id":"other"}"#,
+        )
+        .unwrap();
+
+        let out = pair_relation_field(&conn, "f1", "v3", "rv2", "反向").unwrap();
+
+        assert_eq!(out.reverse_field_id, "rv2");
+        assert_eq!(view_of_field(&conn, "rv1").as_deref(), Some("v2"));
+    }
+
+    #[test]
+    fn pair_relation_rejects_bad_targets() {
+        let conn = setup();
+        add_view(&conn, "v2", "对端", None);
+        create_field(&conn, "v1", "f1", "text", None).unwrap();
+        create_field(&conn, "v1", "f2", "relation", None).unwrap();
+
+        let not_relation = pair_relation_field(&conn, "f1", "v2", "rv1", "反向").unwrap_err();
+        assert!(not_relation.contains("不是关联列"), "{not_relation}");
+        let missing = pair_relation_field(&conn, "f2", "v9", "rv1", "反向").unwrap_err();
+        assert!(missing.contains("不存在"), "{missing}");
+        let empty = pair_relation_field(&conn, "f2", "", "rv1", "反向").unwrap_err();
+        assert!(empty.contains("还没有选择目标表"), "{empty}");
+        assert_eq!(count_fields(&conn, "v2"), 0, "失败不该留下半配对");
+    }
+
+    #[test]
+    fn pair_relation_folds_derived_target_view_to_host() {
+        let conn = setup();
+        add_view(&conn, "v2", "宿主表", None);
+        add_view(&conn, "v2d", "派生视图", Some("v2"));
+        create_field(&conn, "v1", "f1", "relation", None).unwrap();
+
+        let out = pair_relation_field(&conn, "f1", "v2d", "rv1", "反向").unwrap();
+
+        // 数据和反向列都只挂宿主：派生视图背后没有独立的字段表
+        assert_eq!(view_of_field(&conn, "rv1").as_deref(), Some("v2"));
+        assert_eq!(options_of(&conn, "f1")["target_view_id"], "v2");
+        assert_eq!(out.reverse_field_id, "rv1");
+    }
+
+    #[test]
+    fn delete_relation_field_removes_untouched_paired_reverse() {
+        let conn = setup();
+        add_view(&conn, "v2", "对端", None);
+        create_field(&conn, "v1", "f1", "relation", Some("项目")).unwrap();
+        pair_relation_field(&conn, "f1", "v2", "rv1", "反向").unwrap();
+        create_row(&conn, "v2", "t1", None).unwrap();
+        set_cell(&conn, "t1", "rv1", r#"["r1"]"#).unwrap();
+
+        delete_field(&conn, "f1").unwrap();
+
+        assert_eq!(view_of_field(&conn, "rv1"), None);
+        assert_eq!(count_fields(&conn, "v2"), 0);
+        // 反向列的单元格随列一起走 FK 级联
+        assert!(load_cells(&conn, "v2").unwrap().is_empty());
+    }
+
+    #[test]
+    fn delete_relation_field_keeps_customized_paired_reverse() {
+        let conn = setup();
+        add_view(&conn, "v2", "对端", None);
+        create_field(&conn, "v1", "f1", "relation", Some("项目")).unwrap();
+        pair_relation_field(&conn, "f1", "v2", "rv1", "反向").unwrap();
+        rename_field(&conn, "rv1", "谁关联了我").unwrap();
+        update_field_options(
+            &conn,
+            "rv1",
+            r#"{"kind":"reverse_relation","source_view_id":"v9","source_field_id":"f1"}"#,
+        )
+        .unwrap();
+
+        delete_field(&conn, "f1").unwrap();
+
+        assert_eq!(view_of_field(&conn, "rv1").as_deref(), Some("v2"));
     }
 
     // ---------- 行 ----------

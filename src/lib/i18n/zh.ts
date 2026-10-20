@@ -348,6 +348,8 @@ export const zh = {
   "field.relationTarget": "关联到",
   "field.relationHint":
     "选好目标表后，在单元格里点击即可搜索并选择要关联的目标行（可选多行）。目标行被删除时会自动显示「行已删除」。",
+  "field.reverseCreated": "已在目标表建好反向关系列「{name}」",
+  "field.pairFailed": "关联列配对失败：{message}",
   "field.rollupRelation": "关联字段",
   "field.rollupTarget": "汇总字段",
   "field.rollupFn": "汇总方式",

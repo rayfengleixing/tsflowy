@@ -44,6 +44,17 @@ export const databaseApi = {
     return invoke("field_update_options", { fieldId, options: JSON.stringify(options) });
   },
 
+  /** 关联列选定/改指目标表：Rust 侧一个事务里在对端建（或复用）反向关系列并写回本列 options。
+   *  reverseFieldId 等于传入的 reverseId 时说明这条反向列是新建的（前端据此提示）。 */
+  async pairRelationTarget(
+    fieldId: string,
+    targetViewId: string,
+    reverseId: string,
+    reverseName: string,
+  ): Promise<{ relation_field: DatabaseField; reverse_field_id: string }> {
+    return invoke("field_pair_relation", { fieldId, targetViewId, reverseId, reverseName });
+  },
+
   /** 整列重排：orderedIds 为最终顺序（position 0..n-1） */
   async reorderFields(viewId: string, orderedIds: string[]): Promise<void> {
     return invoke("field_reorder", { viewId, orderedIds });

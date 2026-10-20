@@ -383,6 +383,7 @@ pub fn run() {
             commands::db::field_set_width,
             commands::db::field_set_hidden,
             commands::db::field_update_options,
+            commands::db::field_pair_relation,
             commands::db::field_reorder,
             commands::db::field_change_type,
             commands::db::field_restore_values,

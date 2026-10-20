@@ -196,6 +196,13 @@ pub struct DatabaseFieldRow {
     pub position: i64,
 }
 
+/// 关联列配对结果：本列更新后的行 + 对端那条反向关系列的 id（前端提示文案要用）
+#[derive(Debug, Clone, Serialize)]
+pub struct RelationPairOut {
+    pub relation_field: DatabaseFieldRow,
+    pub reverse_field_id: String,
+}
+
 /// database_rows 行
 #[derive(Debug, Clone, Serialize)]
 pub struct DatabaseRowRow {

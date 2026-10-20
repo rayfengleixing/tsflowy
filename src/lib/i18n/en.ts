@@ -358,6 +358,8 @@ export const en: Record<MessageKey, string> = {
   "field.relationTarget": "Links to",
   "field.relationHint":
     "Pick a target table, then click a cell to search and select the rows to link (multiple allowed). Deleted target rows show as “Row deleted”.",
+  "field.reverseCreated": "Created the reverse relation column “{name}” in the target table",
+  "field.pairFailed": "Failed to pair the relation column: {message}",
   "field.rollupRelation": "Relation field",
   "field.rollupTarget": "Target field",
   "field.rollupFn": "Aggregate",
