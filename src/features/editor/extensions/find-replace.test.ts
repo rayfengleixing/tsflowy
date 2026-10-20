@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { Schema, Node as PMNode } from "@tiptap/pm/model";
-import { collectMatches, scanMatches } from "./find-replace";
+import { EditorState } from "@tiptap/pm/state";
+import type { Editor } from "@tiptap/core";
+import { collectMatches, countReplaceableInDoc, replaceAllInDoc, scanMatches } from "./find-replace";
 
 // 位置映射是这块逻辑唯一容易出错的地方：跨 mark、原子 inline 节点、多块文档
 const schema = new Schema({
@@ -177,5 +179,70 @@ describe("scanMatches 正则档", () => {
     const d = doc([{ type: "paragraph", content: [text("a".repeat(1001))] }]);
     expect(scanMatches(d, "a", { regex: true }).matches).toHaveLength(1000);
     expect(scanMatches(d, "a", { regex: true }).truncated).toBe(true);
+  });
+});
+
+/**
+ * 全局替换走编辑器事务这条路需要一个真 Editor，而这里只用到 state / view.dispatch 三个成员，
+ * 于是拿同一份 schema 造个会随事务推进的替身：既能在 node 环境跑，也保证断言的是真实位置计算。
+ */
+function fakeEditor(d: PMNode) {
+  let state = EditorState.create({ doc: d, schema });
+  const editor = {
+    isDestroyed: false,
+    get state() {
+      return state;
+    },
+    view: {
+      dispatch: (tr: Parameters<typeof state.apply>[0]) => {
+        state = state.apply(tr);
+      },
+    },
+  } as unknown as Editor;
+  return { editor, docOf: () => state.doc };
+}
+
+describe("replaceAllInDoc（全局替换的编辑器路径）", () => {
+  const para = (value: string) => ({ type: "paragraph", content: [text(value)] });
+
+  it("换掉段内全部命中，并按事务落到文档里", () => {
+    const { editor, docOf } = fakeEditor(doc([para("旧名 与 旧名"), para("再来一个旧名")]));
+    expect(replaceAllInDoc(editor, "旧名", "新名")).toBe(3);
+    expect(docOf().textContent).toBe("新名 与 新名再来一个新名");
+  });
+
+  it("首个标题块是页面标题，保护区内的命中一个字都不动", () => {
+    const { editor, docOf } = fakeEditor(doc([{ type: "heading", content: [text("旧名指南")] }, para("正文里的旧名")]));
+    expect(replaceAllInDoc(editor, "旧名", "新名")).toBe(1);
+    expect(docOf().child(0).textContent).toBe("旧名指南");
+    expect(docOf().child(1).textContent).toBe("正文里的新名");
+  });
+
+  it("跨 mark 的命中也能替换（这是 JSON 层批量替换刻意不覆盖的部分）", () => {
+    const { editor, docOf } = fakeEditor(
+      doc([{ type: "paragraph", content: [text("前端", [{ type: "bold" }]), text("框架 后端")] }]),
+    );
+    expect(replaceAllInDoc(editor, "前端框架", "全栈")).toBe(1);
+    expect(docOf().textContent).toBe("全栈 后端");
+  });
+
+  it("替换串为空即删除命中；预览计数与实际替换处数同一口径", () => {
+    const { editor, docOf } = fakeEditor(doc([para("a-b-c")]));
+    expect(countReplaceableInDoc(editor, "-")).toBe(2);
+    expect(replaceAllInDoc(editor, "-", "")).toBe(2);
+    expect(docOf().textContent).toBe("abc");
+  });
+
+  it("没有命中返回 0 且不产生事务", () => {
+    const { editor, docOf } = fakeEditor(doc([para("正文")]));
+    expect(replaceAllInDoc(editor, "旧名", "新名")).toBe(0);
+    expect(countReplaceableInDoc(editor, "旧名")).toBe(0);
+    expect(docOf().textContent).toBe("正文");
+  });
+
+  it("替换串里本就含查询词时只跑一轮，不会越替换越多", () => {
+    const { editor, docOf } = fakeEditor(doc([para("旧名")]));
+    expect(replaceAllInDoc(editor, "旧名", "旧名旧名")).toBe(1);
+    expect(docOf().textContent).toBe("旧名旧名");
   });
 });

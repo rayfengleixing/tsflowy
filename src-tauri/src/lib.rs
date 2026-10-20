@@ -359,6 +359,7 @@ pub fn run() {
             commands::db::doc_get,
             commands::db::doc_save,
             commands::db::doc_list_all,
+            commands::db::doc_ids_matching,
             commands::db::doc_snapshot_list,
             commands::db::doc_snapshot_get,
             commands::db::doc_snapshot_restore,

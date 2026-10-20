@@ -173,6 +173,13 @@ pub struct DocRowOut {
     pub content: String,
 }
 
+/// doc_ids_matching 的输出（全局替换候选页：正文含该字面串的视图）
+#[derive(Debug, Clone, Serialize)]
+pub struct MatchedDocOut {
+    pub view_id: String,
+    pub title: String,
+}
+
 // ---------- Phase C：database_fields / database_rows / database_cells ----------
 
 /// database_fields 行（列名 == 字段名，与 tauri-plugin-sql 时代 select 行形状一致）

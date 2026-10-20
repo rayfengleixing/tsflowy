@@ -23,6 +23,10 @@ const MAX_MATCHES = 1000;
 /** 文档编辑后延迟重算的尾抖动时长：太长高亮跟不上，太短等于没节流 */
 const RECOMPUTE_DELAY = 150;
 
+/** 就地全量替换的分批轮次上限：一批 MAX_MATCHES 个，正常文档一轮就够，
+ *  留上限只为防「替换串本身又含查询词」这类自我放大的死循环 */
+const MAX_REPLACE_ROUNDS = 50;
+
 export interface FindMatch {
   from: number;
   to: number;
@@ -308,6 +312,62 @@ export function replaceAllMatches(editor: Editor, replacement: string): number {
   chain.run();
   recomputeFindNow(editor);
   return count;
+}
+
+/**
+ * 就地替换整篇文档里的所有命中，绕开 MAX_MATCHES 上限分批续跑（全局替换用，不挂查找栏状态）。
+ * 与 replaceAllMatches 的区别：
+ *   - 不读 FindState，因此不会影响页面上正在用的查找高亮，也不依赖「当前命中」下标；
+ *   - 与 JSON 层全局替换（lib/text-replace.ts）保持同一条保护规则——首个标题块是页面标题
+ *     （由 views.name 权威管理），落在保护区里的命中一律不动；
+ *   - 一轮最多消化 MAX_MATCHES 个命中，剩下的立即重扫继续，直到没有命中或跑满轮次上限。
+ * 每轮是一条独立事务，用户仍能用 Ctrl+Z 逐轮回退。返回替换处数。
+ */
+export function replaceAllInDoc(
+  editor: Editor,
+  query: string,
+  replacement: string,
+  options: FindOptions = {},
+  maxRounds = MAX_REPLACE_ROUNDS,
+): number {
+  if (editor.isDestroyed || !query) return 0;
+  let total = 0;
+  for (let round = 0; round < maxRounds; round++) {
+    const doc = editor.state.doc;
+    const guard = protectedHeadingEnd(doc);
+    const scan = scanMatches(doc, query, options);
+    const hits = scan.matches.filter((m) => m.from >= guard);
+    if (hits.length === 0) break;
+    const tr = editor.state.tr;
+    // 从后往前落：前面的命中位置不受已替换部分影响；保护区之后的跨块命中也一并跳过
+    for (let i = hits.length - 1; i >= 0; i--) {
+      const m = hits[i];
+      if (m.from < guard) break;
+      if (replacement === "") tr.delete(m.from, m.to);
+      else tr.replaceWith(m.from, m.to, editor.state.schema.text(replacement));
+    }
+    if (!tr.docChanged) break;
+    editor.view.dispatch(tr);
+    total += hits.length;
+    // 没触顶就说明这一轮已经吃完整篇命中；再扫一遍只会把「替换串里本就含查询词」
+    // 的新文字当成新命中，越替换越多
+    if (!scan.truncated) break;
+  }
+  return total;
+}
+
+/** 首个块是标题时它的右边界（页面标题保护区），否则 0 */
+function protectedHeadingEnd(doc: ProseMirrorNode): number {
+  const first = doc.firstChild;
+  return first?.type.name === "heading" ? first.nodeSize : 0;
+}
+
+/** 预览用的可替换处数：与 replaceAllInDoc 共用保护区与匹配语义，只读不改文档。
+ *  与替换一样受 MAX_MATCHES 约束，触顶时这里报的是「至少这么多」。 */
+export function countReplaceableInDoc(editor: Editor, query: string, options: FindOptions = {}): number {
+  if (editor.isDestroyed || !query) return 0;
+  const guard = protectedHeadingEnd(editor.state.doc);
+  return scanMatches(editor.state.doc, query, options).matches.filter((m) => m.from >= guard).length;
 }
 
 export function clearFind(editor: Editor) {

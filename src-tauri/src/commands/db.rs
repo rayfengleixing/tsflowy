@@ -11,8 +11,8 @@ use tauri::State;
 
 use crate::db::{
     self, BacklinkRow, CellLoadRow, CellSetIn, CsvFieldIn, CsvRowIn, DatabaseFieldRow,
-    DatabaseRowRow, Db, DocRowOut, MentionRowIn, PagePropertyOut, SearchRowOut, TrashRowOut,
-    ViewRow, WorkspaceRow,
+    DatabaseRowRow, Db, DocRowOut, MatchedDocOut, MentionRowIn, PagePropertyOut, SearchRowOut,
+    TrashRowOut, ViewRow, WorkspaceRow,
 };
 
 // ---------- 命令入口参数校验 ----------
@@ -346,6 +346,18 @@ pub async fn doc_snapshot_restore(
 pub async fn doc_list_all(db: State<'_, Db>) -> Result<Vec<DocRowOut>, String> {
     let conn = db.read_conn()?;
     db::docs::list_all(&conn)
+}
+
+/// 全局替换候选页：正文纯文本里字面含有 needle 的视图（本空间、非回收站）。
+/// 只负责圈定候选，精确匹配与改写在前端做（见 lib/text-replace.ts 与 features/search/global-replace.ts）。
+#[tauri::command]
+pub async fn doc_ids_matching(
+    db: State<'_, Db>,
+    workspace_id: String,
+    needle: String,
+) -> Result<Vec<MatchedDocOut>, String> {
+    let conn = db.read_conn()?;
+    db::docs::ids_matching(&conn, &workspace_id, &needle)
 }
 
 // ---------- mentions ----------

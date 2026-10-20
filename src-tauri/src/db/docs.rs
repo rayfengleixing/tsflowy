@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
-use super::models::DocRowOut;
+use super::models::{DocRowOut, MatchedDocOut};
 use super::{dberr, now_ms};
 
 pub fn get(conn: &Connection, view_id: &str) -> Result<Option<String>, String> {
@@ -22,6 +22,43 @@ pub fn save(conn: &Connection, view_id: &str, content: &str) -> Result<(), Strin
     )
     .map_err(dberr("save document"))?;
     Ok(())
+}
+
+/// 全局替换的候选页：正文纯文本里字面含有 needle 的视图（回收站除外，按标题排序）。
+///
+/// 走 document_text 派生视图而不是 documents.content：后者是 TipTap JSON 原文，
+/// `"type":"text"` 这类结构字符会一起参与 LIKE 命中；该视图由 json_tree 现算，
+/// 随存随新，不受 FTS 触发器时机影响。
+/// needle 先经 like_pattern 转义（% _ \），所以这里是不含通配符的字面包含；
+/// ASCII 大小写由 SQLite LIKE 默认忽略，正好当超集用——调用方在 JSON 层按精确语义再筛。
+pub fn ids_matching(
+    conn: &Connection,
+    workspace_id: &str,
+    needle: &str,
+) -> Result<Vec<MatchedDocOut>, String> {
+    if needle.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pattern = super::search::like_pattern(needle);
+    let mut stmt = conn
+        .prepare(
+            "SELECT v.id, v.name FROM views v
+             JOIN document_text dt ON dt.view_id = v.id
+             WHERE v.workspace_id = ?1 AND v.is_trash = 0 AND dt.txt LIKE ?2 ESCAPE '\\'
+             ORDER BY v.name",
+        )
+        .map_err(dberr("list matching documents"))?;
+    let rows = stmt
+        .query_map(params![workspace_id, pattern], |r| {
+            Ok(MatchedDocOut {
+                view_id: r.get(0)?,
+                title: r.get(1)?,
+            })
+        })
+        .map_err(dberr("list matching documents"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(dberr("list matching documents"))?;
+    Ok(rows)
 }
 
 /// mentions 启动回填用：全量文档行。
@@ -232,5 +269,65 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM documents_fts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(fts, 0);
+    }
+
+    #[test]
+    fn ids_matching_finds_literal_needle_in_body() {
+        let conn = setup();
+        seed_view(&conn, "v1", "甲");
+        seed_view(&conn, "v2", "乙");
+        save(&conn, "v1", &tiptap("把 API 换成网关")).unwrap();
+        save(&conn, "v2", &tiptap("无关内容")).unwrap();
+        let hits = ids_matching(&conn, "w1", "API").unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].view_id, "v1");
+        assert_eq!(hits[0].title, "甲");
+    }
+
+    #[test]
+    fn ids_matching_escapes_like_wildcards() {
+        let conn = setup();
+        seed_view(&conn, "v1", "甲");
+        seed_view(&conn, "v2", "乙");
+        save(&conn, "v1", &tiptap("100% 覆盖率")).unwrap();
+        save(&conn, "v2", &tiptap("普通文本")).unwrap();
+        // 不转义的话 "%" 会命中所有行；候选集一旦放大，前端会去改写不相干的页面
+        assert_eq!(ids_matching(&conn, "w1", "%").unwrap().len(), 1);
+        assert_eq!(ids_matching(&conn, "w1", "_").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn ids_matching_skips_trash_and_other_workspace() {
+        let conn = setup();
+        seed_view(&conn, "v1", "在册");
+        seed_view(&conn, "t1", "在回收站");
+        conn.execute(
+            "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ('w2','W2',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at)
+             VALUES ('v2','w2',NULL,'别的空间','document','{}',0,1,1)",
+            [],
+        )
+        .unwrap();
+        save(&conn, "v1", &tiptap("独特词组甲")).unwrap();
+        save(&conn, "t1", &tiptap("独特词组乙")).unwrap();
+        save(&conn, "v2", &tiptap("独特词组丙")).unwrap();
+        conn.execute("UPDATE views SET is_trash = 1 WHERE id = 't1'", [])
+            .unwrap();
+
+        let hits = ids_matching(&conn, "w1", "独特词组").unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].view_id, "v1");
+    }
+
+    #[test]
+    fn ids_matching_empty_needle_returns_nothing() {
+        let conn = setup();
+        seed_view(&conn, "v1", "甲");
+        save(&conn, "v1", &tiptap("任意内容")).unwrap();
+        assert!(ids_matching(&conn, "w1", "").unwrap().is_empty());
     }
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Clock, FileSearch } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useRowFocusStore } from "@/stores/row-focus";
 import { searchApi, parseSearchQuery, type SearchHit } from "@/lib/search";
@@ -9,6 +10,7 @@ import { flattenTree } from "@/lib/tree";
 import type { View } from "@/types/models";
 import { viewIcon } from "@/components/view-icon";
 import { HighlightedTitle } from "@/components/highlighted-title";
+import { GlobalReplaceDialog } from "./GlobalReplaceDialog";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
@@ -24,6 +26,7 @@ export function SearchResultsPage() {
   const [results, setResults] = useState<SearchHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [recent, setRecent] = useState<View[]>([]);
+  const [replaceOpen, setReplaceOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<number | null>(null);
   // 最后一次由本页推给 store 的查询：store 里的值变了但与此不同 = 外部（命令面板/快捷键）改动
@@ -106,6 +109,8 @@ export function SearchResultsPage() {
 
   // 高亮只用解析出的关键词，避免把 `type:page` 这类限定符与 `-`/引号符号喂给标题高亮
   const highlightTerms = parseSearchQuery(searchQuery).terms;
+  // 替换弹窗要的是一个字面串：取关键词（多词按原顺序拼回），限定符不进替换框
+  const replaceSeed = highlightTerms.length > 0 ? highlightTerms.join(" ") : searchQuery.trim();
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -132,9 +137,19 @@ export function SearchResultsPage() {
           }}
         />
         {searchQuery.trim() && (
-          <span className="shrink-0 text-[12px] text-neutral-400">
-            {t("search.found", { count: String(results.length) })}
-          </span>
+          <>
+            <Button
+              variant="ghost"
+              className="h-7 shrink-0 px-2 text-[12px]"
+              data-testid="global-replace-entry"
+              onClick={() => setReplaceOpen(true)}
+            >
+              {t("search.replace.entry")}
+            </Button>
+            <span className="shrink-0 text-[12px] text-neutral-400">
+              {t("search.found", { count: String(results.length) })}
+            </span>
+          </>
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -204,6 +219,7 @@ export function SearchResultsPage() {
           )}
         </div>
       </div>
+      <GlobalReplaceDialog open={replaceOpen} onOpenChange={setReplaceOpen} initialQuery={replaceSeed} />
     </div>
   );
 }
