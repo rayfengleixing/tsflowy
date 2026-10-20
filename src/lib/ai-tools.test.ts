@@ -34,7 +34,7 @@ vi.mock("./documents", () => ({ documentApi: { get: () => Promise.resolve(null),
 vi.mock("@/stores/workspace", () => ({ useWorkspaceStore: { getState: () => ws } }));
 vi.mock("@/stores/relation", () => ({ useRelationStore: { getState: () => relation } }));
 
-import { coerceCell, runUndoPlan, runWriteAction, sanitizeUndoPlan } from "./ai-tools";
+import { coerceCell, resolvePage, runUndoPlan, runWriteAction, sanitizeUndoPlan } from "./ai-tools";
 import { onDatabaseChanged } from "./database-changed";
 import type { DatabaseField, FieldType, SelectOption } from "@/types/database";
 import type { ViewNode } from "@/types/models";
@@ -228,5 +228,50 @@ describe("sanitizeUndoPlan", () => {
     expect(
       sanitizeUndoPlan({ kind: "reset_cells", database: "v1", items: [{ row_id: "r1", field_id: "f1", value: {} }] }),
     ).toBeUndefined();
+  });
+});
+
+describe("resolvePage 认页面别名", () => {
+  const rows = [
+    { id: "p1", name: "项目立项说明", aliases: '["计划书","立项材料"]', children: [] },
+    { id: "p2", name: "计划书", aliases: "[]", children: [] },
+  ];
+
+  beforeEach(() => {
+    ws.tree = rows;
+  });
+
+  it("按 id、别名、标题都能定位到同一页", () => {
+    expect(resolvePage("p1")?.id).toBe("p1");
+    expect(resolvePage("立项材料")?.id).toBe("p1");
+    expect(resolvePage(" 立项材料 ")?.id).toBe("p1");
+  });
+
+  it("标题优先于别名：计划书 是 p2 的名字，不落到把它当别名的 p1 上", () => {
+    expect(resolvePage("计划书")?.id).toBe("p2");
+    // 反过来，只有别名能对上时照样命中
+    ws.tree = [{ id: "p3", name: "别的东西", aliases: "[]", children: [] }, ...rows];
+    expect(resolvePage("立项材料")?.id).toBe("p1");
+  });
+
+  it("歧义不猜：同名两页、别名撞在两页上都返回 null", () => {
+    ws.tree = [{ id: "p3", name: "计划书", aliases: "[]", children: [] }, ...rows];
+    expect(resolvePage("计划书")).toBeNull();
+    ws.tree = [
+      { id: "p4", name: "甲", aliases: '["共用叫法"]', children: [] },
+      { id: "p5", name: "乙", aliases: '["共用叫法"]', children: [] },
+    ];
+    expect(resolvePage("共用叫法")).toBeNull();
+  });
+
+  it("模糊匹配也覆盖别名，仍只有一个命中才返回", () => {
+    expect(resolvePage("立项")?.id).toBe("p1");
+    ws.tree = [
+      { id: "p6", name: "甲", aliases: '["季度复盘"]', children: [] },
+      { id: "p7", name: "乙", aliases: "[]", children: [] },
+    ];
+    expect(resolvePage("复盘")?.id).toBe("p6");
+    expect(resolvePage("不存在的叫法")).toBeNull();
+    expect(resolvePage("")).toBeNull();
   });
 });

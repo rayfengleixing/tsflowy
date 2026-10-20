@@ -54,6 +54,8 @@ export interface WorkspaceState {
   setViewFavorite: (id: string, favorite: boolean) => Promise<void>;
   /** 设置页面标签（整体覆写） */
   setViewTags: (id: string, tags: string[]) => Promise<void>;
+  /** 设置页面别名（整体覆写）：这页除名字外的其它叫法，供搜索与 @ 引用命中 */
+  setViewAliases: (id: string, aliases: string[]) => Promise<void>;
   deleteView: (id: string) => Promise<void>;
   restoreView: (id: string) => Promise<void>;
   purgeView: (id: string) => Promise<void>;

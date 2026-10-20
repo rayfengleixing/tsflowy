@@ -7,6 +7,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  BookMarked,
   CheckSquare,
   ChevronRight,
   Columns2,
@@ -29,6 +30,7 @@ import { EmojiPicker } from "@/components/emoji-picker";
 import { NewPageMenu } from "./NewPageMenu";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { TagEditorDialog } from "@/components/tag-editor-dialog";
+import { AliasEditorDialog } from "@/components/alias-editor-dialog";
 import { HistoryDialog } from "@/components/history-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { DropZone } from "@/lib/tree";
@@ -102,6 +104,7 @@ export function PageTreeItem({
   const [editName, setEditName] = useState(node.name);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
+  const [aliasEditorOpen, setAliasEditorOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   /** 行菜单（⋯ 与右键共用这一个实例）：右键在行内任意位置都能打开，定位靠 ⋯ 按钮 */
   const [menuOpen, setMenuOpen] = useState(false);
@@ -263,6 +266,10 @@ export function PageTreeItem({
                   <Tag className="mr-2 h-3.5 w-3.5" />
                   {t("tree.editTags")}
                 </DropdownMenuItem>
+                <DropdownMenuItem data-testid="row-edit-aliases" onSelect={() => setAliasEditorOpen(true)}>
+                  <BookMarked className="mr-2 h-3.5 w-3.5" />
+                  {t("tree.editAliases")}
+                </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setHistoryOpen(true)}>
                   <History className="mr-2 h-3.5 w-3.5" />
                   {t("tree.history")}
@@ -334,6 +341,8 @@ export function PageTreeItem({
       />
 
       <TagEditorDialog view={node} open={tagEditorOpen} onOpenChange={setTagEditorOpen} />
+
+      <AliasEditorDialog view={node} open={aliasEditorOpen} onOpenChange={setAliasEditorOpen} />
 
       <HistoryDialog view={node} open={historyOpen} onOpenChange={setHistoryOpen} />
     </>

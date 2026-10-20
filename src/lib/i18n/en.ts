@@ -111,6 +111,12 @@ export const en: Record<MessageKey, string> = {
   "tag.expand": "Expand sub-tags",
   "tag.collapse": "Collapse sub-tags",
   "tag.hierHint": 'Use "/" to nest tags, e.g. Work/ProjectA',
+  "tree.editAliases": "Set aliases",
+  "alias.editorTitle": "Edit aliases",
+  "alias.emptyHint": "No aliases yet",
+  "alias.inputPlaceholder": "Type an alias, press Enter",
+  "alias.hint":
+    "Search, @ mentions and [[ link completion all accept these names. Amber means another page uses the same alias.",
   "history.title": "History",
   "history.today": "Today",
   "history.loading": "Loading…",

@@ -232,6 +232,14 @@ export const createTreeSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (
     set((state) => ({ tree: patchTreeView(state.tree, id, { tags: JSON.stringify(normalized) }) }));
   },
 
+  setViewAliases: async (id: string, aliases: string[]) => {
+    // 归一规则与 Rust set_aliases 一致（trim、丢空、按首次出现去重）：本地树存的必须是同一份字符串，
+    // 否则下次读树会把刚写的别名"改回去"，搜索与 @ 引用也跟着错
+    const normalized = [...new Set(aliases.map((x) => x.trim()).filter(Boolean))];
+    await viewApi.setAliases(id, normalized);
+    set((state) => ({ tree: patchTreeView(state.tree, id, { aliases: JSON.stringify(normalized) }) }));
+  },
+
   deleteView: async (id: string) => {
     const parentId = findInTree(get().tree, id)?.parent_id ?? null;
     await viewApi.softDelete(id);

@@ -62,7 +62,7 @@ import { flattenTree } from "@/lib/tree";
 import { logger } from "@/lib/logger";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { JSONContent } from "@tiptap/core";
-import type { ViewNode } from "@/types/models";
+import { parseViewAliases, type ViewNode } from "@/types/models";
 import { t, type MessageKey } from "@/lib/i18n";
 
 // AI 助手面板状态：开关/宽度（localStorage 偏好）、消息列表、流式状态、
@@ -904,7 +904,8 @@ export const useAiStore = create<AiState>()((set, get) => {
     if (list.length === 0) return "";
     const refs = parseMentions(
       lastUser.content,
-      list.map((v) => ({ id: v.id, name: v.name })),
+      // 每个叫法各给一条候选（标题 + 别名）：@ 的是别名时也要认出这一篇；同一 id 命中多次只保留一次
+      list.flatMap((v) => [v.name, ...parseViewAliases(v.aliases)].map((name) => ({ id: v.id, name }))),
     );
     if (refs.length === 0) return "";
     const limit = maxChars();

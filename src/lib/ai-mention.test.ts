@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectMentionQuery, mentionScore, parseMentions } from "./ai-mention";
+import { bestMentionScore, detectMentionQuery, mentionScore, parseMentions } from "./ai-mention";
 
 const CANDIDATES = [
   { id: "a", name: "周报" },
@@ -92,5 +92,30 @@ describe("mentionScore", () => {
 
   it("完全不含查询字符则不匹配", () => {
     expect(mentionScore("周报", "月报")).toBeNull();
+  });
+});
+
+describe("页面别名的 @ 引用", () => {
+  // 调用方（stores/ai.ts）把一页的标题与别名各摊成一条候选，id 相同
+  const CANDS = [
+    { id: "a", name: "周报" },
+    { id: "a", name: "每周小结" },
+    { id: "b", name: "会议记录" },
+  ];
+
+  it("@ 别名解析到同一页面", () => {
+    expect(parseMentions("看下 @每周小结 的进展", CANDS)).toEqual([{ id: "a", name: "每周小结" }]);
+  });
+
+  it("同一页被两个叫法各引用一次时只给一份上下文", () => {
+    // 长名字优先匹配（既有的防误配规则），所以留下的那条记的是较长的叫法
+    const out = parseMentions("@周报 与 @每周小结 是同一篇", CANDS);
+    expect(out).toEqual([{ id: "a", name: "每周小结" }]);
+  });
+
+  it("bestMentionScore 取各叫法里的最高分，全不沾时不匹配", () => {
+    expect(bestMentionScore(["会议记录", "周会纪要"], "周会")).toBe(1_000_000);
+    expect(bestMentionScore(["会议记录"], "周会")).toBeNull();
+    expect(bestMentionScore(["会议记录"], "")).toBe(0);
   });
 });

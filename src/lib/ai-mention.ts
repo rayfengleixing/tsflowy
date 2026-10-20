@@ -89,3 +89,16 @@ export function mentionScore(name: string, query: string): number | null {
   // 名称越短越聚焦（同名命中时优先展示更贴切的）
   return 100_000 + score - n.length;
 }
+
+/**
+ * 一个页面的全部叫法（标题 + 别名）里最好的匹配分，全不匹配返回 null。
+ * 别名只是「这页还能被哪些名字找到」，不影响 @ 引用最终解析到哪个页面 id。
+ */
+export function bestMentionScore(names: string[], query: string): number | null {
+  let best: number | null = null;
+  for (const name of names) {
+    const score = mentionScore(name, query);
+    if (score !== null && (best === null || score > best)) best = score;
+  }
+  return best;
+}

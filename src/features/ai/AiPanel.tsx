@@ -44,8 +44,9 @@ import {
 } from "@/lib/ai";
 import { filesFromDataTransfer, resolveAssetUrl } from "@/lib/assets";
 import { getAiEditor } from "@/lib/ai-editor";
-import { detectMentionQuery, mentionScore } from "@/lib/ai-mention";
+import { bestMentionScore, detectMentionQuery } from "@/lib/ai-mention";
 import { flattenTree } from "@/lib/tree";
+import { parseViewAliases } from "@/types/models";
 import { t, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { EditDiffDialog } from "./EditDiffDialog";
@@ -209,7 +210,8 @@ export function AiPanel() {
         } catch {
           /* extra 解析失败当作普通文档 */
         }
-        const score = mentionScore(v.name, mention.query);
+        // 标题与别名一起打分取最高：@ 缩写/旧名也能把这页带进候选
+        const score = bestMentionScore([v.name, ...parseViewAliases(v.aliases)], mention.query);
         return score === null ? [] : [{ v, score }];
       })
       .sort((a, b) => b.score - a.score)

@@ -8,7 +8,7 @@ import { flattenTree } from "@/lib/tree";
 import { viewApi } from "@/lib/db";
 import { databaseApi } from "@/lib/database";
 import { newSelectOption } from "@/lib/database-values";
-import type { View } from "@/types/models";
+import { parseViewAliases, type View } from "@/types/models";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
@@ -242,7 +242,9 @@ export function buildMentionSuggestion(): MentionOptions["suggestion"] {
           }
           if (!query.trim()) return true;
           const q = query.toLowerCase();
-          return v.name.toLowerCase().includes(q);
+          // 别名同样是这页的叫法：敲缩写/旧名也能带出候选，插进去的仍是页面 id 与页面名
+          if (v.name.toLowerCase().includes(q)) return true;
+          return parseViewAliases(v.aliases).some((a) => a.toLowerCase().includes(q));
         });
         return filtered.slice(0, 10).map((v) => ({
           id: v.id,
