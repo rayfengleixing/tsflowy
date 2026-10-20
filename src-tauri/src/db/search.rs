@@ -190,6 +190,30 @@ fn like_rows(
     query_rows(conn, &sql, workspace_id, &patterns, "search fallback")
 }
 
+/// 别名命中：页面还有别的叫法时（frontmatter 的 aliases / 别名面板），按别名也能把这页搜出来。
+/// snippet 直接用命中的那条别名，让结果页能说清「为什么这页会出现在这里」（它的标题里并没有查询词）。
+///
+/// 逐条别名比对，所以多词查询要求这些词都落在同一条别名里——两个别名各含一个词不算命中，
+/// 那种组合在页面上没有任何一个名字对应用户的意图，搜出来只会是噪音。
+fn alias_rows(
+    conn: &Connection,
+    workspace_id: &str,
+    terms: &[QueryTerm],
+) -> Result<Vec<SearchRowOut>, String> {
+    let (filter, patterns) = like_filters("a.value", terms);
+    // CASE 兜住历史/同步来的脏值：json_each() 遇到非数组（'x'、3）是运行期报错，
+    // 而一次搜索报错会让整个搜索框不可用，比少召回几条别名严重得多
+    let sql = format!(
+        "SELECT v.id AS view_id, v.name AS title, v.icon, v.layout,
+                a.value AS snippet, NULL AS row_id, 1e9 AS rank
+         FROM views v, json_each(CASE WHEN json_valid(v.aliases) AND json_type(v.aliases) = 'array'
+                                      THEN v.aliases ELSE '[]' END) a
+         WHERE v.is_trash = 0 AND v.workspace_id = ?1 AND v.source_id IS NULL{filter}
+         LIMIT 50"
+    );
+    query_rows(conn, &sql, workspace_id, &patterns, "search alias")
+}
+
 /// 命中行按固定列序取：0 view_id / 1 title / 2 icon / 3 layout / 4 snippet / 5 row_id / 6 rank
 /// patterns 依次绑定 SQL 里的 ?2、?3……（多词兜底的项数随查询变化，占位符只能动态生成）
 fn query_rows(
@@ -221,8 +245,8 @@ fn query_rows(
     Ok(rows)
 }
 
-/// 搜索当前空间，四路合并：文档 FTS（正文/标题）→ 数据库单元格 FTS → 无索引行的视图标题
-/// LIKE 兜底 → 短查询（有词不足 3 字，trigram 必空）的文档正文与单元格文本 LIKE 兜底。
+/// 搜索当前空间，五路合并：文档 FTS（正文/标题）→ 数据库单元格 FTS → 页面别名 →
+/// 无索引行的视图标题 LIKE 兜底 → 短查询（有词不足 3 字，trigram 必空）的文档正文与单元格文本 LIKE 兜底。
 /// 关键词按「每词独立、AND 组合」检索，`"..."` 为精确短语，`-` 前缀排除，四路都遵守。
 /// 返回按"FTS 在前、兜底在后"的原始序列；跨路去重按 view_id 保留首条（rank 更小的那条），
 /// 标题分层排序与 <em> 清洗仍在 JS（search.ts）。
@@ -253,6 +277,7 @@ pub fn search(
     )?);
 
     // 标题兜底只服务"完全没有索引行"的视图（空文件夹、空表）
+    rows.extend(alias_rows(conn, workspace_id, &terms)?);
     rows.extend(query_rows(
         conn,
         &format!(
@@ -833,6 +858,85 @@ mod tests {
         seed_doc_view(&conn, "v1", "标题A", r#"{"text":"别名视图xx 的内容"}"#);
         let hits = search(&conn, "w1", "别名视图").unwrap();
         assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].view_id, "v1");
+    }
+
+    // --- 页面别名（views.aliases）：用另一个叫法也搜得到这一页 ---
+
+    fn seed_aliases(conn: &Connection, id: &str, json: &str) {
+        conn.execute(
+            "UPDATE views SET aliases = ?1 WHERE id = ?2",
+            params![json, id],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn search_finds_page_by_alias() {
+        let conn = setup();
+        seed_bare_view(&conn, "v1", "项目计划书");
+        seed_bare_view(&conn, "v2", "会议记录");
+        seed_aliases(&conn, "v1", r#"["立项材料","Proposal"]"#);
+
+        let hits = search(&conn, "w1", "立项材料").unwrap();
+
+        assert_eq!(hits.len(), 1, "标题里没有的词，靠别名召回");
+        assert_eq!(hits[0].view_id, "v1");
+        // 片段回显命中的那条别名：结果页要能说明「这页标题里没这词，为什么出现」
+        assert_eq!(hits[0].snippet, "立项材料");
+        assert_eq!(hits[0].rank, 1e9);
+    }
+
+    #[test]
+    fn search_alias_ignores_ascii_case() {
+        let conn = setup();
+        seed_bare_view(&conn, "v1", "项目计划书");
+        seed_aliases(&conn, "v1", r#"["Proposal Doc"]"#);
+        assert_eq!(search(&conn, "w1", "proposal").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn search_alias_requires_all_terms_inside_one_alias() {
+        let conn = setup();
+        seed_bare_view(&conn, "v1", "项目计划书");
+        seed_aliases(&conn, "v1", r#"["季度 预算","会议纪要"]"#);
+
+        assert_eq!(search(&conn, "w1", "季度 预算").unwrap().len(), 1);
+        assert!(
+            search(&conn, "w1", "季度 会议").unwrap().is_empty(),
+            "两个词拆在两条别名里，页面上没有任何一个名字对得上这个查询"
+        );
+    }
+
+    #[test]
+    fn search_alias_skips_trashed_and_derived_views() {
+        let conn = setup();
+        seed_bare_view(&conn, "v1", "表A");
+        seed_aliases(&conn, "v1", r#"["代号甲"]"#);
+        conn.execute("UPDATE views SET is_trash = 1 WHERE id = 'v1'", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO views(id, workspace_id, name, layout, extra, position, created_at, updated_at, source_id, aliases)
+             VALUES ('v2', 'w1', '派生视图', 'grid', '{}', 0, 1, 1, 'v1', '[\"代号甲\"]')",
+            [],
+        )
+        .unwrap();
+
+        assert!(search(&conn, "w1", "代号甲").unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_survives_corrupt_aliases_values() {
+        let conn = setup();
+        seed_bare_view(&conn, "v1", "坏别名");
+        conn.execute("UPDATE views SET aliases = 'not json' WHERE id='v1'", [])
+            .unwrap();
+        seed_bare_view(&conn, "v2", "另一页");
+        seed_aliases(&conn, "v2", "3"); // 合法 JSON，但不是数组：json_each 会直接报错
+
+        let hits = search(&conn, "w1", "别名").unwrap();
+
+        assert_eq!(hits.len(), 1, "脏 aliases 不能把整次搜索打成错误");
         assert_eq!(hits[0].view_id, "v1");
     }
 

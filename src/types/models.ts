@@ -30,21 +30,33 @@ export interface View {
   source_id: string | null;
   /** 页面标签（迁移 009）：JSON 数组字符串，如 `["工作","重要"]`；用 parseViewTags() 解析 */
   tags: string;
+  /** 页面别名（迁移 025）：JSON 数组字符串，如 `["旧名","缩写"]`；用 parseViewAliases() 解析 */
+  aliases: string;
 }
 
 export interface ViewNode extends View {
   children: ViewNode[];
 }
 
-/** 安全解析 views.tags JSON 列（坏数据静默为空数组） */
-export function parseViewTags(tags: string | null | undefined): string[] {
-  if (!tags) return [];
+/** 安全解析 views 上的 JSON 数组字符串列（坏数据静默为空数组） */
+function parseNameList(raw: string | null | undefined): string[] {
+  if (!raw) return [];
   try {
-    const v: unknown = JSON.parse(tags);
+    const v: unknown = JSON.parse(raw);
     return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
   } catch {
     return [];
   }
+}
+
+/** 安全解析 views.tags JSON 列 */
+export function parseViewTags(tags: string | null | undefined): string[] {
+  return parseNameList(tags);
+}
+
+/** 安全解析 views.aliases JSON 列 */
+export function parseViewAliases(aliases: string | null | undefined): string[] {
+  return parseNameList(aliases);
 }
 
 /** 数据库视图布局集合：一张表可拥有的视图类型（多视图阶段 2） */

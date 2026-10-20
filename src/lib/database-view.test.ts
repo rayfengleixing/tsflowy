@@ -20,6 +20,7 @@ const v = (id: string, layout: LayoutType, name = id, children: ViewNode[] = [])
     visited_at: null,
     source_id: null,
     tags: "[]",
+    aliases: "[]",
   };
   return { ...base, children };
 };

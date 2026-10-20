@@ -309,6 +309,8 @@ async function applyViewMeta(viewId: string, meta: PageMeta): Promise<void> {
     if (meta.icon) await viewApi.setIcon(viewId, meta.icon);
     const tags = meta.tags ?? [];
     if (tags.length > 0) await viewApi.setTags(viewId, tags);
+    const aliases = meta.aliases ?? [];
+    if (aliases.length > 0) await viewApi.setAliases(viewId, aliases);
     if (meta.favorite === true) await viewApi.setFavorite(viewId, true);
   } catch (e) {
     logger.warn("import-folder", "apply page meta failed", viewId, e);

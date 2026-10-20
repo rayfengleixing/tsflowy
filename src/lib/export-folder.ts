@@ -10,7 +10,7 @@ import { buildFrontmatter } from "./frontmatter";
 import { jsonToMarkdown } from "./markdown";
 import { logger } from "./logger";
 import { sanitizeFileName } from "./utils";
-import { parseViewTags, type ViewNode } from "@/types/models";
+import { parseViewAliases, parseViewTags, type ViewNode } from "@/types/models";
 
 // 整库导出 Markdown 文件夹（导入 Markdown 文件夹的逆操作）。
 //
@@ -75,6 +75,7 @@ export async function exportMarkdownFolder(): Promise<ExportFolderResult | null>
         icon: node.icon ?? undefined,
         layout: node.layout,
         tags: parseViewTags(node.tags),
+        aliases: parseViewAliases(node.aliases),
         favorite: node.is_favorite === 1,
         updatedAtMs: node.updated_at,
       });

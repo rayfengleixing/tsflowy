@@ -19,7 +19,14 @@ vi.mock("@/stores/workspace", () => ({
             { id: "board", name: "看板", layout: "board", children: [] },
           ],
         },
-        { id: "solo", name: "散页", layout: "document", children: [] },
+        {
+          id: "solo",
+          name: "散页",
+          layout: "document",
+          tags: '["工作"]',
+          aliases: '["计划书","立项材料"]',
+          children: [],
+        },
       ],
     }),
   },
@@ -164,6 +171,8 @@ describe("exportMarkdownFolder（附件随页面落盘）", () => {
     const content = String(solo?.content);
     expect(content.startsWith("---\n")).toBe(true);
     expect(content).toContain("title: 散页");
+    expect(content).toContain("tags: [工作]");
+    expect(content).toContain("aliases: [计划书, 立项材料]");
     expect(content).toContain("→[看板](db:board)");
     expect(content).toContain("| 写周报 | 进行中 |");
   });

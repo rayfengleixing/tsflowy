@@ -20,6 +20,7 @@ const v = (id: string, name: string, layout: LayoutType = "document", children: 
     visited_at: null,
     source_id: null,
     tags: "[]",
+    aliases: "[]",
   };
   return { ...base, children };
 };

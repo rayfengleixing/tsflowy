@@ -546,7 +546,7 @@ fn duplicate_copies_subtree_with_content_and_properties() {
     let conn = setup();
     seed_default_fixture(&conn); // r1(0)/r2(1)/r3(2)，c1..c3 挂在 r1 下
     conn.execute(
-        "UPDATE views SET is_favorite = 1, tags = '[\"甲\"]' WHERE id = 'r1'",
+        "UPDATE views SET is_favorite = 1, tags = '[\"甲\"]', aliases = '[\"旧名\"]' WHERE id = 'r1'",
         [],
     )
     .unwrap();
@@ -574,6 +574,12 @@ fn duplicate_copies_subtree_with_content_and_properties() {
         })
         .unwrap();
     assert_eq!(tags, "[\"甲\"]", "标签继承");
+    let aliases: String = conn
+        .query_row("SELECT aliases FROM views WHERE id = 'r1copy'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(aliases, "[\"旧名\"]", "别名继承（副本同样有那些叫法）");
 
     // 整棵子树：3 个子节点，父级指向副本根，名称与相对顺序保持
     let l = layout(&conn);
@@ -808,4 +814,75 @@ fn duplicate_missing_source_and_derived_view_are_rejected() {
         })
         .unwrap();
     assert_eq!(n, 0, "失败的复制不留下半成品");
+}
+
+// ---------- 页面别名（迁移 025：views.aliases） ----------
+
+fn aliases_of(conn: &Connection, id: &str) -> String {
+    conn.query_row(
+        "SELECT aliases FROM views WHERE id = ?1",
+        params![id],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+#[test]
+fn create_view_starts_with_empty_aliases() {
+    let conn = setup();
+    let v = create(&conn, "p1", "w1", None, "页面", "document", "{}", None).unwrap();
+    assert_eq!(v.aliases, "[]", "新建页面默认没有别名（读侧不必判 NULL）");
+    assert_eq!(aliases_of(&conn, "p1"), "[]");
+}
+
+#[test]
+fn set_aliases_normalizes_trim_dedupe_and_order() {
+    let conn = setup();
+    create(&conn, "p1", "w1", None, "页面", "document", "{}", None).unwrap();
+
+    set_aliases(&conn, "p1", r#"[" 旧名 ","","别名甲","旧名","英文 名"]"#).unwrap();
+
+    // 首尾空白清掉、空串丢弃、完全同名的重复只留第一次出现的顺序
+    assert_eq!(aliases_of(&conn, "p1"), r#"["旧名","别名甲","英文 名"]"#);
+}
+
+#[test]
+fn set_aliases_rejects_non_array_and_non_string_items() {
+    let conn = setup();
+    create(&conn, "p1", "w1", None, "页面", "document", "{}", None).unwrap();
+
+    for junk in [r#"{""a"":1}"#, r#""旧名""#, "[3]", r#"[[""嵌套""]]"#] {
+        let err = set_aliases(&conn, "p1", junk).unwrap_err();
+        assert!(err.contains("aliases"), "{junk} → {err}");
+    }
+    assert_eq!(aliases_of(&conn, "p1"), "[]", "非法输入不落库");
+
+    let err = set_aliases(&conn, "ghost", "[]").unwrap_err();
+    assert!(err.contains("view not found"), "{err}");
+}
+
+#[test]
+fn set_aliases_empty_array_clears_them() {
+    let conn = setup();
+    create(&conn, "p1", "w1", None, "页面", "document", "{}", None).unwrap();
+    set_aliases(&conn, "p1", r#"["旧名"]"#).unwrap();
+
+    set_aliases(&conn, "p1", "[]").unwrap();
+
+    assert_eq!(aliases_of(&conn, "p1"), "[]");
+}
+
+#[test]
+fn tags_and_aliases_share_the_normalization_but_not_the_column() {
+    let conn = setup();
+    create(&conn, "p1", "w1", None, "页面", "document", "{}", None).unwrap();
+
+    set_tags(&conn, "p1", r#"[" 工作 ","工作"]"#).unwrap();
+    set_aliases(&conn, "p1", r#"[" 旧名 ","旧名"]"#).unwrap();
+
+    let tags: String = conn
+        .query_row("SELECT tags FROM views WHERE id = 'p1'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(tags, r#"["工作"]"#);
+    assert_eq!(aliases_of(&conn, "p1"), r#"["旧名"]"#, "两列互不串写");
 }

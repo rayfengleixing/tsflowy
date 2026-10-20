@@ -116,6 +116,11 @@ export const viewApi = {
     return invoke("view_set_tags", { id, tags: JSON.stringify(tags) });
   },
 
+  /** 设置页面别名（整体覆写 JSON 数组）：不改页面名字本身，只增加「这页还能被哪些名字找到」 */
+  async setAliases(id: string, aliases: string[]): Promise<void> {
+    return invoke("view_set_aliases", { id, aliases: JSON.stringify(aliases) });
+  },
+
   /** 软删：视图及其整个子树进回收站 */
   async softDelete(id: string): Promise<void> {
     return invoke("view_soft_delete", { id });

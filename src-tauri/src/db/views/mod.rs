@@ -10,7 +10,8 @@ mod tests;
 
 pub use crud::{
     create, data_view_id, duplicate, get, list_by_workspace, list_for_source, list_recent,
-    list_trash, rename, set_favorite, set_icon, set_tags, touch_visited, update_extra, NewView,
+    list_trash, rename, set_aliases, set_favorite, set_icon, set_tags, touch_visited, update_extra,
+    NewView,
 };
 pub use reorder::move_view;
 pub use trash::{

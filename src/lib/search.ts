@@ -1,4 +1,4 @@
-import { DB_LAYOUTS, parseViewTags, type LayoutType, type View } from "@/types/models";
+import { DB_LAYOUTS, parseViewAliases, parseViewTags, type LayoutType, type View } from "@/types/models";
 import { invoke } from "@/lib/invoke";
 import { pinyinInitials } from "@/lib/pinyin-initials";
 
@@ -59,33 +59,74 @@ export function titleExcluded(title: string, exclude: string[]): boolean {
   return exclude.some((term) => titleTier(title, term) < TIER_BODY_ONLY);
 }
 
-/** 仅标题/拼音可确定的命中（不做正文检索）：本地即时补全命令面板与结果页用 */
+/**
+ * 一组名字（标题或某个别名）对全部关键词的最浅命中层级。
+ * 别名与标题同为用户给这页起的叫法，所以匹配力度一致：命中别名就算名字命中。
+ */
+function nameTier(names: string[], terms: string[]): number {
+  let best = TIER_BODY_ONLY;
+  for (const name of names) best = Math.min(best, titleTierFor(name, terms));
+  return best;
+}
+
+/** 命中的那个别名（用于说明「为什么这页出现在这里」），标题已命中时返回 null */
+function matchedAlias(aliases: string[], terms: string[]): string | null {
+  let best: string | null = null;
+  let bestTier = TIER_BODY_ONLY;
+  for (const alias of aliases) {
+    const t = titleTierFor(alias, terms);
+    if (t < bestTier) {
+      bestTier = t;
+      best = alias;
+    }
+  }
+  return best;
+}
+
+/** 仅标题/别名/拼音可确定的命中（不做正文检索）：本地即时补全命令面板与结果页用 */
 export function localTitleHits(views: View[], terms: string[], exclude: string[] = []): SearchRow[] {
   if (terms.length === 0) return [];
-  return views
-    .filter((v) => titleTierFor(v.name, terms) < TIER_BODY_ONLY && !titleExcluded(v.name, exclude))
-    .map((v) => ({
+  const out: SearchRow[] = [];
+  for (const v of views) {
+    const aliases = parseViewAliases(v.aliases);
+    const title = titleTierFor(v.name, terms);
+    const viaAlias = title >= TIER_BODY_ONLY ? matchedAlias(aliases, terms) : null;
+    if (title >= TIER_BODY_ONLY && viaAlias === null) continue;
+    if (titleExcluded(v.name, exclude) || aliases.some((a) => titleExcluded(a, exclude))) continue;
+    out.push({
       view_id: v.id,
       title: v.name,
       icon: v.icon ?? null,
       layout: v.layout,
-      snippet: "",
+      // 标题没沾上词、只有别名命中时，把命中的别名当片段展示（片段以 HTML 渲染，先清洗）
+      snippet: viaAlias === null ? "" : sanitizeSnippet(viaAlias),
       rank: 0, // 同一层级内本地标题命中排 FTS 命中之前
-    }));
+    });
+  }
+  return out;
 }
 
-/** FTS 命中 + 本地标题命中合并去重（同一 view 以 FTS 行优先，保留其正文片段）后统一排序 */
-export function mergeSearchRows(fts: SearchRow[], local: SearchRow[], terms: string[]): SearchHit[] {
+/** Rust 命中 + 本地标题命中合并去重（同一 view 以 Rust 行优先，保留其正文片段）后统一排序 */
+export function mergeSearchRows(
+  fts: SearchRow[],
+  local: SearchRow[],
+  terms: string[],
+  aliasesOf: (viewId: string) => string[] = () => [],
+): SearchHit[] {
   const seen = new Set(fts.map((r) => r.view_id));
-  return prioritizeSearchRows([...fts, ...local.filter((r) => !seen.has(r.view_id))], terms);
+  return prioritizeSearchRows([...fts, ...local.filter((r) => !seen.has(r.view_id))], terms, aliasesOf);
 }
 
-/** 标题优先、同层按 FTS rank 升序 */
-export function prioritizeSearchRows(rows: SearchRow[], terms: string[]): SearchHit[] {
+/** 标题优先、同层按 FTS rank 升序；别名与标题同档参与分层 */
+export function prioritizeSearchRows(
+  rows: SearchRow[],
+  terms: string[],
+  aliasesOf: (viewId: string) => string[] = () => [],
+): SearchHit[] {
   return [...rows]
     .sort((a, b) => {
-      const ta = titleTierFor(a.title, terms);
-      const tb = titleTierFor(b.title, terms);
+      const ta = nameTier([a.title, ...aliasesOf(a.view_id)], terms);
+      const tb = nameTier([b.title, ...aliasesOf(b.view_id)], terms);
       if (ta !== tb) return ta - tb;
       return a.rank - b.rank;
     })
@@ -214,10 +255,15 @@ export function matchesQualifiers(view: View, parsed: ParsedQuery): boolean {
   return true;
 }
 
-/** 只有限定符、没有关键词时：本地列出满足条件的视图（不做正文检索），排除项只能按标题核验 */
+/** 只有限定符、没有关键词时：本地列出满足条件的视图（不做正文检索），排除项只能按标题与别名核验 */
 export function localQualifierHits(views: View[], parsed: ParsedQuery): SearchRow[] {
   return views
-    .filter((v) => matchesQualifiers(v, parsed) && !titleExcluded(v.name, parsed.exclude))
+    .filter(
+      (v) =>
+        matchesQualifiers(v, parsed) &&
+        !titleExcluded(v.name, parsed.exclude) &&
+        !parseViewAliases(v.aliases).some((a) => titleExcluded(a, parsed.exclude)),
+    )
     .map((v) => ({ view_id: v.id, title: v.name, icon: v.icon ?? null, layout: v.layout, snippet: "", rank: 0 }));
 }
 
@@ -233,13 +279,15 @@ export function filterHits(hits: SearchHit[], parsed: ParsedQuery, tagsOf: (view
 
 export const searchApi = {
   /**
-   * 搜索当前空间：Rust 侧一次返回 FTS 命中（文档正文/标题）+ 无文档行的视图标题 LIKE 兜底
-   * + 短查询（有词不足 3 字）的正文 LIKE 兜底。
+   * 搜索当前空间：Rust 侧一次返回 FTS 命中（文档正文/标题）+ 数据库单元格命中 + 页面别名命中
+   * + 无文档行的视图标题 LIKE 兜底 + 短查询（有词不足 3 字）的正文 LIKE 兜底。
    * 这里只做 <em> 清洗、本地标题命中合并与标题优先排序，最多 100+50+50 条。
    *
-   * localViews 传入当前空间的全部视图（不含回收站）：标题与拼音首字母命中由本地即时算出并合并，
+   * localViews 传入当前空间的全部视图（不含回收站）：标题、别名与拼音首字母命中由本地即时算出并合并，
    * 不与 FTS 重复（FTS trigram 只按字面匹配，覆盖不到「输入 bj 命中 笔记」这类拼音检索）。
    * 拼音按每个关键词单独展开，多词查询里「笔记 数据库」两词都能各自靠首字母召回标题。
+   * 同一份视图还用来把别名命中折算进排序：Rust 的别名行 rank 是兜底值，
+   * 但别名与标题同为用户给页面起的名字，不该排在正文命中之后。
    *
    * 关键词语法（与 Rust db::search 同一套）：空格分词=AND、`"精确短语"`、`-词` 排除；
    * 限定符 `type:`/`tag:` 从输入里剥离后再检索，最后按命中视图的布局/标签过滤；
@@ -256,11 +304,17 @@ export const searchApi = {
       return prioritizeSearchRows(localQualifierHits(localViews, parsed), parsed.terms);
     }
 
+    const byId = new Map(localViews.map((v) => [v.id, v]));
+    const aliasesOf = (id: string) => parseViewAliases(byId.get(id)?.aliases);
     const rows = await invoke<SearchRow[]>("search", { workspaceId, query: parsed.text });
     const cleaned = rows.map((r) => ({ ...r, snippet: sanitizeSnippet(r.snippet) }));
-    const merged = mergeSearchRows(cleaned, localTitleHits(localViews, parsed.terms, parsed.exclude), parsed.terms);
+    const merged = mergeSearchRows(
+      cleaned,
+      localTitleHits(localViews, parsed.terms, parsed.exclude),
+      parsed.terms,
+      aliasesOf,
+    );
     if (!hasQualifier) return merged;
-    const byId = new Map(localViews.map((v) => [v.id, v]));
     const tagsOf = (id: string) => parseViewTags(byId.get(id)?.tags).map((x) => x.toLowerCase());
     return filterHits(merged, parsed, tagsOf);
   },

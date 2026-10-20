@@ -36,6 +36,8 @@ pub struct ViewRow {
     pub source_id: Option<String>,
     /// 页面标签（JSON 数组字符串，如 `["工作","重要"]`）
     pub tags: String,
+    /// 页面别名（JSON 数组字符串，如 `["旧名","缩写"]`）：搜索与 [[链接]] 按名字找页时的补充入口
+    pub aliases: String,
 }
 
 #[cfg(test)]
@@ -62,6 +64,7 @@ mod tests {
             visited_at: None,
             source_id: None,
             tags: "[]".into(),
+            aliases: "[]".into(),
         };
         let obj = serde_json::to_value(&v).unwrap();
         // serde_json 的 Map 按字典序输出键：JS 侧按属性名取值，键序无关紧要，锁死键集合即可
@@ -75,6 +78,7 @@ mod tests {
         assert_eq!(
             keys,
             vec![
+                "aliases",
                 "created_at",
                 "deleted_at",
                 "extra",

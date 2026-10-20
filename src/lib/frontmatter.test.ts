@@ -47,3 +47,30 @@ describe("frontmatter 往返", () => {
     }
   });
 });
+
+describe("frontmatter 别名（aliases）", () => {
+  it("与标签一起写出并读回", () => {
+    const fm = buildFrontmatter({ title: "T", tags: ["工作"], aliases: ["旧名", "含, 逗号", '带"引号'] });
+    expect(fm).toContain('aliases: [旧名, "含, 逗号", "带\\"引号"]');
+    expect(splitFrontmatter(fm).meta).toEqual({ title: "T", tags: ["工作"], aliases: ["旧名", "含, 逗号", '带"引号'] });
+  });
+
+  it("识别 Obsidian 的缩进列表写法", () => {
+    const { meta } = splitFrontmatter('---\ntitle: T\naliases:\n  - 旧名\n  - "带, 逗号"\ntags:\n  - 工作\n---\n正文');
+    expect(meta.aliases).toEqual(["旧名", "带, 逗号"]);
+    expect(meta.tags).toEqual(["工作"]);
+  });
+
+  it("识别裸逗号写法，空列表读回为缺省", () => {
+    expect(splitFrontmatter("---\naliases: 旧名, 缩写\n---\n").meta.aliases).toEqual(["旧名", "缩写"]);
+    expect(splitFrontmatter("---\naliases: []\n---\n").meta.aliases).toBeUndefined();
+    expect(splitFrontmatter("---\naliases:\n---\n").meta.aliases).toBeUndefined();
+  });
+
+  it("空别名不写进文件；缩进项只归属于紧邻的列表键", () => {
+    expect(buildFrontmatter({ title: "x", aliases: [] })).toBe("---\ntitle: x\n---\n");
+    const { meta } = splitFrontmatter("---\ntitle: T\nfavorite: true\n  - 不是成员\n---\n");
+    expect(meta.favorite).toBe(true);
+    expect(meta.title).toBe("T");
+  });
+});

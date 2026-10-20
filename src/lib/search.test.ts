@@ -89,6 +89,33 @@ describe("localTitleHits", () => {
   });
 });
 
+describe("localTitleHits with page aliases", () => {
+  const views = [
+    { id: "a", name: "项目立项说明", icon: null, layout: "document", aliases: '["计划书","立项材料"]' },
+    { id: "b", name: "读书", icon: null, layout: "grid", aliases: "[]" },
+    { id: "c", name: "周报", icon: null, layout: "document", aliases: "坏数据" },
+  ] as unknown as Parameters<typeof localTitleHits>[0];
+
+  it("recalls a page whose title does not contain the term", () => {
+    const hits = localTitleHits(views, ["计划书"]);
+    expect(hits.map((r) => r.view_id)).toEqual(["a"]);
+    expect(hits[0].snippet).toBe("计划书");
+  });
+
+  it("matches alias pinyin initials the same way as titles", () => {
+    expect(localTitleHits(views, ["lxcl"]).map((r) => r.view_id)).toEqual(["a"]);
+  });
+
+  it("drops views whose alias matches an excluded term", () => {
+    expect(localTitleHits(views, ["说明"], ["计划书"])).toEqual([]);
+  });
+
+  it("ignores corrupt alias values", () => {
+    expect(localTitleHits(views, ["坏数据"])).toEqual([]);
+    expect(localTitleHits(views, ["周报"]).map((r) => r.view_id)).toEqual(["c"]);
+  });
+});
+
 describe("mergeSearchRows", () => {
   it("keeps the FTS row (with its snippet) when the same view matches locally", () => {
     const fts = [
@@ -154,6 +181,30 @@ describe("prioritizeSearchRows", () => {
       { view_id: "y", title: "bbb", icon: null, layout: "document" as const, snippet: "", rank: 1 },
     ];
     expect(prioritizeSearchRows(two, ["zz"]).map((r) => r.view_id)).toEqual(["y", "x"]);
+  });
+
+  it("lifts an alias hit above body-only hits", () => {
+    // Rust 的别名行 rank 是兜底值 1e9；靠本地别名把它归到标题档，否则会沉到正文命中之后
+    const two = [
+      {
+        view_id: "body",
+        title: "会议纪要",
+        icon: null,
+        layout: "document" as const,
+        snippet: "正文提到计划书",
+        rank: -1,
+      },
+      {
+        view_id: "alias",
+        title: "项目立项说明",
+        icon: null,
+        layout: "document" as const,
+        snippet: "计划书",
+        rank: 1e9,
+      },
+    ];
+    const out = prioritizeSearchRows(two, ["计划书"], (id) => (id === "alias" ? ["计划书"] : []));
+    expect(out.map((r) => r.view_id)).toEqual(["alias", "body"]);
   });
 });
 

@@ -348,6 +348,7 @@ pub fn run() {
             commands::db::view_update_extra,
             commands::db::view_set_favorite,
             commands::db::view_set_tags,
+            commands::db::view_set_aliases,
             commands::db::view_soft_delete,
             commands::db::view_restore,
             commands::db::view_purge,

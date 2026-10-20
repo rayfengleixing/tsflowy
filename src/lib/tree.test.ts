@@ -30,6 +30,7 @@ const v = (id: string, parent_id: string | null, position: number): View => ({
   visited_at: null,
   source_id: null, // 树里只有页面/宿主：派生视图由 Rust 侧查询排除
   tags: "[]",
+  aliases: "[]",
 });
 
 const views = [

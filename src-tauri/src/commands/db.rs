@@ -229,6 +229,17 @@ pub async fn view_set_tags(db: State<'_, Db>, id: String, tags: String) -> Resul
     db::views::set_tags(&conn, &id, &tags)
 }
 
+/// 页面别名（整体覆写 JSON 数组字符串，与 view_set_tags 同一形状）
+#[tauri::command]
+pub async fn view_set_aliases(
+    db: State<'_, Db>,
+    id: String,
+    aliases: String,
+) -> Result<(), String> {
+    let conn = db.write_conn()?;
+    db::views::set_aliases(&conn, &id, &aliases)
+}
+
 #[tauri::command]
 pub async fn view_soft_delete(db: State<'_, Db>, id: String) -> Result<(), String> {
     let conn = db.write_conn()?;

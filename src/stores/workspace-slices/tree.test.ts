@@ -21,6 +21,7 @@ function node(id: string, children: ViewNode[] = [], over: Partial<View> = {}): 
     visited_at: null,
     source_id: null,
     tags: "[]",
+    aliases: "[]",
     children,
     ...over,
   };

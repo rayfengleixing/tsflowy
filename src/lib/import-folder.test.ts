@@ -7,6 +7,7 @@ const invokeMock = vi.hoisted(() => vi.fn());
 const viewCreateMock = vi.hoisted(() => vi.fn());
 const viewSetIconMock = vi.hoisted(() => vi.fn());
 const viewSetTagsMock = vi.hoisted(() => vi.fn());
+const viewSetAliasesMock = vi.hoisted(() => vi.fn());
 const viewSetFavoriteMock = vi.hoisted(() => vi.fn());
 const docSaveMock = vi.hoisted(() => vi.fn());
 
@@ -18,6 +19,7 @@ vi.mock("./db", () => ({
     create: viewCreateMock,
     setIcon: viewSetIconMock,
     setTags: viewSetTagsMock,
+    setAliases: viewSetAliasesMock,
     setFavorite: viewSetFavoriteMock,
   },
   newId: () => `id-${Math.random().toString(36).slice(2)}`,
@@ -70,6 +72,7 @@ describe("importMarkdownFolder（本地图片/附件收编）", () => {
     viewCreateMock.mockReset();
     viewSetIconMock.mockReset();
     viewSetTagsMock.mockReset();
+    viewSetAliasesMock.mockReset();
     viewSetFavoriteMock.mockReset();
     docSaveMock.mockReset();
 
@@ -82,6 +85,7 @@ describe("importMarkdownFolder（本地图片/附件收编）", () => {
     viewCreateMock.mockImplementation(() => Promise.resolve({ id: `v${viewCreateMock.mock.calls.length}` }));
     viewSetIconMock.mockResolvedValue(undefined);
     viewSetTagsMock.mockResolvedValue(undefined);
+    viewSetAliasesMock.mockResolvedValue(undefined);
     viewSetFavoriteMock.mockResolvedValue(undefined);
     docSaveMock.mockResolvedValue(undefined);
     prefs.clear();
@@ -231,9 +235,10 @@ describe("importMarkdownFolder（本地图片/附件收编）", () => {
     expect(saved(0)).not.toContain("imgs/a.png");
   });
 
-  it("frontmatter 的图标/标签/收藏回填到新建页面", async () => {
+  it("frontmatter 的图标/标签/别名/收藏回填到新建页面", async () => {
     mockSaveAsset();
-    TEXTS[`${ROOT}/note/page.md`] = "---\ntitle: 带元信息\nicon: 📖\ntags: [工作, 重要]\nfavorite: true\n---\n正文\n";
+    TEXTS[`${ROOT}/note/page.md`] =
+      "---\ntitle: 带元信息\nicon: 📖\ntags: [工作, 重要]\naliases:\n  - 立项材料\n  - 计划书\nfavorite: true\n---\n正文\n";
     await importMarkdownFolder("ws-1");
     // 第 1 次 create 是父目录页（note），正文页本身是第 2 次 → id v2
     const pageIndex = viewCreateMock.mock.calls.findIndex((c) => (c[0] as { name: string }).name === "带元信息");
@@ -242,7 +247,16 @@ describe("importMarkdownFolder（本地图片/附件收编）", () => {
     const pageId = `v${pageIndex + 1}`;
     expect(viewSetIconMock).toHaveBeenCalledWith(pageId, "📖");
     expect(viewSetTagsMock).toHaveBeenCalledWith(pageId, ["工作", "重要"]);
+    expect(viewSetAliasesMock).toHaveBeenCalledWith(pageId, ["立项材料", "计划书"]);
     expect(viewSetFavoriteMock).toHaveBeenCalledWith(pageId, true);
+  });
+
+  it("没有别名时不调用 setAliases（老导出目录不会清空页面已有别名）", async () => {
+    mockSaveAsset();
+    TEXTS[`${ROOT}/note/page.md`] = "---\ntitle: 带元信息\ntags: [工作]\n---\n正文\n";
+    await importMarkdownFolder("ws-1");
+    expect(viewSetTagsMock).toHaveBeenCalled();
+    expect(viewSetAliasesMock).not.toHaveBeenCalled();
   });
 
   it("layout: grid 的页面重建为数据库视图（表格灌进 csv_import，不退化成文档）", async () => {

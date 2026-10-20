@@ -24,6 +24,7 @@ fn row_to_view(r: &rusqlite::Row<'_>) -> rusqlite::Result<ViewRow> {
         visited_at: r.get("visited_at")?,
         source_id: r.get("source_id")?,
         tags: r.get("tags")?,
+        aliases: r.get("aliases")?,
     })
 }
 
@@ -231,6 +232,7 @@ pub fn create(conn: &Connection, nv: NewView<'_>) -> Result<ViewRow, String> {
         visited_at: None,
         source_id: source_id.map(|s| s.to_string()),
         tags: "[]".to_string(),
+        aliases: "[]".to_string(),
     })
 }
 
@@ -278,8 +280,8 @@ pub fn duplicate(
     let mut pairs: Vec<(String, String)> = vec![(src_id.to_string(), new_id.to_string())];
     tx.execute(
         "INSERT INTO views(id, workspace_id, parent_id, name, icon, layout, extra, position,
-                            is_favorite, is_trash, deleted_at, created_at, updated_at, visited_at, source_id, tags)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 0, NULL, ?9, ?9, NULL, NULL, ?10)",
+                            is_favorite, is_trash, deleted_at, created_at, updated_at, visited_at, source_id, tags, aliases)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 0, NULL, ?9, ?9, NULL, NULL, ?10, ?11)",
         params![
             new_id,
             src.workspace_id,
@@ -290,7 +292,8 @@ pub fn duplicate(
             src.extra,
             position,
             t,
-            src.tags
+            src.tags,
+            src.aliases
         ],
     )
     .map_err(dberr("duplicate view"))?;
@@ -311,8 +314,8 @@ pub fn duplicate(
             let child_new = format!("{new_id}_{seq}");
             tx.execute(
                 "INSERT INTO views(id, workspace_id, parent_id, name, icon, layout, extra, position,
-                                    is_favorite, is_trash, deleted_at, created_at, updated_at, visited_at, source_id, tags)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 0, NULL, ?9, ?9, NULL, NULL, ?10)",
+                                    is_favorite, is_trash, deleted_at, created_at, updated_at, visited_at, source_id, tags, aliases)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 0, NULL, ?9, ?9, NULL, NULL, ?10, ?11)",
                 params![
                     child_new,
                     c.workspace_id,
@@ -323,7 +326,8 @@ pub fn duplicate(
                     c.extra,
                     c.position,
                     t,
-                    c.tags
+                    c.tags,
+                    c.aliases
                 ],
             )
             .map_err(dberr("duplicate view"))?;
@@ -513,23 +517,7 @@ pub fn set_favorite(conn: &Connection, id: &str, favorite: bool) -> Result<(), S
 /// 设置页面标签（整体覆写 JSON 数组；空数组 = 清空标签）。
 /// 这里校验 + 去重 + 规整成紧凑 JSON，前端直接读字符串。
 pub fn set_tags(conn: &Connection, id: &str, tags: &str) -> Result<(), String> {
-    let parsed: serde_json::Value =
-        serde_json::from_str(tags).map_err(|e| format!("invalid tags JSON: {e}"))?;
-    let serde_json::Value::Array(arr) = parsed else {
-        return Err("tags must be a JSON array".to_string());
-    };
-    let mut seen: Vec<String> = Vec::new();
-    for v in &arr {
-        let Some(s) = v.as_str() else {
-            return Err("tags must be strings".to_string());
-        };
-        let trimmed = s.trim();
-        if trimmed.is_empty() || seen.iter().any(|x| x == trimmed) {
-            continue;
-        }
-        seen.push(trimmed.to_string());
-    }
-    let normalized = serde_json::to_string(&seen).map_err(|e| format!("encode tags: {e}"))?;
+    let normalized = normalized_name_list(tags, "tags")?;
     let n = conn
         .execute(
             "UPDATE views SET tags = ?1, updated_at = ?2 WHERE id = ?3",
@@ -540,6 +528,44 @@ pub fn set_tags(conn: &Connection, id: &str, tags: &str) -> Result<(), String> {
         return Err(format!("view not found: {id}"));
     }
     Ok(())
+}
+
+/// 设置页面别名（与标签同形：JSON 数组字符串，整体覆写，空数组 = 清空）。
+/// 别名不改名字本身，只增加「这页还能被哪些名字找到」，所以链接与反链一律仍按 id 走。
+pub fn set_aliases(conn: &Connection, id: &str, aliases: &str) -> Result<(), String> {
+    let normalized = normalized_name_list(aliases, "aliases")?;
+    let n = conn
+        .execute(
+            "UPDATE views SET aliases = ?1, updated_at = ?2 WHERE id = ?3",
+            params![normalized, now_ms(), id],
+        )
+        .map_err(dberr("set view aliases"))?;
+    if n == 0 {
+        return Err(format!("view not found: {id}"));
+    }
+    Ok(())
+}
+
+/// 标签/别名共用的归一：必须是字符串数组，逐项 trim、丢空、按首次出现去重，输出紧凑 JSON。
+/// 归一在写入口做（不是在读侧），库里的值就只有一种形状，SQL 侧的 json_each 比较才不用担心空白差异。
+fn normalized_name_list(raw: &str, label: &str) -> Result<String, String> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| format!("invalid {label} JSON: {e}"))?;
+    let serde_json::Value::Array(arr) = parsed else {
+        return Err(format!("{label} must be a JSON array"));
+    };
+    let mut seen: Vec<String> = Vec::new();
+    for v in &arr {
+        let Some(s) = v.as_str() else {
+            return Err(format!("{label} must be strings"));
+        };
+        let trimmed = s.trim();
+        if trimmed.is_empty() || seen.iter().any(|x| x == trimmed) {
+            continue;
+        }
+        seen.push(trimmed.to_string());
+    }
+    serde_json::to_string(&seen).map_err(|e| format!("encode {label}: {e}"))
 }
 
 /// 整体覆写视图 extra（视图模式/筛选/排序/看板分组字段/日历日期字段等显示配置）。
