@@ -5,6 +5,7 @@ import {
   computeRowFormulas,
   evalFormula,
   FORMULA_CYCLE,
+  referencedFieldNames,
   renameFormulaRef,
   validateFormula,
 } from "./database-formula";
@@ -186,6 +187,43 @@ describe("computeRowFormulas 依赖图求值", () => {
   it("computeFormula 走同一套依赖求值", () => {
     const fields = [mk("qty", "数量"), mk("total", "金额", "{数量} * 2"), mk("shown", "展示", "{金额} + 1")];
     expect(computeFormula(fields[2], { qty: 20 }, fields)).toBe(41);
+  });
+});
+
+describe("referencedFieldNames", () => {
+  const mk = (
+    id: string,
+    name: string,
+    type: DatabaseField["field_type"] = "number",
+    formula?: string,
+  ): DatabaseField => ({
+    id,
+    database_view_id: "v1",
+    name,
+    field_type: type,
+    options: formula !== undefined ? JSON.stringify({ kind: "formula", formula }) : JSON.stringify({ kind: "none" }),
+    width: 120,
+    is_hidden: 0,
+    position: 0,
+  });
+
+  it("收集全部公式引用到的字段名，供上层决定哪些列要先算出可视值", () => {
+    const fields = [
+      mk("qty", "数量"),
+      mk("st", "状态", "single_select"),
+      mk("total", "金额", "formula", "{数量} * 2"),
+      mk("tag", "标签", "formula", "CONCAT({状态}, {金额})"),
+    ];
+    expect([...referencedFieldNames(fields)].sort()).toEqual(["数量", "状态", "金额"].sort());
+  });
+
+  it("空表达式与非法表达式不贡献引用", () => {
+    const fields = [mk("a", "A", "formula", "   "), mk("b", "B", "formula", "{未闭合")];
+    expect(referencedFieldNames(fields)).toEqual(new Set());
+  });
+
+  it("没有公式字段时返回空集合（计算列不必为公式额外取数）", () => {
+    expect(referencedFieldNames([mk("qty", "数量"), mk("tot", "汇总", "rollup")])).toEqual(new Set());
   });
 });
 

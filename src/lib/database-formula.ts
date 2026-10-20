@@ -624,11 +624,27 @@ function formulaRefNames(expr: string): Set<string> {
   return names;
 }
 
+/** 这张表里所有公式引用到的字段名：上层据此决定哪些列要先算出「公式看得懂的值」
+ *  （计算列没有存储值、选择/关联列存的是 id，直接交给公式都会取到空或裸 id） */
+export function referencedFieldNames(fields: DatabaseField[]): Set<string> {
+  const names = new Set<string>();
+  for (const f of fields) {
+    if (f.field_type !== "formula") continue;
+    const opts = parseFieldOptions(f.options);
+    if (opts.kind !== "formula" || !opts.formula.trim()) continue;
+    for (const name of formulaRefNames(opts.formula)) names.add(name);
+  }
+  return names;
+}
+
 /**
  * 一行内所有公式字段的值（fieldId → 值），按依赖顺序求值：
  * 公式引用另一个公式字段时取的是**对方的计算值**（旧实现读对方存储格——恒为空，
  * 公式串公式静默失效）。互相引用的字段构成环 → 成员标记 FORMULA_CYCLE，
  * 不会无限递归也不会静默变空。无公式字段时返回空 Map。
+ *
+ * rowCells 里除了存储值，还要铺上「公式看得懂的值」：计算列（rollup/反向关系）没有存储值，
+ * 选择/关联列存的是选项 id 与行 id。整表求值走 computeEvaluatedCells，它负责先把这些铺进来。
  */
 export function computeRowFormulas(
   rowCells: Record<string, CellValue>,
