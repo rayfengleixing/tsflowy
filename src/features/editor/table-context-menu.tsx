@@ -142,6 +142,15 @@ export function TableContextMenu({ editor }: { editor: Editor | null }) {
         {t("table.addColumnRight")}
       </button>
       {divider}
+      {/* 标题行/列：TipTap 直接翻转该行（列）所有单元格的 header 属性，再点一次翻回去。
+          菜单只在光标确实落在单元格内时才打开，所以不必再 can() 探测 */}
+      <button className={itemCls} onClick={run(() => editor.chain().focus().toggleHeaderRow().run())}>
+        {t("table.toggleHeaderRow")}
+      </button>
+      <button className={itemCls} onClick={run(() => editor.chain().focus().toggleHeaderColumn().run())}>
+        {t("table.toggleHeaderColumn")}
+      </button>
+      {divider}
       <button className={itemCls} onClick={run(() => editor.chain().focus().deleteRow().run())}>
         {t("table.deleteRow")}
       </button>

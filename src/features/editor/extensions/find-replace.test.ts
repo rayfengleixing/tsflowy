@@ -12,7 +12,11 @@ const schema = new Schema({
     heading: { group: "block", content: "inline*", attrs: { level: { default: 1 } } },
     text: { group: "inline" },
     hardBreak: { inline: true, group: "inline" },
-    image: { inline: true, group: "inline", attrs: { src: { default: "" } } },
+    image: { inline: true, group: "inline", attrs: { src: { default: "" }, alt: { default: "" } } },
+    // 属性里带可见文本的原子块：查找要能搜到，替换一律不能碰（见 FindMatch.inAtom）
+    math: { group: "block", atom: true, attrs: { tex: { default: "" } } },
+    mermaid: { group: "block", atom: true, attrs: { code: { default: "" } } },
+    attachment: { group: "block", atom: true, attrs: { name: { default: "" } } },
   },
   marks: { bold: {}, italic: {} },
 });
@@ -87,6 +91,49 @@ describe("collectMatches", () => {
     const d = doc([{ type: "paragraph", content: [text("abc")] }]);
     expect(collectMatches(d, "")).toEqual([]);
     expect(collectMatches(d, "zzz")).toEqual([]);
+  });
+});
+
+describe("原子块属性文本（公式源码 / Mermaid / 附件名 / 图片 alt）", () => {
+  const math = (tex: string) => ({ type: "math", attrs: { tex } });
+  const mermaid = (code: string) => ({ type: "mermaid", attrs: { code } });
+  const attachment = (name: string) => ({ type: "attachment", attrs: { name } });
+  const para = (value: string) => ({ type: "paragraph", content: [text(value)] });
+
+  it("正文搜不到的属性文本现在能命中，并映射回节点自身范围", () => {
+    // 单个 math 块：leaf nodeSize=1，节点位置 0；占位符 + 「\alpha beta」都映射到 0
+    const d = doc([math("\\alpha beta")]);
+    expect(collectMatches(d, "alpha")).toEqual([{ from: 0, to: 1, inAtom: true }]);
+    expect(collectMatches(d, "lpha be")).toEqual([{ from: 0, to: 1, inAtom: true }]);
+    expect(collectMatches(d, "gamma")).toEqual([]);
+  });
+
+  it("几种原子块各有各的属性字段", () => {
+    // 段落「正文」占 1..2，nodeSize=4 → mermaid 在 pos 4；再 +1 → attachment 在 pos 5
+    const d = doc([para("正文"), mermaid("graph TD"), attachment("报价单.pdf")]);
+    expect(scanMatches(d, "graph TD").matches).toEqual([{ from: 4, to: 5, inAtom: true }]);
+    expect(scanMatches(d, "报价单").matches).toEqual([{ from: 5, to: 6, inAtom: true }]);
+    // 正文命中照旧，不带 inAtom
+    expect(scanMatches(d, "正文").matches).toEqual([{ from: 1, to: 3 }]);
+  });
+
+  it("属性文本与正文之间的边界不允许被命中跨越", () => {
+    // 段落「ab」= 1,2；image 紧跟其后落在 pos 3，alt「cd」也映射到 3
+    const d = doc([{ type: "paragraph", content: [text("ab"), { type: "image", attrs: { alt: "cd" } }] }]);
+    expect(collectMatches(d, "ab")).toEqual([{ from: 1, to: 3 }]);
+    expect(collectMatches(d, "cd")).toEqual([{ from: 3, to: 4, inAtom: true }]);
+    // 「bcd」半在正文半在属性里：按正文替换会把图片整个吃掉，所以这条根本不算命中
+    expect(collectMatches(d, "bcd")).toEqual([]);
+  });
+
+  it("跨块的查询不会从属性文本里穿出去", () => {
+    const d = doc([{ type: "image", attrs: { alt: "cd" } }, para("ef")]);
+    expect(collectMatches(d, "d\ne")).toEqual([]);
+  });
+
+  it("正则档同样识别属性文本命中", () => {
+    const d = doc([math("E = mc^2")]);
+    expect(scanMatches(d, "mc.2", { regex: true }).matches).toEqual([{ from: 0, to: 1, inAtom: true }]);
   });
 });
 
@@ -244,5 +291,14 @@ describe("replaceAllInDoc（全局替换的编辑器路径）", () => {
     const { editor, docOf } = fakeEditor(doc([para("旧名")]));
     expect(replaceAllInDoc(editor, "旧名", "旧名旧名")).toBe(1);
     expect(docOf().textContent).toBe("旧名旧名");
+  });
+
+  it("属性文本里的同名文字不算可替换：预览计数与实际处数同一口径", () => {
+    // 段落 nodeSize = 1+5+1 = 7 → math 在 pos 7
+    const { editor, docOf } = fakeEditor(doc([para("旧名 正文"), { type: "math", attrs: { tex: "旧名公式" } }]));
+    expect(countReplaceableInDoc(editor, "旧名")).toBe(1);
+    expect(replaceAllInDoc(editor, "旧名", "新名")).toBe(1);
+    expect(docOf().child(0).textContent).toBe("新名 正文");
+    expect(docOf().child(1).attrs.tex).toBe("旧名公式");
   });
 });

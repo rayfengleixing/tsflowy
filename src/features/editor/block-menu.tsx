@@ -567,6 +567,17 @@ export function BlockMenu() {
         <IconBtn title={t("blockMenu.cut")} onClick={() => void runCut()}>
           <Scissors className="h-4 w-4" />
         </IconBtn>
+        <IconBtn
+          title={t("blockMenu.duplicate")}
+          onClick={() => {
+            // 与多选的「重复」同一条事务构造：count=1 就是这一块
+            const ok = duplicateBlockSpan(editor, { from: pos, to: pos + nodeSize, count: 1 });
+            if (!ok) toast.info(t("block.duplicateBlocked"));
+            close();
+          }}
+        >
+          <CopyPlus className="h-4 w-4" />
+        </IconBtn>
         <IconBtn title={t("blockMenu.delete")} onClick={runDelete}>
           <Trash2 className="h-4 w-4" />
         </IconBtn>

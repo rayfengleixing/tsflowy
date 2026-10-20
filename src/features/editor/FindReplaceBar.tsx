@@ -22,11 +22,14 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
   const [regex, setRegex] = useState(false);
-  const [info, setInfo] = useState<{ total: number; active: number; truncated: boolean; invalid: boolean }>({
+  const [info, setInfo] = useState({
     total: 0,
     active: -1,
     truncated: false,
     invalid: false,
+    /** 落在原子节点属性文本里的命中数（公式源码、附件名…）：只跳转不替换 */
+    atomCount: 0,
+    activeIsAtom: false,
   });
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -48,10 +51,18 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
       const active = st?.active ?? -1;
       const truncated = st?.truncated ?? false;
       const invalid = st?.invalid ?? false;
+      const atomCount = st?.matches.filter((m) => m.inAtom).length ?? 0;
+      const activeMatch = st && st.active >= 0 ? st.matches[st.active] : null;
+      const activeIsAtom = activeMatch?.inAtom === true;
       setInfo((prev) =>
-        prev.total === total && prev.active === active && prev.truncated === truncated && prev.invalid === invalid
+        prev.total === total &&
+        prev.active === active &&
+        prev.truncated === truncated &&
+        prev.invalid === invalid &&
+        prev.atomCount === atomCount &&
+        prev.activeIsAtom === activeIsAtom
           ? prev
-          : { total, active, truncated, invalid },
+          : { total, active, truncated, invalid, atomCount, activeIsAtom },
       );
     };
     sync();
@@ -203,6 +214,12 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
         </div>
       )}
 
+      {info.atomCount > 0 && (
+        <div className="border-t border-neutral-200 px-2 pb-1.5 text-[11px] text-neutral-500 dark:border-neutral-800">
+          {t("find.atomHits", { count: String(info.atomCount) })}
+        </div>
+      )}
+
       {canReplace && showReplace && (
         <div className="flex items-center gap-1 border-t border-neutral-200 px-2 py-1.5 dark:border-neutral-800">
           <Replace className="ml-1 h-3.5 w-3.5 shrink-0 text-neutral-400" />
@@ -221,9 +238,9 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
           />
           <button
             className="flex h-7 shrink-0 items-center gap-1 rounded px-2 text-[12px] text-neutral-600 hover:bg-neutral-200 disabled:opacity-40 dark:text-neutral-300 dark:hover:bg-neutral-800"
-            title={t("find.replace")}
+            title={info.activeIsAtom ? t("find.atomBlocked") : t("find.replace")}
             aria-label={t("find.replace")}
-            disabled={info.total === 0}
+            disabled={info.total === 0 || info.activeIsAtom}
             onClick={onReplace}
           >
             <Replace className="h-3.5 w-3.5" />

@@ -13,6 +13,7 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { EditorView } from "@tiptap/pm/view";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import type { Editor } from "@tiptap/core";
+import { logger } from "@/lib/logger";
 
 export const findReplaceKey = new PluginKey<FindState>("findReplace");
 
@@ -30,6 +31,12 @@ const MAX_REPLACE_ROUNDS = 50;
 export interface FindMatch {
   from: number;
   to: number;
+  /**
+   * 命中落在原子节点的属性文本里（公式源码、Mermaid 源码、附件名…）。
+   * 这类命中可以跳转、可以高亮整块，但不能替换：替换要改写的是节点属性而不是正文，
+   * 交给用户在那个块自己的编辑器里做，查找栏不越俎代庖。
+   */
+  inAtom?: boolean;
 }
 
 /** 匹配选项；不传时保持旧默认（忽略大小写、不做全词、不用正则） */
@@ -66,29 +73,69 @@ interface TextIndex {
   text: string;
   /** posMap[i] = 第 i 个字符在文档中的位置 */
   posMap: number[];
+  /** origin[i] = 第 i 个字符来自哪个原子节点（正文文本为 null） */
+  origin: (string | null)[];
 }
 
 /** 原子 inline 节点（image/mention 等）在拼接索引中的占位符（U+FFFC，OBJ 字符） */
 const ATOM_SENTINEL = String.fromCharCode(0xfffc);
+
+/** 存在 attrs 里、用户在页面上看得见或就在源码里读的文本：查找要能搜到 */
+const ATOM_TEXT_ATTRS: Record<string, readonly string[] | undefined> = {
+  math: ["tex"],
+  mermaid: ["code"],
+  attachment: ["name"],
+  image: ["alt", "caption"],
+  databaseView: ["name"],
+};
+
+function attrTextOf(node: ProseMirrorNode): string {
+  const names = ATOM_TEXT_ATTRS[node.type.name];
+  if (!names) return "";
+  const attrs = node.attrs as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const name of names) {
+    const v = attrs[name];
+    if (typeof v === "string" && v) parts.push(v);
+  }
+  return parts.join(" ");
+}
 
 /**
  * 递归拼接整篇文档的文本：
  *   - 文本节点逐字符映射（pos + i）；
  *   - 非文本叶子（image/mention 等 atom）以 ATOM_SENTINEL 占位，hardBreak 以 \n 占位——
  *     旧实现直接拼接 textContent 会让跨 hardBreak 的假命中出现；
+ *   - 原子节点再把它 attrs 里的可见文本（公式源码、附件名…）接在占位符后面，这些字符同样
+ *     映射到节点自身位置，于是这类命中只跳转、不替换（见 FindMatch.inAtom）；
  *   - 块级兄弟之间插 \n：既不产生跨块假命中，也允许显式含 \n 的查询跨块匹配。
  */
-function stitchNode(node: ProseMirrorNode, pos: number, text: string[], posMap: number[]) {
+function stitchNode(node: ProseMirrorNode, pos: number, text: string[], posMap: number[], origin: (string | null)[]) {
   if (node.isText && node.text) {
     for (let i = 0; i < node.text.length; i++) {
       text.push(node.text[i]);
       posMap.push(pos + i);
+      origin.push(null);
     }
     return;
   }
   if (node.isLeaf) {
-    text.push(node.type.name === "hardBreak" ? "\n" : ATOM_SENTINEL);
+    if (node.type.name === "hardBreak") {
+      text.push("\n");
+      posMap.push(pos);
+      origin.push(null);
+      return;
+    }
+    text.push(ATOM_SENTINEL);
     posMap.push(pos);
+    origin.push(node.type.name);
+    const attrText = attrTextOf(node);
+    // split("") 按 UTF-16 码元切：for-of 会把 emoji 当成一个字符，索引与位置就错位了
+    for (const ch of attrText.split("")) {
+      text.push(ch);
+      posMap.push(pos);
+      origin.push(node.type.name);
+    }
     return;
   }
   // doc 无开闭标记，子节点从 pos 起算；其余容器节点子节点从 pos+1 起算
@@ -98,17 +145,19 @@ function stitchNode(node: ProseMirrorNode, pos: number, text: string[], posMap: 
     if (!child.isInline && !first) {
       text.push("\n");
       posMap.push(base + offset);
+      origin.push(null);
     }
     first = false;
-    stitchNode(child, base + offset, text, posMap);
+    stitchNode(child, base + offset, text, posMap, origin);
   });
 }
 
 function buildTextIndex(doc: ProseMirrorNode): TextIndex {
   const text: string[] = [];
   const posMap: number[] = [];
-  stitchNode(doc, 0, text, posMap);
-  return { text: text.join(""), posMap };
+  const origin: (string | null)[] = [];
+  stitchNode(doc, 0, text, posMap, origin);
+  return { text: text.join(""), posMap, origin };
 }
 
 export interface FindScan {
@@ -131,15 +180,34 @@ function isWholeWordAt(text: string, idx: number, len: number): boolean {
   return !(before && WORD_CHAR.test(before)) && !(after && WORD_CHAR.test(after));
 }
 
-/** 正则档扫描：与全文扫描共用同一份 posMap，非法表达式当无命中（invalid=true 交给 UI 提示）。
+/**
+ * 把拼接索引里的一段命中翻译成文档位置。返回 null 表示这段不算命中。
+ * 判定按「字符来源必须齐整」来切：
+ *   - 全来自正文 → 常规区间；
+ *   - 全来自同一个原子节点（占位符 + 它的属性文本映射到同一个位置）→ 标 inAtom，
+ *     这类命中能跳、能高亮，但不进替换路径；
+ *   - 跨越原子与正文、或横跨两个原子的，一律丢弃：属性文本不是正文，
+ *     按正文替换会把整个原子节点一起吃掉（旧版没有属性文本，不存在这条路）。
+ */
+function toMatch(index: TextIndex, idx: number, len: number): FindMatch | null {
+  const end = idx + len - 1;
+  const origin = index.origin[idx];
+  for (let i = idx + 1; i <= end; i++) {
+    if (index.origin[i] !== origin) return null;
+  }
+  const fromPos = index.posMap[idx];
+  const toPos = index.posMap[end];
+  if (origin !== null) {
+    if (fromPos !== toPos) return null;
+    return { from: fromPos, to: fromPos + 1, inAtom: true };
+  }
+  return { from: fromPos, to: toPos + 1 };
+}
+
+/** 正则档扫描：与全文扫描共用同一份索引，非法表达式当无命中（invalid=true 交给 UI 提示）。
  *  大小写不敏感直接用 `i` 修饰符跑原文，不做 toLowerCase——省掉长度漂移那一类坑。 */
-function scanRegex(
-  text: string,
-  posMap: number[],
-  query: string,
-  caseSensitive: boolean,
-  wholeWord: boolean,
-): FindScan {
+function scanRegex(index: TextIndex, query: string, caseSensitive: boolean, wholeWord: boolean): FindScan {
+  const { text, posMap } = index;
   let re: RegExp;
   try {
     re = new RegExp(query, caseSensitive ? "g" : "gi");
@@ -156,12 +224,15 @@ function scanRegex(
       const end = m.index + m[0].length - 1;
       if (end >= posMap.length) break;
       if (!wholeWord || isWholeWordAt(text, m.index, m[0].length)) {
-        count++;
-        if (count > MAX_MATCHES) {
-          truncated = true;
-          break;
+        const hit = toMatch(index, m.index, m[0].length);
+        if (hit) {
+          count++;
+          if (count > MAX_MATCHES) {
+            truncated = true;
+            break;
+          }
+          matches.push(hit);
         }
-        matches.push({ from: posMap[m.index], to: posMap[end] + 1 });
       }
     }
     if (re.lastIndex === m.index) re.lastIndex++;
@@ -175,8 +246,9 @@ export function scanMatches(doc: ProseMirrorNode, query: string, options: FindOp
   if (!query) return { matches: [], truncated: false, invalid: false };
   const caseSensitive = options.caseSensitive === true;
   const wholeWord = options.wholeWord === true;
-  const { text, posMap } = buildTextIndex(doc);
-  if (options.regex) return scanRegex(text, posMap, query, caseSensitive, wholeWord);
+  const index = buildTextIndex(doc);
+  const { text } = index;
+  if (options.regex) return scanRegex(index, query, caseSensitive, wholeWord);
   let hay = text;
   let needle = query;
   if (!caseSensitive) {
@@ -199,12 +271,15 @@ export function scanMatches(doc: ProseMirrorNode, query: string, options: FindOp
       idx = hay.indexOf(needle, idx + 1);
       continue;
     }
-    count++;
-    if (count > MAX_MATCHES) {
-      truncated = true;
-      break;
+    const hit = toMatch(index, idx, needle.length);
+    if (hit) {
+      count++;
+      if (count > MAX_MATCHES) {
+        truncated = true;
+        break;
+      }
+      matches.push(hit);
     }
-    matches.push({ from: posMap[idx], to: posMap[idx + needle.length - 1] + 1 });
     idx = hay.indexOf(needle, idx + needle.length);
   }
   return { matches, truncated, invalid: false };
@@ -242,6 +317,15 @@ export function gotoFindMatch(editor: Editor, index: number) {
   const i = ((index % n) + n) % n;
   const m = st.matches[i];
   editor.view.dispatch(editor.state.tr.setMeta(findReplaceKey, { type: "setActive", index: i } satisfies FindMeta));
+  // 属性文本里的命中落不到光标上：整块选中（NodeSelection），用户直接就能改那个块
+  if (m.inAtom) {
+    try {
+      editor.chain().setNodeSelection(m.from).scrollIntoView().run();
+      return;
+    } catch (e: unknown) {
+      logger.warn("find: select atom block failed", m.from, e);
+    }
+  }
   editor.chain().setTextSelection({ from: m.from, to: m.to }).scrollIntoView().run();
 }
 
@@ -282,6 +366,8 @@ export function replaceActiveMatch(editor: Editor, replacement: string): boolean
   const st = getFindState(editor);
   if (!replaceable(st)) return false;
   const m = st.matches[st.active];
+  // 属性文本不是正文：改它得走那个块自己的编辑入口，替换在这里一律拒绝
+  if (m.inAtom) return false;
   const value = expandReplacement(st, editor.state.doc, m, replacement);
   const chain = editor.chain().focus();
   if (value === "") chain.deleteRange({ from: m.from, to: m.to });
@@ -300,10 +386,12 @@ export function replaceAllMatches(editor: Editor, replacement: string): number {
   recomputeFindNow(editor);
   const st = getFindState(editor);
   if (!replaceable(st)) return 0;
-  const count = st.matches.length;
+  // 属性文本里的命中跳过：它们能跳、能看，但不能被正文替换改掉
+  const hits = st.matches.filter((m) => !m.inAtom);
+  const count = hits.length;
   const chain = editor.chain().focus();
-  for (let i = st.matches.length - 1; i >= 0; i--) {
-    const m = st.matches[i];
+  for (let i = hits.length - 1; i >= 0; i--) {
+    const m = hits[i];
     // 逐个命中各自展开捕获组：从后往前落，前面的位置与文本都不受已替换部分影响
     const value = expandReplacement(st, editor.state.doc, m, replacement);
     if (value === "") chain.deleteRange({ from: m.from, to: m.to });
@@ -336,7 +424,7 @@ export function replaceAllInDoc(
     const doc = editor.state.doc;
     const guard = protectedHeadingEnd(doc);
     const scan = scanMatches(doc, query, options);
-    const hits = scan.matches.filter((m) => m.from >= guard);
+    const hits = scan.matches.filter((m) => m.from >= guard && !m.inAtom);
     if (hits.length === 0) break;
     const tr = editor.state.tr;
     // 从后往前落：前面的命中位置不受已替换部分影响；保护区之后的跨块命中也一并跳过
@@ -367,7 +455,7 @@ function protectedHeadingEnd(doc: ProseMirrorNode): number {
 export function countReplaceableInDoc(editor: Editor, query: string, options: FindOptions = {}): number {
   if (editor.isDestroyed || !query) return 0;
   const guard = protectedHeadingEnd(editor.state.doc);
-  return scanMatches(editor.state.doc, query, options).matches.filter((m) => m.from >= guard).length;
+  return scanMatches(editor.state.doc, query, options).matches.filter((m) => m.from >= guard && !m.inAtom).length;
 }
 
 export function clearFind(editor: Editor) {
@@ -459,11 +547,14 @@ export const FindReplace = Extension.create({
             if (!st || st.matches.length === 0) return null;
             return DecorationSet.create(
               state.doc,
-              st.matches.map((m, i) =>
-                Decoration.inline(m.from, m.to, {
-                  class: i === st.active ? "find-hit find-hit-active" : "find-hit",
-                }),
-              ),
+              st.matches.map((m, i) => {
+                const cls = i === st.active ? "find-hit find-hit-active" : "find-hit";
+                // 属性文本没有可着色的文本区间，只能整块上色（node decoration）；
+                // NodeView 渲染的原子块可能不吃这个 class，跳转与整块选中仍是准的
+                return m.inAtom
+                  ? Decoration.node(m.from, m.to, { class: cls })
+                  : Decoration.inline(m.from, m.to, { class: cls });
+              }),
             );
           },
         },
