@@ -162,6 +162,165 @@ fn move_unknown_target_is_noop() {
     assert_eq!(layout(&conn).len(), 6);
 }
 
+/// id → (workspace_id, parent_id, position)：跨空间移动要同时断言归属和排序
+fn placement(conn: &Connection) -> BTreeMap<String, (String, Option<String>, i64)> {
+    let mut stmt = conn
+        .prepare("SELECT id, workspace_id, parent_id, position FROM views")
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    rows.into_iter()
+        .map(|(id, ws, p, pos)| (id, (ws, p, pos)))
+        .collect()
+}
+
+fn add_workspace(conn: &Connection, id: &str) {
+    conn.execute(
+        "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES (?1, ?1, 1, 1)",
+        params![id],
+    )
+    .unwrap();
+}
+
+/// 两个空间各自成树：w1 = r1(→c1,c2) + r2，w2 = p1(→q1) + p2
+fn seed_two_workspaces(conn: &Connection) {
+    add_workspace(conn, "w2");
+    for (ws, id, parent) in [
+        ("w1", "r1", None),
+        ("w1", "r2", None),
+        ("w1", "c1", Some("r1")),
+        ("w1", "c2", Some("r1")),
+        ("w2", "p1", None),
+        ("w2", "p2", None),
+        ("w2", "q1", Some("p1")),
+    ] {
+        create(conn, id, ws, parent, id, "document", "{}", None).unwrap();
+    }
+}
+
+#[test]
+fn move_to_other_workspace_root_renumbers_both_sides() {
+    let conn = setup();
+    seed_two_workspaces(&conn);
+    move_view_to_workspace(&conn, "r1", "w2", None, 0).unwrap();
+    let l = placement(&conn);
+    assert_eq!(l["r1"], ("w2".into(), None, 0));
+    assert_eq!(l["p1"], ("w2".into(), None, 1));
+    assert_eq!(l["p2"], ("w2".into(), None, 2));
+    // 源侧补位；子页跟着换了空间，父子关系与原排序不变
+    assert_eq!(l["r2"], ("w1".into(), None, 0));
+    assert_eq!(l["c1"], ("w2".into(), Some("r1".into()), 0));
+    assert_eq!(l["c2"], ("w2".into(), Some("r1".into()), 1));
+}
+
+#[test]
+fn move_to_other_workspace_under_parent() {
+    let conn = setup();
+    seed_two_workspaces(&conn);
+    move_view_to_workspace(&conn, "c1", "w2", Some("p1"), 1).unwrap();
+    let l = placement(&conn);
+    assert_eq!(l["c1"], ("w2".into(), Some("p1".into()), 1));
+    assert_eq!(l["q1"], ("w2".into(), Some("p1".into()), 0));
+    assert_eq!(l["c2"], ("w1".into(), Some("r1".into()), 0));
+    assert_eq!(l["r1"], ("w1".into(), None, 0));
+}
+
+#[test]
+fn move_takes_row_detail_doc_and_derived_view() {
+    let conn = setup();
+    seed_two_workspaces(&conn);
+    // 一张表：宿主 + 它的派生视图（不属于树）+ 挂在宿主下的行详情文档
+    create(&conn, "db1", "w1", None, "db1", "grid", "{}", None).unwrap();
+    create(
+        &conn,
+        "db2",
+        "w1",
+        None,
+        "看板视图",
+        "board",
+        "{}",
+        Some("db1"),
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO views(id, workspace_id, parent_id, name, layout, extra, position, created_at, updated_at)
+         VALUES ('row1', 'w1', 'db1', '某行', 'document', '{\"row_detail\":1}', 0, 1, 1)",
+        [],
+    )
+    .unwrap();
+
+    move_view_to_workspace(&conn, "db1", "w2", Some("p1"), 0).unwrap();
+    let l = placement(&conn);
+    assert_eq!(l["db1"], ("w2".into(), Some("p1".into()), 0));
+    assert_eq!(l["row1"], ("w2".into(), Some("db1".into()), 0));
+    // 派生视图 parent_id 恒为 NULL，进不了子树 CTE，只能按 source_id 跟着宿主走
+    assert_eq!(l["db2"], ("w2".into(), None, 0));
+}
+
+#[test]
+fn move_keeps_trashed_descendant_trashed_but_follows_parent() {
+    let conn = setup();
+    seed_two_workspaces(&conn);
+    soft_delete(&conn, "c2").unwrap();
+    move_view_to_workspace(&conn, "r1", "w2", None, 0).unwrap();
+    let l = placement(&conn);
+    assert_eq!(l["c2"].0, "w2".to_string());
+    let is_trash: i64 = conn
+        .query_row("SELECT is_trash FROM views WHERE id = 'c2'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(is_trash, 1, "跟着父页换了空间的回收站页面不该被顺手恢复");
+}
+
+#[test]
+fn same_workspace_target_falls_back_to_ordinary_renumber() {
+    let conn = setup();
+    seed_two_workspaces(&conn);
+    move_view_to_workspace(&conn, "c1", "w1", None, 0).unwrap();
+    let l = placement(&conn);
+    assert_eq!(l["c1"], ("w1".into(), None, 0));
+    assert_eq!(l["r1"], ("w1".into(), None, 1));
+    assert_eq!(l["r2"], ("w1".into(), None, 2));
+    assert_eq!(l["c2"], ("w1".into(), Some("r1".into()), 0));
+    // 另一个空间一律不动
+    assert_eq!(l["p1"], ("w2".into(), None, 0));
+}
+
+#[test]
+fn cross_workspace_move_rejects_bad_arguments() {
+    let conn = setup();
+    seed_two_workspaces(&conn);
+    create(&conn, "d1", "w1", None, "派生", "board", "{}", Some("r2")).unwrap();
+    soft_delete(&conn, "p2").unwrap();
+
+    // 视图不存在 / 空间不存在
+    assert!(move_view_to_workspace(&conn, "ghost", "w2", None, 0).is_err());
+    assert!(move_view_to_workspace(&conn, "c1", "w9", None, 0).is_err());
+    // 派生视图属于宿主，不能单独搬家
+    assert!(move_view_to_workspace(&conn, "d1", "w2", None, 0).is_err());
+    // 回收站里的页面不能搬，父级在回收站里也不行
+    assert!(move_view_to_workspace(&conn, "p2", "w1", None, 0).is_err());
+    assert!(move_view_to_workspace(&conn, "c1", "w2", Some("p2"), 0).is_err());
+    // 目标父级必须在目标空间里：r2 是 w1 的页面
+    assert!(move_view_to_workspace(&conn, "c1", "w2", Some("r2"), 0).is_err());
+    // 全部拒绝后，两侧的位置与归属保持原样
+    let l = placement(&conn);
+    assert_eq!(l["c1"], ("w1".into(), Some("r1".into()), 0));
+    assert_eq!(l["p1"], ("w2".into(), None, 0));
+    assert_eq!(l["d1"], ("w1".into(), None, 0));
+}
+
 #[test]
 fn create_document_seeds_content_row_and_fts() {
     let conn = setup();

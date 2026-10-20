@@ -285,6 +285,25 @@ pub async fn view_move(
     db::views::move_view(&conn, &view_id, new_parent_id.as_deref(), index)
 }
 
+/// 把页面连同子树搬到另一个空间；new_parent_id 为空表示挂到目标空间的根级。
+#[tauri::command]
+pub async fn view_move_to_workspace(
+    db: State<'_, Db>,
+    view_id: String,
+    target_workspace_id: String,
+    new_parent_id: Option<String>,
+    index: i64,
+) -> Result<(), String> {
+    let conn = db.write_conn()?;
+    db::views::move_view_to_workspace(
+        &conn,
+        &view_id,
+        &target_workspace_id,
+        new_parent_id.as_deref(),
+        index,
+    )
+}
+
 // ---------- app_settings ----------
 
 #[tauri::command]

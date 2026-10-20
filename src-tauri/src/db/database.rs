@@ -790,7 +790,7 @@ fn move_row_document(
             tx,
             "UPDATE views SET is_trash = 1, deleted_at = ?2 WHERE id IN (SELECT id FROM sub) AND is_trash = 0",
             document_id,
-            Some(t),
+            Some(&t),
             "trash row document",
         )?;
     } else {

@@ -1,4 +1,4 @@
-//! 视图（view）数据层：CRUD、软删/恢复/彻底删除、同 workspace 内的移动与重排、子树复制。
+//! 视图（view）数据层：CRUD、软删/恢复/彻底删除、同 workspace 内的移动与重排、跨 workspace 搬页、子树复制。
 //! 为保持 `db::views::xxx` 的对外路径不变，这里原样重导出各子模块的公开函数。
 
 pub mod crud;
@@ -13,7 +13,7 @@ pub use crud::{
     list_trash, rename, set_aliases, set_favorite, set_icon, set_tags, touch_visited, update_extra,
     NewView,
 };
-pub use reorder::move_view;
+pub use reorder::{move_view, move_view_to_workspace};
 pub use trash::{
     purge, purge_expired_trash, purge_expired_trash_all, purge_trash, restore, soft_delete,
 };

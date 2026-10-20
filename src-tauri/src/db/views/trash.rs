@@ -5,11 +5,12 @@ use super::super::{dberr, now_ms};
 /// 对「视图 + 其子树」跑一条递归 CTE 语句。对外可见供数据库行回收站复用：
 /// 行详情文档挂在宿主视图下，行进/出回收站要连它一起搬，而它本身是普通视图行。
 /// 只做单条 execute，不开事务——调用方负责把多次改动包进同一个 tx。
+/// `extra` 是语句里 ?2 的绑定值（时间戳、workspace_id 等），None 时语句只能用 ?1。
 pub(crate) fn with_recursive_subtree(
     conn: &Connection,
     body: &str,
     id: &str,
-    extra: Option<i64>,
+    extra: Option<&dyn rusqlite::ToSql>,
     ctx: &'static str,
 ) -> Result<usize, String> {
     let sql = format!(
@@ -39,14 +40,14 @@ pub fn soft_delete(conn: &Connection, id: &str) -> Result<(), String> {
         &tx,
         "UPDATE views SET is_trash = 1, deleted_at = ?2 WHERE id IN (SELECT id FROM sub)",
         id,
-        Some(t),
+        Some(&t),
         "soft delete view",
     )?;
     with_recursive_subtree(
         &tx,
         "UPDATE views SET is_trash = 1, deleted_at = ?2 WHERE source_id IN (SELECT id FROM sub)",
         id,
-        Some(t),
+        Some(&t),
         "soft delete derived views",
     )?;
     tx.commit().map_err(dberr("soft delete view (commit)"))

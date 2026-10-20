@@ -355,6 +355,7 @@ pub fn run() {
             commands::db::view_purge_trash,
             commands::db::view_purge_expired_trash,
             commands::db::view_move,
+            commands::db::view_move_to_workspace,
             commands::db::setting_get,
             commands::db::setting_set,
             commands::db::doc_get,
