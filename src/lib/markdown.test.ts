@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { JSONContent } from "@tiptap/react";
 import { looksLikeMarkdown, markdownToJson, parseInline, textToBlocks, jsonToMarkdown } from "./markdown";
 
 describe("parseInline", () => {
@@ -237,7 +238,7 @@ describe("markdownToJson", () => {
   it("converts blockquote and horizontal rule", () => {
     const json = markdownToJson("> 引用一句\n\n---");
     expect(json.content).toEqual([
-      { type: "blockquote", content: [{ type: "text", text: "引用一句" }] },
+      { type: "blockquote", content: [{ type: "paragraph", content: [{ type: "text", text: "引用一句" }] }] },
       { type: "horizontalRule" },
     ]);
   });
@@ -1188,5 +1189,157 @@ describe("jsonToMarkdown", () => {
     const parsed = markdownToJson(md);
     expect(parsed.content?.[0]?.content?.[0]?.type).toBe("image");
     expect(parsed.content?.[0]?.content?.[0]?.attrs).toEqual({ src: "a.png", alt: "", caption: "含'引号'和（括号）" });
+  });
+});
+
+describe("hardBreak 往返", () => {
+  it("段内手动换行导出为行尾两空格，读回还是 hardBreak", () => {
+    const json: JSONContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "第一行" }, { type: "hardBreak" }, { type: "text", text: "第二行" }],
+        },
+      ],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md).toBe("第一行  \n第二行\n");
+    expect(markdownToJson(md)).toEqual(json);
+  });
+
+  it("相邻普通行仍算软换行，不会被误判成硬换行", () => {
+    const json = markdownToJson("甲\n乙");
+    expect(json.content?.[0]?.content).toEqual([{ type: "text", text: "甲 乙" }]);
+  });
+
+  it("表格单元格内的换行写成 <br>，不会把表格拆断", () => {
+    const json: JSONContent = {
+      type: "doc",
+      content: [
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [
+                {
+                  type: "tableHeader",
+                  content: [{ type: "paragraph", content: [{ type: "text", text: "列" }] }],
+                },
+              ],
+            },
+            {
+              type: "tableRow",
+              content: [
+                {
+                  type: "tableCell",
+                  content: [
+                    { type: "paragraph", content: [{ type: "text", text: "甲" }, { type: "hardBreak" }] },
+                    { type: "text", text: "乙" },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const md = jsonToMarkdown(json);
+    expect(md.replace(/\n$/, "").split("\n")).toHaveLength(3); // 多一行就是导出了坏表格
+    expect(md).toContain("| 甲<br>乙 |");
+    const back = markdownToJson(md);
+    const cell = back.content?.[0]?.content?.[1]?.content?.[0];
+    expect(JSON.stringify(cell?.content)).toContain("hardBreak");
+  });
+});
+
+describe("databaseView 附表快照", () => {
+  it("指针后的表格被注释圈住，导回只剩指针不另成表格块", () => {
+    const json = {
+      type: "doc",
+      content: [{ type: "databaseView", attrs: { viewId: "db-1", name: "任务表" } }],
+    };
+    const md = jsonToMarkdown(json, { databaseTables: { "db-1": "| 标题 |\n| --- |\n| 写文档 |" } });
+    expect(md).toContain("<!-- db-table begin -->");
+    expect(md).toContain("<!-- db-table end -->");
+    expect(markdownToJson(md)).toEqual(json);
+    // 关掉快照（老导出格式）时表格照旧读回，别让跳过逻辑吃掉用户手打的表格
+    expect(markdownToJson("→[任务表](db:db-1)\n\n| 标题 |\n| --- |\n| 写文档 |").content?.map((b) => b.type)).toEqual([
+      "databaseView",
+      "table",
+    ]);
+  });
+});
+
+describe("toggle 与单元格的细节保真", () => {
+  it("标题型 toggle 的级别跟进 summary 属性，读回仍是同级标题", () => {
+    for (const level of [2, 3, 4]) {
+      const json = {
+        type: "doc",
+        content: [
+          {
+            type: "toggle",
+            attrs: { collapsed: false },
+            content: [
+              { type: "heading", attrs: { level }, content: [{ type: "text", text: "小节" }] },
+              { type: "paragraph", content: [{ type: "text", text: "正文" }] },
+            ],
+          },
+        ],
+      };
+      const md = jsonToMarkdown(json);
+      expect(md).toContain(`<summary data-level="${level}">小节</summary>`);
+      const title = markdownToJson(md).content?.[0]?.content?.[0];
+      expect(title?.type).toBe("heading");
+      expect(title?.attrs).toEqual({ level });
+    }
+  });
+
+  it("段落型 toggle 不写 data-level，读回还是段落", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "toggle",
+          attrs: { collapsed: false },
+          content: [{ type: "paragraph", content: [{ type: "text", text: "标题段" }] }],
+        },
+      ],
+    };
+    expect(jsonToMarkdown(json)).toContain("<summary>标题段</summary>");
+    expect(markdownToJson(jsonToMarkdown(json)).content?.[0]?.content?.[0]?.type).toBe("paragraph");
+  });
+
+  it("单元格里的对齐不进正文：既不写注释残迹，也读掉老导出留下的标记", () => {
+    const json = {
+      type: "doc",
+      content: [
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [
+                {
+                  type: "tableCell",
+                  content: [
+                    {
+                      type: "paragraph",
+                      attrs: { textAlign: "center" },
+                      content: [{ type: "text", text: "居中" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    expect(jsonToMarkdown(json)).not.toContain("align:center");
+    expect(markdownToJson("| 居中 <!-- align:center --> |\n| --- |").content?.[0]).toBeTruthy();
+    expect(jsonToMarkdown(markdownToJson("| 居中 <!-- align:center --> |\n| --- |"))).toContain("居中");
+    expect(jsonToMarkdown(markdownToJson("| 居中 <!-- align:center --> |\n| --- |"))).not.toContain("align:center");
   });
 });

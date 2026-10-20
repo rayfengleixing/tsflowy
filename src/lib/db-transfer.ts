@@ -1,4 +1,5 @@
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
+import type { DbLayout } from "@/types/models";
 import { invoke } from "@/lib/invoke";
 import { newId, viewApi } from "./db";
 import { databaseApi } from "./database";
@@ -139,12 +140,14 @@ export function collectDatabaseViewIds(node: unknown, out = new Set<string>()): 
   return [...out];
 }
 
-/** 文本矩阵 → 新建 grid 视图（走 csv_import 单命令落库）。返回新视图 id 与行数。 */
+/** 文本矩阵 → 新建数据库视图（走 csv_import 单命令落库）。返回新视图 id 与行数。
+ *  layout 缺省 grid；frontmatter 写了 board/calendar 的导入不该一律退回表格视图。 */
 export async function createDatabaseViewFromTable(
   workspaceId: string,
   parentId: string | null,
   name: string,
   matrix: string[][],
+  layout: DbLayout = "grid",
 ): Promise<{ viewId: string; rowCount: number }> {
   const { headers, types } = planImport(matrix);
   const dataRows = matrix.slice(1);
@@ -178,7 +181,7 @@ export async function createDatabaseViewFromTable(
     }
     return { id: newId(), cells };
   });
-  const view = await viewApi.create({ workspace_id: workspaceId, parent_id: parentId, name, layout: "grid" });
+  const view = await viewApi.create({ workspace_id: workspaceId, parent_id: parentId, name, layout });
   // 嵌套 payload 按 Rust 结构体声明的 snake_case 键传（同 GridView 的 CSV 导入契约）
   await invoke("csv_import", { viewId: view.id, fields, rows });
   return { viewId: view.id, rowCount: rows.length };

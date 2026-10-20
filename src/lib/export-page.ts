@@ -11,7 +11,7 @@ import { databaseApi } from "./database";
 import { collectDatabaseViewIds, databaseViewToMarkdown, tableToTextMatrix, toMarkdownTable } from "./db-transfer";
 import { viewApi } from "./db";
 import { documentApi } from "./documents";
-import { alignValueOf, calloutColorOf, columnRatioOf, jsonToMarkdown } from "./markdown";
+import { alignValueOf, calloutColorOf, colorAttr, columnRatioOf, jsonToMarkdown } from "./markdown";
 import { logger } from "./logger";
 import { sanitizeFileName } from "./utils";
 import { dueState, taskMetaLabel, taskMetaOf, todayIso } from "./task-meta";
@@ -215,10 +215,22 @@ function nodeToHtml(node: JSONContent): string {
       return `<div class="columns">${cols.join("")}</div>`;
     }
     case "imageGallery": {
-      const imgs = (node.content ?? [])
-        .map((img) => `<img src="${escapeAttr(attrStr(img, "src"))}" alt="${escapeHtml(attrStr(img, "alt"))}"/>`)
-        .join("");
-      return `<div class="gallery">${imgs}</div>`;
+      // 图片标题（caption）走 Markdown 的 ![alt](src "title") 标题位，HTML 侧要落成 figcaption，
+      // 否则导出的网页里说明文字整批丢失
+      const imgs = (node.content ?? []).map((img) => {
+        const tag = `<img src="${escapeAttr(attrStr(img, "src"))}" alt="${escapeHtml(attrStr(img, "alt"))}"/>`;
+        const caption = attrStr(img, "caption");
+        return caption ? `<figure>${tag}<figcaption>${escapeHtml(caption)}</figcaption></figure>` : tag;
+      });
+      return `<div class="gallery">${imgs.join("")}</div>`;
+    }
+    case "subpages": {
+      // 原子块在 doc JSON 里没有正文，名称快照在 attrs.items 上（实时子页由 NodeView 查树）
+      const rawItems = node.attrs?.items;
+      const items = Array.isArray(rawItems) ? (rawItems as { name?: string }[]) : [];
+      if (items.length === 0) return "";
+      const lis = items.map((it) => `<li>${escapeHtml(it.name ?? "")}</li>`).join("");
+      return `<div class="subpages"><ul>${lis}</ul></div>`;
     }
     case "outline":
       // 大纲是编辑辅助块，导出时省略
@@ -242,6 +254,16 @@ function inlineHtml(node: JSONContent): string {
             else if (m.type === "strike") html = `<del>${html}</del>`;
             else if (m.type === "link") html = `<a href="${escapeAttr(attrStr(m, "href"))}">${html}</a>`;
             else if (m.type === "underline") html = `<u>${html}</u>`;
+            // 高亮色与文字色：Markdown 导出早就带上了，HTML 侧此前漏掉，导出的网页里颜色全丢
+            else if (m.type === "highlight") {
+              const color = colorAttr(m.attrs?.color);
+              html = color
+                ? `<mark data-color="${escapeAttr(color)}" style="background-color: ${escapeAttr(color)}; color: inherit">${html}</mark>`
+                : `<mark>${html}</mark>`;
+            } else if (m.type === "textStyle") {
+              const color = colorAttr(m.attrs?.color);
+              html = color ? `<span style="color: ${escapeAttr(color)}">${html}</span>` : html;
+            }
           }
         }
         return html;

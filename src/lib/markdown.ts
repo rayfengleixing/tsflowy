@@ -49,7 +49,7 @@ const MATH_FENCE_RE = /^\$\$\s*$/;
 const MATH_ONE_LINE_RE = /^\$\$(.+)\$\$$/;
 const DETAILS_RE = /^<details\b[^>]*>$/i;
 const DETAILS_CLOSE_RE = /^<\/details>$/i;
-const SUMMARY_RE = /^<summary>(.*)<\/summary>$/i;
+const SUMMARY_RE = /^<summary((?:\s[^>]*)?)>(.*)<\/summary>$/is;
 const TABLE_ROW_RE = /^\|.*\|$/;
 const TABLE_SEP_RE = /^\|[\s:|-]+\|$/;
 const COLUMNS_RE = /^<!--\s*columns\s*\((\d+)\)\s*-->$/;
@@ -65,6 +65,13 @@ const OUTLINE_RE = /^<!--\s*outline block\s*-->$/i;
 const CALLOUT_HEAD_RE = /^(.*?)\s*\*\*Callout\*\*(?:\s*<!--\s*color:([a-z]+)\s*-->)?\s*$/;
 /** 块级对齐：Markdown 没有居中/右对齐语法，导出时在行尾挂 `<!-- align:center -->`，导入时摘掉 */
 const ALIGN_RE = /\s*<!--\s*align:(left|center|right|justify)\s*-->\s*$/i;
+/** 段内硬换行标记（行尾两个以上空格）；判定要在 trim 之前 */
+const HARD_BREAK_RE = /[ \t]{2,}$/;
+/** databaseView 指针附带的表格快照：导出写、导入整段跳过（正文只有指针） */
+const DB_TABLE_BEGIN = "<!-- db-table begin -->";
+const DB_TABLE_END = "<!-- db-table end -->";
+const DB_TABLE_BEGIN_RE = /^<!--\s*db-table begin\s*-->$/i;
+const DB_TABLE_END_RE = /^<!--\s*db-table end\s*-->$/i;
 /** 与 callout/node.ts 的 CalloutColor 同一份名单（lib 不反向依赖 features，改一边要改另一边） */
 const CALLOUT_COLORS = ["blue", "green", "orange", "red", "purple", "yellow"];
 /** 附件导出格式 `[name](attach:src)` 的协议前缀 */
@@ -336,6 +343,14 @@ export function markdownToJson(md: string): JSONContent {
     if (dbView) {
       blocks.push({ type: "databaseView", attrs: { viewId: dbView[2], name: dbView[1] } });
       i++;
+      // 指针下面跟着的表格只是给人看的快照：整段吞掉，否则导回来变成指针 + 副本两张表
+      let j = i;
+      while (j < lines.length && lines[j].trim() === "") j++;
+      if (j < lines.length && DB_TABLE_BEGIN_RE.test(lines[j].trim())) {
+        j++;
+        while (j < lines.length && !DB_TABLE_END_RE.test(lines[j].trim())) j++;
+        i = j + 1;
+      }
       continue;
     }
 
@@ -375,7 +390,8 @@ export function markdownToJson(md: string): JSONContent {
     if (trimmed.startsWith(">")) {
       const quoteLines: string[] = [];
       while (i < lines.length && lines[i].trim().startsWith(">")) {
-        quoteLines.push(lines[i].trim().replace(/^>\s?/, ""));
+        // 只剥前导缩进与 > 标记：行尾两空格是硬换行标记，整体 trim 会把它抹掉
+        quoteLines.push(lines[i].replace(/^\s*>\s?/, ""));
         i++;
       }
       const head = quoteLines.length > 0 ? CALLOUT_HEAD_RE.exec(quoteLines[0]) : null;
@@ -389,7 +405,14 @@ export function markdownToJson(md: string): JSONContent {
           content: (inner.content?.length ?? 0) > 0 ? inner.content : [{ type: "paragraph" }],
         });
       } else {
-        blocks.push({ type: "blockquote", content: parseInline(quoteLines.join(" ")) });
+        // 递归解析而不是把行拼成一坨文本：引用块里的嵌套列表、代码块、多段落
+        // 之前会被拍平成一行；且 blockquote 的 schema 是 block+，直接塞 text 节点
+        // 进编辑器会被 TipTap 丢掉，等于引用内容不见了
+        const inner = markdownToJson(quoteLines.join("\n"));
+        blocks.push({
+          type: "blockquote",
+          content: (inner.content?.length ?? 0) > 0 ? inner.content : [{ type: "paragraph" }],
+        });
       }
       continue;
     }
@@ -404,13 +427,13 @@ export function markdownToJson(md: string): JSONContent {
     }
 
     // 普通段落：连续非空行合并
-    const buf: string[] = [];
+    const rawLines: string[] = [];
     while (i < lines.length && lines[i].trim() !== "") {
-      buf.push(lines[i].trim());
+      rawLines.push(lines[i]);
       i++;
     }
-    const paragraph = stripAlign(buf.join(" "));
-    const inline = parseInline(paragraph.body);
+    const paragraph = stripAlign(rawLines.join("\n"));
+    const inline = parseParagraphInline(paragraph.body);
     // 独占一段的 attachment 还原为块级节点（导出时它在块级位置）
     const soloLink = inline.length === 1 ? inline[0] : undefined;
     if (soloLink?.type === "text" && soloLink.marks?.length === 1) {
@@ -432,6 +455,30 @@ export function markdownToJson(md: string): JSONContent {
   }
 
   return { type: "doc", content: blocks };
+}
+
+/**
+ * 段落原文（可能含多行）→ inline 节点。
+ * 行尾两个及以上空格是 Markdown 的硬换行标记，渲染时写成的就是这串空格，
+ * 所以判断必须在 trim 之前做——先 trim 再拼会把用户的手动换行整段抹平成空格。
+ * 其余相邻非空行按 Markdown 惯例算软换行，合并成一个空格。
+ */
+function parseParagraphInline(body: string): JSONContent[] {
+  const rows = body.split("\n");
+  const out: JSONContent[] = [];
+  let soft: string[] = [];
+  const flush = (hard: boolean) => {
+    if (soft.length === 0) return;
+    out.push(...parseInline(soft.join(" ")));
+    soft = [];
+    if (hard) out.push({ type: "hardBreak" });
+  };
+  rows.forEach((row, idx) => {
+    soft.push(row.trim());
+    if (idx < rows.length - 1 && HARD_BREAK_RE.test(row)) flush(true);
+  });
+  flush(false);
+  return out;
 }
 
 interface ParsedListItem {
@@ -486,14 +533,40 @@ function buildList(lines: string[], start: number, indent: number): [JSONContent
         ? { type: "taskItem", attrs: { checked: li.checked, ...metaAttrs }, content: [para] }
         : { type: "listItem", content: [para] };
     i++;
-    if (i < lines.length) {
-      const deeper = listItemOf(lines[i]);
+    // 项内后续内容：更深缩进的行里，列表标记归嵌套列表，其余是本项的续行块
+    // （第二段、代码块、图片——导出时统一缩进两格，见 renderListItem）
+    const cont: string[] = [];
+    const contIndent = " ".repeat(indent + 2);
+    const flushCont = () => {
+      while (cont.length > 0 && cont[cont.length - 1] === "") cont.pop();
+      if (cont.length === 0) return;
+      const inner = markdownToJson(cont.join("\n"));
+      item.content = [...(item.content ?? []), ...(inner.content ?? [])];
+      cont.length = 0;
+    };
+    while (i < lines.length) {
+      const raw = lines[i];
+      const deeper = listItemOf(raw);
       if (deeper && deeper.indent > indent) {
+        flushCont();
         const [nested, after] = buildList(lines, i, deeper.indent);
         item.content = [...(item.content ?? []), nested];
         i = after;
+        continue;
       }
+      if (raw.trim() === "") {
+        // 空行只有后面还接着更深缩进的内容时才属于本项（代码块里的空行、段落间距）
+        const next = lines.slice(i + 1).find((l) => l.trim() !== "");
+        if (next === undefined || next.length - next.trimStart().length <= indent) break;
+        cont.push("");
+        i++;
+        continue;
+      }
+      if (raw.length - raw.trimStart().length <= indent) break;
+      cont.push(raw.startsWith(contIndent) ? raw.slice(contIndent.length) : raw.trimStart());
+      i++;
     }
+    flushCont();
     items.push(item);
   }
   const type = kind === "task" ? "taskList" : kind === "ordered" ? "orderedList" : "bulletList";
@@ -524,14 +597,20 @@ function splitTableRow(line: string): string[] {
   return cells;
 }
 
-/** 单元格文本 → 单元格内容：导出时单元格内多块用 <br> 连接，导回时还原为 hardBreak */
-function cellContent(text: string): JSONContent[] {
+/** `<br>` 分隔的文本（HTML 上下文里的换行）→ inline 节点序列，分隔处落 hardBreak */
+function inlineWithBr(text: string): JSONContent[] {
   const inline: JSONContent[] = [];
   text.split(/<br\s*\/?>/i).forEach((part, idx) => {
     if (idx > 0) inline.push({ type: "hardBreak" });
-    inline.push(...parseInline(part));
+    // 老导出把 align 标记写进了单元格，摘掉免得当成正文显示
+    inline.push(...parseInline(part.replace(ALIGN_RE, "")));
   });
-  return [{ type: "paragraph", content: inline }];
+  return inline;
+}
+
+/** 单元格文本 → 单元格内容：导出时单元格内多块用 <br> 连接，导回时还原为 hardBreak */
+function cellContent(text: string): JSONContent[] {
+  return [{ type: "paragraph", content: inlineWithBr(text) }];
 }
 
 function tableToJson(rows: string[][]): JSONContent {
@@ -569,7 +648,13 @@ function detailsToToggle(innerLines: string[], isOpen: boolean): JSONContent {
   const summary = SUMMARY_RE.exec(innerLines[start]?.trim() ?? "");
   if (summary) {
     // 导出时标题做了 HTML 转义（& < 等），导入时先解码再走行内解析
-    content.push({ type: "paragraph", content: parseInline(decodeHtmlEntities(summary[1])) });
+    // 标题级别记在 data-level 上：不带它时，标题型 toggle 导回会退化成普通段落
+    const level = Number(/data-level="([1-6])"/.exec(summary[1])?.[1] ?? 0);
+    // summary 是 HTML 上下文，标题里的换行导出成 <br>
+    const text = inlineWithBr(decodeHtmlEntities(summary[2]));
+    content.push(
+      level > 0 ? { type: "heading", attrs: { level }, content: text } : { type: "paragraph", content: text },
+    );
     start++;
   }
   const innerJson = markdownToJson(innerLines.slice(start).join("\n").trim());
@@ -655,7 +740,7 @@ function marksOf(node: JSONContent): MarksRecord {
 }
 
 /** 颜色 mark 属性：空值与 "inherit"（编辑器「默认色」档）都当没有颜色 */
-function colorAttr(raw: unknown): string | undefined {
+export function colorAttr(raw: unknown): string | undefined {
   const value = typeof raw === "string" ? raw.trim() : "";
   return value && value !== "inherit" ? value : undefined;
 }
@@ -710,7 +795,8 @@ function imageMarkdown(attrs: Record<string, unknown> | undefined): string {
   return `![${alt}](${target})`;
 }
 
-function renderInline(nodes: JSONContent[] | undefined): string {
+/** inTable：表格单元格里的换行必须写成 <br>，行尾两空格那套会把 GFM 表格拆成两行 */
+function renderInline(nodes: JSONContent[] | undefined, inTable = false): string {
   if (!nodes || nodes.length === 0) return "";
   let out = "";
   for (const n of nodes) {
@@ -720,7 +806,8 @@ function renderInline(nodes: JSONContent[] | undefined): string {
       const raw = m.code ? n.text : escapeInline(n.text);
       out += wrapMarks(raw, m);
     } else if (n.type === "hardBreak") {
-      out += "\n";
+      // 段内换行的标准写法是行尾两空格；只写 \n 会被回读当成同段续行，换行整个丢失
+      out += inTable ? "<br>" : "  \n";
     } else if (n.type === "mention") {
       const id = (n.attrs?.id as string | undefined) ?? "";
       const label = (n.attrs?.label as string | undefined) ?? id;
@@ -730,7 +817,7 @@ function renderInline(nodes: JSONContent[] | undefined): string {
     } else {
       // 其他 inline（date/relations/hardBreak emoji 等）：回退到 textContent
       if (typeof n.text === "string") out += escapeInline(n.text);
-      if (Array.isArray(n.content)) out += renderInline(n.content);
+      if (Array.isArray(n.content)) out += renderInline(n.content, inTable);
     }
   }
   return out;
@@ -749,6 +836,8 @@ interface RenderCtx {
   orderedIndex?: number;
   indent: string;
   tables?: Record<string, string>;
+  /** 渲染发生在表格单元格内：换行只能用 <br> */
+  inTable?: boolean;
 }
 
 /** 单元格上的合并属性：历史数据里 attr 可能是字符串或缺省，一律当 1 处理 */
@@ -787,6 +876,12 @@ function flattenTableGrid(rows: { text: string; colspan: number; rowspan: number
   return grid.map((row) => Array.from({ length: width }, (_, c) => row[c] ?? ""));
 }
 
+/** 标题级别钳到 1-6：坏数据（字符串、0、8）不能让导出产出 `#######` 或空串 */
+function headingLevel(node: JSONContent): number {
+  const raw = Number(node.attrs?.level ?? 1);
+  return Math.max(1, Math.min(6, Number.isFinite(raw) ? raw : 1));
+}
+
 /** 块级对齐（TextAlign 扩展的 textAlign attr）：Markdown 无此语法，导出挂在行尾注释里 */
 const ALIGN_VALUES = ["left", "center", "right", "justify"];
 
@@ -819,16 +914,17 @@ export function calloutColorOf(node: JSONContent): string {
 
 function renderBlock(node: JSONContent, ctx: RenderCtx = { indent: "" }): string {
   const indent = ctx.indent;
+  const inTable = ctx.inTable === true;
   const kids = (content: JSONContent[] | undefined, nextIndent = ""): string =>
-    renderChildren(content, { indent: nextIndent, tables: ctx.tables });
+    renderChildren(content, { indent: nextIndent, tables: ctx.tables, inTable: ctx.inTable });
   switch (node.type) {
     case "paragraph":
-      return renderInline(node.content) + alignSuffix(node);
+      // 单元格放不下块级对齐：GFM 里没有这个语法，写进去只会被读成正文里的注释残迹
+      return renderInline(node.content, inTable) + (inTable ? "" : alignSuffix(node));
 
     case "heading": {
-      const level = Math.max(1, Math.min(6, (node.attrs?.level as number | undefined) ?? 1));
-      const hashes = "#".repeat(level);
-      return `${hashes} ${renderInline(node.content)}${alignSuffix(node)}`;
+      const hashes = "#".repeat(headingLevel(node));
+      return `${hashes} ${renderInline(node.content, inTable)}${inTable ? "" : alignSuffix(node)}`;
     }
 
     case "horizontalRule":
@@ -860,14 +956,16 @@ function renderBlock(node: JSONContent, ctx: RenderCtx = { indent: "" }): string
       const blocks = node.content ?? [];
       const first = blocks.length > 0 ? blocks[0] : undefined;
       const firstIsTitle = first?.type === "paragraph" || first?.type === "heading";
-      const rawTitle = firstIsTitle ? renderInline(first.content).trim() : "";
+      const rawTitle = firstIsTitle ? renderInline(first.content, true).trim() : "";
       // <summary> 是 HTML 上下文，只做 HTML 转义（markdown 转义符会原样显示）
       const title = rawTitle.replace(/&/g, "&amp;").replace(/</g, "&lt;");
       const body = firstIsTitle ? blocks.slice(1) : blocks;
       const inner = kids(body, "");
       const open = node.attrs?.collapsed ? "" : " open";
+      // 标题型 toggle 的级别记在 summary 的属性上，否则导回来一律是段落
+      const levelAttr = first?.type === "heading" ? ` data-level="${headingLevel(first)}"` : "";
       const parts = [`<details${open}>`];
-      if (title) parts.push(`<summary>${title}</summary>`);
+      if (title) parts.push(`<summary${levelAttr}>${title}</summary>`);
       if (inner) parts.push("", inner, "");
       parts.push("</details>");
       return parts.join("\n");
@@ -887,10 +985,15 @@ function renderBlock(node: JSONContent, ctx: RenderCtx = { indent: "" }): string
       const inlineish = new Set(["text", "image", "mention", "hardBreak"]);
       const rows = (node.content ?? []).map((row) =>
         (row.content ?? []).map((cell) => ({
+          // 块尾自带的 <br>（段内硬换行落到最后一行）先削掉：块间分隔符会补回来，
+          // 否则单元格读出两个连排 hardBreak
           text: (cell.content ?? [])
             .map((b) =>
-              inlineish.has(b.type ?? "") ? renderInline([b]) : renderBlock(b, { indent: "", tables: ctx.tables }),
+              inlineish.has(b.type ?? "")
+                ? renderInline([b], true)
+                : renderBlock(b, { indent: "", tables: ctx.tables, inTable: true }),
             )
+            .map((s) => s.replace(/(?:<br>\s*)+$/, ""))
             .filter((s) => s !== "")
             .join("<br>"),
           colspan: numAttr(cell, "colspan"),
@@ -929,7 +1032,9 @@ function renderBlock(node: JSONContent, ctx: RenderCtx = { indent: "" }): string
       const pointer = `→[${name}](db:${viewId})`;
       // 表格文本由调用方预取（见 export-folder 的 databaseTables）：读不到就只留指针，不能让导出中断
       const table = ctx.tables?.[viewId];
-      return table ? `${pointer}\n\n${table}` : pointer;
+      // 附表只是给人看的快照：包进注释围栏，导回时整段跳过，否则指针 + 副本 = 同一张表出现两次
+      if (!table) return pointer;
+      return `${pointer}\n\n${DB_TABLE_BEGIN}\n${table}\n${DB_TABLE_END}`;
     }
 
     case "columns": {
@@ -987,15 +1092,18 @@ function renderListItem(item: JSONContent, index: number, ordered: boolean, ctx:
   const indent = ctx.indent;
   const prefix = ordered ? `${index + 1}. ` : "- ";
   const check = item.type === "taskItem" ? (item.attrs?.checked ? "[x] " : "[ ] ") : "";
-  // item.content = [paragraph, ?nestedList, ...]
-  const contents = item.content ?? [];
-  const firstPara = contents.find((c) => c.type === "paragraph");
-  const nested = contents.find((c) => c.type === "bulletList" || c.type === "orderedList" || c.type === "taskList");
   // 任务行的日期/负责人跟在正文后、嵌套子项前，回读时由 stripTaskMeta 摘走
   const meta = item.type === "taskItem" ? encodeTaskMeta(taskMetaOf(item.attrs)) : "";
-  const head = indent + prefix + check + renderInline(firstPara?.content) + meta;
-  if (!nested) return head;
-  const tail = renderBlock(nested, { ...ctx, indent: indent + "  " });
+  const contents = item.content ?? [];
+  // 首块是段落时写在标记行上；项内其它块（第二段、代码块、图片、嵌套列表）
+  // 一律缩进两格续写。旧写法只取「第一个 paragraph + 第一个列表」，
+  // 其余块在导出时被整块吞掉，用户只在换库导入后才发现内容少了。
+  const headIsPara = contents[0]?.type === "paragraph";
+  const head =
+    indent + prefix + check + (headIsPara ? renderInline(contents[0]?.content, ctx.inTable === true) : "") + meta;
+  const rest = headIsPara ? contents.slice(1) : contents;
+  if (rest.length === 0) return head;
+  const tail = rest.map((b) => renderBlock(b, { ...ctx, indent: indent + "  " })).join("\n");
   return `${head}\n${tail}`;
 }
 
@@ -1007,7 +1115,7 @@ function renderChildren(children: JSONContent[] | undefined, ctx: RenderCtx): st
   const allInline = children.every(
     (n) => n.type === "text" || n.type === "mention" || n.type === "image" || n.type === "hardBreak",
   );
-  if (allInline) return indent + renderInline(children);
+  if (allInline) return indent + renderInline(children, ctx.inTable === true);
   const parts: string[] = [];
   for (const c of children) parts.push(renderBlock(c, ctx));
   // 两个块间空行分隔（heading 后需要，列表项内部由 renderListItem 负责）

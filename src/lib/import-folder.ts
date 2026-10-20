@@ -8,6 +8,7 @@ import { EXPORT_MANIFEST_FILE, parseExportManifest } from "./export-manifest";
 import { splitFrontmatter, type PageMeta } from "./frontmatter";
 import { markdownToJson } from "./markdown";
 import { logger } from "./logger";
+import { isDbLayout, type DbLayout, type LayoutType } from "@/types/models";
 
 // 导入 Markdown 文件夹（Phase 4.1 导入体系）。
 //
@@ -297,6 +298,11 @@ function remapRefs(
   remapRefs(rec.content, resolve, counters);
 }
 
+/** frontmatter 的 layout 决定建出的数据库视图用哪个布局；缺省或 document 落回表格 */
+function dbLayoutOf(layout: LayoutType | undefined): DbLayout {
+  return layout && isDbLayout(layout) ? layout : "grid";
+}
+
 /** 回填 frontmatter 里的页面属性；单项失败只记日志（页面本身已经建出来了，不该因此整篇算失败） */
 async function applyViewMeta(viewId: string, meta: PageMeta): Promise<void> {
   try {
@@ -393,7 +399,13 @@ export async function importMarkdownFolder(workspaceId: string): Promise<ImportR
     const table = meta.layout && meta.layout !== "document" ? parseMarkdownTable(localized) : null;
     if (table) {
       const title = meta.title ?? dirName;
-      const { viewId } = await createDatabaseViewFromTable(workspaceId, parentId, title, table);
+      const { viewId } = await createDatabaseViewFromTable(
+        workspaceId,
+        parentId,
+        title,
+        table,
+        dbLayoutOf(meta.layout),
+      );
       await applyViewMeta(viewId, meta);
       registerView(viewId, relPathOf(self), title);
       return viewId;
@@ -461,7 +473,13 @@ export async function importMarkdownFolder(workspaceId: string): Promise<ImportR
       const name = meta.title ?? extractTitle(localized, f.baseName);
       const table = meta.layout && meta.layout !== "document" ? parseMarkdownTable(localized) : null;
       if (table) {
-        const { viewId } = await createDatabaseViewFromTable(workspaceId, parentId, name, table);
+        const { viewId } = await createDatabaseViewFromTable(
+          workspaceId,
+          parentId,
+          name,
+          table,
+          dbLayoutOf(meta.layout),
+        );
         await applyViewMeta(viewId, meta);
         registerView(viewId, relPathOf(f), name);
         created++;
