@@ -16,6 +16,7 @@ import { TableHeader } from "@tiptap/extension-table-header";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { createNodeFromContent, type JSONContent } from "@tiptap/core";
 import { Slice, Fragment, Node as PMNode } from "@tiptap/pm/model";
+import { TextSelection } from "@tiptap/pm/state";
 import { toast } from "sonner";
 import { Link2, ChevronDown, ChevronUp } from "lucide-react";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -26,6 +27,8 @@ import { mentionsApi, type MentionRow } from "@/lib/mentions";
 import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown";
 import { pickImageExt, uploadImageBytes } from "@/lib/assets";
 import { registerCloseFlush } from "@/lib/close-flush";
+import { readCaret, writeCaret, type CaretMark } from "@/lib/caret-memory";
+import { captureCaretMark, resolveCaretPos } from "./caret-position";
 import { registerAiEditor, registerAiEditorForView, type AiEditorBridge } from "@/lib/ai-editor";
 import { onEscapeClose } from "@/lib/escape-close";
 import { t } from "@/lib/i18n";
@@ -153,6 +156,12 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
   // 上一次选区变化是否来自键盘：鼠标点击不触发上滚，否则点到下半屏会把视图顶飞
   const keyNavRef = useRef(false);
   const caretRafRef = useRef<number | null>(null);
+  // 本页最后一次的光标位置（选区变化时更新，离开本页时才落库）
+  const caretRef = useRef<Omit<CaretMark, "scrollTop"> | null>(null);
+  // 编辑区滚动位置单独记：只滚动不动光标的一段阅读也该被记住
+  const scrollTopRef = useRef(0);
+  // 正文加载完到恢复光标之间用户已经自己动手点过：那就别抢他的位置和焦点
+  const interactedRef = useRef(false);
   // 正文加载完成（编辑器交接给只读模式）前为 false：见加载竞态注释
   const docLoadedRef = useRef(false);
   const editorReadonly = useSettingsStore((s) => s.editorReadonly);
@@ -326,11 +335,13 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
       handleDOMEvents: {
         mousedown: () => {
           keyNavRef.current = false;
+          interactedRef.current = true;
           return false;
         },
       },
       handleKeyDown: (_view, event) => {
         keyNavRef.current = true;
+        interactedRef.current = true;
         const metaOrCtrl = event.ctrlKey || event.metaKey;
         // 硬编码的编辑器命令一律不吞带 Alt 的组合：Alt 档留给全局快捷键（AltGr 布局因此也不会误触发）
         const plainMod = metaOrCtrl && !event.altKey;
@@ -490,6 +501,11 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         editor.view.dispatch(editor.state.tr.setStoredMarks([]));
       }
       if (keyNavRef.current) clampCaretSoon();
+      // 记一下光标落在哪：正文加载完成前不记（setContent 的那次选区更新不是用户位置）
+      if (docLoadedRef.current) {
+        const mark = captureCaretMark(editor.state.doc, selection.head);
+        if (mark) caretRef.current = mark;
+      }
     },
   });
   editorRef.current = editor;
@@ -513,6 +529,56 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     if (editor.isDestroyed) return;
     return registerDocEditor(view.id, editor);
   }, [editor, view.id]);
+
+  // ——— 光标与滚动位置记忆（离开本页时写，下次打开回到原处）———
+  // 记的是「顶层第几块 + 块内第几个字」而不是绝对 pos：pos 会被别处的增删整体带偏。
+  const persistCaret = useCallback((): Promise<void> => {
+    const mark = caretRef.current;
+    const wsId = useWorkspaceStore.getState().currentWorkspaceId;
+    if (!mark || !wsId) return Promise.resolve();
+    return writeCaret(wsId, view.id, { block: mark.block, offset: mark.offset, scrollTop: scrollTopRef.current });
+  }, [view.id]);
+
+  const restoreCaret = useCallback(async () => {
+    const wsId = useWorkspaceStore.getState().currentWorkspaceId;
+    if (!wsId) return;
+    const mark = await readCaret(wsId, view.id);
+    if (!mark) return;
+    const ed = editorRef.current;
+    // await 期间用户可能已经点开了别处：光标位置和焦点都归他，不抢
+    if (!ed || ed.isDestroyed || interactedRef.current) return;
+    const pos = resolveCaretPos(ed.state.doc, mark);
+    if (pos === null) return;
+    const moved = mark.block > 0 || mark.offset > 0;
+    // near：文档变过时这个位置未必还落在正文里，就近找个文本位置，别让它抛
+    const sel = TextSelection.near(ed.state.doc.resolve(pos));
+    ed.view.dispatch(ed.state.tr.setSelection(sel));
+    // 只有「确实回到了文档中部」才接管焦点：主栏、可编辑时才聚焦，
+    // 其余情况（副栏、只读、从搜索/链接跳进来）只把选区摆好，不动焦点
+    if (moved && ed.isEditable && useWorkspaceStore.getState().currentViewId === view.id) {
+      ed.commands.focus(null, { scrollIntoView: false });
+    }
+    if (mark.scrollTop <= 0) return;
+    // 等原生滚动落定后一帧再摆：记忆里的滚动位置才是用户上次看到的地方
+    window.requestAnimationFrame(() => {
+      const scroller = scrollRef.current;
+      if (scroller) scroller.scrollTop = mark.scrollTop;
+    });
+  }, [view.id]);
+
+  useEffect(() => {
+    const onHidden = () => {
+      if (document.visibilityState === "hidden") void persistCaret();
+    };
+    document.addEventListener("visibilitychange", onHidden);
+    // 关窗走 App 的 onCloseRequested 统一冲刷：卸载清理里的异步 IPC 那时已经来不及
+    const offClose = registerCloseFlush(persistCaret);
+    return () => {
+      document.removeEventListener("visibilitychange", onHidden);
+      offClose();
+      void persistCaret();
+    };
+  }, [persistCaret]);
 
   // AI 助手桥接：供 AI 面板取当前页/选区文本、回填内容。光标/选区类目标
   // （registerAiEditor）只认主栏，与 useEditorStore 推送 editor 的约定一致；
@@ -745,6 +811,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
         editor.setEditable(!useSettingsStore.getState().editorReadonly, false);
         // 加载完成后补一次 H1 同步（挂载时的 effect 早退且不会因加载再触发）
         syncH1ToViewNameRef.current();
+        void restoreCaret();
       }
     };
     documentApi
@@ -807,7 +874,7 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     return () => {
       alive = false;
     };
-  }, [view.id]);
+  }, [view.id, restoreCaret]);
 
   // 只读模式：正文没加载完之前 editable 由加载流程掌管（防「加载期间输入被覆盖」的竞态），
   // 加载完成后才轮到开关接管。第二参 false：翻开关不算一次修改，不该触发自动保存。
@@ -1029,7 +1096,14 @@ export function EditorPage({ view, hideSlash = false }: { view: View; hideSlash?
     <div ref={paneRef} data-editor-pane className="relative flex h-full flex-col overflow-hidden bg-white">
       {/* 编辑区：内容最大宽由 --tiptap-max-width 控制（默认 800px，设置页可调，说明书 6.1）。
           滚动条由 index.css 按 data-editor-scroll 隐藏 */}
-      <div ref={scrollRef} data-editor-scroll className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        ref={scrollRef}
+        data-editor-scroll
+        className="min-h-0 flex-1 overflow-y-auto"
+        onScroll={(e) => {
+          scrollTopRef.current = e.currentTarget.scrollTop;
+        }}
+      >
         <div className="mx-auto px-6 py-4" style={{ maxWidth: "var(--tiptap-max-width, 800px)" }}>
           <EditorContent editor={editor} aria-label={t("editor.documentAria")} />
           {/* 只读模式收掉三个改结构的浮层入口（拖拽手柄由 block-drag 自己按 isEditable 隐藏） */}
