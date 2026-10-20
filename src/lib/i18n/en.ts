@@ -1162,6 +1162,7 @@ export const en: Record<MessageKey, string> = {
   "ai.actionRowAdded": "Added a row to “{database}” (fields: {fields})",
   "ai.actionRowEmpty": "empty row",
   "ai.actionCellsSkipped": ", unknown fields skipped: {fields}",
+  "ai.actionCellsRejected": ", values rejected as invalid for the field type or read-only: {fields}",
   "ai.locateHeadingNotFound": "The heading was not found; the document was not changed",
   "ai.locateTextNotFound": "The text to replace was not found; the document was not changed",
   "ai.locateProtectedHeading": "The first-line title follows the page name and cannot be changed by the AI",

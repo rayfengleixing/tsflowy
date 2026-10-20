@@ -1118,6 +1118,7 @@ export const zh = {
   "ai.actionRowAdded": "已在「{database}」新增一行（字段：{fields}）",
   "ai.actionRowEmpty": "空行",
   "ai.actionCellsSkipped": "，忽略未知字段：{fields}",
+  "ai.actionCellsRejected": "，值不合类型或该列不可写：{fields}",
   "ai.locateHeadingNotFound": "没找到对应标题，未修改文档",
   "ai.locateTextNotFound": "没找到要替换的原文，未修改文档",
   "ai.locateProtectedHeading": "文档首行标题由页面名管理，AI 不能改动它",

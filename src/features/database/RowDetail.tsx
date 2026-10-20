@@ -98,6 +98,7 @@ function RowPropertyField({
           testid="row-field-icon"
           types={FIELD_TYPES}
           current={field.field_type}
+          fieldName={field.name}
           onSelect={(type) =>
             void changeFieldType(field.id, type as FieldType).catch((e: unknown) => {
               logger.error("change field type failed", e);

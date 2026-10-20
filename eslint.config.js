@@ -12,7 +12,6 @@ export default tseslint.config(
       "node_modules/**",
       ".github/**",
       "scripts/**",
-      "tailwind.config.js",
       "vite.config.ts",
       "vitest.config.ts",
       "eslint.config.js",

@@ -14,8 +14,9 @@ import { docSearchSnippets, type AiToolSpec } from "./ai";
 import { markdownToNodes } from "./ai-locate";
 import { viewApi } from "./db";
 import { databaseApi } from "./database";
-import { formatCellValue, newSelectOption, parseFieldOptions } from "./database-values";
+import { cellWriteTypeSafe, formatCellValue, newSelectOption, parseFieldOptions } from "./database-values";
 import { documentApi } from "./documents";
+import { fieldKind } from "./field-kinds";
 import { t } from "./i18n";
 import { logger } from "./logger";
 import { jsonToMarkdown } from "./markdown";
@@ -24,6 +25,7 @@ import { flattenTree } from "./tree";
 import { useRelationStore } from "@/stores/relation";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { CellValue, DatabaseField } from "@/types/database";
+import { isReadonlyType } from "@/types/database";
 import type { ViewNode } from "@/types/models";
 
 /** 单次检索结果给模型的最大字符数：再多就该用片段检索而不是整篇塞进上下文 */
@@ -240,7 +242,7 @@ function cellText(value: unknown): string {
 }
 
 /** 模型给的单元格值 → 该字段类型能存的值（选项按名称匹配，缺失则补建选项） */
-async function coerceCell(field: DatabaseField, raw: unknown): Promise<CellValue> {
+export async function coerceCell(field: DatabaseField, raw: unknown): Promise<CellValue> {
   const type = field.field_type;
   if (raw === null || raw === undefined || raw === "") return null;
   const text = cellText(raw);
@@ -255,14 +257,31 @@ async function coerceCell(field: DatabaseField, raw: unknown): Promise<CellValue
     case "progress":
     case "rating":
     case "currency": {
-      const n = typeof raw === "number" ? raw : Number(text.replace(/[^\d.-]/g, ""));
+      if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+      const digits = text.replace(/[^\d.-]/g, "");
+      // 一个数字都没有时不能走 Number("")——那是 0，会把「待定」这类文本静默写成零
+      const n = digits === "" || digits === "-" ? NaN : Number(digits);
       return Number.isFinite(n) ? n : null;
     }
     case "checkbox":
       return raw === true || ["true", "1", "yes", "y", "是", "已", "完成"].includes(text.trim().toLowerCase());
     case "multi_select": {
-      const items = Array.isArray(raw) ? raw : text.split(/[,，、]/);
-      return items.map((x) => optionId(cellText(x))).filter(Boolean);
+      const names = (Array.isArray(raw) ? raw : text.split(/[,，、]/)).map((x) => cellText(x).trim()).filter(Boolean);
+      if (opts.kind !== "select") return names;
+      // 与单选一致：先补建缺失选项。落裸名称当 id 会让展示、筛选、对端关联全都对不上
+      const known = new Set(opts.options.map((o) => o.name.toLowerCase()));
+      const missing = names.filter((n) => !known.has(n.toLowerCase()));
+      const created = [...new Set(missing)].map((name) => newSelectOption(name));
+      if (created.length > 0) {
+        await databaseApi.updateFieldOptions(field.id, { kind: "select", options: [...opts.options, ...created] });
+      }
+      return names
+        .map((name) => {
+          const hit = opts.options.find((o) => o.name.toLowerCase() === name.toLowerCase());
+          if (hit) return hit.id;
+          return created.find((o) => o.name.toLowerCase() === name.toLowerCase())?.id ?? "";
+        })
+        .filter(Boolean);
     }
     case "single_select":
     case "status": {
@@ -276,11 +295,16 @@ async function coerceCell(field: DatabaseField, raw: unknown): Promise<CellValue
       }
       return optionId(name);
     }
+    case "date": {
+      // 走日期类型自己的粘贴归一：模型给「2024/1/5」「Jan 5, 2024」都收成 ISO，
+      // 直接落原文会让日期列的排序、筛选、日历分组全部失效（validate 只认字符串，拦不住语义脏值）
+      const outcome = fieldKind("date").paste(text);
+      return outcome.kind === "value" ? outcome.value : text;
+    }
     case "url":
     case "phone":
     case "email":
     case "text":
-    case "date":
       return text;
     default:
       return null;
@@ -295,6 +319,7 @@ async function addDatabaseRow(args: { database: string; cells?: Record<string, u
   const row = await databaseApi.createRow(node.id);
   const written: string[] = [];
   const skipped: string[] = [];
+  const rejected: string[] = [];
   for (const [key, value] of Object.entries(args.cells ?? {})) {
     const field = byName.get(key.trim().toLowerCase()) ?? fields.find((f) => f.id === key);
     if (!field) {
@@ -302,10 +327,18 @@ async function addDatabaseRow(args: { database: string; cells?: Record<string, u
       continue;
     }
     const cell = await coerceCell(field, value);
+    // 与 store 的写入口共用同一道闸门：这里直接调 databaseApi，不经 stores/database，
+    // 缺了它就等于给模型开了一条能往数字列塞文本、往日期列塞散文的旁路
+    if (isReadonlyType(field.field_type) || !cellWriteTypeSafe(field, cell)) {
+      rejected.push(field.name);
+      continue;
+    }
     await databaseApi.setCell(row.id, field.id, cell);
     written.push(field.name);
   }
-  const tail = skipped.length > 0 ? t("ai.actionCellsSkipped", { fields: skipped.join(", ") }) : "";
+  const tail =
+    (skipped.length > 0 ? t("ai.actionCellsSkipped", { fields: skipped.join(", ") }) : "") +
+    (rejected.length > 0 ? t("ai.actionCellsRejected", { fields: rejected.join(", ") }) : "");
   // 绕开了 database store 的写入口：手动失效 relation 缓存，否则其它库的关联/汇总列看不到这条新行
   useRelationStore.getState().invalidate([node.id]);
   return {

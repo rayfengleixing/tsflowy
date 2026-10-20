@@ -52,18 +52,26 @@
   --radius-4xl: 28px;
 }
 
-/* AppFlowy 品牌色与中性色阶（项目说明书 6.5 节） */
+/* AppFlowy 品牌色与中性色阶（项目说明书 6.5 节）。
+   色阶必须整档补齐：Tailwind v4 只为 @theme 里声明过的档位生成类，
+   缺档的 brand-300/700 等写法在页面上等于没有样式。 */
 @theme {
   --color-brand-50: #f4faff;
   --color-brand-100: #e3f6ff;
+  --color-brand-200: #c9ebff;
+  --color-brand-300: #96dcff;
+  --color-brand-400: #40c6ff;
   --color-brand-500: #00b5ff;
   --color-brand-600: #0092d6;
+  --color-brand-700: #0074ab;
+  --color-brand-800: #005a85;
   --color-neutral-100: #f8faff;
   --color-neutral-200: #e4e8f5;
   --color-neutral-300: #ced3e6;
   --color-neutral-400: #b5bbd3;
   --color-neutral-500: #989eb7;
   --color-neutral-600: #6f748c;
+  --color-neutral-700: #54596e;
   --color-neutral-800: #3d404f;
   --color-neutral-850: #32343f;
   --color-neutral-900: #272930;
