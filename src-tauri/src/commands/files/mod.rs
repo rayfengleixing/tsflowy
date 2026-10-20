@@ -19,8 +19,8 @@ pub mod secret;
 // —— 配置读写（config.json）——
 pub use config::{
     app_config_dir_raw, config_file_path, load_config_raw, AiConfig, AiProfile, AiQuickAction,
-    AppConfig, AutoBackupConfig, SnapshotConfig, SyncConfig, SyncHistoryEntry, TrashConfig,
-    AI_CTX_MAX_MESSAGES_DEFAULT, AI_CTX_TOKEN_BUDGET_DEFAULT, SYNC_HISTORY_MAX,
+    AppConfig, AutoBackupConfig, CaptureShortcut, SnapshotConfig, SyncConfig, SyncHistoryEntry,
+    TrashConfig, AI_CTX_MAX_MESSAGES_DEFAULT, AI_CTX_TOKEN_BUDGET_DEFAULT, SYNC_HISTORY_MAX,
 };
 pub use config::{
     get_prefs, get_retention_policy, run_expired_trash_sweep, set_prefs, set_retention_policy,

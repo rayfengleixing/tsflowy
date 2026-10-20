@@ -1,6 +1,7 @@
 import { t } from "@/lib/i18n";
 import { EDITOR_SHORTCUT_IDS, GLOBAL_SHORTCUT_IDS, shortcutLabelKey, type ShortcutId } from "@/lib/shortcuts";
 import { Section, ResetAllShortcuts, ShortcutRecorder, type ShortcutGroup, type ShortcutItem } from "./settings-parts";
+import { SettingsCaptureShortcut } from "./SettingsCaptureShortcut";
 
 /** 可自定义命令的清单直接由 shortcuts.ts 的分组生成：新增命令不用再在这里补一行（漏抄就等于少一个改绑入口） */
 function itemsOf(ids: ShortcutId[]): ShortcutItem[] {
@@ -53,6 +54,8 @@ export function SettingsShortcuts() {
             </ul>
           </div>
         ))}
+        {/* 系统级那一条不在 shortcuts store 里：它由 Rust 注册给操作系统，改了立刻换绑 */}
+        <SettingsCaptureShortcut />
       </div>
     </Section>
   );

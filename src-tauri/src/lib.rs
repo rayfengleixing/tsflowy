@@ -414,6 +414,8 @@ pub fn run() {
             commands::ai::ai_chat,
             commands::ai::ai_cancel,
             desktop::set_lang,
+            desktop::get_capture_shortcut,
+            desktop::set_capture_shortcut,
             startup::get_autostart,
             startup::set_autostart,
             startup::crash_restart_round,

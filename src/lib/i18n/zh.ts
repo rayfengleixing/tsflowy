@@ -965,6 +965,12 @@ export const zh = {
   "db.errorHint":
     "提示：若数据库文件正被其他程序占用，请关闭该程序后点「重新检查」；若文件已损坏，先点「尝试修复库文件」（只把文件改名，不删除任何数据），没救回来再用最近一次备份恢复。",
   "settings.shortcuts": "快捷键",
+  "settings.capture": "唤起主窗口（系统级）",
+  "settings.captureDesc":
+    "窗口最小化或藏进托盘时，按这组键把它调出来。这组键归操作系统所有，被其它软件占用时改绑会失败，旧的那条继续有效。",
+  "settings.captureOff": "已关闭：不占用系统快捷键",
+  "settings.captureReset": "恢复默认",
+  "settings.captureFailed": "改绑失败：{message}",
   "settings.shortcuts.global": "全局",
   "settings.shortcuts.editor": "编辑器",
   "settings.shortcuts.commandPalette": "打开命令面板",

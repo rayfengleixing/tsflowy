@@ -1,7 +1,12 @@
+use std::str::FromStr;
+use std::sync::Mutex;
+
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WebviewWindow};
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+
+use crate::commands::files::{load_app_config, save_app_config, CaptureShortcut};
 
 pub const DEEP_LINK_SCHEME: &str = "tsflowy";
 pub const TRAY_ID: &str = "tsflowy-tray";
@@ -110,6 +115,85 @@ fn quit_via_close(app: &AppHandle) {
     }
 }
 
+/// 本进程当前占用的那条系统唤起快捷键（None = 没注册）。
+/// 换绑要先摘掉旧的，而插件没有公开「列出已注册」的接口，只能自己记。
+#[derive(Default)]
+struct RegisteredShortcut(Mutex<Option<Shortcut>>);
+
+fn on_capture_pressed(
+    app: &AppHandle,
+    _shortcut: &Shortcut,
+    event: tauri_plugin_global_shortcut::ShortcutEvent,
+) {
+    // 按下与松开都会回调一次，只认按下
+    if event.state == ShortcutState::Pressed {
+        if let Some(win) = main_window(app) {
+            reveal_window(&win);
+        }
+    }
+}
+
+/// 把配置里的 Combo 解析成插件用的 Shortcut。加速串语法由 global-hotkey 的表认，
+/// 因此前端录制器交出的键名（`t`、`f5`、`space`、`arrowup`）不需要这里再维护一份码表。
+fn parse_capture_shortcut(cfg: &CaptureShortcut) -> Result<Shortcut, String> {
+    let accel = cfg.accelerator()?;
+    Shortcut::from_str(&accel).map_err(|e| format!("快捷键 {accel} 无法解析：{e}"))
+}
+
+/// 按 cfg 换绑系统快捷键：先摘旧的再注册新的；新的注册失败（多半被别的软件占用）就把旧的装回去。
+/// 返回 Err 时调用方不要写 config.json —— 界面该显示的是系统里真的生效的那条，不是用户刚点的那条。
+fn rebind_capture_shortcut(app: &AppHandle, cfg: &CaptureShortcut) -> Result<(), String> {
+    let holder = app.state::<RegisteredShortcut>();
+    let previous = *holder.0.lock().unwrap();
+    let gs = app.global_shortcut();
+    if let Some(old) = previous {
+        // 摘不掉也没什么可补救的：系统里那条已经不属于我们了，继续往下注册新的
+        let _ = gs.unregister(old);
+        *holder.0.lock().unwrap() = None;
+    }
+    if !cfg.enabled {
+        return Ok(());
+    }
+    let shortcut = parse_capture_shortcut(cfg)?;
+    match gs.on_shortcut(shortcut, on_capture_pressed) {
+        Ok(()) => {
+            *holder.0.lock().unwrap() = Some(shortcut);
+            Ok(())
+        }
+        Err(e) => {
+            // 一次失败的改绑不该把用户原本还能用的唤起键一起带走
+            if let Some(old) = previous {
+                if gs.on_shortcut(old, on_capture_pressed).is_ok() {
+                    *holder.0.lock().unwrap() = Some(old);
+                }
+            }
+            Err(format!(
+                "快捷键 {} 注册失败（可能已被其它应用占用）：{e}",
+                cfg.key.to_uppercase()
+            ))
+        }
+    }
+}
+
+/// 读取当前生效的系统唤起快捷键（config.json 里的值）
+#[tauri::command]
+pub fn get_capture_shortcut(app: AppHandle) -> CaptureShortcut {
+    load_app_config(&app).capture_shortcut
+}
+
+/// 改绑系统唤起快捷键。注册成功才落盘，失败时原样返回错误、配置不动。
+#[tauri::command]
+pub fn set_capture_shortcut(
+    app: AppHandle,
+    shortcut: CaptureShortcut,
+) -> Result<CaptureShortcut, String> {
+    rebind_capture_shortcut(&app, &shortcut)?;
+    let mut cfg = load_app_config(&app);
+    cfg.capture_shortcut = shortcut;
+    save_app_config(&app, &cfg)?;
+    Ok(cfg.capture_shortcut)
+}
+
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     // ——— 系统托盘：文案按启动时记下的语言，之后由 set_lang 命令跟随切换 ———
     let lang = startup_lang(app);
@@ -147,20 +231,12 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         }
     });
 
-    // ——— 全局快捷键 Ctrl+Alt+T：唤起/聚焦主窗（快捷捕捉）———
-    // 注册失败（被其它应用占用）只告警，不阻塞启动
-    let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyT);
-    if let Err(e) = app
-        .global_shortcut()
-        .on_shortcut(shortcut, |_app, _shortcut, event| {
-            if event.state == ShortcutState::Pressed {
-                if let Some(win) = main_window(_app) {
-                    reveal_window(&win);
-                }
-            }
-        })
-    {
-        tracing::warn!(error = %e, "global shortcut Ctrl+Alt+T register failed (maybe taken by another app)");
+    // ——— 系统级唤起/聚焦主窗快捷键：绑定存 config.json，改绑走 set_capture_shortcut ———
+    // 注册失败（被其它应用占用）只告警，不阻塞启动；设置页里换一条即可
+    app.manage(RegisteredShortcut::default());
+    let capture = load_app_config(app).capture_shortcut;
+    if let Err(e) = rebind_capture_shortcut(app, &capture) {
+        tracing::warn!(error = %e, "capture shortcut register failed");
     }
 
     Ok(())
@@ -192,7 +268,6 @@ mod tests {
         let argv = args(&[r"C:\Apps\TsFlowy.exe", "--flag", "extra"]);
         assert!(deep_link_urls_from_argv(&argv).is_empty());
     }
-
     #[test]
     fn skips_other_schemes_and_keeps_multiple_urls() {
         let argv = args(&[
@@ -215,5 +290,72 @@ mod tests {
         // 未设置、或认不出的语言退回中文（与界面默认语言一致）
         assert_eq!(labels_for("").tray_toggle, "显示/隐藏主窗口");
         assert_eq!(labels_for("fr-FR").tray_toggle, "显示/隐藏主窗口");
+    }
+
+    fn combo(ctrl: bool, shift: bool, alt: bool, key: &str) -> CaptureShortcut {
+        CaptureShortcut {
+            enabled: true,
+            ctrl,
+            shift,
+            alt,
+            key: key.to_string(),
+        }
+    }
+
+    /// 默认值必须与这份改动之前硬编码的那条一致：老用户升级后不该发现自己的唤起键变了
+    #[test]
+    fn default_capture_shortcut_is_ctrl_alt_t() {
+        use tauri_plugin_global_shortcut::{Code, Modifiers};
+        let parsed = parse_capture_shortcut(&CaptureShortcut::default()).unwrap();
+        assert_eq!(
+            parsed,
+            Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyT)
+        );
+    }
+
+    #[test]
+    fn capture_shortcut_accepts_named_and_function_keys() {
+        use tauri_plugin_global_shortcut::Code;
+        let cases = [
+            (combo(true, false, false, "f5"), Code::F5),
+            (combo(true, false, true, "space"), Code::Space),
+            (combo(true, true, false, "arrowup"), Code::ArrowUp),
+            (combo(false, false, true, "1"), Code::Digit1),
+        ];
+        for (cfg, code) in cases {
+            let parsed = parse_capture_shortcut(&cfg)
+                .unwrap_or_else(|_| panic!("应能解析 {}", cfg.key));
+            assert_eq!(parsed, Shortcut::new(Some(cfg_mods(&cfg)), code));
+        }
+    }
+
+    fn cfg_mods(cfg: &CaptureShortcut) -> tauri_plugin_global_shortcut::Modifiers {
+        use tauri_plugin_global_shortcut::Modifiers;
+        let mut m = Modifiers::empty();
+        if cfg.ctrl {
+            m |= Modifiers::CONTROL;
+        }
+        if cfg.alt {
+            m |= Modifiers::ALT;
+        }
+        if cfg.shift {
+            m |= Modifiers::SHIFT;
+        }
+        m
+    }
+
+    /// 守卫在前端录制器之外再走一遍：全局快捷键没有 Ctrl/Alt 会吃掉正常输入
+    #[test]
+    fn capture_shortcut_requires_a_strong_modifier() {
+        assert!(parse_capture_shortcut(&combo(false, true, false, "a")).is_err());
+        assert!(parse_capture_shortcut(&combo(false, false, false, "a")).is_err());
+        assert!(parse_capture_shortcut(&combo(true, false, false, "")).is_err());
+        assert!(parse_capture_shortcut(&combo(true, false, false, "  ")).is_err());
+    }
+
+    #[test]
+    fn capture_shortcut_rejects_keys_without_a_code() {
+        // 录制器偶尔会交出 "+"、"\"" 这类码表里没有的键名：报错，不能静默注册成别的键
+        assert!(parse_capture_shortcut(&combo(true, false, false, "+")).is_err());
     }
 }

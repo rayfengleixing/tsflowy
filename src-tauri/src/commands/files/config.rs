@@ -31,6 +31,9 @@ pub struct AppConfig {
     /// 回收站自动清空策略（旧 config.json 无此字段时取默认值）
     #[serde(default)]
     pub trash: TrashConfig,
+    /// 系统级唤起/聚焦主窗的快捷键（旧 config.json 无此字段时为 Ctrl+Alt+T）
+    #[serde(default)]
+    pub capture_shortcut: CaptureShortcut,
     /// 偏好镜像：渲染进程那几个影响行为的 localStorage 键（自动同步、每日笔记、快捷键、外观）。
     /// 它们存在 WebView 自己的用户数据目录里，不在数据目录内 → 备份里没有，换机/重装后
     /// 自动同步会静静关着、快捷键与主题全丢。这里多存一份，config.json 是进备份包的。
@@ -448,6 +451,62 @@ impl TrashConfig {
                 .retention_days
                 .clamp(TRASH_RETENTION_DAYS_MIN, TRASH_RETENTION_DAYS_MAX),
         }
+    }
+}
+
+/// 系统级「唤起/聚焦主窗」快捷键。
+///
+/// 存 config.json 而不是 localStorage：注册要赶在前端起来之前，而 config.json 是进备份包的，
+/// 换机后这条绑定跟着走。
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(default)]
+pub struct CaptureShortcut {
+    /// false = 不注册任何系统级快捷键
+    pub enabled: bool,
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+    /// 前端录制器交出的规范键名（小写：`t`、`f5`、`space`、`arrowup`）
+    pub key: String,
+}
+
+impl Default for CaptureShortcut {
+    fn default() -> Self {
+        // 与这份改动之前硬编码的那条一致：老用户升级后行为不变
+        Self {
+            enabled: true,
+            ctrl: true,
+            shift: false,
+            alt: true,
+            key: "t".to_string(),
+        }
+    }
+}
+
+impl CaptureShortcut {
+    /// 拼成 global-hotkey 认得的加速串（`Control+Alt+T`）。
+    /// 键名不自己维护码表，直接交给厂商的 parse_key：它的表比手写全，且随依赖更新。
+    pub fn accelerator(&self) -> Result<String, String> {
+        let key = self.key.trim();
+        if key.is_empty() {
+            return Err("快捷键缺少按键".to_string());
+        }
+        // 不带 Ctrl/Alt 的全局快捷键会吃掉正常输入（单独 Shift+A 之类），一律拒绝
+        if !(self.ctrl || self.alt) {
+            return Err("全局快捷键要带 Ctrl 或 Alt".to_string());
+        }
+        let mut parts: Vec<&str> = Vec::with_capacity(4);
+        if self.ctrl {
+            parts.push("Control");
+        }
+        if self.alt {
+            parts.push("Alt");
+        }
+        if self.shift {
+            parts.push("Shift");
+        }
+        parts.push(key);
+        Ok(parts.join("+"))
     }
 }
 

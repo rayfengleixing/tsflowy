@@ -1005,6 +1005,12 @@ export const en: Record<MessageKey, string> = {
   "db.errorHint":
     "Tip: if the database file is locked by another program, close it and try again; if the file is corrupted, use “Try to repair the file” first (it only renames files, it never deletes data) and fall back to the latest backup if nothing can be rescued.",
   "settings.shortcuts": "Keyboard shortcuts",
+  "settings.capture": "Summon the main window (system-wide)",
+  "settings.captureDesc":
+    "Works while the window is minimized or hiding in the tray. The operating system owns this one: if another app already grabbed it the change fails and the previous binding stays active.",
+  "settings.captureOff": "Off: nothing is registered system-wide",
+  "settings.captureReset": "Restore default",
+  "settings.captureFailed": "Could not rebind: {message}",
   "settings.shortcuts.global": "Global",
   "settings.shortcuts.editor": "Editor",
   "settings.shortcuts.commandPalette": "Open command palette",

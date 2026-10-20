@@ -56,3 +56,34 @@ export function setCrashRestartEnabled(on: boolean): void {
 export function crashRestartRound(): Promise<number> {
   return invoke<number>("crash_restart_round").catch(() => 0);
 }
+
+// ——— 系统级「唤起/聚焦主窗」快捷键 ———
+// 正本在 config.json（进备份包），注册发生在前端起来之前，所以设置页读回的是系统里真的那条。
+// 与 tsflowy-shortcuts 那套应用内快捷键无关：那条只在窗口内生效，这条在系统里抢。
+
+export interface CaptureShortcut {
+  enabled: boolean;
+  ctrl: boolean;
+  shift: boolean;
+  alt: boolean;
+  /** 规范键名（小写：t / f5 / space / arrowup），与 lib/shortcuts 的 Combo.key 同一口径 */
+  key: string;
+}
+
+/** 与这份改动之前硬编码的那条一致，也是「恢复默认」写回去的值 */
+export const CAPTURE_SHORTCUT_DEFAULT: CaptureShortcut = {
+  enabled: true,
+  ctrl: true,
+  shift: false,
+  alt: true,
+  key: "t",
+};
+
+export function getCaptureShortcut(): Promise<CaptureShortcut> {
+  return invoke<CaptureShortcut>("get_capture_shortcut");
+}
+
+/** 改绑。Rust 侧注册成功才落盘，失败时抛错且旧绑定继续生效，所以调用方要把界面退回原值。 */
+export function setCaptureShortcut(shortcut: CaptureShortcut): Promise<CaptureShortcut> {
+  return invoke<CaptureShortcut>("set_capture_shortcut", { shortcut });
+}
