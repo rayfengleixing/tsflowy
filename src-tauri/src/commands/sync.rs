@@ -205,6 +205,21 @@ enum Decision {
     LocalWins,
 }
 
+/// 两侧都改过时的裁决：先看数据活动时间；时间相同（含两侧都读不出来、都是 0 的情况）
+/// 改用指纹大小定序。恒定判本机胜会让两台设备在「谁覆盖谁」上永远打架：
+/// A 同步完推上去，B 再同步时照样判自己赢，来回覆盖。指纹比较对每台设备都算出同一个赢家。
+fn remote_is_newer(
+    local_activity: i64,
+    remote_activity: i64,
+    local_hash: &str,
+    remote_hash: &str,
+) -> bool {
+    if remote_activity != local_activity {
+        return remote_activity > local_activity;
+    }
+    remote_hash > local_hash
+}
+
 /// 依据两侧指纹与上次同步基线判断动作。
 /// 基线（last_hash）缺失说明是首次同步（或换了同步目录）——此时若两侧内容不同，
 /// 无从判断谁改过，退化为"按修改时间取新者，旧者留副本"，绝不静默丢弃任何一侧。
@@ -754,7 +769,7 @@ fn run_sync_inner(
         &local_hash,
         &remote_hash,
         last_hash,
-        remote_activity > local_activity,
+        remote_is_newer(local_activity, remote_activity, &local_hash, &remote_hash),
     );
 
     let mut outcome = SyncOutcome::new("none");
@@ -1128,6 +1143,22 @@ mod tests {
     }
 
     #[test]
+    fn remote_is_newer_uses_activity_first() {
+        assert!(remote_is_newer(100, 200, "aaa", "bbb"));
+        assert!(!remote_is_newer(200, 100, "aaa", "bbb"));
+    }
+
+    #[test]
+    fn remote_is_newer_breaks_time_tie_by_hash_not_by_side() {
+        // 时间相同（含两侧都读不出来都是 0）：赢家的判定只跟两份指纹有关，
+        // 所以同一对库在任何一台设备上算出的结果都一致，不会来回互相覆盖
+        assert!(remote_is_newer(0, 0, "aaa", "bbb"));
+        assert!(!remote_is_newer(0, 0, "bbb", "aaa"));
+        assert!(!remote_is_newer(500, 500, "bbb", "aaa"));
+        assert!(remote_is_newer(500, 500, "aaa", "bbb"));
+    }
+
+    #[test]
     fn sha256_file_is_stable_and_content_sensitive() {
         let base = temp_base("hash");
         let a = base.join("a.bin");
@@ -1465,11 +1496,14 @@ mod tests {
         let remote_db = sync_dir.join(DB_FILE);
         make_real_db(&local_db);
         fs::copy(&local_db, &remote_db).unwrap();
+        // 本机数据活动时间抬到未来：这才是"本机较新"的真判据。
+        // 两侧时间相同（都读不出）时的平局现在由指纹定序，赢家不固定，不能再拿来当本机胜的构造。
+        bump_activity(&local_db, 4_102_444_800_000); // 2100 年：稳赢远端
 
         let db = crate::db::Db::open(local_db.clone());
         let hooks = RecordingHooks::default();
         let snap = data_dir.join(format!("{DB_FILE}.snap"));
-        // 基线对不上任何一侧 + 两侧活动时间都读不出（平局）→ 本机胜，远端旧版存副本
+        // 基线对不上任何一侧 + 本机活动时间更新 → 本机胜，远端旧版存副本
         let outcome = run_sync_inner(
             &db,
             &local_db,
@@ -1488,13 +1522,18 @@ mod tests {
         assert!(!outcome.pulled);
         assert_eq!(outcome.conflict_winner.as_deref(), Some("local"));
         assert!(outcome.conflicts[0].starts_with("remote-"));
+        assert!(
+            outcome.local_activity.is_some(),
+            "本机抬过活动时间，判据应读得出来"
+        );
         assert!(!hooks.replaced(), "没换库就不该发替换通知");
         let views: i64 = db
             .read_conn()
             .unwrap()
             .query_row("SELECT COUNT(*) FROM views", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(views, 0, "本机胜出的路径不能碰本机库文件");
+        // 本机那份（含抬活动时间时插入的页面）还在；被远端空库覆盖的话这里是 0
+        assert_eq!(views, 1, "本机胜出的路径不能碰本机库文件");
         let stages: Vec<&str> = hooks.events().iter().map(|e| e.0).collect();
         assert!(
             !stages.contains(&stage::REPLACE_DB),

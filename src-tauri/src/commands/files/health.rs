@@ -224,6 +224,17 @@ fn check_deep(path: &Path) -> (bool, Vec<String>) {
     }
 }
 
+/// 给备份恢复用的门禁：深检不过就返回第一句报错，过则 None。
+/// 用 integrity_check 而不是 quick_check——这是「拿这份库覆盖本机现有数据」前唯一的把关，
+/// 慢一点也要扫全库；恢复本身是极少发生的高风险动作，不值得为省几秒留下烂档。
+pub(crate) fn deep_check_failure(path: &Path) -> Option<String> {
+    let (ok, messages) = check_deep(path);
+    if ok {
+        return None;
+    }
+    Some(messages.join(" / "))
+}
+
 /// 结构检查（设置页按钮与启动后的后台巡检共用）。
 /// 深度检查在慢盘/大库上要几十秒，放 blocking 线程，别占着 tokio worker。
 #[tauri::command]

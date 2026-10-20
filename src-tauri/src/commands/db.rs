@@ -636,14 +636,22 @@ pub async fn field_reorder(
     db::database::reorder_fields(&conn, &view_id, &ids)
 }
 
+/// 改字段类型（清空整列前会留存该列取值），返回留存的单元格数；>0 时前端给撤销入口
 #[tauri::command]
 pub async fn field_change_type(
     db: State<'_, Db>,
     field_id: String,
     new_type: String,
-) -> Result<(), String> {
+) -> Result<i64, String> {
     let conn = db.write_conn()?;
     db::database::change_field_type(&conn, &field_id, &new_type)
+}
+
+/// 用留存的取值把字段还原回改类型之前，返回还原的单元格数
+#[tauri::command]
+pub async fn field_restore_values(db: State<'_, Db>, field_id: String) -> Result<i64, String> {
+    let conn = db.write_conn()?;
+    db::database::restore_field_values(&conn, &field_id)
 }
 
 #[tauri::command]

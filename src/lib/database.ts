@@ -49,9 +49,17 @@ export const databaseApi = {
     return invoke("field_reorder", { viewId, orderedIds });
   },
 
-  /** 改字段类型：清空该字段所有单元格值（类型不兼容的数据不可保留） */
-  async changeFieldType(fieldId: string, newType: FieldType): Promise<void> {
-    return invoke("field_change_type", { fieldId, newType });
+  /**
+   * 改字段类型：清空该字段所有单元格值（类型不兼容的数据不可保留）。
+   * 返回后端留存的旧值条数（>0 时本轮改动可在提示条里撤销）。
+   */
+  async changeFieldType(fieldId: string, newType: FieldType): Promise<number> {
+    return invoke<number>("field_change_type", { fieldId, newType });
+  },
+
+  /** 把留存的一列取值连同字段定义一起还原回改类型前，返回还原条数 */
+  async restoreFieldValues(fieldId: string): Promise<number> {
+    return invoke<number>("field_restore_values", { fieldId });
   },
 
   // ---------- 行 ----------

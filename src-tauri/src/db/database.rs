@@ -220,25 +220,72 @@ pub fn reorder_fields(
     Ok(())
 }
 
+/// 留存一列改类型前的取值上限：再大就不只是「误操作反悔」而是整表归档了，
+/// 那份 JSON 会长期占着库文件（同步时整库算指纹，也跟着变慢）
+const FIELD_SNAPSHOT_MAX_CELLS: usize = 50_000;
+
 /// 改字段类型：重置默认 options，并清空该字段所有单元格值（类型不兼容的数据不可保留）。
 /// 同类型重选是 no-op：UI 已对当前类型禁用，这里兜底防止误清整列数据。
 /// 两处 UPDATE 必须同事务：中途失败时不允许出现「类型已换、旧值还挂着」的半程状态。
-pub fn change_field_type(conn: &Connection, field_id: &str, new_type: &str) -> Result<(), String> {
-    let current: Option<String> = conn
+///
+/// 清空前把该列的非空取值与字段定义存进 database_field_snapshots（每个字段只留最近一份），
+/// 前端据此给「撤销」入口 —— 否则误选一次类型只能靠恢复整库备份，代价是丢掉这期间的所有编辑。
+/// 返回留存的单元格数（0 表示这列本来就空，没有可回退的东西）。
+pub fn change_field_type(conn: &Connection, field_id: &str, new_type: &str) -> Result<i64, String> {
+    let current: Option<(String, String)> = conn
         .query_row(
-            "SELECT field_type FROM database_fields WHERE id = ?1",
+            "SELECT field_type, options FROM database_fields WHERE id = ?1",
             params![field_id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(dberr("change field type (read current)"))?;
-    if current.as_deref() == Some(new_type) {
-        return Ok(());
+    let Some((from_type, from_options)) = current else {
+        return Ok(0);
+    };
+    if from_type == new_type {
+        return Ok(0);
     }
+    let cells: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT row_id, value FROM database_cells
+             WHERE field_id = ?1 AND value <> 'null' ORDER BY row_id",
+        )
+        .map_err(dberr("change field type (read cells)"))?
+        .query_map(params![field_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(dberr("change field type (read cells)"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(dberr("change field type (read cells)"))?;
+
     let options = default_options_json(new_type);
     let tx = conn
         .unchecked_transaction()
         .map_err(dberr("change field type"))?;
+    let preserved = if cells.is_empty() || cells.len() > FIELD_SNAPSHOT_MAX_CELLS {
+        0
+    } else {
+        // 覆盖式留存：字段级唯一键，历史只留最近一次改类型
+        tx.execute(
+            "INSERT INTO database_field_snapshots(field_id, from_type, from_options, values_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(field_id) DO UPDATE SET
+               from_type = excluded.from_type,
+               from_options = excluded.from_options,
+               values_json = excluded.values_json,
+               created_at = excluded.created_at",
+            params![
+                field_id,
+                from_type,
+                from_options,
+                serde_json::to_string(&cells)
+                    .map_err(|e| format!("序列化列值留存失败：{e}"))?,
+                now_ms()
+            ],
+        )
+        .map_err(dberr("change field type (snapshot)"))?;
+        // 报给前端的是「留了几个值」，不是那条 INSERT 影响的行数（它恒为 1）
+        cells.len() as i64
+    };
     tx.execute(
         "UPDATE database_fields SET field_type = ?1, options = ?2 WHERE id = ?3",
         params![new_type, options, field_id],
@@ -250,7 +297,55 @@ pub fn change_field_type(conn: &Connection, field_id: &str, new_type: &str) -> R
     )
     .map_err(dberr("change field type (clear cells)"))?;
     tx.commit().map_err(dberr("change field type (commit)"))?;
-    Ok(())
+    Ok(preserved)
+}
+
+/// 把留存的那一列取值还原回去：字段定义（类型 + options）一并退回改类型前那个时刻。
+/// 还原即消费：快照删掉，避免「撤销撤销」把同一份旧值反复盖回来。
+/// 期间被删掉的行自动跳过（单元格的外键指向行），其余行按原值写回。
+pub fn restore_field_values(conn: &Connection, field_id: &str) -> Result<i64, String> {
+    let snap: Option<(String, String, String)> = conn
+        .query_row(
+            "SELECT from_type, from_options, values_json FROM database_field_snapshots WHERE field_id = ?1",
+            params![field_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(dberr("restore field values (read snapshot)"))?;
+    let Some((from_type, from_options, values_json)) = snap else {
+        return Err(format!("字段 {field_id} 没有可还原的列值留存"));
+    };
+    let cells: Vec<(String, String)> = serde_json::from_str(&values_json)
+        .map_err(|e| format!("解析列值留存失败：{e}"))?;
+
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(dberr("restore field values"))?;
+    tx.execute(
+        "UPDATE database_fields SET field_type = ?1, options = ?2 WHERE id = ?3",
+        params![from_type, from_options, field_id],
+    )
+    .map_err(dberr("restore field values (field)"))?;
+    let mut restored = 0i64;
+    for (row_id, value) in &cells {
+        // WHERE EXISTS：留存之后行可能被删掉，直接插会撞 database_cells.row_id 的外键
+        restored += tx
+            .execute(
+                "INSERT INTO database_cells(row_id, field_id, value)
+                 SELECT ?1, ?2, ?3
+                 WHERE EXISTS (SELECT 1 FROM database_rows WHERE id = ?1)
+                 ON CONFLICT(row_id, field_id) DO UPDATE SET value = excluded.value",
+                params![row_id, field_id, value],
+            )
+            .map_err(dberr("restore field values (cell)"))? as i64;
+    }
+    tx.execute(
+        "DELETE FROM database_field_snapshots WHERE field_id = ?1",
+        params![field_id],
+    )
+    .map_err(dberr("restore field values (drop snapshot)"))?;
+    tx.commit().map_err(dberr("restore field values (commit)"))?;
+    Ok(restored)
 }
 
 // ---------- 行 ----------
@@ -1050,6 +1145,69 @@ mod tests {
         let f1_cells = cells_of(&conn, "f1");
         assert_eq!(f1_cells.len(), 1); // 行还在，单元格没被删
         assert_eq!(f1_cells[0].value, "null");
+    }
+
+    /// 改类型不再是一去无回头的清空：旧值连同字段定义留着，撤销能原样换回
+    #[test]
+    fn change_field_type_snapshot_restores_values_and_definition() {
+        let conn = setup();
+        create_field(&conn, "v1", "f1", "text", None).unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
+        create_row(&conn, "v1", "r2", None).unwrap();
+        set_cell(&conn, "r1", "f1", r#""甲""#).unwrap();
+        set_cell(&conn, "r2", "f1", r#""乙""#).unwrap();
+        let definition_before = list_fields(&conn, "v1").unwrap()[0].clone();
+
+        assert_eq!(change_field_type(&conn, "f1", "number").unwrap(), 2);
+        let cleared: Vec<String> = cells_of(&conn, "f1").into_iter().map(|c| c.value).collect();
+        assert_eq!(cleared, vec!["null".to_string(), "null".to_string()]);
+
+        assert_eq!(restore_field_values(&conn, "f1").unwrap(), 2);
+        let back = &list_fields(&conn, "v1").unwrap()[0];
+        assert_eq!(back.field_type, definition_before.field_type, "类型要换回去");
+        assert_eq!(back.options, definition_before.options, "options 也要换回去");
+        let values: Vec<String> = cells_of(&conn, "f1").into_iter().map(|c| c.value).collect();
+        assert_eq!(values, vec![r#""甲""#.to_string(), r#""乙""#.to_string()]);
+
+        // 还原即消费：快照没了，再点撤销不该把同一份旧值反复盖回来
+        assert!(restore_field_values(&conn, "f1").is_err());
+    }
+
+    /// 连续改类型时，空列不该把上一次留存的旧值顶掉（A 有值→B 空→C：还能拿回 A）
+    #[test]
+    fn change_field_type_keeps_earlier_snapshot_when_column_is_empty() {
+        let conn = setup();
+        create_field(&conn, "v1", "f1", "text", None).unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
+        set_cell(&conn, "r1", "f1", r#""别丢""#).unwrap();
+
+        assert_eq!(change_field_type(&conn, "f1", "number").unwrap(), 1);
+        // 这一列现在全是 null，再改一次类型没什么可留存
+        assert_eq!(change_field_type(&conn, "f1", "single_select").unwrap(), 0);
+        assert_eq!(restore_field_values(&conn, "f1").unwrap(), 1);
+        let f = &list_fields(&conn, "v1").unwrap()[0];
+        assert_eq!(f.field_type, "text", "还原回的是最初有值时的类型");
+        assert_eq!(cells_of(&conn, "f1")[0].value, r#""别丢""#);
+    }
+
+    #[test]
+    fn restore_field_values_skips_rows_deleted_after_the_snapshot() {
+        let conn = setup();
+        create_field(&conn, "v1", "f1", "text", None).unwrap();
+        create_row(&conn, "v1", "r1", None).unwrap();
+        create_row(&conn, "v1", "r2", None).unwrap();
+        set_cell(&conn, "r1", "f1", r#""留""#).unwrap();
+        set_cell(&conn, "r2", "f1", r#""没""#).unwrap();
+        change_field_type(&conn, "f1", "number").unwrap();
+        // 期间删掉一行：那一格的取值没有归属的行，插回去会撞 cells.row_id 的外键
+        purge_rows(&conn, &["r2".to_string()]).unwrap();
+
+        assert_eq!(restore_field_values(&conn, "f1").unwrap(), 1);
+        let values: Vec<(String, String)> = cells_of(&conn, "f1")
+            .into_iter()
+            .map(|c| (c.row_id, c.value))
+            .collect();
+        assert_eq!(values, vec![("r1".to_string(), r#""留""#.to_string())]);
     }
 
     #[test]

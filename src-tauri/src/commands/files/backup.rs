@@ -450,33 +450,61 @@ fn prune_stale_backups(data_dir: &Path) {
     }
 }
 
-/// 导入前置校验（不写任何文件）：能打开、无路径穿越条目、含数据库文件
+/// 导入前置校验：能打开、无路径穿越条目、含数据库文件，且**每个条目真能解出来**
+/// （zip 在读取时校验 CRC，只翻中央目录发现不了正文被截断/篡改的档），
+/// 解出的库还要过一遍 `PRAGMA integrity_check`。
+///
+/// 为什么查到这一步：恢复是「拿这份档覆盖本机现有数据」，而校验发生在覆盖之前，
+/// 是唯一还能反悔的时机。此前只看中央目录有没有 data.db，
+/// 半截下载、磁盘坏道、被压缩工具改写过的归档都能一路放行，直到库被换掉才暴露。
 fn validate_backup_zip(src: &Path) -> Result<(), String> {
     let file = fs::File::open(src).map_err(|e| format!("open backup: {e}"))?;
     let mut archive =
         ZipArchive::new(BufReader::new(file)).map_err(|e| format!("invalid zip archive: {e}"))?;
     let mut has_db = false;
-    for i in 0..archive.len() {
-        let entry = archive
-            .by_index(i)
-            .map_err(|e| format!("read zip entry: {e}"))?;
-        let name = entry.name().to_string();
-        let rel = Path::new(&name);
-        if rel.is_absolute()
-            || rel
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
-            return Err(format!("invalid zip entry (path traversal): {name}"));
+    // 库解到同目录的临时文件里查（数据目录可能跨盘，落在归档旁边最稳）
+    let probe = src.with_extension(format!("integrity-{}.db", std::process::id()));
+    let result = (|| -> Result<(), String> {
+        for i in 0..archive.len() {
+            let mut entry = archive
+                .by_index(i)
+                .map_err(|e| format!("read zip entry: {e}"))?;
+            let name = entry.name().to_string();
+            let rel = Path::new(&name);
+            if rel.is_absolute()
+                || rel
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                return Err(format!("invalid zip entry (path traversal): {name}"));
+            }
+            if name == DB_FILE {
+                has_db = true;
+                // f 在本轮结束即关闭：Windows 上文件还开着就没法再被 SQLite 检查/删除
+                let mut f =
+                    fs::File::create(&probe).map_err(|e| format!("create probe file: {e}"))?;
+                std::io::copy(&mut entry, &mut f).map_err(|e| format!("unpack database: {e}"))?;
+            } else {
+                // 其余条目同样要读完一遍：CRC 只在数据被消费时才校验
+                std::io::copy(&mut entry, &mut std::io::sink())
+                    .map_err(|e| format!("unpack entry {name}: {e}"))?;
+            }
         }
-        if name == DB_FILE {
-            has_db = true;
+        if !has_db {
+            return Err("backup zip does not contain valid database file".to_string());
         }
-    }
-    if !has_db {
-        return Err("backup zip does not contain valid database file".to_string());
-    }
-    Ok(())
+        match super::health::deep_check_failure(&probe) {
+            Some(msg) => Err(format!(
+                "backup database failed integrity_check, refuse to restore: {msg}"
+            )),
+            None => Ok(()),
+        }
+    })();
+    let _ = fs::remove_file(&probe);
+    // 库是 WAL 模式时检查过程会顺手建出 sidecar，跟着一起清掉
+    let _ = fs::remove_file(format!("{}-wal", probe.display()));
+    let _ = fs::remove_file(format!("{}-shm", probe.display()));
+    result
 }
 
 /// 解压备份 zip（写入前再校验一次条目安全；调用方负责失败回滚）。
@@ -795,15 +823,19 @@ mod tests {
         fs::write(data.join("assets/old.png"), b"old-asset").unwrap();
 
         let good = base.join("good.zip");
+        let restored_db = make_db_bytes("restored");
         write_zip(
             &good,
-            &[(DB_FILE, b"new-db"), ("assets/new.png", b"new-asset")],
+            &[
+                (DB_FILE, restored_db.as_slice()),
+                ("assets/new.png", b"new-asset"),
+            ],
         );
 
         let cfg = base.join("config").join(CONFIG_FILE_NAME);
         import_backup_into(&data, &good, &cfg).unwrap();
 
-        assert_eq!(fs::read(data.join(DB_FILE)).unwrap(), b"new-db");
+        assert_eq!(fs::read(data.join(DB_FILE)).unwrap(), restored_db);
         assert_eq!(fs::read(data.join("assets/new.png")).unwrap(), b"new-asset");
         assert!(!data.join("assets/old.png").exists());
         // 归档里没有 config 条目时，配置目录不该被凭空写出文件
@@ -841,10 +873,11 @@ mod tests {
         fs::write(&cfg, b"{\"from\":\"old\"}").unwrap();
 
         let good = base.join("with-config.zip");
+        let restored_db = make_db_bytes("sidecar");
         write_zip(
             &good,
             &[
-                (DB_FILE, b"new-db"),
+                (DB_FILE, restored_db.as_slice()),
                 (CONFIG_FILE_NAME, b"{\"from\":\"new\"}"),
                 (TOMBSTONE_FILE, b"assets/other.png\n"),
                 ("stray.txt", b"ignored"),
@@ -858,7 +891,7 @@ mod tests {
             fs::read(data.join(TOMBSTONE_FILE)).unwrap(),
             b"assets/other.png\n"
         );
-        assert_eq!(fs::read(data.join(DB_FILE)).unwrap(), b"new-db");
+        assert_eq!(fs::read(data.join(DB_FILE)).unwrap(), restored_db);
         assert!(!data.join("stray.txt").exists());
         // 旧配置以同组 *.bak-<后缀> 存在数据目录：可回滚，也会被 prune_stale_backups 一起清理
         let cfg_bak: Vec<String> = fs::read_dir(&data)
@@ -874,7 +907,8 @@ mod tests {
         write_zip(
             &broken,
             &[
-                (DB_FILE, b"newer-db"),
+                // 库是合法的（否则先被深检挡下，测不到解压中途失败的回滚），坏在 assets 条目
+                (DB_FILE, make_db_bytes("rollback").as_slice()),
                 (CONFIG_FILE_NAME, b"{\"from\":\"bogus\"}"),
                 ("assets", b"not-a-dir"),
                 ("assets/a.png", b"x"),
@@ -883,7 +917,7 @@ mod tests {
         let err = import_backup_into(&data, &broken, &cfg).unwrap_err();
         assert!(err.contains("assets/a.png"), "{err}");
         assert_eq!(fs::read(&cfg).unwrap(), b"{\"from\":\"new\"}");
-        assert_eq!(fs::read(data.join(DB_FILE)).unwrap(), b"new-db");
+        assert_eq!(fs::read(data.join(DB_FILE)).unwrap(), restored_db);
         // 解压时被写成文件的残留 assets 条目要清掉：留在原地下次备份/同步会当目录遍历失败
         // 回滚不能把 assets 留在"文件"形态（下次备份/同步按目录遍历会失败）。
         // 目录形态是合法的：上一轮导入 stash 的 assets.bak 后缀相同（秒级时间戳），回滚把它改回来了
@@ -904,7 +938,10 @@ mod tests {
         let good = base.join("fresh.zip");
         write_zip(
             &good,
-            &[(DB_FILE, b"new-db"), (CONFIG_FILE_NAME, b"{\"a\":1}")],
+            &[
+                (DB_FILE, make_db_bytes("fresh").as_slice()),
+                (CONFIG_FILE_NAME, b"{\"a\":1}"),
+            ],
         );
         import_backup_into(&data, &good, &cfg).unwrap();
 
@@ -929,6 +966,21 @@ mod tests {
              INSERT INTO t VALUES ('keep-me');",
         )
         .unwrap();
+    }
+
+    /// 造一个真实 SQLite 库的字节内容：恢复前的深检只放行真库，测试里的占位文本会被拒
+    fn make_db_bytes(tag: &str) -> Vec<u8> {
+        let path =
+            std::env::temp_dir().join(format!("tsflowy-dbbytes-{}-{tag}", std::process::id()));
+        let _ = fs::remove_file(&path);
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE t(x TEXT);").unwrap();
+            conn.execute("INSERT INTO t VALUES (?1)", [tag]).unwrap();
+        }
+        let bytes = fs::read(&path).unwrap();
+        let _ = fs::remove_file(&path);
+        bytes
     }
 
     fn zip_entry_names(path: &Path) -> Vec<String> {
@@ -992,6 +1044,73 @@ mod tests {
             .filter(|n| n.starts_with(&format!("{ASSETS_DIR}.bak-")))
             .collect();
         assert!(stashed.is_empty(), "不该把附件挪走：{stashed:?}");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// 造一份只含 data.db 与范围清单的归档；库内容由调用方给
+    fn archive_with_db_body(base: &Path, body: &[u8]) -> PathBuf {
+        let target = base.join("probe.zip");
+        let file = fs::File::create(&target).unwrap();
+        let mut zip = ZipWriter::new(BufWriter::new(file));
+        let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
+        zip.start_file(DB_FILE, options).unwrap();
+        zip.write_all(body).unwrap();
+        zip.start_file(MANIFEST_ENTRY, options).unwrap();
+        zip.write_all(br#"{"scope":"database_only"}"#).unwrap();
+        zip.finish().unwrap();
+        target
+    }
+
+    /// 校验过程解出来的探针文件不该留在归档旁边
+    fn leftover_probes(dir: &Path) -> Vec<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("integrity-"))
+            .collect()
+    }
+
+    #[test]
+    fn validate_rejects_archive_whose_database_is_not_a_database() {
+        let base = std::env::temp_dir().join(format!("tsflowy-validate-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        // 条目名有 data.db、中央目录也打得开——旧校验（只看条目名）会放行这份档，
+        // 等现有数据被它覆盖完才发现是垃圾
+        let archive = archive_with_db_body(&base, b"this is not a sqlite database at all");
+        let err = validate_backup_zip(&archive).unwrap_err();
+        assert!(err.contains("integrity_check"), "{err}");
+        assert!(leftover_probes(&base).is_empty());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn validate_accepts_real_archive_but_rejects_tampered_body() {
+        let base = std::env::temp_dir().join(format!("tsflowy-validate-ok-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let db = base.join(DB_FILE);
+        make_db_file(&db);
+        // 只读连接拿不到 WAL sidecar，这里用刚写完的库文件本体
+        let body = fs::read(&db).unwrap();
+        let archive = archive_with_db_body(&base, &body);
+        validate_backup_zip(&archive).unwrap();
+        assert!(leftover_probes(&base).is_empty());
+
+        // 库被截掉后半段：zip 本身完好、CRC 也对，但里面的库文件少页——
+        // 只有真把 data.db 解开跑一遍检查才能发现
+        let mut short = body.clone();
+        short.truncate(short.len() * 3 / 4);
+        let truncated = archive_with_db_body(&base, &short);
+        assert!(validate_backup_zip(&truncated).is_err());
+
+        // 归档中部一个字节翻掉（bit rot）：deflate 流要么读错要么 CRC 不匹配
+        let mut raw = fs::read(&archive).unwrap();
+        let at = raw.len() / 2;
+        raw[at] ^= 0xff;
+        let tampered = base.join("tampered.zip");
+        fs::write(&tampered, &raw).unwrap();
+        assert!(validate_backup_zip(&tampered).is_err());
         let _ = fs::remove_dir_all(&base);
     }
 

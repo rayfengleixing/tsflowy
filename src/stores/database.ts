@@ -55,6 +55,8 @@ export interface DatabaseState {
   addField: (type: FieldType, name?: string) => Promise<DatabaseField | null>;
   renameField: (id: string, name: string) => Promise<void>;
   changeFieldType: (id: string, type: FieldType) => Promise<void>;
+  /** 把最近一次改类型前留存的列值（连同类型与 options）还原回去 */
+  restoreFieldValues: (id: string) => Promise<void>;
   removeField: (id: string) => Promise<void>;
   setFieldWidth: (id: string, width: number) => Promise<void>;
   toggleFieldHidden: (id: string) => Promise<void>;
@@ -282,9 +284,31 @@ export function createDatabaseStore() {
 
       changeFieldType: async (id, type) => {
         const field = get().fields.find((f) => f.id === id);
-        if (field?.field_type === type) return; // 同类型重选：不清列、不重置选项
-        await databaseApi.changeFieldType(id, type);
+        if (!field || field.field_type === type) return; // 同类型重选：不清列、不重置选项
+        const preserved = await databaseApi.changeFieldType(id, type);
         await get().reload();
+        if (preserved <= 0) return;
+        // 整列被清空这件事当场看不出来（只是变的一片空），所以要出声并给一键退路：
+        // 后端按字段留存最近一次改类型前的取值与定义，撤销即原样换回
+        toast.message(t("field.typeClearedKeep", { name: field.name, n: String(preserved) }), {
+          duration: 8000,
+          action: {
+            label: t("field.undoTypeChange"),
+            onClick: () => void get().restoreFieldValues(id),
+          },
+        });
+      },
+
+      restoreFieldValues: async (id) => {
+        const name = get().fields.find((f) => f.id === id)?.name ?? "";
+        try {
+          const restored = await databaseApi.restoreFieldValues(id);
+          await get().reload();
+          toast.success(t("field.typeChangeRestored", { name, n: String(restored) }));
+        } catch (e) {
+          logger.error("restore field values failed", e);
+          toast.error(t("error.db", { message: String(e) }));
+        }
       },
 
       removeField: async (id) => {

@@ -366,8 +366,50 @@ fn purge_expired_trash_counts_and_respects_null_deleted_at() {
     assert_eq!(r3, 1);
 }
 
-// ---------- 多视图（迁移 007：views.source_id） ----------
+#[test]
+fn purge_expired_trash_all_covers_workspaces_the_ui_never_opened() {
+    let conn = setup();
+    seed_default_fixture(&conn);
+    // 第二个空间：前端那个定时器只管当前打开的工作区，这边必须照样清干净
+    conn.execute(
+        "INSERT INTO workspaces(id, name, created_at, updated_at) VALUES ('w9', 'x', 1, 1)",
+        [],
+    )
+    .unwrap();
+    create(&conn, "z1", "w9", None, "过期页", "document", "{}", None).unwrap();
+    let old = now_ms() - 40 * 24 * 3600 * 1000;
+    for id in ["r2", "z1"] {
+        conn.execute(
+            "UPDATE views SET is_trash = 1, deleted_at = ?2 WHERE id = ?1",
+            params![id, old],
+        )
+        .unwrap();
+    }
+    // 没到期的那页要留下
+    create(&conn, "z2", "w9", None, "新页", "document", "{}", None).unwrap();
+    conn.execute(
+        "UPDATE views SET is_trash = 1, deleted_at = ?1 WHERE id = 'z2'",
+        params![now_ms()],
+    )
+    .unwrap();
 
+    let n = purge_expired_trash_all(&conn, now_ms() - 30 * 24 * 3600 * 1000).unwrap();
+    assert_eq!(n, 2, "两个空间的过期项都要清掉");
+    let left: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM views WHERE id IN ('r2','z1')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(left, 0);
+    let z2: i64 = conn
+        .query_row("SELECT COUNT(*) FROM views WHERE id='z2'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(z2, 1, "未到保留期的不动");
+}
+
+// ---------- 多视图（迁移 007：views.source_id） ----------
 /// 在宿主表上建一个派生视图
 fn derive(conn: &Connection, id: &str, host: &str, name: &str, layout: &str) -> ViewRow {
     create(conn, id, "w1", None, name, layout, "{}", Some(host)).unwrap()

@@ -13,7 +13,9 @@ pub use crud::{
     list_trash, rename, set_favorite, set_icon, set_tags, touch_visited, update_extra, NewView,
 };
 pub use reorder::move_view;
-pub use trash::{purge, purge_expired_trash, purge_trash, restore, soft_delete};
+pub use trash::{
+    purge, purge_expired_trash, purge_expired_trash_all, purge_trash, restore, soft_delete,
+};
 
 // 拆分前 views.rs 顶层 import 的这些名字，测试模块经 `use super::*` 使用；这里按 test 场景补齐。
 #[cfg(test)]

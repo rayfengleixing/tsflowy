@@ -153,6 +153,20 @@ pub fn purge_expired_trash(
     Ok(n as i64)
 }
 
+/// 跨空间清理过期回收站（Rust 侧开机兜底，见 commands::files::run_expired_trash_sweep）。
+/// 前端的定时器只管当前打开的那个工作区，本机从没点开过的工作区会一直挂着过期项。
+pub fn purge_expired_trash_all(conn: &Connection, deadline_ms: i64) -> Result<i64, String> {
+    let ids = super::super::workspaces::list(conn)?
+        .into_iter()
+        .map(|w| w.id)
+        .collect::<Vec<String>>();
+    let mut total = 0i64;
+    for id in &ids {
+        total += purge_expired_trash(conn, id, deadline_ms)?;
+    }
+    Ok(total)
+}
+
 /// 把"父已被永久删除、自己还在树里"的页面挂回根级，避免悬挂 parent_id
 /// （回收站支持单独恢复子页：父被清空后子页会落在这种情况）
 fn reparent_orphans_in_workspace(conn: &Connection, workspace_id: &str) -> Result<(), String> {

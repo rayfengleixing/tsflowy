@@ -23,7 +23,8 @@ pub use config::{
     AI_CTX_MAX_MESSAGES_DEFAULT, AI_CTX_TOKEN_BUDGET_DEFAULT, SYNC_HISTORY_MAX,
 };
 pub use config::{
-    get_prefs, get_retention_policy, set_prefs, set_retention_policy, RetentionPolicyInfo,
+    get_prefs, get_retention_policy, run_expired_trash_sweep, set_prefs, set_retention_policy,
+    RetentionPolicyInfo,
 };
 pub(crate) use config::{load_app_config, save_app_config};
 

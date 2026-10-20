@@ -454,6 +454,28 @@ pub fn set_retention_policy(
 /// 塞了进来，不能任由它把 config.json 撑爆
 const PREF_VALUE_MAX_BYTES: usize = 64 * 1024;
 
+/// 回收站到期兜底清理（Rust 侧，与自动备份共用小时级节拍）。
+///
+/// 为什么要放在后端：前端的清理定时器按「当前打开的工作区」跑，
+/// 一台机器上从没点开过的工作区、以及关机几周后攒下的过期条目，都没人管。
+/// 到期就该彻底删除是策略而不是交互，所以由进程自己保证，不依赖 UI 是否开过那页。
+pub fn run_expired_trash_sweep(app: &tauri::AppHandle) {
+    let days = load_app_config(app).trash.normalized().retention_days;
+    let Some(db) = app.try_state::<crate::db::Db>() else {
+        return; // 库还没 manage 起来（正常不会发生）：这一跳跳过，下一跳再来
+    };
+    let Ok(conn) = db.write_conn() else {
+        return; // 库打开失败已另有 init_error 日志，这里不重复报
+    };
+    let deadline = crate::db::now_ms() - (days.min(TRASH_RETENTION_DAYS_MAX) as i64) * 86_400_000;
+    if let Err(e) = crate::db::views::purge_expired_trash_all(&conn, deadline) {
+        tracing::warn!(error = %e, "trash sweep: views failed");
+    }
+    if let Err(e) = crate::db::database::purge_expired_trash_rows(&conn, deadline) {
+        tracing::warn!(error = %e, "trash sweep: database rows failed");
+    }
+}
+
 /// 读取偏好镜像。前端在渲染首帧之前调用，用它回填本机缺失的 localStorage 键。
 #[tauri::command]
 pub fn get_prefs(app: tauri::AppHandle) -> HashMap<String, String> {

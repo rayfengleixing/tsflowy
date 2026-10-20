@@ -123,6 +123,11 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "database_rows_parent",
         sql: include_str!("../../../migrations/023_database_rows_parent.sql"),
     },
+    Migration {
+        version: 24,
+        description: "database_field_snapshots",
+        sql: include_str!("../../../migrations/024_database_field_snapshots.sql"),
+    },
 ];
 
 /// 自带事务的迁移：重建表改 CHECK 约束需要两个连接级 PRAGMA，而它们在事务内是 no-op，

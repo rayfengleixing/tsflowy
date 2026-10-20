@@ -182,6 +182,8 @@ fn spawn_auto_backup_loop(app: tauri::AppHandle) {
         std::thread::sleep(std::time::Duration::from_secs(30));
         loop {
             commands::files::maybe_run_auto_backup(&app);
+            // 回收站到期清理同样按小时兜底跑一遍（前端的定时器只管当前打开的工作区）
+            commands::files::run_expired_trash_sweep(&app);
             std::thread::sleep(TICK);
         }
     });
@@ -382,6 +384,7 @@ pub fn run() {
             commands::db::field_update_options,
             commands::db::field_reorder,
             commands::db::field_change_type,
+            commands::db::field_restore_values,
             commands::db::row_list,
             commands::db::row_create,
             commands::db::row_create_many,

@@ -117,4 +117,26 @@ describe("hydratePrefs（备份里的偏好回填本机）", () => {
     expect(store.get("tsflowy:editor-readonly")).toBe("1");
     expect(store.get("tsflowy:editor-typewriter")).toBe("1");
   });
+
+  it("搜索历史跟着镜像走：换机后命令面板的最近查询还在", async () => {
+    const history = JSON.stringify(["报销", "tsflowy"]);
+    invoker.mockResolvedValue({ "tsflowy:search-history": history });
+    const { hydratePrefs } = await freshMirror();
+    await hydratePrefs();
+    expect(store.get("tsflowy:search-history")).toBe(history);
+
+    // 反方向：本机新记的查询要能冲刷进 config.json
+    vi.useFakeTimers();
+    invoker.mockResolvedValue({});
+    const second = await freshMirror();
+    await second.hydratePrefs();
+    const newer = JSON.stringify(["周报", "报销", "tsflowy"]);
+    store.set("tsflowy:search-history", newer);
+    await vi.advanceTimersByTimeAsync(30_000);
+    const written = invoker.mock.calls.find((c) => c[0] === "set_prefs")?.[1] as {
+      prefs: Record<string, string>;
+    };
+    expect(written.prefs["tsflowy:search-history"]).toBe(newer);
+    vi.useRealTimers();
+  });
 });

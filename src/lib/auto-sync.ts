@@ -114,6 +114,7 @@ const WRITE_COMMANDS = new Set([
   "field_update_options",
   "field_reorder",
   "field_change_type",
+  "field_restore_values",
   "row_create",
   "row_create_many",
   "row_set_document_id",
