@@ -7,7 +7,11 @@
 - 打包时这个文件随安装包分发（见 `src-tauri/tauri.conf.json` 的 `bundle.resources`），安装目录下的 `resources/CHANGELOG.md`。
 - 更早版本的发布说明在 GitHub Releases 上，与 `latest.json` 的 `notes` 同源。
 
-## 未发布（v0.8.32 之后）
+## 未发布（v0.8.33 之后）
+
+（暂无）
+
+## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
 
