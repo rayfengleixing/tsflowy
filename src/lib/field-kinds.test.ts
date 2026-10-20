@@ -132,6 +132,22 @@ describe("field-kinds 粘贴解读", () => {
     expect(FIELD_KINDS.checkbox.paste("是")).toEqual({ kind: "value", value: true });
     expect(FIELD_KINDS.checkbox.paste("yes")).toEqual({ kind: "value", value: false });
   });
+
+  it("日期：认得出的写法补零成 YYYY-MM-DD，认不出的按空处理", () => {
+    // 交给 new Date 会按本机时区偏移：东八区的 2024/1/5 偏成 1 月 4 日，所以月日写法必须先走正则
+    expect(FIELD_KINDS.date.paste("2024/1/5")).toEqual({ kind: "value", value: "2024-01-05" });
+    expect(FIELD_KINDS.date.paste("2024.1.5")).toEqual({ kind: "value", value: "2024-01-05" });
+    expect(FIELD_KINDS.date.paste("2024年1月5日")).toEqual({ kind: "value", value: "2024-01-05" });
+    expect(FIELD_KINDS.date.paste("2024-1-5")).toEqual({ kind: "value", value: "2024-01-05" });
+    expect(FIELD_KINDS.date.paste("2024-01-05")).toEqual({ kind: "value", value: "2024-01-05" });
+    // 越界日期不能靠 new Date 自动进位（2024-13-01 会变成次年 1 月）
+    expect(FIELD_KINDS.date.paste("2024-13-01")).toEqual({ kind: "value", value: null });
+    expect(FIELD_KINDS.date.paste("下周三见")).toEqual({ kind: "value", value: null });
+    // 带时刻的走 ISO（具体时刻随本机时区变化，只断言格式）
+    const withTime = FIELD_KINDS.date.paste("2024-01-05 08:30");
+    if (withTime.kind !== "value") throw new Error("日期粘贴应交出值");
+    expect(withTime.value).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
 });
 
 describe("field-kinds 展示格式", () => {

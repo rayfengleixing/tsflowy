@@ -86,11 +86,15 @@ describe("coerceCell", () => {
     expect(api.updateFieldOptions).not.toHaveBeenCalled();
   });
 
-  it("日期：把模型给的散文收成 ISO，解析不出才留原文", async () => {
-    expect(await coerceCell(field("date"), "2024-01-05")).toBe("2024-01-05");
-    // 具体时刻随本机时区变化，只断言「已归一成 ISO」
-    expect(await coerceCell(field("date"), "2024/1/5")).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-    expect(await coerceCell(field("date"), "下周三见")).toBe("下周三见");
+  it("日期：认得出的写法归一，认不出的按空处理（不把原文落进日期列）", async () => {
+    // 斜杠/中文写法补零成 YYYY-MM-DD：交给 new Date 会按本机时区偏移，东八区的 2024/1/5 会落到 1 月 4 日
+    expect(await coerceCell(field("date"), "2024/1/5")).toBe("2024-01-05");
+    expect(await coerceCell(field("date"), "2024年1月5日")).toBe("2024-01-05");
+    // 带时刻的仍归一成 ISO（具体时刻随本机时区变化，只断言格式）
+    expect(await coerceCell(field("date"), "2024-01-05 08:30")).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    );
+    expect(await coerceCell(field("date"), "下周三见")).toBeNull();
   });
 
   it("数字类剥掉单位与千分位，一个数字都没有时不落 0", async () => {

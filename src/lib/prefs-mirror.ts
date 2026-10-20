@@ -33,6 +33,8 @@ const MIRRORED_KEYS = [
   "tsflowy:editor-typewriter",
   // 搜索历史最多 8 条查询（lib/search-history.ts 的 MAX），小且稳定，跟着备份走
   "tsflowy:search-history",
+  // 「这个新版本已经提示过」：不镜像的话换机后同一个已看过的更新会再弹一次
+  "tsflowy:update-notified-version",
 ];
 
 /** 回填等不到 IPC 时的上限：超了就照常渲染，偏好丢一次启动好过白屏 */

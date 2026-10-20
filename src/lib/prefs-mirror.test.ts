@@ -139,4 +139,12 @@ describe("hydratePrefs（备份里的偏好回填本机）", () => {
     expect(written.prefs["tsflowy:search-history"]).toBe(newer);
     vi.useRealTimers();
   });
+
+  it("已看过的更新版本跟着镜像走：换机后同一个版本不会二次弹窗", async () => {
+    invoker.mockResolvedValue({ "tsflowy:update-notified-version": "0.9.0" });
+    const { hydratePrefs } = await freshMirror();
+    await hydratePrefs();
+
+    expect(store.get("tsflowy:update-notified-version")).toBe("0.9.0");
+  });
 });

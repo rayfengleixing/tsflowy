@@ -128,13 +128,26 @@ function numberOutcome(raw: string, parse: (s: string) => number = Number): Past
   return Number.isFinite(n) ? { kind: "value", value: n } : VALUE_NULL;
 }
 
-/** 日期：已是 YYYY-MM-DD 直接存，其它能解析的归一成 ISO，解析不了按原文存 */
+/** 纯日期写法归一成可排序的 YYYY-MM-DD：`2024-1-5`、`2024/1/5`、`2024年1月5日`、`2024.1.5` 补同一零 */
+function toDateOnly(v: string): string | null {
+  const m = /^(\d{4})\s*[年./-]\s*(\d{1,2})\s*[月./-]\s*(\d{1,2})\s*[日号]?$/.exec(v);
+  if (!m) return null;
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return `${m[1]}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/** 日期：认得出的写法存成规范化日期，认不出来的按空处理（见 DATE_LIKE.validate 只认字符串） */
 function dateOutcome(raw: string): PasteOutcome {
   const v = raw.trim();
   if (v === "") return VALUE_NULL;
-  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(v)) return { kind: "value", value: v };
+  const day = toDateOnly(v);
+  if (day) return { kind: "value", value: day };
   const d = new Date(v);
-  return { kind: "value", value: Number.isNaN(d.getTime()) ? v : d.toISOString() };
+  // 「下周三」这类文本落进日期列后，排序、筛选、日历分组会全部失效，而 validate 只认字符串拦不住，
+  // 所以宁可不写：与 number 对非法文本的处理一致（按空，不按原文）
+  return Number.isNaN(d.getTime()) ? VALUE_NULL : { kind: "value", value: d.toISOString() };
 }
 
 /** 选择类：只交出选项名；名 → id 要补建缺失选项（写库副作用），由 pasteCell 负责 */

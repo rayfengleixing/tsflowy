@@ -1,7 +1,7 @@
 // GridView 的视图模型（MVVM 的 VM 层）。
 // 分工：这里只写「状态怎么算、命令按什么顺序发」，不碰 React、不碰 zustand、不弹提示；
 // 副作用（写库、toast、日志、setState）由适配层 use-grid-view-model.ts 注入。
-// 本仓库的 vitest 是 node 环境（没有 jsdom / testing-library），组件测不了，
+// 本仓库的 vitest 默认是 node 环境（组件测要按文件单独开 jsdom），整套表格交互测起来代价大，
 // 所以要把可验证的规则收到这一层。
 //
 // 派生刻意分两段，为了守住与改造前一致的 memo 边界：

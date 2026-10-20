@@ -2,7 +2,7 @@ import { isReadonlyType, type CellValue, type DatabaseField, type FieldType } fr
 import { parseFieldOptions, ratingMax, sameCellValue } from "./database-values";
 
 // 批量改值（勾选多行 → 一次改同一字段）的纯逻辑层。
-// 拆出来的理由：交互在 GridView 里（.tsx，本项目的 vitest 没有 jsdom，测不到），
+// 拆出来的理由：交互在 GridView 里（.tsx，要测得单独开 jsdom 环境），
 // 而「草稿 → 单元格值」和「按当前值合并」这两段是真会算错的：
 // 数字草稿可能是空串/NaN，日期要按字段是否含时刻决定编码，多选追加要保住已有项的顺序。
 

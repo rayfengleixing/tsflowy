@@ -373,9 +373,9 @@ export async function coerceCell(field: DatabaseField, raw: unknown): Promise<Ce
     }
     case "date": {
       // 走日期类型自己的粘贴归一：模型给「2024/1/5」「Jan 5, 2024」都收成 ISO，
-      // 直接落原文会让日期列的排序、筛选、日历分组全部失效（validate 只认字符串，拦不住语义脏值）
+      // 认不出的（如「下周三」）按空处理——落原文会让日期列的排序、筛选、日历分组全部失效
       const outcome = fieldKind("date").paste(text);
-      return outcome.kind === "value" ? outcome.value : text;
+      return outcome.kind === "value" ? outcome.value : null;
     }
     case "url":
     case "phone":
