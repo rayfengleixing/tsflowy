@@ -117,6 +117,11 @@ export const en: Record<MessageKey, string> = {
   "alias.inputPlaceholder": "Type an alias, press Enter",
   "alias.hint":
     "Search, @ mentions and [[ link completion all accept these names. Amber means another page uses the same alias.",
+  "moveToSpace.title": "Move to another space",
+  "moveToSpace.rootLevel": "{space} · top level",
+  "moveToSpace.hint": "The whole subtree moves along. Afterwards the app jumps to that space and opens this page.",
+  "moveToSpace.confirm": "Move",
+  "moveToSpace.failed": "Move failed: {message}",
   "history.title": "History",
   "history.today": "Today",
   "history.loading": "Loading…",

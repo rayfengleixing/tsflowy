@@ -61,6 +61,8 @@ export interface WorkspaceState {
   purgeView: (id: string) => Promise<void>;
   purgeTrash: () => Promise<void>;
   moveView: (viewId: string, newParentId: string | null, index: number) => Promise<void>;
+  /** 把页面连同子树搬到另一个空间（末尾追加），完成后切到目标空间并打开该页 */
+  moveViewToWorkspace: (viewId: string, targetWorkspaceId: string, newParentId: string | null) => Promise<void>;
 
   /** 页面树标签过滤：null = 不过滤 */
   tagFilter: string | null;

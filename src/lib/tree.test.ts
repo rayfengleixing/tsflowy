@@ -7,6 +7,7 @@ import {
   flattenTree,
   flattenVisibleTree,
   isDescendant,
+  moveDestinations,
   pruneSubtreeSelection,
   siblingIds,
   visibleRangeSelection,
@@ -248,5 +249,24 @@ describe("filterTreeByTag", () => {
     expect(flattenTree(filterTreeByTag(nested, "工作/项目B")).map((n) => n.id)).toEqual(["b"]);
     // 前缀必须落在层级边界上："工作" 不应命中 "工作台"
     expect(flattenTree(filterTreeByTag(nested, "工作/项")).map((n) => n.id)).toEqual([]);
+  });
+});
+
+describe("moveDestinations", () => {
+  it("根级排第一，其余按深度优先展平并带上层级", () => {
+    const out = moveDestinations(views);
+    expect(out).toEqual([
+      { parentId: null, name: "", depth: 0 },
+      { parentId: "r1", name: "r1", depth: 0 },
+      { parentId: "c1", name: "c1", depth: 1 },
+      { parentId: "c2", name: "c2", depth: 1 },
+      { parentId: "c3", name: "c3", depth: 1 },
+      { parentId: "r2", name: "r2", depth: 0 },
+      { parentId: "r3", name: "r3", depth: 0 },
+    ]);
+  });
+
+  it("空空间只剩根级", () => {
+    expect(moveDestinations([])).toEqual([{ parentId: null, name: "", depth: 0 }]);
   });
 });

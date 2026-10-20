@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Columns2,
   Copy,
+  FolderInput,
   History,
   MoreHorizontal,
   Pencil,
@@ -31,6 +32,7 @@ import { NewPageMenu } from "./NewPageMenu";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { TagEditorDialog } from "@/components/tag-editor-dialog";
 import { AliasEditorDialog } from "@/components/alias-editor-dialog";
+import { MoveToSpaceDialog } from "@/components/move-to-space-dialog";
 import { HistoryDialog } from "@/components/history-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { DropZone } from "@/lib/tree";
@@ -98,6 +100,8 @@ export function PageTreeItem({
   const duplicateView = useWorkspaceStore((s) => s.duplicateView);
   const openInSplit = useWorkspaceStore((s) => s.openInSplit);
   const deleteView = useWorkspaceStore((s) => s.deleteView);
+  /** 只有一个空间时「搬其它空间」无处可去，菜单里不摆空选项 */
+  const hasOtherSpace = useWorkspaceStore((s) => s.workspaces.length > 1);
   const hasChildren = node.children.length > 0;
 
   const [editing, setEditing] = useState(false);
@@ -105,6 +109,7 @@ export function PageTreeItem({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
   const [aliasEditorOpen, setAliasEditorOpen] = useState(false);
+  const [moveToSpaceOpen, setMoveToSpaceOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   /** 行菜单（⋯ 与右键共用这一个实例）：右键在行内任意位置都能打开，定位靠 ⋯ 按钮 */
   const [menuOpen, setMenuOpen] = useState(false);
@@ -282,6 +287,12 @@ export function PageTreeItem({
                   <Columns2 className="mr-2 h-3.5 w-3.5" />
                   {t("tree.openInSplit")}
                 </DropdownMenuItem>
+                {hasOtherSpace && batchCount === 0 && (
+                  <DropdownMenuItem data-testid="row-move-to-space" onSelect={() => setMoveToSpaceOpen(true)}>
+                    <FolderInput className="mr-2 h-3.5 w-3.5" />
+                    {t("moveToSpace.title")}
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => exportPage(node.id, node.name, "markdown")}>
                   <Download className="mr-2 h-3.5 w-3.5" />
@@ -343,6 +354,8 @@ export function PageTreeItem({
       <TagEditorDialog view={node} open={tagEditorOpen} onOpenChange={setTagEditorOpen} />
 
       <AliasEditorDialog view={node} open={aliasEditorOpen} onOpenChange={setAliasEditorOpen} />
+
+      <MoveToSpaceDialog view={node} open={moveToSpaceOpen} onOpenChange={setMoveToSpaceOpen} />
 
       <HistoryDialog view={node} open={historyOpen} onOpenChange={setHistoryOpen} />
     </>

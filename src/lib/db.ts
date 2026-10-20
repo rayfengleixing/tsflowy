@@ -152,6 +152,20 @@ export const viewApi = {
     return invoke("view_move", { viewId, newParentId, index });
   },
 
+  /**
+   * 把页面连同子树搬到另一个空间。Rust 侧同事务里改两侧排序 + 整棵子树的 workspace_id，
+   * 因此要么整批成功要么原样不动；派生视图与行详情文档一并跟随。
+   * 目标父级传 null 表示挂到目标空间的根级。
+   */
+  async moveToWorkspace(
+    viewId: string,
+    targetWorkspaceId: string,
+    newParentId: string | null,
+    index: number,
+  ): Promise<void> {
+    return invoke("view_move_to_workspace", { viewId, targetWorkspaceId, newParentId, index });
+  },
+
   /** 获取当前应用的工作区标识（app_settings 键值，供 store 恢复） */
   async getSetting(key: string): Promise<string | null> {
     return invoke<string | null>("setting_get", { key });

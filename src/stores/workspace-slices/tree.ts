@@ -277,4 +277,25 @@ export const createTreeSlice: WorkspaceSliceCreator<Partial<WorkspaceState>> = (
     syncSubpages(get, oldParentId);
     if (newParentId !== oldParentId) syncSubpages(get, newParentId);
   },
+
+  moveViewToWorkspace: async (viewId, targetWorkspaceId, newParentId) => {
+    const node = findInTree(get().tree, viewId);
+    const sourceWorkspaceId = get().currentWorkspaceId;
+    if (!node || !sourceWorkspaceId) return;
+    const oldParentId = node.parent_id ?? null;
+
+    // 落到目标父级的末尾：目标空间的树不在本地，单独取一次它的可见页面
+    const destination = await viewApi.listByWorkspace(targetWorkspaceId);
+    const index = destination.filter((v) => v.parent_id === newParentId).length;
+    await viewApi.moveToWorkspace(viewId, targetWorkspaceId, newParentId, index);
+
+    // 新旧父页的「子页面」块都得改，但各自只能在本空间树还是本地那份时同步：
+    // 先刷新源空间（此时那页已经不在树里）把旧父页的列表去掉，切过去后再把它补进新父页的列表
+    await get().reload();
+    syncSubpages(get, oldParentId);
+    await get().switchWorkspace(targetWorkspaceId);
+    syncSubpages(get, newParentId);
+    // 跟着页面走：搬完直接落到目标空间打开它，否则用户只会觉得「页面不见了」
+    get().openView(viewId);
+  },
 });

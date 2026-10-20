@@ -100,6 +100,7 @@ const WRITE_COMMANDS = new Set([
   "view_purge_trash",
   "view_purge_expired_trash",
   "view_move",
+  "view_move_to_workspace",
   "setting_set",
   "doc_save",
   "doc_snapshot_restore",

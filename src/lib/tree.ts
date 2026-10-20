@@ -141,6 +141,29 @@ export function siblingIds(views: View[], parentId: string | null, movedId?: str
     .map((v) => v.id);
 }
 
+export interface MoveDestination {
+  /** null = 挂在空间根级，此时 name 留空由调用方按目标空间名展示 */
+  parentId: string | null;
+  name: string;
+  depth: number;
+}
+
+/**
+ * 跨空间搬页的落点清单：根级排第一，其余按目标空间的树深度优先展平并带上缩进层级。
+ * 入参是视图行而非树，为的是直接吃 viewApi.listByWorkspace 的结果（它已排除派生视图与行详情文档）。
+ */
+export function moveDestinations(views: View[]): MoveDestination[] {
+  const out: MoveDestination[] = [{ parentId: null, name: "", depth: 0 }];
+  const walk = (nodes: ViewNode[], depth: number) => {
+    for (const n of nodes) {
+      out.push({ parentId: n.id, name: n.name, depth });
+      walk(n.children, depth + 1);
+    }
+  };
+  walk(buildTree(views), 0);
+  return out;
+}
+
 /**
  * 标签过滤树：保留"自身带标签"或"子孙带标签"的节点（祖先仅作路径容器）。
  * 层级标签按前缀命中：筛选 "工作" 时 "工作/项目A" 也算命中。
