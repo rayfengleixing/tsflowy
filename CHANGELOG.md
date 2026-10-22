@@ -105,6 +105,39 @@
 - 验证：顶层符号清单 80 条与拆前对上（差集只有 2 条 `mod` 声明、12 处 `pub(super)` 前缀、`mod tests {` → `mod tests;`），四份文件与 HEAD 做空白归一后的逐行比对只剩本批新增的注释与 import；`cargo test` 343 通过 / 1 忽略、`cargo clippy --all-targets` 无告警、`cargo fmt --check` 与 `npm run format:check` 均干净。
 - 本批全链：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest` 91 文件 / 1287 用例全过、`npm run build` exit 0、`cargo test` 343 通过 / 1 忽略。Rust 侧动了命令的模块归属，静态检查之外又在原生窗口里重跑了一遍 CDP 冒烟（`scripts/cdp-lang-smoke.mjs`，11 条断言全过、0 未捕获异常），确认 `generate_handler!` 的注册路径与界面启动都没被拆坏。
 
+### 工程：`db/search.rs` 按「词法 / 查询」两层拆成目录模块（1257 行 → 单文件最大 421 行）
+
+- 同样纯搬运：`src-tauri/src/db/search.rs` 变成 `search/`。`terms.rs`（106 行）拿走近乎纯函数的那一层——FTS5 转义、把查询串切成 `QueryTerm`（空白分词、`"…"` 精确短语、`-` 前缀排除）、由项拼 `MATCH` 表达式与 LIKE 模式；`query.rs`（301 行）管「一次查询怎么跑出来」——文档 FTS、数据库单元格 FTS、页面别名、三路 LIKE 兜底、回收站过滤、AI 上下文用的单篇片段检索；父模块 25 行留共用导入与 `dedupe_by_view`（跨路去重是两层共用的收口）。
+- 对外路径一字未动：`pub use query::*; pub use terms::*;`，`commands/db/{documents,ai_sessions}.rs` 的 `db::search::search(...)` / `search_in_view(...)` 与 `db/docs.rs` 的 `super::search::like_pattern(...)` 都不用改。
+- 1,257 行里有 840 行是 `#[cfg(test)] mod tests`，按被测层拆成四份：`tests/mod.rs`（43 行，`setup()` 建库与两个 seed 夹具）、`tests/terms.rs`（128 行）、`tests/query.rs`（421 行）、`tests/cells.rs`（260 行，迁移 008 的单元格索引）。54 个 `#[test]` 拆前拆后计数一致，断言一行没动；降缩进同样交给 `rustfmt`，不手工 awk（里面有 raw string 样本）。
+- 两处必要的路径/可见性适配（不改逻辑）：`like_filters` 是「词法项 → SQL 片段」的拼串、实现在 `query.rs` 却被 `tests/terms.rs` 断言，放宽到 `pub(super)` 并在用例里显式 `use`（`pub use` 的 glob 不透出 `pub(super)`）；`tests/cells.rs` 调 `soft_delete_rows` 的 `super::super::database` 因层级多了一处，换成绝对路径 `crate::db::database::`。
+- 验证：七份文件与 HEAD 做空白归一后的逐行比对，差集只有本批新增的注释、`mod` / `use` 声明和上述两行适配，没有一行原代码被改写；`cargo test` 343 通过 / 1 忽略、`cargo clippy --all-targets` 无告警、`cargo fmt --check` 干净。
+- 拆完 `src-tauri/src` 里仍超 800 行的只剩 `db/migrations.rs` 1,722（迁移按时间追加，拆开反而读不动）、`commands/files/backup.rs` 1,172、`db/views/tests.rs` 1,047（单个用例集，不是混杂职责）、`commands/files/config.rs` 844。
+
+### 工程：`commands/files/backup.rs` 按「导出 / 恢复」两条链拆成目录模块（1,172 行 → 单文件最大 540 行）
+
+- 同样纯搬运：`src-tauri/src/commands/files/backup.rs` 变成 `backup/`。父模块 90 行留文件头总注、共用导入与「归档范围」这层两条链共用的语义（`BackupScope`、`impl BackupScope`、清单条目名 `MANIFEST_ENTRY`、`BackupManifest`、`scope_from_manifest_text`、`read_backup_scope`）；`export.rs`（229 行）管导出与打包——VACUUM INTO 快照、zip 落盘、迁移前留档与它的清理；`import.rs`（338 行）管恢复与导入——归档校验、把现有库与附件改名让位（`.bak-时间戳`）、解压覆盖、失败回滚；`tests.rs`（540 行）是原来 `mod tests` 的 12 个用例。
+- 对外路径一字未动：`pub use export::*; pub use import::*;`，`files/mod.rs` 的 `pub use backup::{export_backup, import_backup}` 与 `pub(crate) use backup::{make_db_snapshot, stash_current_db}`、`auto_backup.rs` 引的 `write_backup_zip` / `restore_backup_from` / `scope_from_manifest_text` / `BackupScope` / `MANIFEST_ENTRY`、`db/migrations.rs` 的 `backup::capture_pre_migration` 全部照原样解析。2 个 `#[tauri::command]` 拆前拆后计数一致。
+- 一处父模块新增绑定（同 `db.rs` 那批的写法）：恢复链路里 `super::health::deep_check_failure(...)` 原本指 `commands::files::health`，搬进 `import.rs` 后 `super` 变成了 `commands::files::backup`；不在被搬的代码里改路径，而在父模块加 `use super::health;` 让原表达式继续解析。
+- 可见性放宽 5 个原本私有的函数到 `pub(super)`（作用域仍限在 `backup` 内）：`export::prune_pre_migration`、`import::{prune_stale_backups, validate_backup_zip, import_backup_into, move_db_sidecars_to_bak}`，都是用例直接点的内部函数；用例里补两行显式 `use super::{export,import}::{…}`。
+- 验证：四份文件与 HEAD 做空白归一后的逐行比对，差集只有本批新增的注释、`mod` / `use` 声明、5 处 `pub(super)` 前缀与 `mod tests {` → `mod tests;`；12 个 `#[test]` 计数一致（降缩进交给 `rustfmt`，raw string 样本未动）；`cargo test` 343 通过 / 1 忽略、`cargo clippy --all-targets` 无告警、`cargo fmt --check` 干净。
+
+### 工程：`commands/files/config.rs` 按「数据形状 / 命令 / 落盘」三层拆成目录模块（844 行 → 单文件最大 503 行）
+
+- 同样纯搬运：`src-tauri/src/commands/files/config.rs` 变成 `config/`。父模块 24 行留共用导入与两个目录/文件名常量（`CONFIG_DIR_NAME`、`CONFIG_FILE_NAME`）；`types.rs`（503 行）是配置的数据形状——`AppConfig` 与 AI / 同步 / 自动备份 / 快照 / 回收站 / 唤起快捷键各子块，连同默认值函数与 clamp/normalize 口径；`commands.rs`（95 行）是设置页读写的那几条命令（`get/set_retention_policy`、`get/set_prefs`、`run_expired_trash_sweep`、`RetentionPolicyInfo`、`retention_info`、`PREF_VALUE_MAX_BYTES`）；`store.rs`（87 行）管落盘（目录解析、损坏配置的救援式加载、先写临时文件再 rename 的读写）；`tests.rs`（154 行）8 个用例。
+- 对外路径一字未动：三条 `pub use <子>::*;`，`files/mod.rs` 里逐名列出的 `config::{AppConfig, AiConfig, …}`、`config::{get_prefs, set_prefs, get_retention_policy, set_retention_policy, run_expired_trash_sweep, RetentionPolicyInfo}`、`pub(crate) use config::{load_app_config, save_app_config}` 与 `__cmd__…` / `__tauri_command_name_…` 那批宏生成项都能照原样解析，`generate_handler!` 未改。4 个 `#[tauri::command]`、8 个 `#[test]` 计数一致。
+- 本批零可见性放宽、零 `super::` 路径适配：跨层引用的 `load_app_config` / `save_app_config` 本就是 `pub(crate)`，靠 glob 透出。
+- 验证：五份文件与 HEAD 做空白归一后的逐行比对，差集只有本批新增的注释、`mod` / `pub use` 声明与 `mod tests {` → `mod tests;`；顶层符号清单一致（多出的 8 条正是降缩进后进入顶层统计的用例函数）。
+- 至此批次内点名的三个文件（`db/search.rs`、`commands/files/backup.rs`、`commands/files/config.rs`）全部 ≤800 行，本批全链：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest` 91 文件 / 1287 用例全过、`npm run build` exit 0、`cargo test` 343 通过 / 1 忽略。`src-tauri/src` 里仍超 800 行的只剩 `db/migrations.rs` 1,722（迁移按版本号顺序追加，是时间线不是混杂职责，拆开反而读不动）与 `db/views/tests.rs` 1,047（单个用例集）。
+
+### 工程：`src/lib/markdown.ts` 按「导入 / 导出」两侧拆成目录模块（1,143 行 → 单文件最大 679 行）
+
+- Rust 侧收完后前端的第一批，同样纯搬运：`src/lib/markdown.ts` 变成 `src/lib/markdown/`。`parse.ts`（679 行）是导入侧——行内语法解析、`looksLikeMarkdown` 判定、纯文本转块、`markdownToJson` 整篇解析与列宽比例；`render.ts`（467 行）是导出侧，从原文件 675 行那条分节注释开始整段搬出——`jsonToMarkdown` 与各块的序列化、`colorAttr` / `alignValueOf` / `calloutColorOf`；`index.ts`（5 行）只做一件事：显式再导出原来那 9 个对外名字。
+- 对外路径一字未动：`src/lib/markdown/` 的目录 index 在 `moduleResolution: "bundler"` 下照旧解析，8 个 `@/lib/markdown` 消费方（`features/editor/EditorPage.tsx`、`stores/ai.ts`、`lib/{ai-locate,ai-tools,doc-diff,export-folder,export-page,import-folder}.ts`）与 `markdown.test.ts` 的 `./markdown` 一行没改；测试文件仍留在 `src/lib/markdown.test.ts`，不跟着搬。index 用逐名再导出而不是 `export *`，正是为了让 `parse.ts` 多出来的那几个内部常量不会因此漏进对外面。
+- 唯一的可见性变化：4 个原本文件私有的常量在 `parse.ts` 加 `export`（`DB_TABLE_BEGIN` / `DB_TABLE_END` / `CALLOUT_COLORS` / `ATTACH_PREFIX`），因为导出侧要读同一份协议名单与色表；`columnRatioOf` 本就是导出的。原先猜要跨侧的 `ALIGN_RE` 与 `stripAlign` 查了引用后确认只有导入侧用，于是把 `stripAlign` 连着它的注释从 902 行整块搬到 `parse.ts` 末尾，两者都保持文件私有——拆完两侧各自 `tsc` 报出的未用 import 反过来印证了这个判断。
+- 三个 import 按各半的实际用量分写而不是照抄：`JSONContent` 两侧都要，`t` 只有导出侧用（`databaseView.defaultName`），`task-meta` 那 5 项里导入侧用 `EMPTY_TASK_META` / `stripTaskMeta` / `TaskMeta`、导出侧用 `encodeTaskMeta` / `taskMetaOf`。
+- 验证：`parse.ts` 与 `render.ts` 的函数体逐行对 HEAD 的 `markdown.ts` 做归一比对，除上述 4 处 `export` 前缀外完全相等；行数对账 1,143 = 1,138 行原代码 + 新增的 5 行 `index.ts`。本批只动 TS，全链：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest` 91 文件 / 1287 用例全过（与基线一致）、`npm run build` exit 0、`npm run format:check` 干净；`cargo test` 复跑仍是 343 通过 / 1 忽略。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
