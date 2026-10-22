@@ -68,6 +68,43 @@
 - 拆的过程中撞到一个非本批引入的问题：`desktop.rs:323` 那段用例在 HEAD 上就不是 rustfmt 干净的，`cargo fmt` 顺手会改掉别人的文件；已把这处还原回 HEAD，格式检查只针对本批的 10 个文件跑（`rustfmt --edition 2021`），落差单记在下条。
 - 验证：函数清单 97 个与拆前逐字一致，`cargo clippy --all-targets` 无告警，`cargo test` 343 通过 / 1 忽略（与拆前基线持平）。
 
+### 工程：`commands/ai_protocol.rs` 按域拆成目录模块（1396 行 → 单文件最大 600 行）
+
+- 纯搬运，不改一行逻辑：`src-tauri/src/commands/ai_protocol.rs` 变成目录模块 `ai_protocol/`。父模块 275 行留 `Protocol` / `Endpoint`、请求头、三家共用的 URL 归一与消息/工具辅助函数以及 `chat()` / `models()` 分派；`providers.rs`（262 行）是三家的请求体构造（OpenAI 兼容 / Anthropic / Gemini）；`sse.rs`（276 行）是非流式响应解析（连通性测试、模型列表）与 SSE 帧解码器；`tests.rs`（600 行）15 个用例。
+- 对外路径一字未动：`pub use sse::*;` 让 `commands/ai/chat.rs` 里的 `super::ai_protocol::{SseDecoder, completion_text, model_ids, …}` 照常解析；三家 body 构造本来是私有的，只有父模块的 `chat()` 分派它们，故升 `pub(super)` 并在父模块显式 `use providers::{anthropic_body, gemini_body, openai_body};`（同一批学到的规则：`pub use` 的 glob 不透出 `pub(super)` 项）。
+- 用例里的 SSE / tool_calls 帧样本是多行 raw string，缩进降层交给 `rustfmt` 而非手工去缩进，逐行核对 23 处 raw string 内容未变。
+- 验证：顶层符号与 HEAD 逐条对上，四份文件与 HEAD 做空白归一后的逐行比对只剩本批新增的注释与 import；`cargo test` 343 通过 / 1 忽略、clippy 无告警、`cargo fmt --check` 干净。
+
+### 工程：`commands/db.rs` 按资源拆成目录模块（906 行 / 77 个命令 → 单文件最大 289 行）
+
+- 纯搬运：`src-tauri/src/commands/db.rs` 变成 `db/`，按命令资源的既有分节切成五块——`workspace.rs`（62 行，workspace 5 个命令 + app_settings 2 个）、`views.rs`（260 行，view 23 个命令 + page_properties 4 个）、`documents.rs`（116 行，文档正文 / 历史快照 / mentions / search）、`ai_sessions.rs`（130 行，AI 会话与用量统计）、`tables.rs`（289 行，fields / rows / cells 与 CSV 导入）；父模块 79 行只留参数契约总注、`check_id` / `check_name` 这两个持久层边界的第二道防线与 `#[cfg(test)] mod entry_checks`（它只测这两个校验函数，留在父模块最省事）。
+- 77 个 `#[tauri::command]` 拆前拆后计数一致，`lib.rs` 的 `generate_handler!` 与前端 `invoke("…")` 的命令名一字未改，靠五个 `pub use <域>::*` 平铺回 `crate::commands::db::*`。
+- 一处父模块新增绑定：文档快照策略那两处 `super::files::load_app_config(...)` 原本指 `commands::files`，搬进子模块后 `super` 变成了 `commands::db`；选择不在搬出的代码里改路径，而在父模块加 `use super::files;` 让原表达式继续解析——这样这两行仍是逐字节搬运。
+- 验证：四份文件与 HEAD 做空白归一后的逐行比对，差集只有本批新增的注释、`mod` 声明与 `use super::*;`，没有任何一行原代码被改写；`cargo test` 343 通过 / 1 忽略、clippy 无告警、`cargo fmt --check` 与 `npm run format:check` 均干净。
+- 至此本批点名的四个巨型命令文件（`db/database.rs`、`commands/sync.rs`、`commands/ai.rs`、`commands/ai_protocol.rs`、`commands/db.rs`）全部 ≤800 行。`src-tauri/src` 里仍超 800 行的是 `db/migrations.rs` 1,722（迁移按时间追加，拆开反而读不动）、`db/search.rs` 1,257、`commands/files/backup.rs` 1,172、`db/views/tests.rs` 1,047、`commands/files/config.rs` 844——不在本批范围。
+
+### 工程：CI 的 `cargo fmt --check` 转绿
+
+- 上一批记的落差收了口：`desktop.rs:323` 那段用例在 HEAD 上就不是 rustfmt 干净的，CI 的 `cargo fmt --check`（`.github/workflows/ci.yml:55`）从那次起一直是红的，本批之前的格式检查只能「对改动文件单独跑 rustfmt」来绕开。
+- 按 rustfmt 的写法把那两行折回来（只换折行位置，不改语义），现在全仓 `cargo fmt --check` exit 0，后续批次可以正常跑格式检查。
+
+### 工程：`commands/sync.rs` 按域拆成目录模块（1629 行 → 单文件最大 765 行）
+
+- 纯搬运，不改一行逻辑：`src-tauri/src/commands/sync.rs` 变成目录模块 `sync/`。父模块 765 行留「同步目录 + 文件系统原语 + 冲突裁决」，其中 LWW 裁决那一段（`remote_is_newer` / `decide` / `db_activity_ms` / `activity_label` / `info_of`）按禁区约定连位置都没挪；`run.rs`（310 行）装「跑一轮同步」的命令与流程（`get_sync_info` / `get_sync_history` / `clear_sync_history` / `set_sync_dir` / `open_sync_dir` / `run_sync` / `run_sync_blocking` 及内部的 `push_history` / `run_sync_inner` / `pull_into_local` / `restore_stashed_db`）；`tests.rs`（561 行）是原来的 24 个用例，断言未改。
+- 对外路径一字未动：父模块 `pub use run::*;`，`lib.rs` 里 10 条 `commands::sync::…` 的 `generate_handler!` 条目与前端命令名保持原样，冲突域（`conflicts/`）那几个命令仍留在父模块。
+- 可见性放宽 3 个函数（`push_history` / `run_sync_inner` / `pull_into_local` 加 `pub(super)`）：前两个被用例直接调用，`pull_into_local` 被留在父模块的「用冲突副本恢复本机库」复用。这里撞到一条 Rust 规则——`pub use 子模块::*` 的 glob 不透出 `pub(super)` 项，所以父模块与 `tests` 各补了一行显式 `use …::run::{…}`，作用域仍限在 `commands::sync` 内部。
+- 验证：顶层符号清单 95 条与拆前逐项对上（差异只有新增的 `mod run` 声明与 3 处 `pub(super)` 前缀），搬出的 307 行与 HEAD 逐字节一致（除那 3 个前缀），`cargo test` 343 通过 / 1 忽略、`cargo clippy --all-targets` 无告警。
+
+### 工程：`commands/ai.rs` 按域拆成目录模块（1854 行 → 单文件最大 624 行）
+
+- 同样纯搬运：`src-tauri/src/commands/ai.rs` 变成 `ai/`。父模块 351 行留文件总注、取消世代计数、超时/退避常量与全部前后端共用的类型（`AiMessage` / `AiImage` / `AiToolCall` / `AiChatRequest` / `AiUsage` / `AiEvent` / `AiConfigPublic` / `AiConfigInput` / `AiProfileInput` / `AiQuickActionInput` 与两个 `normalize_*`），跨域共用的都留在父模块、子模块用 `use super::*` 取；`config.rs`（410 行）是 5 个配置命令（`ai_get_config` / `ai_save_config` / `ai_test_connection` / `ai_list_models` / `ai_cancel`）加掩码视图 `public_of` / `mask_api_key` 与「生效配置」解析（`effective_api_key` / `effective_profile_key` / `apply_profile` / `request_ready` / `effective_ai`）；`chat.rs`（624 行）是流式对话的传输层（`ai_chat` / `stream_once` / 重试 / 取消 / 图片内联 / HTTP 客户端）与 SSE 帧、错误码解析；`tests.rs`（486 行）26 个用例。
+- 对外路径一字未动：`pub use chat::*; pub use config::*;`，`lib.rs` 的 6 条 `commands::ai::…` handler、`commands/ai_protocol.rs` 的互调与前端命令名全部保持原样；`pub(crate)` 的 `extract_error_message` / `parse_sse_line` / `parse_completion_text` / `inline_images` 经 glob 仍以 `crate::commands::ai::…` 可见。
+- 可见性放宽 12 个原本私有的函数到 `pub(super)`（作用域仍限在 `commands::ai` 内）并配 4 行显式跨子模块 `use`：`chat` 需要 `effective_ai`，`config` 需要 `build_client` / `readable_http_error`，用例另外需要 `collect_tool_calls` / `error_code` / `guess_error_code` / `image_media_type` / `mask_api_key` / `parse_retry_after` / `request_ready` / `apply_profile` / `retryable_status`。
+- 用例从 `mod tests { … }` 里搬出来要降一层缩进，但里面有多行 raw string 的 SSE 帧样本（含「并行多工具调用」那条），手工降缩进会改掉字符串内容；改成先原样搬出再交给 `rustfmt`——它只重排代码、不动字符串字面量，逐行核对确认样本字节一致。
+- 唯一一处非搬运的文字改动：父模块顶上的 `//!` 总注原来写「本文件只管一次流式请求的生命周期」，拆完这话不再成立，改成「共用的常量与类型在本文件，配置在 `config.rs`、流式在 `chat.rs`」。注释，不涉及任何行为。
+- 验证：顶层符号清单 80 条与拆前对上（差集只有 2 条 `mod` 声明、12 处 `pub(super)` 前缀、`mod tests {` → `mod tests;`），四份文件与 HEAD 做空白归一后的逐行比对只剩本批新增的注释与 import；`cargo test` 343 通过 / 1 忽略、`cargo clippy --all-targets` 无告警、`cargo fmt --check` 与 `npm run format:check` 均干净。
+- 本批全链：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest` 91 文件 / 1287 用例全过、`npm run build` exit 0、`cargo test` 343 通过 / 1 忽略。Rust 侧动了命令的模块归属，静态检查之外又在原生窗口里重跑了一遍 CDP 冒烟（`scripts/cdp-lang-smoke.mjs`，11 条断言全过、0 未捕获异常），确认 `generate_handler!` 的注册路径与界面启动都没被拆坏。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）

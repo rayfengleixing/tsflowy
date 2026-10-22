@@ -323,8 +323,8 @@ mod tests {
             (combo(false, false, true, "1"), Code::Digit1),
         ];
         for (cfg, code) in cases {
-            let parsed = parse_capture_shortcut(&cfg)
-                .unwrap_or_else(|_| panic!("应能解析 {}", cfg.key));
+            let parsed =
+                parse_capture_shortcut(&cfg).unwrap_or_else(|_| panic!("应能解析 {}", cfg.key));
             assert_eq!(parsed, Shortcut::new(Some(cfg_mods(&cfg)), code));
         }
     }
