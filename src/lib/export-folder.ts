@@ -1,7 +1,7 @@
-import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "@/lib/ipc-dialog";
 import { invoke } from "@/lib/invoke";
 import type { JSONContent } from "@tiptap/core";
-import { useWorkspaceStore } from "@/stores/workspace";
+import { appTree } from "./app-context";
 import { collectAssetPaths, copyAssetsForExport, createExportAssetContext } from "./assets";
 import { collectDatabaseViewIds, databaseViewToMarkdown } from "./db-transfer";
 import { documentApi } from "./documents";
@@ -50,7 +50,7 @@ function parseDoc(raw: string): JSONContent {
 }
 
 export async function exportMarkdownFolder(): Promise<ExportFolderResult | null> {
-  const tree = useWorkspaceStore.getState().tree;
+  const tree = appTree();
   if (tree.length === 0) return { total: 0, exported: 0, failed: 0 };
 
   // recursive: true 让 dialog 把整棵子树授权给 fs scope：导出会往下建子目录（<页面>/<子页>.md），

@@ -12,6 +12,7 @@
 // Rust 侧再实现一套等于把同一份业务规则抄两遍。
 
 import type { JSONContent } from "@tiptap/core";
+import { appInvalidateRelations, appReload, appRenameView, appTree, appViewId, appWorkspaceId } from "./app-context";
 import { docSearchSnippets, type AiToolSpec } from "./ai";
 import { markdownToNodes } from "./ai-locate";
 import { viewApi } from "./db";
@@ -25,8 +26,6 @@ import { logger } from "./logger";
 import { jsonToMarkdown } from "./markdown";
 import { searchApi } from "./search";
 import { flattenTree } from "./tree";
-import { useRelationStore } from "@/stores/relation";
-import { useWorkspaceStore } from "@/stores/workspace";
 import type { CellValue, DatabaseField } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { parseViewAliases, type ViewNode } from "@/types/models";
@@ -46,7 +45,7 @@ function truncate(text: string, limit = RESULT_CHAR_LIMIT): string {
  * 标题优先于别名：`计划书` 既是某页的名字又是另一页的别名时，叫这个名字的那页才是用户要的。
  */
 export function resolvePage(ref: string): ViewNode | null {
-  const list = flattenTree(useWorkspaceStore.getState().tree);
+  const list = flattenTree(appTree());
   if (!ref) return null;
   const byId = list.find((v) => v.id === ref);
   if (byId) return byId;
@@ -73,7 +72,7 @@ function isRowDetail(node: ViewNode): boolean {
 
 /** 页面清单文本（缩进体现层级），供 list_pages 与建页时的父页面选择 */
 function renderTree(limit = 200): string {
-  const tree = useWorkspaceStore.getState().tree;
+  const tree = appTree();
   const lines: string[] = [];
   const walk = (nodes: ViewNode[], depth: number) => {
     for (const n of nodes) {
@@ -111,15 +110,15 @@ async function readPageMarkdown(viewId: string, limit: number, query = ""): Prom
 
 /** 只读取证工具的执行：返回值即喂回模型的文本 */
 async function runRetrievalTool(name: string, args: Record<string, unknown>, limit: number): Promise<string> {
-  const ws = useWorkspaceStore.getState();
-  const views = flattenTree(ws.tree).filter((v) => !isRowDetail(v));
+  const workspaceId = appWorkspaceId();
+  const views = flattenTree(appTree()).filter((v) => !isRowDetail(v));
   const str = (k: string) => (typeof args[k] === "string" ? args[k] : "");
   switch (name) {
     case "search_workspace": {
       const query = str("query").trim();
       if (!query) return t("ai.toolNoQuery");
-      if (!ws.currentWorkspaceId) return t("ai.toolNoWorkspace");
-      const hits = await searchApi.search(ws.currentWorkspaceId, query, views);
+      if (!workspaceId) return t("ai.toolNoWorkspace");
+      const hits = await searchApi.search(workspaceId, query, views);
       if (hits.length === 0) return t("ai.toolNoHit");
       const lines = hits.slice(0, 12).map((h) => {
         const snip = h.snippet
@@ -259,8 +258,8 @@ function newDocumentJson(title: string, contentMarkdown: string): JSONContent {
 }
 
 async function createPage(args: { title: string; content?: string; parent_page?: string }): Promise<WriteOutcome> {
-  const ws = useWorkspaceStore.getState();
-  if (!ws.currentWorkspaceId) return { ok: false, detail: t("ai.toolNoWorkspace") };
+  const workspaceId = appWorkspaceId();
+  if (!workspaceId) return { ok: false, detail: t("ai.toolNoWorkspace") };
   let parentId: string | null = null;
   let parentName = "";
   if (args.parent_page) {
@@ -268,13 +267,16 @@ async function createPage(args: { title: string; content?: string; parent_page?:
     if (!parent) return { ok: false, detail: t("ai.toolPageNotFound", { ref: args.parent_page }) };
     parentId = parent.id;
     parentName = parent.name;
-  } else if (ws.currentViewId) {
-    // 未指定父页面：挂在当前页之下（就地建子页），没有当前页则建在根
-    parentId = ws.currentViewId;
-    parentName = resolvePage(ws.currentViewId)?.name ?? "";
+  } else {
+    const currentViewId = appViewId();
+    if (currentViewId) {
+      // 未指定父页面：挂在当前页之下（就地建子页），没有当前页则建在根
+      parentId = currentViewId;
+      parentName = resolvePage(currentViewId)?.name ?? "";
+    }
   }
   const view = await viewApi.create({
-    workspace_id: ws.currentWorkspaceId,
+    workspace_id: workspaceId,
     parent_id: parentId,
     name: args.title,
     layout: "document",
@@ -285,7 +287,7 @@ async function createPage(args: { title: string; content?: string; parent_page?:
     logger.error("ai-tools: save new page failed", view.id, e);
     return { ok: false, detail: t("ai.actionCreateFailed", { title: args.title }) };
   }
-  await ws.reload();
+  await appReload();
   return {
     ok: true,
     detail: t("ai.actionCreated", {
@@ -301,7 +303,7 @@ async function createPage(args: { title: string; content?: string; parent_page?:
 async function setPageTitle(args: { page: string; title: string }): Promise<WriteOutcome> {
   const node = resolvePage(args.page);
   if (!node) return { ok: false, detail: t("ai.toolPageNotFound", { ref: args.page }) };
-  await useWorkspaceStore.getState().renameView(node.id, args.title);
+  await appRenameView(node.id, args.title);
   return {
     ok: true,
     detail: t("ai.actionRenamed", { from: node.name, to: args.title }),
@@ -416,7 +418,7 @@ async function addDatabaseRow(args: { database: string; cells?: Record<string, u
     (skipped.length > 0 ? t("ai.actionCellsSkipped", { fields: skipped.join(", ") }) : "") +
     (rejected.length > 0 ? t("ai.actionCellsRejected", { fields: rejected.join(", ") }) : "");
   // 绕开了 database store 的写入口：手动失效 relation 缓存，否则其它库的关联/汇总列看不到这条新行
-  useRelationStore.getState().invalidate([node.id]);
+  appInvalidateRelations([node.id]);
   notifyDatabaseChanged([node.id]);
   return {
     ok: true,
@@ -518,7 +520,7 @@ async function updateDatabaseRow(args: {
     // 一格都没写成不能报「成功」：卡片会显示已更新，而用户的表什么都没变
     return { ok: false, detail: `${t("ai.actionNothingWritten")}${tail}` };
   }
-  useRelationStore.getState().invalidate([node.id]);
+  appInvalidateRelations([node.id]);
   notifyDatabaseChanged([node.id]);
   return {
     ok: true,
@@ -535,7 +537,7 @@ async function deleteDatabaseRow(args: { database: string; row: string }): Promi
   const found = await resolveRowId(node, args.row);
   if ("error" in found) return { ok: false, detail: found.error };
   await databaseApi.deleteRow(found.row_id);
-  useRelationStore.getState().invalidate([node.id]);
+  appInvalidateRelations([node.id]);
   notifyDatabaseChanged([node.id]);
   return {
     ok: true,
@@ -582,22 +584,22 @@ export async function runUndoPlan(plan: UndoPlan): Promise<WriteOutcome> {
     switch (plan.kind) {
       case "remove_view": {
         await viewApi.softDelete(plan.view_id);
-        await useWorkspaceStore.getState().reload();
+        await appReload();
         return { ok: true, detail: t("ai.undoPageRemoved") };
       }
       case "rename_view": {
-        await useWorkspaceStore.getState().renameView(plan.view_id, plan.name);
+        await appRenameView(plan.view_id, plan.name);
         return { ok: true, detail: t("ai.undoTitleRestored", { name: plan.name }) };
       }
       case "purge_row": {
         await databaseApi.purgeRow(plan.row_id);
-        useRelationStore.getState().invalidate([plan.database]);
+        appInvalidateRelations([plan.database]);
         notifyDatabaseChanged([plan.database]);
         return { ok: true, detail: t("ai.undoRowRemoved") };
       }
       case "restore_row": {
         await databaseApi.restoreRow(plan.row_id);
-        useRelationStore.getState().invalidate([plan.database]);
+        appInvalidateRelations([plan.database]);
         notifyDatabaseChanged([plan.database]);
         return { ok: true, detail: t("ai.undoRowRestored") };
       }
@@ -605,7 +607,7 @@ export async function runUndoPlan(plan: UndoPlan): Promise<WriteOutcome> {
         await databaseApi.setCellsMany(
           plan.items.map((i) => ({ rowId: i.row_id, fieldId: i.field_id, value: i.value })),
         );
-        useRelationStore.getState().invalidate([plan.database]);
+        appInvalidateRelations([plan.database]);
         notifyDatabaseChanged([plan.database]);
         return { ok: true, detail: t("ai.undoCellsRestored", { n: String(plan.items.length) }) };
       }

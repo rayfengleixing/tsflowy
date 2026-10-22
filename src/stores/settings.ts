@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { bindAppActions, bindAppReaders } from "@/lib/app-context";
 import { syncNativeLang } from "@/lib/app-shell";
 import { LANGUAGES, type LangCode } from "@/lib/i18n/languages";
 
@@ -755,6 +756,16 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   },
   setFocusMode: (focusMode) => set({ focusMode }),
 }));
+
+// 把语言读取交给 lib/app-context：t() 与每日笔记模板在 lib 侧取当前语言，
+// 而 lib 不该反向依赖 store。模块求值时绑一次，测试用 bindAppReaders/resetAppReaders 自行接管。
+bindAppReaders({ getLang: () => useSettingsStore.getState().lang });
+// 语言变更还要喂进 React 渲染（lib/i18n 的 useLanguage()）：这里只交「怎么订阅」，
+// hook 由 app-context 用 useSyncExternalStore 自己组，比的是语言这一份快照，
+// 所以改主题/字体这类别的设置不会连带让订阅方重渲染。
+// 绑错的形态（比如给了个永不回调的 subscribe）不会报错，只会「切了语言界面不刷新」——
+// 由 src/stores/app-binding-lang.test.tsx 在真 jsdom 里钉住这条。
+bindAppActions({ subscribeLang: (listener) => useSettingsStore.subscribe(listener) });
 
 /** App 启动时用 settings 存储当前值立即写一次（避免第一次进入才有效果） */
 export function bootstrapVisualSettings() {

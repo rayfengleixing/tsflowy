@@ -1,7 +1,6 @@
 import { useRef, useState } from "react";
 import { DownloadCloud, RefreshCw } from "lucide-react";
-import { check } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { check, relaunch } from "@/lib/ipc-shell";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";

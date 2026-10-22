@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { NodeViewContent, NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import { Upload, X, ImagePlus } from "lucide-react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "@/lib/ipc-dialog";
 import { invoke } from "@/lib/invoke";
 import { toast } from "sonner";
 import { t } from "@/lib/i18n";

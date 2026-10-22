@@ -8,6 +8,7 @@
 // 同时持有 currentViewId，便于侧栏判断当前激活的视图（避免 outline tab 在非文档视图渲染）。
 import { create } from "zustand";
 import type { Editor } from "@tiptap/react";
+import { bindAppReaders } from "@/lib/app-context";
 
 interface EditorStoreState {
   editor: Editor | null;
@@ -21,6 +22,10 @@ export const useEditorStore = create<EditorStoreState>()((set) => ({
   currentViewId: null,
   setEditor: (editor, viewId) => set({ editor, currentViewId: viewId ?? null }),
 }));
+
+// 交给 lib/app-context：长图/PDF 导出（lib/export-page）要读活的正文 DOM，绑的是取值函数，
+// EditorPage 挂载/卸载换掉实例后 lib 侧立刻读到新的那一个
+bindAppReaders({ getEditor: () => useEditorStore.getState().editor });
 
 // ————— 文档编辑器登记表：按 viewId 索引所有存活的编辑器实例 —————
 //

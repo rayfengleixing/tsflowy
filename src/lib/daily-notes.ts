@@ -5,7 +5,7 @@
 //   · 目录下按「年 / 月」分层，最内层是当天文档页（页面名如「10-02 周五」），一天一篇
 // 这样搜索、标签、导出、备份、同步等既有能力全部直接可用。
 import type { JSONContent } from "@tiptap/core";
-import { useSettingsStore } from "@/stores/settings";
+import { appLang } from "./app-context";
 import { logger } from "./logger";
 
 const CONFIG_KEY = "tsflowy:daily-notes";
@@ -39,7 +39,7 @@ export function defaultDailyNotesConfig(lang: "zh-CN" | "en-US"): DailyNotesConf
 
 /** 读取配置；未配置或数据损坏时回落到当前语言的默认值 */
 export function loadDailyNotesConfig(): DailyNotesConfig {
-  const lang = useSettingsStore.getState().lang;
+  const lang = appLang();
   const fallback = defaultDailyNotesConfig(lang);
   let raw: string | null = null;
   try {

@@ -4,8 +4,12 @@
  * 为什么要这一层：WebView2 的控制台普通用户打不开，而前端恰恰是「点了没反应」这类问题的一线现场。
  * 批量发送：一次重渲染可能连打十几条，逐条走 IPC 会把序列化压在主线程上；错误级别则立刻刷，
  * 崩溃前的最后一条最值得留。失败后整段禁用：日志出口再报错会绕回 logger 自己，形成回环。
+ *
+ * 走 @/lib/ipc-core 的 raw invoke 而不是 @/lib/invoke：后者 import auto-sync，auto-sync import
+ * logger，logger import 本模块 —— 转一圈就回到这里，模块初始化顺序会踩上空窗；
+ * 且 write_client_logs 本就不该被算成「本机写入」。
  */
-import { invoke as rawInvoke } from "@tauri-apps/api/core";
+import { invoke as rawInvoke } from "./ipc-core";
 
 import { registerCloseFlush } from "./close-flush";
 

@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { viewNode } from "@/test/view-node";
 
 const openMock = vi.hoisted(() => vi.fn());
 const invokeMock = vi.hoisted(() => vi.fn());
@@ -6,35 +7,19 @@ const docGetMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openMock }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock, convertFileSrc: (p: string) => p }));
-vi.mock("@/stores/workspace", () => ({
-  useWorkspaceStore: {
-    getState: () => ({
-      tree: [
-        {
-          id: "root",
-          name: "项目",
-          layout: "document",
-          children: [
-            { id: "child", name: "子页", layout: "document", children: [] },
-            { id: "board", name: "看板", layout: "board", children: [] },
-          ],
-        },
-        {
-          id: "solo",
-          name: "散页",
-          layout: "document",
-          tags: '["工作"]',
-          aliases: '["计划书","立项材料"]',
-          children: [],
-        },
-      ],
-    }),
-  },
-}));
 vi.mock("./documents", () => ({ documentApi: { get: docGetMock } }));
 
+import { bindAppReaders, resetAppReaders } from "./app-context";
 import { exportMarkdownFolder } from "./export-folder";
 import type { ExportManifest } from "./export-manifest";
+
+/** 页面树直接喂给 app-context：导出模块不再经 store，用例也就不必 mock 整条 workspace store */
+const TREE = [
+  viewNode("root", "项目", {
+    children: [viewNode("child", "子页"), viewNode("board", "看板", { layout: "board" })],
+  }),
+  viewNode("solo", "散页", { tags: '["工作"]', aliases: '["计划书","立项材料"]' }),
+];
 
 const ROOT_DOC = {
   type: "doc",
@@ -101,6 +86,8 @@ const callsFor = (cmd: string): Record<string, unknown>[] =>
 
 describe("exportMarkdownFolder（附件随页面落盘）", () => {
   beforeEach(() => {
+    // 页面树由 app-context 直接提供：导出模块不再读 store，用例也不再 mock 整条 workspace store
+    bindAppReaders({ getTree: () => TREE });
     openMock.mockReset();
     invokeMock.mockReset();
     docGetMock.mockReset();
@@ -191,4 +178,13 @@ describe("exportMarkdownFolder（附件随页面落盘）", () => {
     expect(await exportMarkdownFolder()).toBeNull();
     expect(invokeMock).not.toHaveBeenCalled();
   });
+
+  it("页面树没绑定时抛错，而不是静默导出 0 个文件", async () => {
+    // 「没绑定」被当成「没有页面」会让用户以为目录是空的：这是最难查的一类假象
+    resetAppReaders();
+    await expect(exportMarkdownFolder()).rejects.toThrow("app-context");
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  afterEach(() => resetAppReaders());
 });

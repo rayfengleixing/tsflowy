@@ -1,7 +1,7 @@
 // 数据库单元格的只读展示部件（选项 / 关联 / 附件胶囊与缩略图）。
 // 从 editors.tsx 原样搬出（无逻辑/样式改动），editors.tsx 再统一转出以保持对外导出 API 不变。
 import { useEffect, useState, type ReactNode } from "react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@/lib/ipc-shell";
 import { Check, File as FileIcon, Link2, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
 import type { CellValue, DatabaseField, FieldType, SelectOption } from "@/types/database";

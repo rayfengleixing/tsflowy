@@ -1,5 +1,5 @@
-import { open } from "@tauri-apps/plugin-dialog";
-import { readDir, readTextFile, type DirEntry } from "@tauri-apps/plugin-fs";
+import { open } from "@/lib/ipc-dialog";
+import { readDir, readTextFile, type DirEntry } from "@/lib/ipc-fs";
 import { invoke } from "@/lib/invoke";
 import { createDatabaseViewFromTable, parseMarkdownTable } from "./db-transfer";
 import { viewApi } from "./db";

@@ -13,7 +13,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@/lib/ipc-dialog";
 import { invoke } from "@/lib/invoke";
 import { toast } from "sonner";
 import type { AttachmentRef, CellValue, DatabaseField, DatabaseRow, FieldType } from "@/types/database";

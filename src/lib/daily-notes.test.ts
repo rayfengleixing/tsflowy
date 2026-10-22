@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getSchema } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import { LockedHeading } from "@/features/editor/extensions/document-structure-lock";
+import { bindAppReaders, resetAppReaders } from "./app-context";
 import {
   buildDailyFolderDoc,
   buildDailyNoteDoc,
@@ -11,6 +12,7 @@ import {
   dailyNoteTitle,
   defaultDailyNotesConfig,
   interpolateTemplate,
+  loadDailyNotesConfig,
   parseDateKey,
   shiftDateKey,
   shortDateKey,
@@ -153,5 +155,52 @@ describe("buildDailyFolderDoc", () => {
     expect(doc.childCount).toBe(3);
 
     expect(schema.nodeFromJSON(buildDailyFolderDoc("每日笔记", "")).childCount).toBe(2);
+  });
+});
+
+// 配置里的「语言」过去取自 useSettingsStore.getState()，用例要跑起来必须先拖进整条 settings store
+// （连带 localStorage 读写与主题初始化）。现在只认 app-context 注入的取值函数。
+describe("loadDailyNotesConfig 的语言注入", () => {
+  const CONFIG_KEY = "tsflowy:daily-notes";
+  const mem = new Map<string, string>();
+
+  beforeEach(() => {
+    mem.clear();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (k: string) => (mem.has(k) ? mem.get(k)! : null),
+        setItem: (k: string, v: string) => {
+          mem.set(k, v);
+        },
+      },
+    });
+  });
+
+  afterEach(() => resetAppReaders());
+
+  it("没配过时，默认目录名与模板跟随注入的语言", () => {
+    expect(loadDailyNotesConfig().folderName).toBe("每日笔记"); // 未绑定 → 注册表首项
+    bindAppReaders({ getLang: () => "en-US" });
+    expect(loadDailyNotesConfig().folderName).toBe("Daily notes");
+  });
+
+  it("配过的内容原样返回，不会被当前语言改写", () => {
+    bindAppReaders({ getLang: () => "en-US" });
+    mem.set(CONFIG_KEY, JSON.stringify({ folderName: "手记", template: "## 今日\n", openOnStart: true }));
+    expect(loadDailyNotesConfig()).toEqual({ folderName: "手记", template: "## 今日\n", openOnStart: true });
+  });
+
+  it("存坏了按当前语言回落默认值", () => {
+    bindAppReaders({ getLang: () => "en-US" });
+    mem.set(CONFIG_KEY, "{不是 json");
+    expect(loadDailyNotesConfig()).toEqual(defaultDailyNotesConfig("en-US"));
+  });
+
+  it("空目录名不算配置，回落当前语言的默认目录名", () => {
+    bindAppReaders({ getLang: () => "en-US" });
+    mem.set(CONFIG_KEY, JSON.stringify({ folderName: "   " }));
+    expect(loadDailyNotesConfig().folderName).toBe("Daily notes");
+    expect(loadDailyNotesConfig().template).toBe(defaultDailyNotesConfig("en-US").template);
   });
 });

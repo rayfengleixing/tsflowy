@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { readDir, type DirEntry } from "@tauri-apps/plugin-fs";
-import { join } from "@tauri-apps/api/path";
+import { open } from "@/lib/ipc-dialog";
+import { readDir, type DirEntry } from "@/lib/ipc-fs";
 import { toast } from "sonner";
 import type { FieldType } from "@/types/database";
 import { resolveAttachmentNames } from "@/lib/csv";
+import { join } from "@/lib/ipc-core";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,

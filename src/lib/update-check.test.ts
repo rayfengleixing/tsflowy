@@ -13,7 +13,6 @@ vi.mock("@/lib/i18n", () => ({
   t: (key: string, vars?: Record<string, unknown>) => `${key}:${JSON.stringify(vars ?? {})}`,
 }));
 vi.mock("./logger", () => ({ logger: { warn, error: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn() } }));
-vi.mock("@/stores/workspace", () => ({ useWorkspaceStore: { getState: () => ({ setRoute }) } }));
 
 let store: Map<string, string>;
 
@@ -34,6 +33,9 @@ function stubEnv() {
 
 async function freshModule() {
   vi.resetModules();
+  // 提示条的「去设置」按钮走 lib/app-context 的写侧注册表；resetModules 之后要在新的那份上重绑
+  const { bindAppActions } = await import("./app-context");
+  bindAppActions({ setRoute });
   return await import("./update-check");
 }
 

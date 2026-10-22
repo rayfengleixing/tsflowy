@@ -1,8 +1,8 @@
-import { open, save } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { open, save } from "@/lib/ipc-dialog";
+import { writeTextFile } from "@/lib/ipc-fs";
 import { invoke } from "@/lib/invoke";
 import { toast } from "sonner";
-import { useEditorStore } from "@/stores/editor";
+import { appEditor } from "@/lib/app-context";
 import { flushAllForClose } from "./close-flush";
 import { t } from "./i18n";
 import { collectAssetPaths, copyAssetsForExport, isLibraryAssetPath } from "./assets";
@@ -469,7 +469,7 @@ function resolveBackdrop(node: HTMLElement): string {
  * 需要活的编辑器实例（TabBar 仅在有打开文档时展示入口）。
  */
 export async function exportPageImage(viewName: string): Promise<void> {
-  const editor = useEditorStore.getState().editor;
+  const editor = appEditor();
   if (!editor || editor.isDestroyed) throw new Error("editor not ready");
 
   const el = editor.view.dom;
@@ -527,7 +527,7 @@ const PRINTING_CLASS = "tsflowy-printing";
  * 祖先约束（固定高度滚动容器），直接打印会被裁成一屏。
  */
 export async function printPage(): Promise<void> {
-  const editor = useEditorStore.getState().editor;
+  const editor = appEditor();
   if (!editor || editor.isDestroyed) throw new Error("editor not ready");
 
   ensurePrintStyle();

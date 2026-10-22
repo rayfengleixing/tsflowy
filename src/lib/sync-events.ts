@@ -1,4 +1,4 @@
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "./ipc-events";
 import { logger } from "./logger";
 import { t, type MessageKey } from "@/lib/i18n";
 

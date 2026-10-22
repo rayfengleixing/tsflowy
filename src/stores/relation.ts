@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { bindAppActions } from "@/lib/app-context";
 import { databaseApi } from "@/lib/database";
 import type { RelationDb } from "@/lib/relation";
 import { logger } from "@/lib/logger";
@@ -55,3 +56,7 @@ export const useRelationStore = create<RelationState>()((set, get) => ({
       revision: s.revision + 1,
     })),
 }));
+
+// 交给 lib/app-context：AI 写动作绕开 database store 的写入口直接落库时，得能把对应目标库快照作废
+// （lib 不该反向依赖 store，见 lib/app-context.ts 头注释）。
+bindAppActions({ invalidateRelations: (viewIds) => useRelationStore.getState().invalidate(viewIds) });

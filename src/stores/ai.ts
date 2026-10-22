@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { toast } from "sonner";
-import { save } from "@tauri-apps/plugin-dialog";
+import { save } from "@/lib/ipc-dialog";
 import { invoke } from "@/lib/invoke";
 import { newId } from "@/lib/db";
 import {

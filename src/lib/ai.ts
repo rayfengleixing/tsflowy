@@ -1,4 +1,4 @@
-import { Channel } from "@tauri-apps/api/core";
+import { Channel } from "@/lib/ipc-core";
 import { invoke } from "@/lib/invoke";
 import { uploadImageBytes } from "@/lib/assets";
 

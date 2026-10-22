@@ -2,7 +2,7 @@
 // 模型看到的检索结果每行都带 `[id=…]`（见 lib/ai-tools），它照抄进答案时原本只是一串死文本；
 // 这里在 Markdown 的 text 节点上就地换成链接节点，代码块里的同样子串不受影响（只碰 text 节点）。
 import type { Root } from "mdast";
-import { useWorkspaceStore } from "@/stores/workspace";
+import { appTree } from "@/lib/app-context";
 import { findNode } from "@/lib/tree";
 import { t } from "@/lib/i18n";
 
@@ -38,7 +38,7 @@ export function citationViewId(href: string): string | null {
 /** 在页面树里解析引用标题；解析不到返回 null（宁可留原样文本，也不造一个点不动的假链接） */
 export function resolveCitationTitle(viewId: string): string | null {
   if (!CITED_ID_RE.test(viewId)) return null;
-  const node = findNode(useWorkspaceStore.getState().tree, viewId);
+  const node = findNode(appTree(), viewId);
   if (!node) return null;
   return node.name.trim() || t("common.untitled");
 }

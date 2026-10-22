@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Element as HastElement, Root as HastRoot, RootContent } from "hast";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@/lib/ipc-shell";
 import { FileText } from "lucide-react";
 import { toast } from "sonner";
 import "highlight.js/styles/github.css";

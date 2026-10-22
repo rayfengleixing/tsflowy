@@ -1,5 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { citationHref, citationViewId, splitCitations, transformCitations, type CitationNode } from "@/lib/ai-citation";
+import { afterEach, describe, expect, it } from "vitest";
+import { viewNode } from "@/test/view-node";
+
+import { bindAppReaders, resetAppReaders } from "@/lib/app-context";
+import {
+  citationHref,
+  citationViewId,
+  resolveCitationTitle,
+  splitCitations,
+  transformCitations,
+  type CitationNode,
+} from "@/lib/ai-citation";
 
 const resolveKnown = (id: string) => (id === "abc" || id === "def" ? `页面-${id}` : null);
 
@@ -65,5 +75,35 @@ describe("ai-citation href 还原", () => {
     expect(citationViewId("other/abc")).toBeNull();
     expect(citationViewId(`${citationHref("")}`)).toBeNull();
     expect(citationViewId(`tsflowy-citation/a"b`)).toBeNull();
+  });
+});
+
+// 标题解析过去直接读 workspace store，用例得把整条 store mock 掉才跑得动；
+// 现在页面树从 app-context 注入，这里只给三行数据即可。
+describe("resolveCitationTitle 的页面树来自 app-context", () => {
+  const tree = [viewNode("abc", "季度复盘"), viewNode("def", "   ", { children: [viewNode("ghi", "子页")] })];
+
+  afterEach(() => resetAppReaders());
+
+  it("命中页面返回标题，嵌套子页也能找到", () => {
+    bindAppReaders({ getTree: () => tree });
+    expect(resolveCitationTitle("abc")).toBe("季度复盘");
+    expect(resolveCitationTitle("ghi")).toBe("子页");
+  });
+
+  it("空标题页面回落到「无标题页面」文案，引用里不至于出现空链接文字", () => {
+    bindAppReaders({ getTree: () => tree });
+    expect(resolveCitationTitle("def")).toBe("无标题页面");
+  });
+
+  it("树里没有这个页面时返回 null：宁可留原样文本，也不造点不动的假链接", () => {
+    bindAppReaders({ getTree: () => tree });
+    expect(resolveCitationTitle("zzz")).toBeNull();
+  });
+
+  it("脏 id 不查树", () => {
+    bindAppReaders({ getTree: () => tree });
+    expect(resolveCitationTitle('a"b')).toBeNull();
+    expect(resolveCitationTitle("")).toBeNull();
   });
 });

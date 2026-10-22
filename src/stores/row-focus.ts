@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { bindAppActions } from "@/lib/app-context";
 
 // 搜索命中行的定位状态（阶段 3 #5）：Rust 侧把命中的单元格 row_id 一起带出来，
 // 表格/看板/日历据此滚动到那一行并短时高亮。
@@ -19,3 +20,6 @@ export const useRowFocusStore = create<RowFocusState>()((set) => ({
   setFocusRow: (rowId) => set({ focusRowId: rowId }),
   clearFocusRow: () => set({ focusRowId: null }),
 }));
+
+// 交给 lib/app-context：深链与站内跳行（lib/deep-link）要把表格滚动并高亮到某一行
+bindAppActions({ setFocusRow: (rowId) => useRowFocusStore.getState().setFocusRow(rowId) });

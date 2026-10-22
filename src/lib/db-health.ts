@@ -1,7 +1,7 @@
 import { invoke } from "@/lib/invoke";
+import { appSetRoute } from "@/lib/app-context";
 import { t, type MessageKey } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import { useWorkspaceStore } from "@/stores/workspace";
 import { toast } from "sonner";
 
 /**
@@ -77,7 +77,7 @@ export async function probeDbHealthOnStartup(delayMs: number = PROBE_DELAY_MS): 
       duration: 12_000,
       action: {
         label: t("settings.dbHealthGoSettings"),
-        onClick: () => useWorkspaceStore.getState().setRoute("settings"),
+        onClick: () => appSetRoute("settings"),
       },
     });
     return report;

@@ -11,9 +11,6 @@ vi.mock("@/lib/invoke", () => ({ invoke: invokeMock }));
 vi.mock("sonner", () => ({
   toast: { warning: warnMock, success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
-vi.mock("@/stores/workspace", () => ({
-  useWorkspaceStore: { getState: () => ({ setRoute: setRouteMock }) },
-}));
 
 const healthy = {
   ok: true,
@@ -28,6 +25,10 @@ const broken = { ...healthy, ok: false, messages: ["btree3: page 3 is not a vali
 /** 模块级的一次性闸门会跨用例生效：每个用例都要重新取一份模块 */
 async function freshModule() {
   vi.resetModules();
+  // resetModules 把 app-context 也换成新的一份，注册表得在同一份上重新绑：
+  // 告警按钮的「去设置」现在走写侧注册表（lib/app-context），不再直接拿 workspace store
+  const { bindAppActions } = await import("./app-context");
+  bindAppActions({ setRoute: setRouteMock });
   return await import("./db-health");
 }
 

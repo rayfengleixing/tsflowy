@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Download, RefreshCw, Stethoscope, Wrench } from "lucide-react";
 import { toast } from "sonner";
-import { save } from "@tauri-apps/plugin-dialog";
+import { save } from "@/lib/ipc-dialog";
 import { invoke } from "@/lib/invoke";
 
 import { Button } from "@/components/ui/button";

@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { bindFakeApp } from "@/test/app-fakes";
+import { viewNode } from "@/test/view-node";
 
 const api = vi.hoisted(() => ({
   updateFieldOptions: vi.fn((_id: string, _options: { options: SelectOption[] }): Promise<void> => Promise.resolve()),
@@ -18,26 +20,21 @@ const view = vi.hoisted(() => ({
   softDelete: vi.fn(() => Promise.resolve()),
 }));
 
-const ws = vi.hoisted(() => ({
-  currentWorkspaceId: "w1",
-  currentViewId: null as string | null,
-  tree: [] as unknown[],
-  renameView: vi.fn(() => Promise.resolve()),
-  reload: vi.fn(() => Promise.resolve()),
-}));
-
-const relation = vi.hoisted(() => ({ invalidate: vi.fn() }));
-
 vi.mock("./database", () => ({ databaseApi: api }));
 vi.mock("./db", () => ({ viewApi: view }));
 vi.mock("./documents", () => ({ documentApi: { get: () => Promise.resolve(null), save: () => Promise.resolve() } }));
-vi.mock("@/stores/workspace", () => ({ useWorkspaceStore: { getState: () => ws } }));
-vi.mock("@/stores/relation", () => ({ useRelationStore: { getState: () => relation } }));
 
 import { coerceCell, resolvePage, runUndoPlan, runWriteAction, sanitizeUndoPlan } from "./ai-tools";
 import { onDatabaseChanged } from "./database-changed";
 import type { DatabaseField, FieldType, SelectOption } from "@/types/database";
-import type { ViewNode } from "@/types/models";
+
+// 页面树、当前空间与写动作（刷树/改名/失效关联）都由 app-fakes 登记，用例不再 mock 任何 store
+const app = bindFakeApp({ workspaceId: "w1" });
+
+beforeEach(() => {
+  app.set({ workspaceId: "w1", viewId: null, tree: [] });
+  for (const fn of Object.values(app.actions)) fn.mockClear();
+});
 
 const field = (type: FieldType, options = "{}"): DatabaseField => ({
   id: "f1",
@@ -121,14 +118,13 @@ const col = (id: string, name: string, type: FieldType = "text", options = "{}")
   position: 0,
 });
 
-const tableNode = { id: "v1", name: "任务", layout: "table", extra: "{}", children: [] } as unknown as ViewNode;
+const tableNode = viewNode("v1", "任务", { layout: "grid" });
 
 describe("AI 写动作的逆操作计划", () => {
   beforeEach(() => {
-    ws.tree = [tableNode];
-    ws.currentViewId = null;
-    ws.reload.mockClear();
-    relation.invalidate.mockClear();
+    app.set({ tree: [tableNode], viewId: null });
+    app.actions.reload.mockClear();
+    app.actions.invalidateRelations.mockClear();
     api.listFields.mockResolvedValue([col("f1", "标题"), col("f2", "数量", "number")]);
     api.listRows.mockResolvedValue([{ id: "r1" }, { id: "r2" }]);
     api.loadCells.mockResolvedValue({ r1: { f1: "写周报" }, r2: { f1: "写周报" } });
@@ -193,7 +189,16 @@ describe("AI 写动作的逆操作计划", () => {
     expect(out.undo).toEqual({ kind: "remove_view", view_id: "v-new" });
     await runUndoPlan(out.undo!);
     expect(view.softDelete).toHaveBeenCalledWith("v-new");
-    expect(ws.reload).toHaveBeenCalledTimes(2); // 建页刷一次，撤销再刷一次
+    expect(app.actions.reload).toHaveBeenCalledTimes(2); // 建页刷一次，撤销再刷一次
+  });
+
+  it("没指定父页面就挂在当前打开的页之下，没有当前页才落到根", async () => {
+    await runWriteAction({ tool: "create_page", args: { title: "新页" } });
+    expect(view.create).toHaveBeenLastCalledWith(expect.objectContaining({ parent_id: null }));
+
+    app.set({ viewId: "v1" });
+    await runWriteAction({ tool: "create_page", args: { title: "子页" } });
+    expect(view.create).toHaveBeenLastCalledWith(expect.objectContaining({ parent_id: "v1" }));
   });
 
   it("改库会通知正显示这张表的页面，解绑后不再打扰", async () => {
@@ -204,7 +209,7 @@ describe("AI 写动作的逆操作计划", () => {
     off();
     await runWriteAction({ tool: "delete_database_row", args: { database: "任务", row: "r1" } });
     expect(seen).toHaveLength(1);
-    expect(relation.invalidate).toHaveBeenCalledWith(["v1"]);
+    expect(app.actions.invalidateRelations).toHaveBeenCalledWith(["v1"]);
   });
 });
 
@@ -237,12 +242,12 @@ describe("sanitizeUndoPlan", () => {
 
 describe("resolvePage 认页面别名", () => {
   const rows = [
-    { id: "p1", name: "项目立项说明", aliases: '["计划书","立项材料"]', children: [] },
-    { id: "p2", name: "计划书", aliases: "[]", children: [] },
+    viewNode("p1", "项目立项说明", { aliases: '["计划书","立项材料"]' }),
+    viewNode("p2", "计划书", { aliases: "[]" }),
   ];
 
   beforeEach(() => {
-    ws.tree = rows;
+    app.set({ tree: rows });
   });
 
   it("按 id、别名、标题都能定位到同一页", () => {
@@ -254,26 +259,24 @@ describe("resolvePage 认页面别名", () => {
   it("标题优先于别名：计划书 是 p2 的名字，不落到把它当别名的 p1 上", () => {
     expect(resolvePage("计划书")?.id).toBe("p2");
     // 反过来，只有别名能对上时照样命中
-    ws.tree = [{ id: "p3", name: "别的东西", aliases: "[]", children: [] }, ...rows];
+    app.set({ tree: [viewNode("p3", "别的东西"), ...rows] });
     expect(resolvePage("立项材料")?.id).toBe("p1");
   });
 
   it("歧义不猜：同名两页、别名撞在两页上都返回 null", () => {
-    ws.tree = [{ id: "p3", name: "计划书", aliases: "[]", children: [] }, ...rows];
+    app.set({ tree: [viewNode("p3", "计划书"), ...rows] });
     expect(resolvePage("计划书")).toBeNull();
-    ws.tree = [
-      { id: "p4", name: "甲", aliases: '["共用叫法"]', children: [] },
-      { id: "p5", name: "乙", aliases: '["共用叫法"]', children: [] },
-    ];
+    app.set({
+      tree: [viewNode("p4", "甲", { aliases: '["共用叫法"]' }), viewNode("p5", "乙", { aliases: '["共用叫法"]' })],
+    });
     expect(resolvePage("共用叫法")).toBeNull();
   });
 
   it("模糊匹配也覆盖别名，仍只有一个命中才返回", () => {
     expect(resolvePage("立项")?.id).toBe("p1");
-    ws.tree = [
-      { id: "p6", name: "甲", aliases: '["季度复盘"]', children: [] },
-      { id: "p7", name: "乙", aliases: "[]", children: [] },
-    ];
+    app.set({
+      tree: [viewNode("p6", "甲", { aliases: '["季度复盘"]' }), viewNode("p7", "乙", { aliases: "[]" })],
+    });
     expect(resolvePage("复盘")?.id).toBe("p6");
     expect(resolvePage("不存在的叫法")).toBeNull();
     expect(resolvePage("")).toBeNull();

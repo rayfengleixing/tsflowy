@@ -1,6 +1,5 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { appDataDir, join } from "@tauri-apps/api/path";
-import { open } from "@tauri-apps/plugin-dialog";
+import { appDataDir, convertFileSrc, join } from "@/lib/ipc-core";
+import { open } from "@/lib/ipc-dialog";
 import type { AttachmentRef } from "@/types/database";
 import { invoke } from "@/lib/invoke";
 import { logger } from "./logger";

@@ -9,7 +9,64 @@
 
 ## 未发布（v0.8.33 之后）
 
-（暂无）
+### 工程：绕过统一入口的 IPC 调用收口，组件可以在 jsdom 里测
+
+- 新增 `src/lib/ipc-core.ts`（唯一引 `@tauri-apps/api/core` 与 `api/path` 的文件）和 `src/lib/ipc-events.ts`（唯一引 `api/event` 的文件）：`ai.ts` 的 `Channel`、`assets.ts` 的 `convertFileSrc`/`appDataDir`/`join`、`CsvImportDialog.tsx` 的 `join`、`sync-events.ts` 的 `listen` 全部改从这两个入口导入。业务侧仍走 `@/lib/invoke`，`auto-sync` 与 `client-log` 仍拿不经拦截的 raw 通道（前者与 `invoke.ts` 互引会成环，后者经 `logger` 绕回 `auto-sync`），只是 import 源换成 `ipc-core`。
+- 新增 `src/test/tauri-mock.ts`：按命令名注册返回值的 IPC 替身，含事件监听与 `Channel` 投喂；命令没注册直接抛错而不是回 `undefined`，免得组件漏注册被看成「数据正好是空的」。组件测试按需顶掉 `ipc-core` / `ipc-events` / `ipc-dialog` / `ipc-fs` / `ipc-shell` 这几个入口之一即可，不必再逐文件 `vi.mock("@tauri-apps/…")`。
+- 新增两组用例：替身本身的行为（命令命中 / 未注册抛错 / 真实 `sync-events` 收帧 / `aiChat` 的 Channel 回调），以及 `SettingsDataDir` 在 jsdom 里真渲染（读命令回填输入框、云盘路径出风险条、点按钮打到 Rust 命令名）。
+- 新增第三、第四个入口 `src/lib/ipc-dialog.ts`（唯一引 `@tauri-apps/plugin-dialog`）与 `src/lib/ipc-fs.ts`（唯一引 `@tauri-apps/plugin-fs`）：14 处 `open`/`save`（对话框）与 3 处 `readDir`/`readTextFile`/`writeTextFile`（目录列举与文本读写）改从这两个入口导入，含 `stores/ai.ts`、`GridView.tsx`、`SettingsBackup.tsx` 等。替身补了对应能力：对话框按「排队一次给一个」返回，排空即当用户取消（`null`）；假目录树用 `setFsDir`/`setFsFile` 登记，没登记的目录被读到直接抛错，`writeTextFile` 只记录不落盘。
+- 新增用例：`CsvImportDialog` 在 jsdom 里真点一遍「选附件文件夹 → 递归扫描子目录 → 按名匹配」，断言统计数字、`recursive` 参数与回传给导入层的「小写文件名 → 绝对路径」索引；取消对话框那条路径断言不去扫目录。
+- 新增第五个入口 `src/lib/ipc-shell.ts`（唯一引 `api/window`、`api/app`、plugin-opener、plugin-updater、plugin-process、plugin-deep-link 的文件）：`App.tsx` 的 `getCurrentWindow`、设置页的 `getVersion`、`Markdown.tsx` 与 `cell-display.tsx` 的 `openUrl`、`SettingsUpdates.tsx` 的 `check`/`relaunch`、`update-check.ts` 的 `check`、`deep-link.ts` 的深链插件共 7 处改从这个入口导入。深链原来是 `await import("plugin-deep-link")`（不在入口模块求值插件），收口后用 `loadDeepLink()` 保住这层懒加载，只换 import 源不改加载时机。至此非测试代码里 `@tauri-apps` 的引用面只剩这五个 `ipc-*` 文件。
+- 替身补了系统侧能力：`getCurrentWindow()` 返回能接 `onCloseRequested`/`destroy` 的窗口替身，`requestWindowClose()` 相当于用户点关闭按钮（返回处理器有没有拦住）；`openUrl` 记录每次尝试、`failNextOpenUrl()` 让下一次失败以覆盖调用方的 catch；更新按 `queueUpdateCheck()` 排队，装完记进 `installedUpdates`；深链用 `queueDeepLinkStartup()`（冷启动 argv）与 `emitDeepLinkUrl()`（热启动点击协议）。`resetIpcMock()` 一起清干净。
+- 新增两组用例：`cell-display.test.tsx` 在 jsdom 里真点 url/email 单元格（没写协议的补 `https://`、邮箱加 `mailto:`、`javascript:` 退化成纯文本不打边界、系统拒绝拉起时出声且按钮还能再点），`grid-view.test.tsx` 把 CSV 导入整条链跑通（选文件 → 解析 → 弹类型确认 → 按文件名建表 → 打 `csv_import`，并断言取消时一条命令都不发）。此前这条链只有头（`CsvImportDialog` 的附件选择）和尾（`csv.ts` 的解析与类型推断）各自有单测，中间的接线没人管。
+
+### 工程：lib 的纯读取不再反向依赖 store（P3 第一批）
+
+- 新增 `src/lib/app-context.ts`：界面语言、当前页面树、当前工作区 id 这三样纯读取收成单点，lib 侧改成 `appLang()` / `appTree()` / `appWorkspaceId()`；stores 在自己的模块体里 `bindAppReaders(...)`（`stores/settings.ts` 绑语言，`stores/workspace.ts` 绑树与工作区），依赖方向回到 features → stores → lib → types。注册/注销形制沿用 `close-flush.ts`、`ai-editor.ts`。
+- 兜底口径是分开定的：语言未绑定回落注册表首项（`t()` 是全仓消费点，不该在这里抛），页面树与工作区未绑定直接抛——把「还没绑」当成「没有页面」会让整目录导出静默返回 0 个文件、让 AI 回「页面不存在」，属于最难查的一类假象。
+- 换源的读取点共 8 处：`i18n.ts` 的 `t()`（签名一字未动，`useLanguage()` 的订阅仍走 store）、`daily-notes.ts` 的配置默认值、`ai-citation.ts` 的引用标题解析、`export-folder.ts` 的整目录导出、`ai-tools.ts` 的 `resolvePage` / `renderTree` / 检索工具。
+- 补了能脱离 store 跑的用例：`app-context.test.ts`（绑定、注销、未绑定的两种兜底）、`i18n.test.ts`（跑在无 window 的 node 环境，证明取文案不再拖进整条 settings store）、`ai-citation.test.ts` 的注入树、`daily-notes.test.ts` 的语言注入、`export-folder.test.ts` 改为直接喂页面树并新增「未绑定抛错」一条；`ai-tools.test.ts` 不再靠 store mock 提供树。反方向由 `src/stores/app-binding.test.ts` 用真 store 验那两次 `bindAppReaders`（改语言后 `t()` 跟着换字典、store 换了树 lib 侧立刻读到新值），绑定被删或绑成快照都会在这里先炸。新增用例 20 条，套件 89 文件 / 1265 通过。
+- `src/lib` 里剩下的 `@/stores` 引用是写侧与订阅侧（`ai-tools.ts` 的 `renameView`/`reload`、`deep-link.ts` 的 `openView`/行聚焦/订阅、`export-page.ts` 的编辑器实例、`update-check.ts` 与 `db-health.ts` 的 `setRoute`、`i18n.ts` 的 `useLanguage`），属 service 语义，按注册表统一收口另批处理。
+
+### 工程：lib 的写动作与订阅也不再反向依赖 store（P3 第二批）
+
+- `src/lib/app-context.ts` 在只读注册表旁边补了写侧登记表 `AppActions`：`reload`（刷页面树）、`renameView`、`openView`、`setRoute`、`invalidateRelations`、`setFocusRow`、`subscribeWorkspace` 共 7 项，lib 侧只说「要做这件事」（`appReload()` / `appOpenView(id)` …），实现在 stores 模块求值时 `bindAppActions(...)` 装上（`stores/workspace.ts` 5 项、`relation.ts` 1 项、`row-focus.ts` 1 项）。字段名与 store 里的同名动作对齐，读代码不用换脑子；`setRoute` 的界面名收成 `AppRoute = "settings"` 这一真用得上的值，绑定方与 store 的 Route 不兼容时 tsc 立刻报。
+- 兜底口径延续第一批的分法：写侧没有「合理的默认动作」可回落，未绑定一律抛且指名缺哪一项（不靠 `undefined` 的 TypeError 让人猜）。绑的是取值/动作函数而不是模块求值那一刻的快照，store 换了实现或重载了页面树，lib 侧自然跟着。
+- 换源的调用点共 18 处：`ai-tools.ts` 11 处（2 处 `reload`、2 处 `renameView`、6 处关联失效、1 处「AI 没指定父页面就挂在当前页下」读当前页），`deep-link.ts` 3 处（开页、行聚焦、工作区订阅），`export-page.ts` 2 处（长图/PDF 导出读活的编辑器实例，`stores/editor.ts` 负责绑），`update-check.ts` 与 `db-health.ts` 各 1 处（提示条上「去设置页」）。
+- 测试面不再需要 `vi.mock("@/stores/…")`：新增 `src/test/app-fakes.ts`——`bindFakeApp()` 一次把 5 项读取绑成可变对象、7 个动作绑成同名 `vi.fn`，另有 `set()` 换读到的值、`emitWorkspaceChange()` 模拟「store 变了」、`fakeEditor()` 给导出用例一个最小编辑器，`dispose()` 做成幂等（用例里提前解绑后 afterEach 再清一次不会回滚掉别人的绑定）。`ai-tools.test.ts`、`deep-link.test.ts`、`export-page.test.ts`、`update-check.test.ts`、`db-health.test.ts` 改用假运行态。
+- `deep-link.ts` 那段「目标页还没进树就先订阅等它出现，等满 15s 放弃并记日志」的排队逻辑，此前只能靠整条 store 替身才测得到，补了 6 条脱 store 用例：树里已有则立刻开页并落到行聚焦 / 不传 rowId 就不碰行聚焦 / 子树里的页面也算命中 / 还没出现时等着、变化后开且只开一次 / 超时退订后来出现也不跳 / 没绑运行态直接抛而不是静默当成「页面不存在」。
+- 反方向的守卫从读取扩到写侧：`src/stores/app-binding.test.ts` 新增 3 条用真 store 验那 7 个动作真装上了。workspace 那 4 项把 store 上的同名方法临时换成 spy 再调 lib 侧——要是绑成了模块求值时的函数快照，这里就调不到 spy、真实现会去碰 IPC，用例当场红；行聚焦与关联失效断言落到真状态；订阅那条断言注销函数确实退订。
+- 新增用例 12 条，套件 89 文件 / 1277 通过；`tsc --noEmit`、`eslint --max-warnings=0`、`npm run build`、`cargo test`（343 通过 / 1 忽略）均与上一批持平。
+- 这一批做完，`src/lib` 里 `@/stores` 的引用只剩 1 处：`i18n.ts:3` 为 `useLanguage()` 引 `useSettingsStore`。它是 React 订阅（切换语言后要触发重渲染），当时判断「注册表注入的是取值函数与动作，给不了订阅」——下一批证明这个判断只对了一半，见下面那条。
+
+### 工程：语言订阅收进同一个注册表，src/lib 对 stores 的引用归零（P3 第三批）
+
+- `useLanguage()` 不再直连 `useSettingsStore`：`src/lib/app-context.ts` 的 `AppActions` 多了一项 `subscribeLang`（语言变化时回调、返回取消函数），hook 由 app-context 自己用 `useSyncExternalStore(subscribeLang, appLang, appLang)` 组，读的仍是 `appLang()` 那一份；`stores/settings.ts` 只交 `useSettingsStore.subscribe` 这一半。上一批说「注册表给不了订阅」只对了一半：给不了的是把 hook 当普通值传来传去（react-compiler 明确拦这种写法），能给的是订阅本身。
+- 口径与改之前一致：快照比的是语言，所以 store 里改主题、字体这些别的设置项不会连带让订阅方重渲染（`useSettingsStore((s) => s.lang)` 选值本来也是这个行为）；未绑定 `subscribeLang` 时和写侧一样直接抛，不退化成「读一次值」——那种实现看着能用，切语言后界面不刷新，是最难发现的一类失效。
+- `src/lib/i18n.ts` 的 `@/stores` 引用删除，`t()` 与 `useLanguage()` 的签名一字未动，全仓唯一调用点 `App.tsx` 不用改。至此 `src/lib` 里对 `@/stores` 的引用为 0（上一批剩 1 处）。
+- 用例补了三处：`src/lib/i18n.test.ts` 在 node 环境钉住「没绑订阅就抛」和「只绑读取不绑订阅也抛」；新增 `src/lib/use-language.test.tsx`（jsdom + `bindFakeApp` 的假订阅，验「触发订阅才重渲染」「只改值不广播就不重渲染」「卸载后取消订阅」）；新增 `src/stores/app-binding-lang.test.tsx`（真 store 探针：`setLang` 后同一次挂载就刷新、挂载前改过语言的新探针读到新值、改别的设置项不多渲染一次）。两组守卫各做过一次变异核验：把 hook 退化成 `appLang()` 读一次值 → 4 条用例红；把 stores 交的订阅换成从不回调的空实现 → 3 条用例红，确认它们不是摆设。
+- `src/test/app-fakes.ts` 的假动作跟着加上 `subscribeLang` 与 `emitLangChange()`，用例不必再引真 store 就能驱动一次语言变更广播。
+- 新增用例 10 条、测试文件 2 个，套件 91 文件 / 1287 通过；`tsc --noEmit`、`eslint --max-warnings=0`、`npm run build`、`cargo test`（343 通过 / 1 忽略）均通过。
+
+### 发布链路：latest.json 的更新说明取自 更新说明.md
+
+- `scripts/gen-latest-json.mjs` 的 `notes` 不再默认写成 `TsFlowy v{version}` 占位串，改为从仓库根目录的 `更新说明.md` 取本版章节（`## v{version}` 起、到下一个 `## ` 之前、去掉结尾的 `---`），与 `gh release create --notes-file` 用的是同一份内容，安装包里的说明和更新清单不会再有两份说法。
+- 本版章节缺失时脚本直接报错退出，不再静默产出占位文案；确实要手写成一条，用 `--notes` 显式传入。
+- 补了章节抽取的用例：版本段边界（`0.8.3` 不会命中 `v0.8.30`）、结尾分隔线剔除、真实 更新说明.md 里本版章节只含本版内容。
+
+### 工程：切语言在原生窗口里验了一遍（CDP 冒烟脚本）
+
+- P3 第三批的「切语言后整棵界面刷新」此前只有 jsdom 探针证据；新增 `scripts/cdp-lang-smoke.mjs`：用 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 npm run tauri dev` 起真窗口，脚本经 CDP 点侧栏齿轮进设置、把语言下拉改成 English 再改回简体中文，逐步断言侧栏文案（设置 → Settings → 设置）、`<html lang>`（zh-CN → en-US → zh-CN）与设置页正文跟着重渲染，并收集整场的 `Runtime.exceptionThrown`，非零即失败退出。
+- 实跑结果：11 条断言全过、0 未捕获异常，界面回到起始语言。脚本是手工冒烟工具，没进 CI（CI 里没有可用的 WebView2 会话），跑法写在脚本头部注释。
+
+### 工程：`db/database.rs` 按域拆成目录模块（2393 行 → 单文件最大 476 行）
+
+- 纯搬运，不改一行逻辑：`src-tauri/src/db/database.rs` 变成目录模块 `src-tauri/src/db/database/`，父模块 `mod.rs` 只留三表总注、`TRIGGER_MANAGED_TIMESTAMPS`、`default_options_json()` 与跨域共用的 `next_position()`（86 行），字段域 467 行、行域 476 行、单元格与 CSV 导入 147 行各自成文件。
+- 对外路径一字未动：`mod.rs` 用 `pub use fields::*; pub use rows::*; pub use cells::*;` 把三个子模块的公开函数平铺回 `crate::db::database::*`，`commands/db.rs`、`commands/files/config.rs`、`db/search.rs`、`db/views/crud.rs` 这 32 个调用点一个都不用改，Rust 侧命令名与 SQL 也完全一致。
+- 45 个用例同样按域拆进 `database/tests/`（`mod.rs` 76 行只放 `setup()` 等共享夹具，`fields`/`rows`/`cells`/`trash`/`view_id` 各一个文件），子模块靠 `use super::*` 拿夹具、夹具自己 `use super::*` 拿领域函数，断言内容未改。
+- 唯一的可见性放宽是搬运的必然代价：`fields::paired_field_id()` 从「与用例同文件」变成要有 `pub(super)` 才能被 `tests` 取到，作用域仍限在 `db::database` 内部，没有对外暴露新符号。
+- 拆的过程中撞到一个非本批引入的问题：`desktop.rs:323` 那段用例在 HEAD 上就不是 rustfmt 干净的，`cargo fmt` 顺手会改掉别人的文件；已把这处还原回 HEAD，格式检查只针对本批的 10 个文件跑（`rustfmt --edition 2021`），落差单记在下条。
+- 验证：函数清单 97 个与拆前逐字一致，`cargo clippy --all-targets` 无告警，`cargo test` 343 通过 / 1 忽略（与拆前基线持平）。
 
 ## v0.8.33（2026-10-20）
 

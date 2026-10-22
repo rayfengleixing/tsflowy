@@ -35,7 +35,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useAiStore } from "@/stores/ai";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "@/lib/ipc-dialog";
 import { invoke } from "@/lib/invoke";
 import { toast } from "sonner";
 import { t, type MessageKey } from "@/lib/i18n";

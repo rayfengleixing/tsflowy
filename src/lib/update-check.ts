@@ -1,7 +1,7 @@
-import { check } from "@tauri-apps/plugin-updater";
+import { check } from "@/lib/ipc-shell";
 import { toast } from "sonner";
+import { appSetRoute } from "@/lib/app-context";
 import { t } from "@/lib/i18n";
-import { useWorkspaceStore } from "@/stores/workspace";
 import { logger } from "./logger";
 
 // 自动检查更新：设置页那个按钮只有被点时才联网，而桌面应用会一直开着，等不到第二次点击。
@@ -74,7 +74,7 @@ export async function autoCheckOnce(): Promise<AutoCheckOutcome> {
   }
   toast.info(t("settings.updateFound", { version }), {
     duration: 0,
-    action: { label: t("settings.updateGoSettings"), onClick: () => useWorkspaceStore.getState().setRoute("settings") },
+    action: { label: t("settings.updateGoSettings"), onClick: () => appSetRoute("settings") },
   });
   return "notified";
 }

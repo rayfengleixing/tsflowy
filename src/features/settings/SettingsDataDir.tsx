@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { FolderInput, FolderOpen, RefreshCw } from "lucide-react";
 import { invoke } from "@/lib/invoke";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "@/lib/ipc-dialog";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";

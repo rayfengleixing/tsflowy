@@ -29,7 +29,7 @@ import { startUpdateChecks } from "@/lib/update-check";
 import { probeDbHealthOnStartup } from "@/lib/db-health";
 import { startSyncEvents } from "@/lib/sync-events";
 import { flushPendingUiPersist } from "@/stores/workspace";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@/lib/ipc-shell";
 import { invoke } from "@/lib/invoke";
 import { requestEscapeClose } from "@/lib/escape-close";
 import { setupDeepLink } from "@/lib/deep-link";

@@ -11,7 +11,6 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ save: saveMock, open: openMock }))
 vi.mock("@tauri-apps/plugin-fs", () => ({ writeTextFile: writeMock }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock, convertFileSrc: (p: string) => p }));
 vi.mock("html-to-image", () => ({ toBlob: vi.fn() }));
-vi.mock("@/stores/editor", () => ({ useEditorStore: { getState: () => ({ editor: null }) } }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("./documents", () => ({ documentApi: { get: docGetMock } }));
 vi.mock("./db-transfer", async (importOriginal) => {
@@ -19,7 +18,14 @@ vi.mock("./db-transfer", async (importOriginal) => {
   return { ...mod, databaseViewToMarkdown: dbTableMock };
 });
 
-import { exportPage } from "./export-page";
+import { exportPage, exportPageImage, printPage } from "./export-page";
+import { bindAppReaders, type AppEditor } from "./app-context";
+import { fakeEditor } from "@/test/app-fakes";
+
+// 长图/PDF 两条路径要读活的编辑器：过去是 useEditorStore.getState().editor，用例得 mock 整条 store；
+// 现在只绑一个取值函数（本文件其余用例走 markdown/html 路径，不碰它）
+let currentEditor: AppEditor | null = null;
+bindAppReaders({ getEditor: () => currentEditor });
 
 const RICH_DOC = {
   type: "doc",
@@ -319,5 +325,22 @@ describe("exportPage（附件随导出落盘）", () => {
     expect(openMock).not.toHaveBeenCalled();
     expect(writeMock).toHaveBeenCalledWith("D:/out/plain.md", "纯文本页\n");
     expect(invokeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("长图与 PDF 导出的编辑器前置", () => {
+  beforeEach(() => {
+    currentEditor = null;
+  });
+
+  it("没有可用编辑器实例时两条路都拒，不去渲染一张白图", async () => {
+    await expect(exportPageImage("某页")).rejects.toThrow("editor not ready");
+    await expect(printPage()).rejects.toThrow("editor not ready");
+  });
+
+  it("编辑器已卸载（isDestroyed）同样拒：那份 DOM 属于上一篇文章", async () => {
+    currentEditor = fakeEditor({}, true);
+    await expect(exportPageImage("某页")).rejects.toThrow("editor not ready");
+    await expect(printPage()).rejects.toThrow("editor not ready");
   });
 });

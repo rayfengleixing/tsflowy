@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc-core";
 import { toast } from "sonner";
 import { flushAllForClose } from "./close-flush";
 import { requestSyncReload } from "./sync-events";
@@ -11,7 +11,7 @@ import { logger } from "./logger";
 // 与设置页手动同步同一条链路（先冲刷挂起写入，pulled 后重载窗口）。
 // 周期性同步独立走 setInterval：应用常开时远端更新也能按间隔拉到，
 // 休眠/挂后台导致定时器停摆时，恢复回前台会自查周期并立刻补跑一拍。
-// 本模块自身仍直接用 @tauri-apps/api/core（run_sync 不是写命令，且避免循环依赖）。
+// 本模块走 @/lib/ipc-core 的 raw invoke（run_sync 不是写命令，且反向上 @/lib/invoke 会成环）。
 
 const CONFIG_KEY = "tsflowy:auto-sync";
 
