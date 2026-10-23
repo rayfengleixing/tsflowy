@@ -176,6 +176,14 @@
 - 验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest run` 93 文件 / 1287 用例全过（本轮机器负载高，103s，仍全绿）、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。用例数与断言未动；`stores/ai.test.ts` 的 88 条里覆盖落库、删会话与「db down 退 localStorage」这些路径，切片化后照样命中（它 mock 的仍是 `@/lib/ai` 下游，不依赖这些助手写在哪个文件里）。
 - 落差：`index.ts` 仍 1,245 行 >800。剩 `return {`（现 683 行）之前 15 个助手——配置派生 4（`maxChars` / `agentRounds` / `halvedContextBudget` / `ctxScope`）、请求构造 3（`systemMessage` / `requestMessages` / `buildReferenceContext`）、定位与落地 4（`editOnPage` / `previewAction` / `landAction` / `planAction`）、流式 4（`settleIncomplete` / `finalizeAssistant` / `streamRound` / `runStream`），外加 `return {` 之后约 560 行的动作实现面。下一批切配置派生 + 请求构造这一簇（7 个约 130 行，它们只读 `get()`，注入面最小），流式那四个共同读写 `streamingAssistantId` / `turnSeq` / `cancelledTurns` 三个轮次变量，要连着一个 `turnRegistry` 一起定形，留到最后单独一批。
 
+### 工程：出请求那一侧的派生与组装收成 `createRequestSlice(get)`（`index.ts` 1,245 → 1,068 行）
+
+- 新增 `src/stores/ai/request-slice.ts`（203 行）：配置读数 `maxChars`（上下文字符数）、`agentRounds`（一次提问允许的模型往返轮数，兜底 4 轮）、`halvedContextBudget`（撞上下文上限后补发用的预算砍一半，低于 500 token 就不值得再试）、`ctxScope`（只认 `page_only` / `off`，没有可编辑文档时 `page_only` 与 `full` 等价），与请求构造 `systemMessage`（有文档时下发编辑协议 + 文档上下文，无文档退化成纯问答）、`requestMessages`（system + 参考文档 + 选中内容 + 按 token 预算从最新往前收的历史窗，发生截断时显式告知模型）、`buildReferenceContext`（`@文件名` 引用 → 参考上下文：短文档整篇给出，长文档先按问题检索片段，没命中才截断并写明截了多少）。
+- 这一簇七个都只读状态、不写状态，所以注入的是 `get` 一个参数（`createRequestSlice(get: AiGet): AiRequestActions`），而不是上一批的 `(set, get)`。`systemMessage` 只被 `requestMessages` 调用，因此不进 `AiRequestActions` 对外动作面——接口 6 个名字，比搬走的实现少一个，跟 `persist.ts` 里 `writeLocal` / `activeSnapshot` 同一条口径。
+- **实现逐字未动，163 行连一行注释都没加**：切片工厂体与 store 工厂体同为 2 格缩进，整块搬过去不需要 dedent，所以带反引号的模板字符串（`requestMessages` 的截断告知、`buildReferenceContext` 的参考上下文拼装）不会被改到；与 `HEAD` 逐行比对结果是 `EQUAL`。`index.ts` 净 6 增 183 删，增的是 1 行 import + 同名解构 2 行 + 1 行说明 + 2 行改写的 import；解构出的 6 个名字与原来一致，`index.ts` 里那 10 处调用（`send` / `retry` 的降预算补发、quickAction 取正文截断等）一行没改。搬走后不再被引用的 14 个 specifier 由 `noUnusedLocals` 逐个报出并清掉（报在 13 条错里，`@/lib/ai-tokens` 那行两个一起空）：`docSearchSnippets`、ai-edit 那 4 个协议常量、`parseMentions`、`estimateTokens` / `tailTokens`、`jsonToMarkdown`、`parseViewAliases`、limits 那 4 个默认值。
+- 验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest run` 93 文件 / 1287 用例全过、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。上下文预算与截断告知、`@` 引用这些路径在 `stores/ai.test.ts`、`ai-tokens.test.ts`、`ai-mention.test.ts` 里有用例，切片化后照样命中。没碰界面，也没做浏览器冒烟。
+- 落差：`index.ts` 仍 1,068 行 >800。剩 `return {` 之前 8 个助手（定位与落地 4：`editOnPage` / `previewAction` / `landAction` / `planAction`；流式 4：`settleIncomplete` / `finalizeAssistant` / `streamRound` / `runStream`）与 `return {` 之后约 560 行的动作实现面。定位与落地这簇里 `planAction` 读写 `cancelledTurns`，流式那簇四个共同读写 `streamingAssistantId` / `turnSeq` / `cancelledTurns`——三个轮次变量的归属是下一个决定，不再属于「搬」。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
