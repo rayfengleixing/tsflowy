@@ -202,6 +202,14 @@
 - 落差：`index.ts` 876 行仍 >800。上面那两个跨切片依赖的落盘动作**不在 `AiState` 上**（`types.ts:83` 没声明，只有 `persist.ts` 的 `AiPersistActions` 声明，靠 `index.ts` 闭包里解构使用），所以切它们的调用方只能把函数本身当参数注入新切片（同名参数 → 调用文本一字不改）；另一条路是把这些动作提升成 `AiState` 上的公开面再 `get().saveSession(...)` 调，那要改对外形状，不算机械搬运，本轮不擅自选。
 - 验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest run` 93 文件 / 1287 用例全过、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。面板开关、宽度持久化、档位切换、`refinePrompt` 的改写结果与失败提示在 `stores/ai.test.ts` 有用例，切片化后照样命中。没碰界面，也没做浏览器冒烟。
 
+### 工程：会话历史九个动作切出切片，`index.ts` 首次降到 800 行以下（876 → 708）
+
+- 新增 `src/stores/ai/session-slice.ts`（192 行）：`loadSessions`（优先从库里读历史会话，库空或不可用才回退本地老数据并尝试一次性导入）、`loadMoreSessions`（放宽面板显示窗口）、`clear`（清空即按 id 销毁这条会话）、`newChat`、`switchSession`、`deleteSession`、`renameSession`、`setSessionArchived`、`branchFrom`（从某条消息前缀分出一条新会话，原对话整段归档保留）。
+- 先了结上一批留的落差：这四个落盘动作（`saveSession` / `dropSessions` / `applyLocal` / `fetchUsage`）确实**不在 `AiState` 上**（`types.ts:83` 没声明，只有 `persist.ts` 的 `AiPersistActions` 声明，运行时也不在 store 对象里——`index.ts` 是把 `createPersistSlice` 的返回值解构使用，没有 spread 进去），所以 `get().saveSession(…)` 这条路根本不通，要走就得先把它们提升成对外动作面、改 `createPersistSlice` 的接法，那是形状变更，不属机械搬运。选定**同名参数注入**：`createSessionSlice(set, get, { saveSession, dropSessions, applyLocal, fetchUsage }: AiPersistDeps)`，`AiPersistDeps = Pick<AiPersistActions, …>`（复用已有接口，不新写类型）；因为注入的形参与闭包里的解构同名，九个动作的实现文本一字没改。
+- 延续 6a 的块体工厂写法（`=> { return { … } }`，属性仍落在 4 格缩进上）：158 行搬过去与 `HEAD` **逐字节相等**，零 dedent、零 prettier 重排。`index.ts` 净 1 条 spread + 1 行 import，摘掉 6 个不再被引用的 specifier（`aiSessionList` / `AiSessionRow` / `logger` 整条 / `archiveCurrent` / `importLocalSessions` / `fromSessionRow` / `sessionTitle` / `StoredSession`），`@/stores/ai` 对外符号仍 12 个。
+- 验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest run` 93 文件 / 1287 用例全过、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。这九个动作在 `stores/ai.test.ts` 里全部有用例（`loadSessions` 的库/本地两条来源与导入失败回退、`clear` 删库行、`switchSession` 先归档、`renameSession` 去重与截断、`branchFrom` 归档原文并保留两条线，共 49 处引用），用例跑的是真 store 实例，所以切片 spread 的接线与注入的函数身份都在运行时被真打过一遍。没碰界面，也没做浏览器冒烟（白屏限制照旧）。
+- 落差：`index.ts` 708 行，>800 这条纪律第一次达标。剩下的动作面只有 6c（`rateMessage` / `undoAction` / `applyAction` / `rejectAction` / `saveMessageAsPage` / `exportMessage` 六件，注入 `persistSessions`）与闭包簇那一整块（`send` / `retry` / `regenerate` / `resend` + `stop` + 流式四件 + `planAction` + `settleIncomplete`），后者要先拍板 `turnRegistry`。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
