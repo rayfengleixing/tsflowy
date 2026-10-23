@@ -145,6 +145,13 @@
 - 测试文件跟着被测源码住进 `src/lib/markdown/`，与 `stores/workspace-slices/tree.test.ts` 的同目录放法一致；vitest 收集数因此从 91 文件变 93 文件，用例总数仍是 1,287。
 - 验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest` 93 文件 / 1287 用例全过、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略（本批未动 Rust）。
 
+### 工程：给 jsdom 组件用例留出超时余量，全量 `vitest run` 不再随机红
+
+- 症状：`npx vitest run` 全量并行时随机红 1~3 条，每次不是同一条——`features/database/csv-import-dialog`、`features/database/FieldTypeMenu`、`features/search/GlobalReplaceDialog`、`features/database/grid-view` 这几份 `.test.tsx` 报 `Test timed out in 5000ms`；把这几份单独跑或整仓串行（`--no-file-parallelism`）都全绿。和拆用例那批没有因果关系，只是机器负载高的时候更容易撞到。
+- 定位：这几条用例空闲时实测 0.7~1.0s（`userEvent` 真实派发 + radix 弹窗动画等待），多文件并行抢 CPU 会放大到 5s 以上，撞的是 vitest 默认 `testTimeout: 5000`，不是用例逻辑或组件行为有问题。顺带核了 CI 上唯一一次红（2026-10-20 发布那次），失败的是「从 CHANGELOG 抽取发布 notes」那条断言，跟这里不是一回事。
+- 改法只动测试配置：`vitest.config.ts` 的 `test.testTimeout` 设 15000，并注明为什么。给的是争用下的余量，不是提速——用例本身该跑多久还是多久；应用代码、断言与被测组件一字未动。也没顺手改成串行：`--no-file-parallelism` 只当定位用的对照口径（本机串行 113s、无争用时并行 41s、争用时并行能拖到 130~160s），把整仓文件并行关掉换来的东西比问题本身更贵。
+- 验证：全量并行连跑两次皆 93 文件 / 1287 用例全过（各约 41s）；`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
