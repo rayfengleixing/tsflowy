@@ -7,8 +7,6 @@ import {
   aiCancel,
   aiChat,
   aiErrorText,
-  aiGetConfig,
-  aiSaveConfig,
   aiSessionList,
   type AiSessionRow,
   type AiChatEvent,
@@ -33,7 +31,9 @@ import { t } from "@/lib/i18n";
 import { AiActionRecord, AiMessage, AiState, StoredSession } from "./types";
 import { createPersistSlice } from "./persist";
 import { createRequestSlice } from "./request-slice";
-import { archiveCurrent, configPayload, importLocalSessions, sessionUsageTotal } from "./ops";
+import { createConfigSlice } from "./config-slice";
+import { createPanelSlice } from "./panel-slice";
+import { archiveCurrent, importLocalSessions, sessionUsageTotal } from "./ops";
 import { landAction, previewAction } from "./edit-ops";
 import {
   addUsage,
@@ -44,8 +44,8 @@ import {
   isWriteCall,
   summaryOf,
 } from "./calls";
-import { QUICK_PROMPT_KEY, REFINE_SYSTEM_PROMPT, pageTitleFrom, parsePromptIdeas } from "./prompts";
-import { MAX_SESSIONS, MAX_WIDTH, MIN_WIDTH, PANEL_WIDTH_KEY, loadWidth } from "./limits";
+import { QUICK_PROMPT_KEY, pageTitleFrom } from "./prompts";
+import { MAX_SESSIONS, loadWidth } from "./limits";
 import { fromSessionRow, loadSessionsFromStorage, sessionTitle } from "./session-codec";
 
 // AI 助手面板状态：开关/宽度（localStorage 偏好）、消息列表、流式状态、
@@ -403,6 +403,9 @@ export const useAiStore = create<AiState>()((set, get) => {
   };
 
   return {
+    // 配置/档位与面板自身这两组动作只读写 config、宽度等自己的状态，切进各自的切片文件
+    ...createConfigSlice(set, get),
+    ...createPanelSlice(set, get),
     open: false,
     width: loadWidth(),
     messages: restored.active?.messages ?? [],
@@ -427,29 +430,6 @@ export const useAiStore = create<AiState>()((set, get) => {
     editingId: null,
     promptIdeas: [],
     refining: false,
-
-    toggle: () => set((s) => ({ open: !s.open })),
-    // 打开面板的同时请求聚焦输入框：编辑器里点「问 AI」后可以立刻开始打字
-    openPanel: () => set((s) => ({ open: true, focusTick: s.focusTick + 1 })),
-    closePanel: () => set({ open: false }),
-    setWidth: (w) => {
-      const width = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w));
-      set({ width });
-      try {
-        localStorage.setItem(PANEL_WIDTH_KEY, String(width));
-      } catch {
-        /* localStorage 不可用时静默降级 */
-      }
-    },
-
-    loadConfig: async () => {
-      try {
-        const config = await aiGetConfig();
-        set({ config, configLoaded: true });
-      } catch (e) {
-        set({ configLoaded: true, error: aiErrorText(e) });
-      }
-    },
 
     // 历史会话优先从库里读（localStorage 只有约 5MB 配额）；库为空或不可用时再用本地老数据
     loadSessions: async () => {
@@ -496,8 +476,6 @@ export const useAiStore = create<AiState>()((set, get) => {
     },
 
     loadMoreSessions: () => set((s) => ({ sessionsShown: s.sessionsShown + MAX_SESSIONS })),
-    setConfig: (config) => set({ config, configLoaded: true }),
-    setPendingContext: (text) => set({ pendingContext: text }),
 
     send: async (text, images) => {
       const content = text.trim();
@@ -756,32 +734,6 @@ export const useAiStore = create<AiState>()((set, get) => {
       persistSessions();
     },
 
-    // 切换档位：只改 active_profile，其余配置原样回传
-    switchProfile: async (id) => {
-      const c = get().config;
-      if (!c) return;
-      try {
-        await aiSaveConfig(configPayload(c, { activeProfile: id }));
-        set({ config: await aiGetConfig() });
-      } catch (e) {
-        logger.error("ai switch profile failed", e);
-        toast.error(t("ai.errorPrefix", { message: String(e) }));
-      }
-    },
-
-    // 上下文范围：面板顶部就能改，改完立即生效（下一轮请求按新范围组装）
-    setCtxScope: async (scope) => {
-      const c = get().config;
-      if (!c || c.ctx_scope === scope) return;
-      try {
-        await aiSaveConfig(configPayload(c, { ctxScope: scope }));
-        set({ config: await aiGetConfig() });
-      } catch (e) {
-        logger.error("ai set context scope failed", e);
-        toast.error(t("ai.errorPrefix", { message: String(e) }));
-      }
-    },
-
     // 自定义快捷指令：按 scope 取文本填进模板的 {content} 占位符
     runQuickAction: async (action) => {
       const bridge = getAiEditor();
@@ -855,15 +807,6 @@ export const useAiStore = create<AiState>()((set, get) => {
       await runStream(assistant.id);
     },
 
-    // 改后重发的入口：只标记目标提问，正文由面板填回输入框，用户改完再发送
-    startEdit: (messageId) => {
-      const s = get();
-      if (s.streaming) return;
-      const msg = s.messages.find((m) => m.id === messageId);
-      if (msg?.role === "user") set({ editingId: messageId, promptIdeas: [] });
-    },
-    cancelEdit: () => set({ editingId: null }),
-
     branchFrom: (messageId) => {
       const s = get();
       if (s.streaming) return;
@@ -929,39 +872,5 @@ export const useAiStore = create<AiState>()((set, get) => {
         toast.error(aiErrorText(e));
       }
     },
-
-    refinePrompt: async (text) => {
-      const question = text.trim();
-      if (!question || get().streaming || get().refining) return;
-      set({ refining: true, promptIdeas: [] });
-      // 改写是一次性请求，不进对话：错误单独收集，别把面板的 error 状态污染成「这一轮失败」
-      const state: { full: string; failed: string | null } = { full: "", failed: null };
-      try {
-        await aiChat(
-          [
-            { role: "system", content: REFINE_SYSTEM_PROMPT },
-            { role: "user", content: question },
-          ],
-          (ev: AiChatEvent) => {
-            if (ev.type === "done") state.full = ev.full;
-            else if (ev.type === "error") state.failed = ev.message;
-          },
-        );
-      } catch (e) {
-        state.failed = aiErrorText(e);
-      }
-      set({ refining: false });
-      if (state.failed) {
-        toast.error(t("ai.errorPrefix", { message: state.failed }));
-        return;
-      }
-      const ideas = parsePromptIdeas(state.full).filter((x) => x !== question);
-      if (ideas.length === 0) {
-        toast.error(t("ai.refineNone"));
-        return;
-      }
-      set({ promptIdeas: ideas });
-    },
-    clearPromptIdeas: () => set({ promptIdeas: [] }),
   };
 });

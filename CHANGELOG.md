@@ -193,6 +193,15 @@
 - 验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest run` 93 文件 / 1287 用例全过、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。跨页编辑与落地判定在 `stores/ai.test.ts` 有用例（含「没打开的页面走 JSON 直写」「confirm_edit 开启时停在待确认」），hoist 后照样命中。没碰界面，也没做浏览器冒烟。
 - 落差：`index.ts` 仍 967 行 >800。剩 5 个闭包助手——`settleIncomplete`（用 `set`）、`planAction`、流式三件 `finalizeAssistant` / `streamRound` / `runStream`（共同读写 `streamingAssistantId` / `turnSeq` / `cancelledTurns`）——与 `return {`（第 405 行）之后约 560 行的动作实现面。下一批要么先定 `turnRegistry`（把三个轮次变量收成一个可注入的持有者，这一步是设计决定不是搬运），要么改切动作面里的独立域；不再能在「只搬不改」里自动推出。
 
+### 工程：动作面先切走不碰轮次的两组动作（`index.ts` 967 → 876 行）
+
+- 新增 `src/stores/ai/config-slice.ts`（48 行）：`loadConfig`（拉配置回填）、`setConfig`（整份覆盖）、`switchProfile`（切档位，只改 `active_profile` 其余原样回传）、`setCtxScope`（上下文范围，改完下一轮生效）。
+- 新增 `src/stores/ai/panel-slice.ts`（81 行）：`toggle` / `openPanel` / `closePanel` / `setWidth`（宽度夹在上下限内并写 localStorage）/ `setPendingContext` / `startEdit` / `cancelEdit` / `refinePrompt`（改写提问的一次性请求，不进对话）/ `clearPromptIdeas`。
+- 两个切片写成**块体工厂** `= (set, get) => { return { … } }`：属性正好落在动作面里原来的 4 格缩进上，所以这次连去缩进都没有——88 行搬过去与 `HEAD` **逐字节相等**（比第五批更干净，那批被 prettier 重排了两处空白）。类型面也不新写接口，用 `Pick<AiState, "loadConfig" | …>` 直接取 `types.ts` 里已声明的动作签名，「抄签名」这一步从流程里删掉。接线沿用 `stores/workspace.ts` 的先例：`return { ...createConfigSlice(set, get), ...createPanelSlice(set, get), 其余 }`。`index.ts` 净 8 增 99 删，`@/stores/ai` 对外符号仍 12 个。
+- 顺带把动作面的依赖关系勘察清楚了（下一批的依据）：`return {` 之后 562 行里真正锁在闭包簇上的只有 5 处——`send` / `retry` / `regenerate` / `resend` 调 `runStream`，`stop` 读写 `streamingAssistantId` / `turnSeq` / `cancelledTurns`。剩下两组：会话历史 9 件（`loadSessions` / `clear` / `newChat` / `switchSession` / `deleteSession` / `renameSession` / `setSessionArchived` / `branchFrom` / `loadMoreSessions`）要用 `saveSession` / `dropSessions` / `applyLocal` / `fetchUsage`；动作卡片 + 消息导出 6 件（`rateMessage` / `undoAction` / `applyAction` / `rejectAction` / `saveMessageAsPage` / `exportMessage`）要用 `persistSessions` 与 `landAction`。
+- 落差：`index.ts` 876 行仍 >800。上面那两个跨切片依赖的落盘动作**不在 `AiState` 上**（`types.ts:83` 没声明，只有 `persist.ts` 的 `AiPersistActions` 声明，靠 `index.ts` 闭包里解构使用），所以切它们的调用方只能把函数本身当参数注入新切片（同名参数 → 调用文本一字不改）；另一条路是把这些动作提升成 `AiState` 上的公开面再 `get().saveSession(...)` 调，那要改对外形状，不算机械搬运，本轮不擅自选。
+- 验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest run` 93 文件 / 1287 用例全过、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。面板开关、宽度持久化、档位切换、`refinePrompt` 的改写结果与失败提示在 `stores/ai.test.ts` 有用例，切片化后照样命中。没碰界面，也没做浏览器冒烟。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
