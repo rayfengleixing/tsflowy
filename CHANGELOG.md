@@ -160,6 +160,13 @@
 - 验证口径还是老那三条：五个叶子文件与原 `ai.ts` 对应行段逐字相等（只多 `export ` 前缀），172/79/39/33/185 行对得上；`index.ts` 里从 `currentPageRef` 到文件尾的 1,351 行与原 `310–316` + `601–1943` 逐字节相等；导出面 12=12。`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest run` 93 文件 / 1287 用例全过（41.65s）、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。界面没碰，行为口径不变；照例没有在浏览器里冒烟（本应用浏览器打开必白屏）。
 - 落差：`index.ts` 还有 1,438 行，超着 800 行的线。剩下的是 `create<AiState>()((set,get)=>{…})` 的本体——`return {`（原 1381 行）之前那 28 个闭包助手几乎都要 `set`/`get`，拆它们得先给每个切片一个上下文对象，那正是下一批要定的形状。
 
+### 工程：把「不读 store 状态」的动作构件搬出 `create` 闭包（`index.ts` 1,438 → 1,324 行）
+
+- 新增 `src/stores/ai/ops.ts`（133 行）：`archiveCurrent`（当前对话归档进 sessions）、`importLocalSessions`（localStorage 老归档补导进库）、`configPayload`（面板改一个字段时的整份回写载荷，少带一项就等于把它悄悄重置成默认值）、`LOCATE_REASON`（定位失败原因 → 文案 key）、`editorTarget` / `bridgeFor`（落地桥接怎么选）、`sessionUsageTotal`（会话用量三元组）。这七个的共同点是把参数给足就不碰 `set`/`get`，也不碰 `streamingAssistantId`/`turnSeq`/`cancelledTurns` 那三个轮次变量——它们本来被每个 store 实例重建一次，纯函数挪到模块作用域行为不变。
+- 判定口径写清楚，免得下批照着抄错：`dropSessions` 看着没有捕获就漏了它，实际是 `.then(fetchUsage)` 把函数当引用传下去，按名字找 `fetchUsage(` 的粗筛扫不到，它仍留在闭包里；`systemMessage`/`previewAction`/`landAction`/`persistSessions` 同理，它们调的 `ctxScope`/`maxChars`/`editOnPage`/`activeSnapshot` 要读状态，得等切片化那批给上下文。
+- 搬法是逐字移动：整块连同上方注释摘出、每行去掉两个缩进、加 `export`，调用点一行没改（`index.ts` 从 `./ops` 导入同名）。对账即按这个口径做的——去掉 `export ` 前缀与 2 格缩进后与 `HEAD` 逐字节相等。`index.ts` 那侧的净变化是 13 增 127 删：增的全是 import 行（4 个因搬走而改写的 + 新 `./ops` 那 9 行），删的 127 = 搬走的 115 行 + 7 个块后空行 + 5 个 import 行（4 个改写 + 1 行纯删的 `type AiConfig,`）。顺带清掉 `index.ts` 里因此不再被引用的 5 个 import（`AiConfig`、`getAiEditorForView`、`LocateFailure`、`MessageKey`、`SessionUsage`）——`noUnusedLocals` 会把当年「整份抄 import 头」的多余项全报出来，这本身就是核对。
+- 验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest run` 93 文件 / 1287 用例全过（42.62s）、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。用例数没动，纯移动不改行为。界面依旧只能在 `npm run tauri dev` 的原生窗口里看，没做浏览器冒烟。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）

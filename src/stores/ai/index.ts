@@ -17,11 +17,10 @@ import {
   type AiSessionRow,
   type AiChatEvent,
   type AiChatMessage,
-  type AiConfig,
   type AiToolCallRaw,
   type AiToolCallRef,
 } from "@/lib/ai";
-import { getAiEditor, getAiEditorForView } from "@/lib/ai-editor";
+import { getAiEditor } from "@/lib/ai-editor";
 import {
   buildEditSystemPrompt,
   buildNoContextSystemPrompt,
@@ -37,7 +36,7 @@ import {
   type RetrievalCall,
 } from "@/lib/ai-edit";
 import { aiToolSpecs, resolvePage, runRetrievalCall, runUndoPlan, runWriteAction } from "@/lib/ai-tools";
-import { applyEditToDocJson, asDoc, type LocateFailure } from "@/lib/ai-locate";
+import { applyEditToDocJson, asDoc } from "@/lib/ai-locate";
 import { parseMentions } from "@/lib/ai-mention";
 import { estimateTokens, tailTokens } from "@/lib/ai-tokens";
 import { documentApi } from "@/lib/documents";
@@ -47,8 +46,17 @@ import { logger } from "@/lib/logger";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { JSONContent } from "@tiptap/core";
 import { parseViewAliases, type ViewNode } from "@/types/models";
-import { t, type MessageKey } from "@/lib/i18n";
-import { AiActionRecord, AiMessage, AiState, SessionUsage, StoredSession } from "./types";
+import { t } from "@/lib/i18n";
+import { AiActionRecord, AiMessage, AiState, StoredSession } from "./types";
+import {
+  LOCATE_REASON,
+  archiveCurrent,
+  bridgeFor,
+  configPayload,
+  editorTarget,
+  importLocalSessions,
+  sessionUsageTotal,
+} from "./ops";
 import {
   addUsage,
   collectCalls,
@@ -105,33 +113,6 @@ export const useAiStore = create<AiState>()((set, get) => {
    */
   let turnSeq = 0;
   const cancelledTurns = new Set<number>();
-
-  /**
-   * 当前对话有内容时归档进 sessions，供 newChat / 切换会话复用。
-   * 不再按条数上限淘汰：库里的会话全部保留，显示窗口在面板侧控制，
-   * 否则「列表里看得见 100 条、下次 newChat 悄悄删掉 80 条」比截断展示更糟。
-   * archived 为刚落档的会话。
-   */
-  const archiveCurrent = (s: {
-    messages: AiMessage[];
-    sessions: StoredSession[];
-    activeSessionId: string;
-    sessionPageId: string | null;
-    sessionPageTitle: string | null;
-    usageTotal: { prompt: number; completion: number; total: number };
-  }): { sessions: StoredSession[]; archived: StoredSession | null } => {
-    if (s.messages.length === 0) return { sessions: s.sessions, archived: null };
-    const entry: StoredSession = {
-      id: s.activeSessionId,
-      title: sessionTitle(s.messages),
-      updatedAt: Date.now(),
-      messages: s.messages,
-      pageId: s.sessionPageId,
-      pageTitle: s.sessionPageTitle,
-      usage: { prompt: s.usageTotal.prompt, completion: s.usageTotal.completion },
-    };
-    return { sessions: [entry, ...s.sessions], archived: entry };
-  };
 
   /** 会话快照落盘（流式增量不触发，只在轮次结束 / 显式操作时调用） */
   /** 跨会话 token 累计：库不可用时清掉即可，用量条是锦上添花，不该弹错打扰 */
@@ -212,34 +193,6 @@ export const useAiStore = create<AiState>()((set, get) => {
       sessionsLoaded: true,
     });
 
-  /**
-   * 一次性导入老会话：ai_sessions 的建表迁移在 0.8.24 之前从未生效，历史只存在 localStorage。
-   * 库空而本地有货时先写进库，全部成功才清掉本地副本 —— 否则下一次启动库里已经有当前会话的行，
-   * 本地那份归档就再也读不到了（看起来像用户的历史会话凭空消失）。
-   * 返回 false 表示没导成功，调用方继续沿用本地那份，下次启动还会重试。
-   */
-  const importLocalSessions = async (pending: StoredSession[]): Promise<boolean> => {
-    const unique: StoredSession[] = [];
-    const seen = new Set<string>();
-    for (const s of pending) {
-      if (seen.has(s.id)) continue;
-      seen.add(s.id);
-      unique.push(s);
-    }
-    try {
-      for (const s of unique) await aiSessionSave(toSessionRow(s));
-    } catch (e) {
-      logger.warn("ai sessions import from localStorage failed", e);
-      return false;
-    }
-    try {
-      localStorage.removeItem(SESSIONS_KEY);
-    } catch {
-      /* 清不掉只是下次重复导入，按 id upsert 没有副作用 */
-    }
-    return true;
-  };
-
   /** 当前配置的最大上下文字符数 */
   const maxChars = () => {
     const configured = get().config?.max_chars;
@@ -275,40 +228,6 @@ export const useAiStore = create<AiState>()((set, get) => {
     if (s === "page_only" && getAiEditor()) return "page_only";
     return "full";
   };
-
-  /**
-   * 面板里「只改一个字段」的整份回写载荷：`ai_save_config` 是覆盖式保存，
-   * 少带一个字段就等于把它悄悄重置成默认值，所以载荷统一由这里生成、只叠增量。
-   * profiles 不带 api_key 字段 → Rust 侧按 id 保留各档原有 Key；apiKey=null 表示不改全局 Key。
-   */
-  const configPayload = (c: AiConfig, over: Record<string, unknown>) => ({
-    enabled: c.enabled,
-    provider: c.provider,
-    protocol: c.protocol,
-    baseUrl: c.base_url,
-    model: c.model,
-    maxChars: c.max_chars,
-    confirmEdit: c.confirm_edit,
-    temperature: c.temperature,
-    thinking: c.thinking,
-    ctxTokenBudget: c.ctx_token_budget,
-    ctxMaxMessages: c.ctx_max_messages,
-    ctxScope: c.ctx_scope,
-    maxTokens: c.max_tokens,
-    systemPrompt: c.system_prompt,
-    profiles: c.profiles,
-    activeProfile: c.active_profile,
-    quickActions: c.quick_actions,
-    useTools: c.use_tools,
-    priceInput: c.price_input,
-    priceOutput: c.price_output,
-    agentRounds: c.agent_rounds,
-    firstByteTimeout: c.first_byte_timeout,
-    idleTimeout: c.idle_timeout,
-    streamRetries: c.stream_retries,
-    apiKey: null,
-    ...over,
-  });
 
   /**
    * system prompt：有可编辑文档时下发编辑协议 + 当前文档上下文（AI 自主修改的基础），
@@ -445,32 +364,6 @@ export const useAiStore = create<AiState>()((set, get) => {
         .map((m) => (m.id === assistantId ? { ...m, content: m.content.trim(), incomplete: kind } : m))
         .filter((m) => m.id !== assistantId || m.content.trim().length > 0),
     }));
-
-  /** 定位失败原因 → 界面文案 */
-  const LOCATE_REASON: Record<LocateFailure["reason"], MessageKey> = {
-    no_doc: "ai.noPage",
-    heading_not_found: "ai.locateHeadingNotFound",
-    text_not_found: "ai.locateTextNotFound",
-    protected_heading: "ai.locateProtectedHeading",
-    bad_structure: "ai.locateBlockedByLock",
-  };
-
-  /** 当前编辑器桥接与正在打开的页面（apply_edit 不带 view_id 时的落点） */
-  const editorTarget = () => ({
-    bridge: getAiEditor(),
-    currentId: useWorkspaceStore.getState().currentViewId,
-  });
-
-  /** 指定视图的落地桥接：主栏/副栏打开中的页面一律就地走编辑器事务；未打开时返回 null 走 JSON 直写 */
-  const bridgeFor = (
-    view_id: string | undefined,
-    currentBridge: ReturnType<typeof getAiEditor>,
-    currentId: string | null,
-  ) => {
-    if (!view_id) return currentBridge;
-    if (currentBridge && currentId === view_id) return currentBridge;
-    return getAiEditorForView(view_id);
-  };
 
   /**
    * 对非当前页做定位编辑：save=false 只演练一遍（取 diff 用的改前原文、判断能不能定位到）。
@@ -865,13 +758,6 @@ export const useAiStore = create<AiState>()((set, get) => {
       persistSessions();
     }
   };
-
-  /** 库里存的用量 → 面板用的累计三元组（老会话没单独记 total，用输入+输出兜底） */
-  const sessionUsageTotal = (u?: SessionUsage) => ({
-    prompt: u?.prompt ?? 0,
-    completion: u?.completion ?? 0,
-    total: (u?.prompt ?? 0) + (u?.completion ?? 0),
-  });
 
   return {
     open: false,
