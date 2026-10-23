@@ -167,6 +167,15 @@
 - 搬法是逐字移动：整块连同上方注释摘出、每行去掉两个缩进、加 `export`，调用点一行没改（`index.ts` 从 `./ops` 导入同名）。对账即按这个口径做的——去掉 `export ` 前缀与 2 格缩进后与 `HEAD` 逐字节相等。`index.ts` 那侧的净变化是 13 增 127 删：增的全是 import 行（4 个因搬走而改写的 + 新 `./ops` 那 9 行），删的 127 = 搬走的 115 行 + 7 个块后空行 + 5 个 import 行（4 个改写 + 1 行纯删的 `type AiConfig,`）。顺带清掉 `index.ts` 里因此不再被引用的 5 个 import（`AiConfig`、`getAiEditorForView`、`LocateFailure`、`MessageKey`、`SessionUsage`）——`noUnusedLocals` 会把当年「整份抄 import 头」的多余项全报出来，这本身就是核对。
 - 验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest run` 93 文件 / 1287 用例全过（42.62s）、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。用例数没动，纯移动不改行为。界面依旧只能在 `npm run tauri dev` 的原生窗口里看，没做浏览器冒烟。
 
+### 工程：会话落盘收成 `createPersistSlice(set, get)`（`index.ts` 1,324 → 1,245 行）
+
+- 新增 `src/stores/ai/persist.ts`（98 行）：`fetchUsage`（跨会话 token 累计，库不可用时清掉就好、不弹错）、`writeLocal`（localStorage 兜底，配额溢出丢一半最老归档重试一次）、`activeSnapshot`（进行中对话的快照，无消息时为 null）、`saveSession`（按条 upsert 落库，失败退回本地并记日志）、`dropSessions`（删库里的会话，等写请求落地再重取用量）、`persistSessions`、`applyLocal`（本地老数据直接充当当前状态）。这七件都读写 store 状态，所以不能像上一批那样搬去模块作用域，改成切片工厂 `createPersistSlice(set, get) => { …; return { … } }`。
+- 注入不改变语义：`create<AiState>()((set, get) => …)` 的这两个参数本来就是它们原来捕获的那两个函数；`AiSet` / `AiGet` 取 `StoreApi<AiState>["setState" | "getState"]`，`AiSliceCreator<T>` 与 `stores/workspace-slices/types.ts` 的 `WorkspaceSet` / `WorkspaceGet` / `WorkspaceSliceCreator` 同一形制，两个 store 的切片读起来是一套写法。
+- **实现逐字未动**：七个助手在工厂里本来就是 2 格缩进，切片工厂体同为 2 格，整块搬过去不需要 dedent，与 `HEAD` 比对只有我加的一行说明注释多出来（`writeLocal` / `activeSnapshot` 只被切片内部互调，所以不放进对外动作面，接口因此比返回对象少两个名字）。
+- 调用点零改动是关键设计：`index.ts` 里解构 `const { fetchUsage, saveSession, dropSessions, persistSessions, applyLocal } = createPersistSlice(set, get);`，名字与原来一模一样，那 33 处调用（`newChat` / `switchSession` / `clear` / `branchFrom` / `send` 收尾等）一行都不用改。`index.ts` 净 4 增 83 删，顺带清掉因此不再被引用的 6 个 specifier（`aiSessionSave` / `aiSessionDelete` / `aiUsageSummary` / `SESSIONS_KEY` / `LocalSessions` / `toSessionRow`）——还是靠 `noUnusedLocals` 报出来当核对。
+- 验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest run` 93 文件 / 1287 用例全过（本轮机器负载高，103s，仍全绿）、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。用例数与断言未动；`stores/ai.test.ts` 的 88 条里覆盖落库、删会话与「db down 退 localStorage」这些路径，切片化后照样命中（它 mock 的仍是 `@/lib/ai` 下游，不依赖这些助手写在哪个文件里）。
+- 落差：`index.ts` 仍 1,245 行 >800。剩 `return {`（现 683 行）之前 15 个助手——配置派生 4（`maxChars` / `agentRounds` / `halvedContextBudget` / `ctxScope`）、请求构造 3（`systemMessage` / `requestMessages` / `buildReferenceContext`）、定位与落地 4（`editOnPage` / `previewAction` / `landAction` / `planAction`）、流式 4（`settleIncomplete` / `finalizeAssistant` / `streamRound` / `runStream`），外加 `return {` 之后约 560 行的动作实现面。下一批切配置派生 + 请求构造这一簇（7 个约 130 行，它们只读 `get()`，注入面最小），流式那四个共同读写 `streamingAssistantId` / `turnSeq` / `cancelledTurns` 三个轮次变量，要连着一个 `turnRegistry` 一起定形，留到最后单独一批。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）

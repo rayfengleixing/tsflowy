@@ -8,6 +8,7 @@ import {
 import { type AiEditRevert } from "@/lib/ai-editor";
 import { type AiEditOp, type AiWriteCall } from "@/lib/ai-edit";
 import { type UndoPlan } from "@/lib/ai-tools";
+import type { StoreApi } from "zustand";
 // AI 面板 store 的类型面：动作记录、消息、会话与整份 AiState 形状。
 
 /**
@@ -182,3 +183,8 @@ export interface AiState {
   refinePrompt: (text: string) => Promise<void>;
   clearPromptIdeas: () => void;
 }
+
+/** 切片工厂的 set / get 形制，与 workspace-slices 同法（值来自 store 工厂，注入不改变语义） */
+export type AiSet = StoreApi<AiState>["setState"];
+export type AiGet = StoreApi<AiState>["getState"];
+export type AiSliceCreator<T> = (set: AiSet, get: AiGet) => T;
