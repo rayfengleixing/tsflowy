@@ -138,6 +138,13 @@
 - 三个 import 按各半的实际用量分写而不是照抄：`JSONContent` 两侧都要，`t` 只有导出侧用（`databaseView.defaultName`），`task-meta` 那 5 项里导入侧用 `EMPTY_TASK_META` / `stripTaskMeta` / `TaskMeta`、导出侧用 `encodeTaskMeta` / `taskMetaOf`。
 - 验证：`parse.ts` 与 `render.ts` 的函数体逐行对 HEAD 的 `markdown.ts` 做归一比对，除上述 4 处 `export` 前缀外完全相等；行数对账 1,143 = 1,138 行原代码 + 新增的 5 行 `index.ts`。本批只动 TS，全链：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest` 91 文件 / 1287 用例全过（与基线一致）、`npm run build` exit 0、`npm run format:check` 干净；`cargo test` 复跑仍是 343 通过 / 1 忽略。
 
+### 工程：`src/lib/markdown.test.ts` 跟着源码两侧拆开（1,345 行 → 单文件最大 509 行）
+
+- 上一批把 `markdown.ts` 拆成 `parse.ts` / `render.ts` 之后，配套用例还是一份 1,345 行的文件，这次按同一道缝搬过去：`markdown/parse.test.ts`（364 行）是 `parseInline` / `markdownToJson` / `looksLikeMarkdown`+`textToBlocks` 三个 describe；`markdown/render.test.ts`（509 行）是 `jsonToMarkdown` 里「渲染成什么」的那一半（标题级别、行内标记、列表、代码、图片、表格、数学、toggle、分栏比例…）；`markdown/roundtrip.test.ts`（478 行）是「导出再读回」的那一半（原 873 行起的 round-trip 序列，加上 `hardBreak 往返`、`databaseView 附表快照`、`toggle 与单元格的细节保真` 三个整段 describe）。
+- 用例文本一字未动：90 个 `it(` 拆前拆后计数一致，非空行做多重集比对，差集只有为了让 `roundtrip.test.ts` 独立成立而复开的一对 `describe("jsonToMarkdown", () => { … });`（用的还是原名，所以报告里的用例路径不变）。三个文件各留自己实际用到的 import，`JSONContent` 只有往返那份需要。
+- 测试文件跟着被测源码住进 `src/lib/markdown/`，与 `stores/workspace-slices/tree.test.ts` 的同目录放法一致；vitest 收集数因此从 91 文件变 93 文件，用例总数仍是 1,287。
+- 验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest` 93 文件 / 1287 用例全过、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略（本批未动 Rust）。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
