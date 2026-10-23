@@ -15,17 +15,13 @@ import {
   aiUsageSummary,
   docSearchSnippets,
   type AiSessionRow,
-  type AiUsageSummary,
   type AiChatEvent,
   type AiChatMessage,
   type AiConfig,
-  type AiImageAttachment,
-  type AiQuickActionDef,
   type AiToolCallRaw,
   type AiToolCallRef,
-  type AiUsage,
 } from "@/lib/ai";
-import { getAiEditor, getAiEditorForView, type AiEditRevert } from "@/lib/ai-editor";
+import { getAiEditor, getAiEditorForView } from "@/lib/ai-editor";
 import {
   buildEditSystemPrompt,
   buildNoContextSystemPrompt,
@@ -35,24 +31,12 @@ import {
   hideEditBlock,
   retrievalResultMessage,
   RETRIEVAL_BLOCKED_BY_SCOPE_NOTE,
-  RETRIEVAL_TOOLS,
-  validateCall,
-  type AiCall,
   type AiEditAnchor,
   type AiEditOp,
   type AiWriteCall,
   type RetrievalCall,
-  type RetrievalKind,
 } from "@/lib/ai-edit";
-import {
-  aiToolSpecs,
-  resolvePage,
-  runRetrievalCall,
-  runUndoPlan,
-  runWriteAction,
-  sanitizeUndoPlan,
-  type UndoPlan,
-} from "@/lib/ai-tools";
+import { aiToolSpecs, resolvePage, runRetrievalCall, runUndoPlan, runWriteAction } from "@/lib/ai-tools";
 import { applyEditToDocJson, asDoc, type LocateFailure } from "@/lib/ai-locate";
 import { parseMentions } from "@/lib/ai-mention";
 import { estimateTokens, tailTokens } from "@/lib/ai-tokens";
@@ -64,248 +48,42 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import type { JSONContent } from "@tiptap/core";
 import { parseViewAliases, type ViewNode } from "@/types/models";
 import { t, type MessageKey } from "@/lib/i18n";
+import { AiActionRecord, AiMessage, AiState, SessionUsage, StoredSession } from "./types";
+import {
+  addUsage,
+  collectCalls,
+  contentOf,
+  invalidActionRecord,
+  isRetrievalCall,
+  isWriteCall,
+  summaryOf,
+} from "./calls";
+import { QUICK_PROMPT_KEY, REFINE_SYSTEM_PROMPT, pageTitleFrom, parsePromptIdeas } from "./prompts";
+import {
+  DEFAULT_AGENT_ROUNDS,
+  DEFAULT_HISTORY_MAX_MESSAGES,
+  DEFAULT_HISTORY_TOKEN_BUDGET,
+  DEFAULT_MAX_CHARS,
+  MAX_SESSIONS,
+  MAX_WIDTH,
+  MIN_WIDTH,
+  PANEL_WIDTH_KEY,
+  SESSIONS_KEY,
+  loadWidth,
+} from "./limits";
+import { LocalSessions, fromSessionRow, loadSessionsFromStorage, sessionTitle, toSessionRow } from "./session-codec";
 
 // AI 助手面板状态：开关/宽度（localStorage 偏好）、消息列表、流式状态、
 // 配置缓存与 send / stop / clear / retry / quickAction / undoAction 动作。
 
-/**
- * 动作的落地状态：
- * pending 待用户确认 / applied 已写入 / rejected 已忽略 /
- * unavailable 没有可编辑文档、定位失败或执行报错 / malformed 指令块解析失败
- */
-export type AiEditState = "pending" | "applied" | "rejected" | "unavailable" | "malformed";
-
-/** 一条回复附带的动作（改文档 / 建页 / 改标题 / 加表行）及其落地情况 */
-export interface AiActionRecord {
-  tool: AiWriteCall["tool"] | "invalid";
-  /** 动作本体；invalid 卡片为 null（格式有误，没有可执行的东西） */
-  call: AiWriteCall | null;
-  /** apply_edit 的作用范围；其余动作与解析失败时为 null */
-  op: AiEditOp | null;
-  summary: string;
-  /** 建议写入的 Markdown 内容（建页时为页面正文） */
-  content: string;
-  /** 将被替换的原文（插入/新增类为空），用于落地前的 diff 预览 */
-  before: string;
-  state: AiEditState;
-  undone?: boolean;
-  /** 动作落点页名（跨页面编辑时界面要说明改了哪一页） */
-  pageName?: string;
-  /** 执行结果说明或失败原因 */
-  detail?: string;
-  /** 撤销句柄（含改前快照），仅当前编辑器实例内有效，不参与持久化 */
-  revert?: AiEditRevert;
-  /**
-   * 页面/表数据写动作的逆操作计划：纯数据，随会话 JSON 落库，
-   * 所以重启后这一张卡片仍然可以撤销（与 revert 是两套机制）。
-   */
-  undo?: UndoPlan;
-}
-
-export interface AiMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  /** 本条回复下发的动作及其落地结果（用于展示、确认与撤销） */
-  actions?: AiActionRecord[];
-  /** 用户消息附带的图片（assets/ 相对路径，发送时才内联成 base64） */
-  images?: AiImageAttachment[];
-  /** 回答评分：点赞 / 点踩，未评过为 undefined */
-  rating?: "up" | "down";
-  /** 回答被中断的标记：error=请求失败留下的半截，stopped=用户点停止；重试据此丢弃残响重发 */
-  incomplete?: "error" | "stopped";
-}
-
-/** 指令块解析失败的占位卡片：没有可执行的动作，也就没有确认与撤销 */
-function invalidActionRecord(): AiActionRecord {
-  return { tool: "invalid", call: null, op: null, summary: "", content: "", before: "", state: "malformed" };
-}
-
-/** 一次提问可能跑多轮（每次检索往返都是一个请求），用量合并成本轮合计 */
-function addUsage(turn: AiUsage | null, u: AiUsage): AiUsage {
-  return {
-    prompt_tokens: (turn?.prompt_tokens ?? 0) + (u.prompt_tokens ?? 0),
-    completion_tokens: (turn?.completion_tokens ?? 0) + (u.completion_tokens ?? 0),
-    total_tokens: (turn?.total_tokens ?? 0) + (u.total_tokens ?? 0),
-  };
-}
-
-/** 快捷动作：前四个基于选中文本，continue 基于整页上下文（不需要选中） */
-export type AiQuickAction = "summarize" | "translate" | "rewrite" | "explain" | "continue";
-
-function isRetrievalCall(call: AiCall): call is RetrievalCall {
-  return RETRIEVAL_TOOLS.includes(call.tool as RetrievalKind);
-}
-
-function isWriteCall(call: AiCall): call is AiWriteCall {
-  return !isRetrievalCall(call);
-}
-
-/** 动作的正文内容（diff 预览右侧展示；建页用正文，其余写动作没有整段文本） */
-function contentOf(call: AiWriteCall): string {
-  if (call.tool === "apply_edit") return call.args.content;
-  if (call.tool === "create_page") return call.args.content ?? "";
-  return "";
-}
-
-/** 卡片标题：apply_edit 用模型给的 summary，其余动作按参数自动生成一句说明 */
-function summaryOf(call: AiWriteCall): string {
-  switch (call.tool) {
-    case "apply_edit":
-      return call.args.summary ?? "";
-    case "create_page":
-      return t("ai.actionSummaryCreate", { title: call.args.title });
-    case "set_page_title":
-      return t("ai.actionSummaryRename", { page: call.args.page, title: call.args.title });
-    case "add_database_row":
-      return t("ai.actionSummaryAddRow", { database: call.args.database });
-    case "update_database_row":
-      return t("ai.actionSummaryUpdateRow", { database: call.args.database, row: call.args.row });
-    case "delete_database_row":
-      return t("ai.actionSummaryDeleteRow", { database: call.args.database, row: call.args.row });
-  }
-}
-
-/** 本轮模型下发的动作：函数调用与文本协议块合并去重（两条路收敛为同一种形态） */
-function collectCalls(
-  refs: AiToolCallRaw[],
-  text: string,
-): { items: { call: AiCall; id: string }[]; malformed: boolean } {
-  const items: { call: AiCall; id: string }[] = [];
-  const seen = new Set<string>();
-  let malformed = false;
-  const push = (call: AiCall, id: string) => {
-    const key = JSON.stringify(call);
-    if (seen.has(key)) return;
-    seen.add(key);
-    items.push({ call, id });
-  };
-  for (const r of refs) {
-    let value: unknown;
-    try {
-      value = JSON.parse(r.arguments || "{}");
-    } catch {
-      malformed = true;
-      continue;
-    }
-    const obj = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
-    // 函数调用的工具名在 name 字段里，参数体是裸 args；个别模型会把 {tool,args} 整个塞进 arguments，
-    // 那种形态直接交给 validateCall（它与文本协议共用同一种 JSON）
-    const call = validateCall("tool" in obj || "op" in obj ? obj : { tool: r.name, args: obj });
-    if (!call) malformed = true;
-    else push(call, r.id);
-  }
-  const extracted = extractCalls(text);
-  for (const c of extracted.calls) push(c, "");
-  return { items, malformed: malformed || extracted.malformed };
-}
-
-const PANEL_WIDTH_KEY = "tsflowy-ai-panel-width";
-const DEFAULT_WIDTH = 360;
-const MIN_WIDTH = 280;
-const MAX_WIDTH = 640;
-const DEFAULT_MAX_CHARS = 8000;
-/**
- * 一次提问内允许的最大模型往返次数：每轮模型可以要求若干次只读检索，
- * 前端执行后把结果喂回模型继续。上限用来兜住「模型反复要求检索却收敛不了」的情况。
- * 实际值取设置里的 agent_rounds（弱模型常在第 4 轮前收敛不了，写死只能少查或一直转圈），这只是兜底。
- */
-export const DEFAULT_AGENT_ROUNDS = 4;
-
-export const AI_WIDTH_LIMITS = { min: MIN_WIDTH, max: MAX_WIDTH };
-
-const SESSIONS_KEY = "tsflowy-ai-sessions-v1";
-/** localStorage 兜底容量；同时作为历史面板的默认显示窗口 / 「加载更多」步长（库中的会话不计数截断、不删除） */
-const MAX_SESSIONS = 20;
-const MAX_SESSION_MESSAGES = 200;
-const MAX_MESSAGE_CHARS = 100_000;
-// 长对话防超限：历史消息按估算 token 从最新往前收进预算，放不下的早期轮次直接丢弃
-// （system prompt 与 @ 引用上下文不占预算，不受影响）。
-// 按 token 而非字符计：中文 1 字 ≈ 1 token、拉丁 4 字符 ≈ 1 token，字符预算对两种文本失真严重。
-// 两项可在设置里配置（config.ctx_token_budget / ctx_max_messages），这里只是兜底默认值。
-export const DEFAULT_HISTORY_TOKEN_BUDGET = 3000;
-export const DEFAULT_HISTORY_MAX_MESSAGES = 40;
-
-/**
- * 历史面板的显示窗口：归档会话全部保留（用户明确要留档），
- * 普通会话按列表原序（updated_at 降序）取前 limit 条；其余靠「加载更多」放量。
- */
-export function visibleSessionWindow(sessions: StoredSession[], limit: number): StoredSession[] {
-  const out: StoredSession[] = [];
-  let normal = 0;
-  for (const s of sessions) {
-    if (s.archived) out.push(s);
-    else if (normal++ < limit) out.push(s);
-  }
-  return out;
-}
-
-/** 会话累计 token 用量（服务商不回 usage 时整份为 0） */
-export interface SessionUsage {
-  prompt: number;
-  completion: number;
-}
-
-/** 归档的历史会话（不含进行中的当前对话） */
-export interface StoredSession {
-  id: string;
-  title: string;
-  updatedAt: number;
-  messages: AiMessage[];
-  /** 会话发起时所在的页面：历史会话的上下文是那一页，切换页面后不应混淆 */
-  pageId?: string | null;
-  pageTitle?: string | null;
-  /** 会话累计 token 用量：切回历史会话时据此恢复底部的用量条 */
-  usage?: SessionUsage;
-  /** 归档位：归档后不进日常历史列表，但仍可检索、可还原，且不受会话条数上限裁剪 */
-  archived?: boolean;
-}
-
-/** 只认非负有限数：库行/本地 JSON 里的脏值一律按 0 处理，别让 NaN 流进费用估算 */
-function sanitizeUsage(raw: unknown): SessionUsage | undefined {
-  if (typeof raw !== "object" || raw === null) return undefined;
-  const rec = raw as Record<string, unknown>;
-  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
-  const prompt = num(rec.prompt);
-  const completion = num(rec.completion);
-  return prompt > 0 || completion > 0 ? { prompt, completion } : undefined;
-}
-
-function toSessionRow(s: StoredSession): AiSessionRow {
-  return {
-    id: s.id,
-    title: s.title,
-    page_id: s.pageId ?? null,
-    page_title: s.pageTitle ?? null,
-    updated_at: String(s.updatedAt),
-    messages: JSON.stringify(s.messages),
-    prompt_tokens: s.usage?.prompt ?? 0,
-    completion_tokens: s.usage?.completion ?? 0,
-    archived: s.archived ?? false,
-  };
-}
-
-function fromSessionRow(row: AiSessionRow): StoredSession | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(row.messages);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed)) return null;
-  const messages = parsed.map((x) => sanitizeMessage(x, row.page_id ?? null)).filter((m): m is AiMessage => m !== null);
-  if (messages.length === 0) return null;
-  return {
-    id: row.id,
-    title: row.title,
-    updatedAt: Number(row.updated_at) || Date.now(),
-    messages,
-    pageId: row.page_id,
-    pageTitle: row.page_title,
-    usage: sanitizeUsage({ prompt: row.prompt_tokens, completion: row.completion_tokens }),
-    archived: row.archived === true,
-  };
-}
+export type { AiActionRecord, AiEditState, AiMessage, AiQuickAction, SessionUsage, StoredSession } from "./types";
+export {
+  AI_WIDTH_LIMITS,
+  DEFAULT_AGENT_ROUNDS,
+  DEFAULT_HISTORY_MAX_MESSAGES,
+  DEFAULT_HISTORY_TOKEN_BUDGET,
+} from "./limits";
+export { visibleSessionWindow } from "./session-codec";
 
 /** 当前打开的页面（用于给会话标注上下文来源） */
 function currentPageRef(): { id: string; name: string } | null {
@@ -313,289 +91,6 @@ function currentPageRef(): { id: string; name: string } | null {
   if (!s.currentViewId) return null;
   const node = flattenTree(s.tree).find((v) => v.id === s.currentViewId);
   return { id: s.currentViewId, name: node?.name ?? "" };
-}
-
-/** 会话标题：第一条用户消息前 30 字 */
-function sessionTitle(messages: AiMessage[]): string {
-  const first = messages.find((m) => m.role === "user");
-  const text = (first?.content ?? "").replace(/\s+/g, " ").trim();
-  if (!text) return t("ai.fallbackTitle");
-  return text.length > 30 ? `${text.slice(0, 30)}…` : text;
-}
-
-/** 恢复出来的动作状态必须是已知值；撤销句柄属于当时的编辑器实例，一律不恢复 */
-const RESTORABLE_STATES: readonly AiEditState[] = ["pending", "applied", "rejected", "unavailable", "malformed"];
-
-/**
- * 恢复一张动作卡片。apply_edit 的撤销依赖 revert 句柄，这里刻意不恢复它：
- * 重启后编辑器 undo 栈已空，撤销会错伤无关内容。
- * 页面/表数据动作的 undo 是纯数据逆操作，照原样恢复 —— 这正是它能跨重启撤销的原因。
- */
-function sanitizeAction(raw: unknown, pageId: string | null): AiActionRecord | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const a = raw as Record<string, unknown>;
-  if (!RESTORABLE_STATES.includes(a.state as AiEditState)) return null;
-  const text = (v: unknown) => (typeof v === "string" ? v : "");
-  if (a.tool === "invalid") return invalidActionRecord();
-  const call = validateCall(a.call);
-  // 只读检索不产生卡片，历史里出现这种脏数据直接丢掉
-  if (!call || isRetrievalCall(call)) return null;
-  const undo = sanitizeUndoPlan(a.undo);
-  const record: AiActionRecord = {
-    tool: call.tool,
-    call,
-    op: call.tool === "apply_edit" ? call.args.op : null,
-    summary: text(a.summary),
-    content: contentOf(call),
-    before: text(a.before),
-    state: a.state as AiEditState,
-    ...(a.undone === true ? { undone: true } : {}),
-    ...(text(a.pageName) ? { pageName: text(a.pageName) } : {}),
-    ...(text(a.detail) ? { detail: text(a.detail) } : {}),
-    ...(undo ? { undo } : {}),
-  };
-  // 恢复出的待确认改文档没写落点时，钉回会话发起的那一页：
-  // 否则用户切到别的页面点「应用」，改动会落到当前打开的文档上
-  if (record.state === "pending" && call.tool === "apply_edit" && !call.args.view_id && pageId) {
-    record.call = { ...call, args: { ...call.args, view_id: pageId } };
-  }
-  return record;
-}
-
-/** 图片附件恢复：只认 assets/ 之内的相对路径，与会话里存的形态一致（base64 从不入库） */
-function sanitizeImages(raw: unknown): AiImageAttachment[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const out = raw.flatMap((x) => {
-    if (typeof x !== "object" || x === null) return [];
-    const img = x as Record<string, unknown>;
-    if (typeof img.path !== "string" || !img.path.startsWith("assets/")) return [];
-    return [{ name: typeof img.name === "string" ? img.name : "图片", path: img.path }];
-  });
-  return out.length > 0 ? out : undefined;
-}
-
-/** 恢复时逐条校验消息；动作卡片一并恢复，切回历史会话仍能看到并处理待确认的改动 */
-function sanitizeMessage(raw: unknown, pageId: string | null = null): AiMessage | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const m = raw as Record<string, unknown>;
-  if ((m.role !== "user" && m.role !== "assistant") || typeof m.content !== "string") return null;
-  const actions = Array.isArray(m.actions)
-    ? m.actions.map((x) => sanitizeAction(x, pageId)).filter((x): x is AiActionRecord => x !== null)
-    : [];
-  const images = sanitizeImages(m.images);
-  // 评分不白名单化就会被恢复流程丢掉，重开面板就看不到自己标过的好/坏
-  const rating = m.rating === "up" || m.rating === "down" ? m.rating : undefined;
-  const incomplete = m.incomplete === "error" || m.incomplete === "stopped" ? m.incomplete : undefined;
-  return {
-    id: typeof m.id === "string" && m.id ? m.id : newId(),
-    role: m.role,
-    content: m.content.slice(0, MAX_MESSAGE_CHARS),
-    ...(actions.length > 0 ? { actions } : {}),
-    ...(images ? { images } : {}),
-    ...(rating ? { rating } : {}),
-    ...(incomplete ? { incomplete } : {}),
-  };
-}
-
-function restoreSession(raw: unknown): StoredSession | null {
-  if (typeof raw !== "object" || raw === null || !Array.isArray((raw as Record<string, unknown>).messages)) return null;
-  const rec = raw as Record<string, unknown>;
-  const pageId = typeof rec.pageId === "string" ? rec.pageId : null;
-  const messages = (rec.messages as unknown[])
-    .slice(-MAX_SESSION_MESSAGES)
-    .map((x) => sanitizeMessage(x, pageId))
-    .filter((m): m is AiMessage => m !== null);
-  if (messages.length === 0) return null;
-  return {
-    id: typeof rec.id === "string" && rec.id ? rec.id : newId(),
-    title: typeof rec.title === "string" && rec.title ? rec.title : sessionTitle(messages),
-    updatedAt: typeof rec.updatedAt === "number" ? rec.updatedAt : Date.now(),
-    messages,
-    pageId: typeof rec.pageId === "string" ? rec.pageId : null,
-    pageTitle: typeof rec.pageTitle === "string" ? rec.pageTitle : null,
-    usage: sanitizeUsage(rec.usage),
-    archived: rec.archived === true,
-  };
-}
-
-/** 从 localStorage 恢复会话（损坏/缺失时返回空态）——库不可用时的兜底来源 */
-function loadSessionsFromStorage(): {
-  activeId: string;
-  sessions: StoredSession[];
-  active: StoredSession | null;
-} {
-  const empty = { activeId: newId(), sessions: [] as StoredSession[], active: null as StoredSession | null };
-  try {
-    const raw = localStorage.getItem(SESSIONS_KEY);
-    if (!raw) return empty;
-    const data = JSON.parse(raw) as Record<string, unknown>;
-    const sessions = Array.isArray(data.sessions)
-      ? (data.sessions as unknown[])
-          .slice(0, MAX_SESSIONS)
-          .map(restoreSession)
-          .filter((s): s is StoredSession => s !== null)
-      : [];
-    const active = restoreSession(data.active);
-    return { activeId: active?.id ?? empty.activeId, sessions, active };
-  } catch {
-    return empty;
-  }
-}
-
-/** localStorage 里那份会话快照的形状 */
-type LocalSessions = ReturnType<typeof loadSessionsFromStorage>;
-
-function loadWidth(): number {
-  try {
-    const v = Number(localStorage.getItem(PANEL_WIDTH_KEY));
-    return Number.isFinite(v) && v >= MIN_WIDTH && v <= MAX_WIDTH ? v : DEFAULT_WIDTH;
-  } catch {
-    return DEFAULT_WIDTH;
-  }
-}
-
-const QUICK_PROMPT_KEY: Record<AiQuickAction, MessageKey> = {
-  summarize: "ai.prompt.summarize",
-  translate: "ai.prompt.translate",
-  rewrite: "ai.prompt.rewrite",
-  explain: "ai.prompt.explain",
-  continue: "ai.prompt.continue",
-};
-
-/** 「优化提问」的系统提示：只改写提问本身，不进对话、不下发编辑协议 */
-const REFINE_SYSTEM_PROMPT =
-  "你是提问改写助手。用户会给你一句要发给笔记应用 AI 助手的提问，请把它改写成 3 个更清晰、更具体的版本。" +
-  "每行一条，不要编号、不要引号、不要解释，保持原意，不要回答这个问题本身。";
-
-/** 解析模型给出的改写候选：去掉编号与项目符号，最多 3 条互不重复 */
-function parsePromptIdeas(text: string): string[] {
-  const out: string[] = [];
-  for (const rawLine of text.split("\n")) {
-    const line = rawLine
-      .replace(/^\s*(?:[-*·•]|\d+[.、)])\s+/, "")
-      .trim()
-      .replace(/^["「『'`]+|["」』'`]+$/g, "")
-      .trim();
-    if (!line || line.length > 300 || out.includes(line)) continue;
-    out.push(line);
-    if (out.length === 3) break;
-  }
-  return out;
-}
-
-/** 从回答正文取页面标题：第一条非空行去掉 Markdown 记号，最多 40 字 */
-function pageTitleFrom(content: string): string {
-  const line =
-    content
-      .split("\n")
-      .map((l) => l.replace(/^[#>\-*+\s]+/, "").trim())
-      .find((l) => l.length > 0) ?? "";
-  if (!line) return t("ai.fallbackTitle");
-  return line.length > 40 ? `${line.slice(0, 40)}…` : line;
-}
-
-interface AiState {
-  open: boolean;
-  width: number;
-  messages: AiMessage[];
-  /** 归档的历史会话（不含进行中的当前对话） */
-  sessions: StoredSession[];
-  activeSessionId: string;
-  /** 推理型模型的思考过程（仅展示，不参与回填/复制） */
-  reasoning: string;
-  streaming: boolean;
-  /** agent 循环里正在本机执行只读检索（模型已回答完上一轮，下一轮请求还没发出） */
-  retrieving: boolean;
-  error: string | null;
-  /** 上一条错误的归类码（auth / rate_limit / quota / timeout / network / server / context_length / cancelled） */
-  errorCode: string | null;
-  /** 当前会话发起时所在的页面（历史会话据此标注上下文来源） */
-  sessionPageId: string | null;
-  sessionPageTitle: string | null;
-  /** 历史会话是否已从库里加载过（避免重复拉取） */
-  sessionsLoaded: boolean;
-  /** 最近一轮的 token 用量（服务商不返回时保持 null） */
-  usage: AiUsage | null;
-  /** 本会话累计用量，只在服务商返回用量时累加 */
-  usageTotal: { prompt: number; completion: number; total: number };
-  /** 库中全部会话的 token 累计（库不可用时为 null，界面隐藏用量条） */
-  usageSummary: AiUsageSummary | null;
-  config: AiConfig | null;
-  configLoaded: boolean;
-  /**
-   * 从编辑器（浮动工具栏 / 斜杠菜单）带入的选中内容。
-   * 只随下一轮提问生效，发完即清空——作为 system 上下文下发，不占用用户消息正文。
-   */
-  pendingContext: string | null;
-  /** 输入框聚焦请求计数：从编辑器唤起面板时递增，面板据此把光标交给输入框 */
-  focusTick: number;
-  /** 正在「改后重发」的那条用户消息 id；null 表示下一次发送是普通提问 */
-  editingId: string | null;
-  /** 「优化提问」给出的改写候选（点一条填入输入框） */
-  promptIdeas: string[];
-  /** 正在向模型请求提问改写 */
-  refining: boolean;
-
-  toggle: () => void;
-  openPanel: () => void;
-  closePanel: () => void;
-  setWidth: (w: number) => void;
-  loadConfig: () => Promise<void>;
-  /** 从库中恢复历史会话（库不可用时回退 localStorage），只在首次打开面板时执行一次 */
-  loadSessions: () => Promise<void>;
-  /** 历史面板当前展示的普通会话条数窗口（归档不受窗口限制） */
-  sessionsShown: number;
-  /** 「加载更多」：放大显示窗口，一步 MAX_SESSIONS 条 */
-  loadMoreSessions: () => void;
-  setConfig: (c: AiConfig) => void;
-  /** 设置/清除下一条提问要附带的选中内容 */
-  setPendingContext: (text: string | null) => void;
-  send: (text: string, images?: AiImageAttachment[]) => Promise<void>;
-  stop: () => void;
-  clear: () => void;
-  retry: () => Promise<void>;
-  quickAction: (kind: AiQuickAction) => Promise<void>;
-  /** 归档当前对话并开始新会话 */
-  newChat: () => void;
-  /** 切换到历史会话（当前对话有内容时先归档） */
-  switchSession: (id: string) => void;
-  deleteSession: (id: string) => void;
-  /** 重命名历史会话（当前对话的标题由首条提问决定，不参与） */
-  renameSession: (id: string, title: string) => void;
-  /** 归档 / 取消归档历史会话 */
-  setSessionArchived: (id: string, archived: boolean) => void;
-  /** 给一条回答打分，再点同向取消 */
-  rateMessage: (messageId: string, rating: "up" | "down") => void;
-  /** 撤销某条回复里某个动作造成的改动（表/页面按逆操作计划，文档按编辑器快照） */
-  undoAction: (messageId: string, index: number) => Promise<void>;
-  /** 执行待确认的动作（设置开启「改前确认」后由用户触发） */
-  applyAction: (messageId: string, index: number) => Promise<void>;
-  /** 忽略待确认的动作 */
-  rejectAction: (messageId: string, index: number) => void;
-  /** 切换模型档位（会持久化到配置） */
-  switchProfile: (id: string) => Promise<void>;
-  /** 切换上下文范围（full / page_only / off，会持久化到配置） */
-  setCtxScope: (scope: string) => Promise<void>;
-  /** 执行用户在设置里自定义的快捷指令 */
-  runQuickAction: (action: AiQuickActionDef) => Promise<void>;
-  /** 从上一条被中断的回答接着往下生成 */
-  continueGenerate: () => Promise<void>;
-  /** 从某条回答重新生成：丢掉它与它之后的消息，用同一个问题再问一次 */
-  regenerate: (messageId: string) => Promise<void>;
-  /** 改后重发：替换某条提问、丢掉它之后的消息并重新生成 */
-  resend: (messageId: string, text: string, images?: AiImageAttachment[]) => Promise<void>;
-  /** 把某条提问标记为待修改（面板据此把它填回输入框） */
-  startEdit: (messageId: string) => void;
-  cancelEdit: () => void;
-  /** 从某条消息处分支：当前对话原样归档，之前的内容成为一个新会话 */
-  branchFrom: (messageId: string) => void;
-  /** 把一条回答另存为文档页面 */
-  saveMessageAsPage: (messageId: string) => Promise<void>;
-  /** 把一条回答导出成 Markdown 文件 */
-  exportMessage: (messageId: string) => Promise<void>;
-  /** 让模型把一句提问改写成几条候选 */
-  refinePrompt: (text: string) => Promise<void>;
-  clearPromptIdeas: () => void;
 }
 
 export const useAiStore = create<AiState>()((set, get) => {

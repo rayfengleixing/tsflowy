@@ -152,6 +152,14 @@
 - 改法只动测试配置：`vitest.config.ts` 的 `test.testTimeout` 设 15000，并注明为什么。给的是争用下的余量，不是提速——用例本身该跑多久还是多久；应用代码、断言与被测组件一字未动。也没顺手改成串行：`--no-file-parallelism` 只当定位用的对照口径（本机串行 113s、无争用时并行 41s、争用时并行能拖到 130~160s），把整仓文件并行关掉换来的东西比问题本身更贵。
 - 验证：全量并行连跑两次皆 93 文件 / 1287 用例全过（各约 41s）；`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。
 
+### 工程：`stores/ai.ts` 先切出「无状态」的那一半（1,943 行 → 五个叶子模块 + 1,438 行）
+
+- 这一批只搬不动 store 本体：把 `src/stores/ai.ts` 里不碰 `set`/`get`、不碰那三个轮次闭包变量（`streamingAssistantId`/`turnSeq`/`cancelledTurns`）的部分切进 `src/stores/ai/`——`types.ts`（184 行，动作记录 / 消息 / 会话 / `AiState` 形状）、`calls.ts`（93 行，指令块与用量的小工具）、`prompts.ts`（43 行，快捷动作文案 key 与提示词精修 prompt）、`limits.ts`（35 行，宽度与各类兜底上限、localStorage 键名）、`session-codec.ts`（195 行，会话快照读写、坏数据清洗、会话行 ↔ 本地形状）。先切这一刀是因为它整块能搬：动 store 本体的那批改动要靠注入上下文，两边混在一批里，验证信号会被稀释。
+- `index.ts` 的 `export` 面与原文件逐字对账：仍是原来那 12 个名字（`useAiStore`、`AI_WIDTH_LIMITS`、`DEFAULT_AGENT_ROUNDS`、`DEFAULT_HISTORY_MAX_MESSAGES`、`DEFAULT_HISTORY_TOKEN_BUDGET`、`visibleSessionWindow` 与 5 个类型），一条多一条少都没有（6 个类型 + `useAiStore` + 5 个值/函数），也没有用 `export *`——叶子模块为了互相引用新 widened 出来的符号（`sanitizeUsage`、`toSessionRow`、`loadWidth` 等 33 个）不对 `@/stores/ai` 的消费者可见。`moduleResolution: "bundler"` 下 `@/stores/ai` 会解析到目录 `index.ts`，8 个消费方（`App.tsx`、`AiPanel`、`EditDiffDialog`、`floating-menu`、`slash-menu`、`CommandPalette`、`SettingsAi`、`TabBar`）的 import 一行没改。
+- `currentPageRef()` 故意留在 `index.ts`：它读 `useWorkspaceStore.getState()` 与 `flattenTree`，搬进 `session-codec` 会让「会话编解码」这个模块重新长回依赖 store 的样子；等下面那批做注入时再安置。`stores/ai.test.ts` 也没动：它 mock 的是 `@/lib/ai`、`@/stores/workspace` 这些下游模块，搬动 `stores/ai` 内部的分文件不影响 `vi.mock` 的命中。
+- 验证口径还是老那三条：五个叶子文件与原 `ai.ts` 对应行段逐字相等（只多 `export ` 前缀），172/79/39/33/185 行对得上；`index.ts` 里从 `currentPageRef` 到文件尾的 1,351 行与原 `310–316` + `601–1943` 逐字节相等；导出面 12=12。`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest run` 93 文件 / 1287 用例全过（41.65s）、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。界面没碰，行为口径不变；照例没有在浏览器里冒烟（本应用浏览器打开必白屏）。
+- 落差：`index.ts` 还有 1,438 行，超着 800 行的线。剩下的是 `create<AiState>()((set,get)=>{…})` 的本体——`return {`（原 1381 行）之前那 28 个闭包助手几乎都要 `set`/`get`，拆它们得先给每个切片一个上下文对象，那正是下一批要定的形状。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
