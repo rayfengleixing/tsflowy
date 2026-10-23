@@ -184,6 +184,15 @@
 - 验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest run` 93 文件 / 1287 用例全过、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。上下文预算与截断告知、`@` 引用这些路径在 `stores/ai.test.ts`、`ai-tokens.test.ts`、`ai-mention.test.ts` 里有用例，切片化后照样命中。没碰界面，也没做浏览器冒烟。
 - 落差：`index.ts` 仍 1,068 行 >800。剩 `return {` 之前 8 个助手（定位与落地 4：`editOnPage` / `previewAction` / `landAction` / `planAction`；流式 4：`settleIncomplete` / `finalizeAssistant` / `streamRound` / `runStream`）与 `return {` 之后约 560 行的动作实现面。定位与落地这簇里 `planAction` 读写 `cancelledTurns`，流式那簇四个共同读写 `streamingAssistantId` / `turnSeq` / `cancelledTurns`——三个轮次变量的归属是下一个决定，不再属于「搬」。
 
+### 工程：定位与落地三个构件搬出闭包（`index.ts` 1,068 → 967 行）
+
+- 新增 `src/stores/ai/edit-ops.ts`（101 行）：`editOnPage`（对非当前页做定位编辑，`save=false` 只演练一遍以取改前原文、判断能不能定位到）、`previewAction`（动作落点与可行性预览，`blocked` 非空表示这条动作执行不了）、`landAction`（真正执行：打开中的页面走编辑器事务可撤销，其它页面走 JSON 直写，建页/改标题/写库走各自路径）。
+- 这一簇三件都不读 store 状态、也不碰轮次变量（入参给足，编辑器桥接与当前页由 `ops.ts` 里那两个读取器现取），所以按第二批的口径直接 hoist 成模块级普通函数，不套切片工厂、不注入 `set` / `get`——与三、四批不同形是刻意的：那里注入是因为真读了状态。`editOnPage` 只被同文件的另两件调用，不进导出面（`writeLocal` / `activeSnapshot` / `systemMessage` 同一条口径），导出只有 `previewAction`、`landAction` 两个名字。
+- `planAction` 留在 `index.ts`：它读 `cancelledTurns`（用户按停止后迟到的 done 帧不能替用户写数据）和 `get().config?.confirm_edit`，注不注入都改变不了「它持有轮次判定」这件事，硬搬等于替下一批的 `turnRegistry` 做决定。
+- 实现是逐字搬运，但有 2 处 prettier 因去缩进/加 `export` 而重排的空白：`editOnPage` 里 `raw ? asDoc(…) : { type: "doc", content: [] }` 这个三元去缩进后行宽够了被并成一行；`previewAction` 加了 `export ` 后单行超过 120，参数被换行并补上尾逗号。除这两处与两个 `export ` 前缀外，与 `HEAD` 的 token 流完全一致（去掉空白逐字比对），语义零改动。`index.ts` 净 3 增 104 删，`planAction` 里对 `previewAction` / `landAction` 的两处调用一行没改；搬走后不再被引用的 specifier 由 `noUnusedLocals` 报出并清掉（`applyEditToDocJson` / `asDoc`、`documentApi`、`JSONContent`、`ViewNode` 四行整行删，ai-edit 的 `AiEditAnchor` / `AiEditOp` 与 `resolvePage`、`LOCATE_REASON` / `bridgeFor` / `editorTarget` 五个名字摘掉）。`@/stores/ai` 对外符号清单仍是拆前那 12 个。
+- 验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest run` 93 文件 / 1287 用例全过、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。跨页编辑与落地判定在 `stores/ai.test.ts` 有用例（含「没打开的页面走 JSON 直写」「confirm_edit 开启时停在待确认」），hoist 后照样命中。没碰界面，也没做浏览器冒烟。
+- 落差：`index.ts` 仍 967 行 >800。剩 5 个闭包助手——`settleIncomplete`（用 `set`）、`planAction`、流式三件 `finalizeAssistant` / `streamRound` / `runStream`（共同读写 `streamingAssistantId` / `turnSeq` / `cancelledTurns`）——与 `return {`（第 405 行）之后约 560 行的动作实现面。下一批要么先定 `turnRegistry`（把三个轮次变量收成一个可注入的持有者，这一步是设计决定不是搬运），要么改切动作面里的独立域；不再能在「只搬不改」里自动推出。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
