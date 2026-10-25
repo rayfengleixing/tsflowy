@@ -52,3 +52,8 @@ function positionForChars(block: PMNode, contentStart: number, chars: number): n
   if (out >= 0) return out;
   return contentStart + chars;
 }
+
+/** 光标所在行相对编辑区高度的上限：超过就把内容上滚，保证当前行留在 70% 线以上 */
+export const CARET_LINE_RATIO = 0.7;
+/** 打字机模式：光标行钉在视口中线，新行往下长时正文整体上移，视线不用追到屏幕底部 */
+export const TYPEWRITER_RATIO = 0.5;

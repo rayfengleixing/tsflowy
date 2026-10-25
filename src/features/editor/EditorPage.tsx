@@ -12,8 +12,6 @@ import TaskList from "@tiptap/extension-task-list";
 import { TaskItemWithMeta } from "./extensions/task-meta";
 import { Table } from "@tiptap/extension-table";
 import { TableRow } from "@tiptap/extension-table-row";
-import { TableHeader } from "@tiptap/extension-table-header";
-import { TableCell } from "@tiptap/extension-table-cell";
 import { createNodeFromContent, type JSONContent } from "@tiptap/core";
 import { Slice, Fragment, Node as PMNode } from "@tiptap/pm/model";
 import { TextSelection } from "@tiptap/pm/state";
@@ -28,7 +26,7 @@ import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown"
 import { pickImageExt, uploadImageBytes } from "@/lib/assets";
 import { registerCloseFlush } from "@/lib/close-flush";
 import { readCaret, writeCaret, type CaretMark } from "@/lib/caret-memory";
-import { captureCaretMark, resolveCaretPos } from "./caret-position";
+import { captureCaretMark, resolveCaretPos, CARET_LINE_RATIO, TYPEWRITER_RATIO } from "./caret-position";
 import { registerAiEditor, registerAiEditorForView, type AiEditorBridge } from "@/lib/ai-editor";
 import { onEscapeClose } from "@/lib/escape-close";
 import { t } from "@/lib/i18n";
@@ -70,59 +68,8 @@ import { BlockDrag } from "./extensions/block-drag";
 import { LockedHeading, DocumentStructureLock, STRUCTURE_SYNC_META } from "./extensions/document-structure-lock";
 import { clearFind, FindReplace } from "./extensions/find-replace";
 import { FindReplaceBar } from "./FindReplaceBar";
-
-const AUTOSAVE_MS = 800;
-/** 落库观测阈值：超过其一即 warn + 一次性提示（只观测，不影响保存本身） */
-const SAVE_SLOW_MS = 1200;
-const SAVE_BIG_CHARS = 300_000;
-
-/** 本次会话内已提示过「保存偏慢」的文档：超阈值只提示一次，避免每次自动保存都弹 */
-const slowSaveWarned = new Set<string>();
-
-/** 落库耗时/体积记录：慢或大时 warn（生产环境保留），否则 debug */
-function reportSaveMetrics(viewId: string, chars: number, ms: number) {
-  // 注意：本文件从 tiptap 导入了 Math 扩展，模块作用域内的 Math 已被遮蔽，不能用 Math.round
-  const elapsed = Number(ms.toFixed(0));
-  if (elapsed >= SAVE_SLOW_MS || chars >= SAVE_BIG_CHARS) {
-    logger.warn("doc.save", { viewId, chars, ms: elapsed });
-    if (!slowSaveWarned.has(viewId)) {
-      slowSaveWarned.add(viewId);
-      toast.warning(t("editor.saveSlow", { size: Number((chars / 1000).toFixed(0)), ms: elapsed }));
-    }
-  } else {
-    logger.debug("doc.save", { viewId, chars, ms: elapsed });
-  }
-}
-
-/** 光标所在行相对编辑区高度的上限：超过就把内容上滚，保证当前行留在 70% 线以上 */
-const CARET_LINE_RATIO = 0.7;
-/** 打字机模式：光标行钉在视口中线，新行往下长时正文整体上移，视线不用追到屏幕底部 */
-const TYPEWRITER_RATIO = 0.5;
-
-// 表格单元格默认居中（tiptap v3 表格原生支持 align 属性，导出/粘贴可保留）
-const centeredCellAttrs = () => ({
-  align: {
-    default: "center",
-    parseHTML: (el: HTMLElement) => {
-      const v = (el.style.textAlign || (el.getAttribute("align") ?? "")).trim().toLowerCase();
-      return v === "left" || v === "center" || v === "right" ? v : "center";
-    },
-    renderHTML: (attrs: Record<string, unknown>) => {
-      const align = attrs.align;
-      return typeof align === "string" && align ? { style: `text-align: ${align}` } : {};
-    },
-  },
-});
-const CenteredTableCell = TableCell.extend({
-  addAttributes() {
-    return { ...this.parent?.(), ...centeredCellAttrs() };
-  },
-});
-const CenteredTableHeader = TableHeader.extend({
-  addAttributes() {
-    return { ...this.parent?.(), ...centeredCellAttrs() };
-  },
-});
+import { AUTOSAVE_MS, reportSaveMetrics } from "./doc-save";
+import { CenteredTableCell, CenteredTableHeader } from "./table-centered";
 
 // Markdown 符号输入规则由内置扩展自带：**粗体** / *斜体* / ==高亮== / ~~删除线~~ / `代码`
 // （@tiptap/extension-bold·italic·strike·highlight·code 的 addInputRules 已注册，无需自定义）

@@ -264,6 +264,19 @@
 - 落差：① `exportXlsx`、`onPasteTsv`、`runAppendCsv` 三个仍无运行时证据。前两者与 `exportCsv` 同形（读同一批注入值，分别走 `export_xlsx` 命令与剪贴板事件），追加路径要在 `CsvImportDialog` 里选「追加到当前表」；补三条用例各自要造 fixture，建议另开一批（`queueSaveDialog` 与 `dialogCalls` 已在替身里，成本约 60 行）。② `GridView.tsx` 1,120 行仍 >800：剩下的全是 JSX 与本地 UI state（22 个 `useState`），下一处接缝要么像 `grid-row.tsx` 那样透传几十个字段的 ctx，要么先定 state 归属，属边界决定，不在「只搬不改」里能推出。
 - 全仓 >800 行的前端文件从 5 个降到 4 个：`EditorPage.tsx` 1,216 / `AiPanel.tsx` 968 / `i18n/{en,zh}.ts`（一语言一份，不算债）。
 
+### 工程：`EditorPage.tsx` 的模块级小件外迁（1,216 → 1,163 行）
+
+- 新增 `src/features/editor/doc-save.ts`（28 行）：`AUTOSAVE_MS`（800ms 防抖是产品口径）与 `reportSaveMetrics`（落库耗时/体积过阈值才 warn + 会话内一次性提示），连同只有它用的私有三件 `SAVE_SLOW_MS` / `SAVE_BIG_CHARS` / `slowSaveWarned`。原样来自 `EditorPage.tsx` 74–95。
+- 新增 `src/features/editor/table-centered.ts`（29 行）：`CenteredTableCell` / `CenteredTableHeader` 两个 tiptap 扩展与私有 `centeredCellAttrs`（align 属性走 v3 表格原生支持，导出/粘贴保留对齐）。原样来自 102–125。
+- `src/features/editor/caret-position.ts` 54 → 59 行：`CARET_LINE_RATIO` / `TYPEWRITER_RATIO` 两个常量从 `EditorPage.tsx` 97–100 摘过来，和同文件的 `captureCaretMark` / `resolveCaretPos` 放一起——它们本来就是同一件事（光标行位置）的参数，此前隔着一个 1,200 行文件。该文件已有的 `caret-position.test.ts` 照旧通过。
+- 形制：这三处全是 0 格缩进的顶层声明，走 A 批那一族「整块摘出 + 零 dedent」，对外需要的 6 个符号加 `export ` 前缀，私有件不动可见性；prettier 对四个文件都报 unchanged，搬运部分零重排。
+- 唯一一处改写是一行注释：`reportSaveMetrics` 里原先写「本文件从 tiptap 导入了 Math 扩展，模块作用域内的 Math 已被遮蔽，不能用 `Math.round`」——搬出新文件后不再有 Math 扩展遮蔽，注释留着会误导，改成说明「取整沿用 `toFixed`，这一段原样搬出」。函数体（`ms.toFixed(0)`）一个字没动。
+- 因此 `EditorPage.tsx` 的 diff 只有 import 头：删掉 `TableHeader` / `TableCell` 两行（`noUnusedLocals` 报出）、`./caret-position` 那行加两个 specifier、新增 `./doc-save` 与 `./table-centered` 两行；其余逐字节保留（HEAD 的 127–137 / 138–600 / 601–1216 三段全部原样可寻）。
+- 两处刻意留在原地：`ownsPaneShortcuts`（11 行）与 `extractPlainText`（`EditorPage.tsx` 尾部）各自只有一个使用点、且都贴着组件的 DOM/编辑器实例，为它们各开一个模块比留着更难读。（顺带记一笔：`extractPlainText` 与 `ai-locate.ts:60` 的 `textOfNode` 语义高度重叠，dedupe 属行为变更，本批不碰。）
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 95 文件 / 1,288 用例全过（用例数与 C 批相同，本批没加测试）、`npm run build` exit 0、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① 真机只做到「编辑器带着新模块挂载成功」——原生窗口 CDP 探针读到 `.ProseMirror` 在、可编辑、正文是原文，0 未捕获异常；但当前文档里没有表格，`CenteredTableCell` 的 `text-align: center` 没有屏幕证据，补插表格会写用户的真实库，冒烟不该顺手做。② `reportSaveMetrics` 这条路径没跑到：要它执行得改一次正文触发自动保存，同样是写真实数据。它只有「逐字节相同 + 类型通过 + 构建通过」三件证据，而 `vitest` 里也没有覆盖它的用例。③ `EditorPage.tsx` 1,163 行仍 >800：剩下的都是组件本体（状态、效果与 JSX），下一处接缝（反链面板、AI bridge 那个 183 行 effect）要透传 state 归属，属边界决定，不在「只搬不改」里能推出。
+- 全仓 >800 行的前端文件还是 3 个，只是排序换了：`EditorPage.tsx` 1,163 / `GridView.tsx` 1,120 / `AiPanel.tsx` 968（`i18n/{en,zh}.ts` 一语言一份，不算债）。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
