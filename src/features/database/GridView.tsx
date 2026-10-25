@@ -1,24 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import {
-  Archive,
-  CheckSquare,
-  Copy,
-  Download,
-  FileUp,
-  FileSpreadsheet,
-  GripVertical,
-  Palette,
-  Square,
-  SquarePen,
-  Trash2,
-  X,
-} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Archive, Copy, Download, FileUp, FileSpreadsheet, Palette, SquarePen, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { useDbStore, useDbStoreApi } from "@/stores/database-context";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
-import { MAX_GROUP_DEPTH, cellAt, type SortSpec } from "@/lib/database-query";
+import { MAX_GROUP_DEPTH, cellAt } from "@/lib/database-query";
 import type { AggregateFn } from "@/lib/database-aggregate";
 import { buildCondIndex, type CondFormatRule } from "@/lib/database-cond-format";
 import { CsvImportDialog } from "./CsvImportDialog";
@@ -36,23 +23,22 @@ import {
   type RowDropMode,
 } from "./grid-view-model";
 import { hierarchyLines, parentCandidates } from "@/lib/database-hierarchy";
-import { FieldMenu } from "./FieldMenu";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { AggregateMenu } from "./AggregateMenu";
 import { useRowFocus } from "./rowFocus";
 import { RowDetailPanel } from "./RowDetail";
-import { AddFieldButton, HiddenColumnsMenu, RenameInput, needsFieldSettings } from "./grid-parts";
+import { HiddenColumnsMenu } from "./grid-parts";
 import { renderGridRow, type GridRowContext, type GridRowHierarchy } from "./grid-row";
 import { GridAddRow, GridGroupHeaderRow, GridSpacerRow, GridSubtotalRow } from "./grid-rows";
 import { createGridIoSlice, type GridImportPlan } from "./grid-io-slice";
+import { GridHeaderRow } from "./GridHeaderRow";
 import {
   GROUP_LINE_H_FALLBACK,
   ROW_H_FALLBACK,
   VIRTUAL_MIN_ROWS,
   VIRTUAL_OVERSCAN,
   cellSelector,
-  clampColumnWidth,
   computeVirtualWindow,
   computeWindowFromHeights,
   lineHeightsOf,
@@ -84,13 +70,11 @@ export function GridView({
   const store = useDbStore();
   const storeApi = useDbStoreApi();
   const load = useDbStore((s) => s.load);
-  const { fields, rows, cells, loading, sorts, rowDetail } = store;
+  const { fields, rows, cells, loading, rowDetail } = store;
   const { closeRowDetail } = store;
 
   const [editing, setEditing] = useState<{ rowId: string; fieldId: string } | null>(null);
-  const [renamingField, setRenamingField] = useState<string | null>(null);
   const [optionsEditorFor, setOptionsEditorFor] = useState<DatabaseField | null>(null);
-  const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
   const bar = useQueryBar();
   // 待确认删除的行（删行=进回收站，确认后仍可在「回收站」里恢复）
   const [deleteRowTarget, setDeleteRowTarget] = useState<DatabaseRow | null>(null);
@@ -100,7 +84,6 @@ export function GridView({
   const [deleteSelectedOpen, setDeleteSelectedOpen] = useState(false);
   // 批量改值弹窗：勾选行 + 一个字段一次改完
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
-  const [draggingField, setDraggingField] = useState<string | null>(null);
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
   const [groupFieldIds, setGroupFieldIds] = useState<string[]>(() => readViewConfig(view).groupFieldIds ?? []);
   // 键盘光标（↑↓←→/Tab 移动、Enter 编辑、Delete 清空、Esc 退出）
@@ -130,30 +113,8 @@ export function GridView({
     setCollapsedRows(new Set());
   }, [view.id]);
 
-  // 列宽拖拽：拖拽期间直接改 <col> 宽度（纯 DOM，零重渲/零 IPC），mouseup 才落库一次
+  // <table> 的 ref：表头里的列宽拖拽按它找 <col>
   const tableRef = useRef<HTMLTableElement | null>(null);
-  const startColumnResize = (e: ReactMouseEvent, fieldId: string, startWidth: number) => {
-    e.preventDefault();
-    const col = tableRef.current?.querySelector<HTMLTableColElement>(`col[data-field-id="${fieldId}"]`);
-    if (!col) return;
-    const startX = e.clientX;
-    const onMove = (ev: MouseEvent) => {
-      col.style.width = clampColumnWidth(startWidth + ev.clientX - startX) + "px";
-    };
-    const onUp = (ev: MouseEvent) => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      const width = clampColumnWidth(startWidth + ev.clientX - startX);
-      void store.setFieldWidth(fieldId, width).catch((err: unknown) => {
-        col.style.width = ""; // 落库失败：去掉本地预览宽度，回退 store 旧值
-        logger.error("set field width failed", err);
-        toast.error(t("error.db", { message: String(err) }));
-      });
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-
   // 视图状态与批量行命令由 MVVM 层算好：这里只留本地 UI 状态与渲染接线
   const { model, displayCells, sortableCells, relationDbOf, runDeleteCheckedRows, runDuplicateCheckedRows } =
     useGridViewModel({
@@ -466,17 +427,6 @@ export function GridView({
     [store],
   );
 
-  // 表头单击：没排过 → 追加升序；升序 → 转降序；降序 → 取消该字段（其余字段保持）
-  const cycleSort = (fieldId: string) => {
-    const current = sorts.find((s) => s.field_id === fieldId);
-    const next: SortSpec[] = !current
-      ? [...sorts, { field_id: fieldId, dir: "asc" }]
-      : current.dir === "asc"
-        ? sorts.map((s) => (s.field_id === fieldId ? { ...s, dir: "desc" as const } : s))
-        : sorts.filter((s) => s.field_id !== fieldId);
-    store.setSorts(next);
-  };
-
   const addRow = async () => {
     try {
       await store.addRow();
@@ -545,20 +495,6 @@ export function GridView({
       logger.error("set row parent failed", e);
       toast.error(t("error.db", { message: String(e) }));
     }
-  };
-
-  // 字段拖拽排序（主列固定首位，只在其它列之间排序）
-  const onFieldDrop = (targetId: string) => {
-    if (!draggingField || draggingField === targetId) return;
-    if (draggingField === primaryField?.id || targetId === primaryField?.id) return;
-    // 全量重排（含隐藏列）：传 visibleFields 会把隐藏字段从 store.fields 里剔除
-    const sortable = fields.filter((f) => f.id !== primaryField?.id).map((f) => f.id);
-    const from = sortable.indexOf(draggingField);
-    const to = sortable.indexOf(targetId);
-    if (from < 0 || to < 0) return;
-    sortable.splice(to, 0, sortable.splice(from, 1)[0]);
-    void store.reorderFields([primaryField?.id, ...sortable].filter((id): id is string => Boolean(id)));
-    setDraggingField(null);
   };
 
   // 行拖拽：默认改行序；按住 Alt 落到某个合法父行上 = 挂成它的子行（落点判定见 planRowDrop）
@@ -836,137 +772,14 @@ export function GridView({
             ))}
             <col style={{ width: 44 }} />
           </colgroup>
-          <thead>
-            <tr>
-              <th className="sticky left-0 z-[6] border-b border-r border-neutral-200 bg-neutral-100 px-2 text-[11px] font-normal text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400">
-                <button
-                  className="mx-auto flex h-4 w-4 items-center justify-center rounded text-neutral-500 hover:text-brand-600 dark:text-neutral-400"
-                  title={t("row.selectAll")}
-                  aria-label={t("row.selectAll")}
-                  onClick={toggleSelectAll}
-                >
-                  {allSelected ? (
-                    <CheckSquare className="h-3.5 w-3.5 text-brand-600" />
-                  ) : (
-                    <Square className="h-3 w-3" />
-                  )}
-                </button>
-              </th>
-              {visibleFields.map((field) => {
-                const sortIndex = sorts.findIndex((s) => s.field_id === field.id);
-                const sort = sortIndex === -1 ? null : sorts[sortIndex];
-                const isPrimary = field.id === primaryField?.id;
-                return (
-                  <th
-                    key={field.id}
-                    className={cn(
-                      "group/head relative border-b border-r border-neutral-200 bg-neutral-100 px-1 dark:border-neutral-700 dark:bg-neutral-800",
-                      // 冻结主列表头：z 高于正文 sticky 列
-                      isPrimary && "sticky left-[44px] z-[6]",
-                    )}
-                  >
-                    <div
-                      draggable={field.id !== primaryField?.id}
-                      onDragStart={() => {
-                        if (field.id !== primaryField?.id) setDraggingField(field.id);
-                      }}
-                      onDragEnd={() => setDraggingField(null)}
-                      onDragOver={(e) => {
-                        if (draggingField && draggingField !== field.id && field.id !== primaryField?.id)
-                          e.preventDefault();
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        onFieldDrop(field.id);
-                      }}
-                      className={cn(
-                        "flex h-8 cursor-pointer items-center gap-1",
-                        draggingField === field.id && "opacity-40",
-                      )}
-                      onClick={() => cycleSort(field.id)}
-                      onDoubleClick={(e) => {
-                        e.stopPropagation();
-                        setMenuOpenFor(field.id);
-                      }}
-                    >
-                      <GripVertical className="h-3 w-3 shrink-0 cursor-grab text-neutral-300 dark:text-neutral-600" />
-                      <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-neutral-800 dark:text-neutral-100">
-                        {field.name}
-                      </span>
-                      <span className="flex h-4 min-w-4 shrink-0 items-center justify-center gap-0.5 text-[10px] text-brand-600 dark:text-brand-500">
-                        {sort && (
-                          <>
-                            <span>{sort.dir === "asc" ? "↑" : "↓"}</span>
-                            {sorts.length > 1 && (
-                              <span className="text-[9px] text-neutral-400 dark:text-neutral-500">{sortIndex + 1}</span>
-                            )}
-                          </>
-                        )}
-                      </span>
-                      <FieldMenu
-                        fieldName={field.name}
-                        fieldType={field.field_type}
-                        hidden={field.is_hidden === 1}
-                        primary={field.id === primaryField?.id}
-                        open={menuOpenFor === field.id}
-                        onOpenChange={(open) => {
-                          setMenuOpenFor(open ? field.id : null);
-                        }}
-                        onRename={() => {
-                          setMenuOpenFor(null);
-                          setRenamingField(field.id);
-                        }}
-                        onChangeType={(type) => {
-                          setMenuOpenFor(null);
-                          void store.changeFieldType(field.id, type).then(() => {
-                            // 改成关联/公式/汇总后必须配置才有意义，直接弹出字段设置
-                            if (!needsFieldSettings(type)) return;
-                            const next = storeApi.getState().fields.find((f) => f.id === field.id);
-                            if (next) setOptionsEditorFor(next);
-                          });
-                        }}
-                        onToggleHidden={() => {
-                          setMenuOpenFor(null);
-                          void store.toggleFieldHidden(field.id);
-                        }}
-                        onDelete={() => {
-                          setMenuOpenFor(null);
-                          void store.removeField(field.id);
-                        }}
-                        onOpenOptions={() => {
-                          setMenuOpenFor(null);
-                          setOptionsEditorFor(field);
-                        }}
-                      />
-                    </div>
-                    {/* 重命名输入 */}
-                    {renamingField === field.id && (
-                      <RenameInput
-                        initial={field.name}
-                        onCommit={(name) => {
-                          setRenamingField(null);
-                          if (name && name !== field.name) void store.renameField(field.id, name);
-                        }}
-                        onCancel={() => setRenamingField(null)}
-                      />
-                    )}
-                    {/* 列宽拖拽手柄 */}
-                    <div
-                      data-testid={"resize-" + field.id}
-                      role="separator"
-                      aria-orientation="vertical"
-                      aria-label={t("grid.resizeColumn")}
-                      className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-brand-500/60"
-                      onMouseDown={(e) => startColumnResize(e, field.id, field.width)}
-                    />
-                  </th>
-                );
-              })}
-              <th className="border-b border-neutral-200 bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-800">
-                <AddFieldButton onConfigure={setOptionsEditorFor} />
-              </th>
-            </tr>
-          </thead>
+          <GridHeaderRow
+            visibleFields={visibleFields}
+            primaryField={primaryField}
+            tableRef={tableRef}
+            allSelected={allSelected}
+            onToggleSelectAll={toggleSelectAll}
+            onConfigure={setOptionsEditorFor}
+          />
           <tbody ref={tbodyRef}>
             {virtual
               ? (() => {

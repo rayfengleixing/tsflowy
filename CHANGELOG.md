@@ -344,6 +344,16 @@
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`vitest run` 99 文件 / 1,320 通过（+15）、`npm run format:check` 干净、`npm run build` exit 0（55.89s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
 - 落差：① 真机没复验——两块挂在同一个位置、props 全是原宿主的变量，界面观感这轮只在 jsdom 里看过。② `AiComposer` 里图片附件的落盘（`saveAiImageFile`）与粘贴取文件（`filesFromDataTransfer`）只测到「被调用」，没测真写进 `assets/`；③ 输入区 12 条 store 读数仍是组件自取，`AiPanel` 那边同名读数已经删干净，若以后要在面板层读同一个值，得注意别读成两份快照。
 
+### 工程：`GridView.tsx` 的表头行切出 `GridHeaderRow.tsx`（1,120 → 933 行）
+
+- 搬动：整段 `<thead>`（131 行）连同只服务它的**三个状态**（重命名进行中、字段菜单开给谁、拖拽中的列）与**三个动作**（列宽拖拽 `startColumnResize`、排序循环 `cycleSort`、字段拖落 `onFieldDrop`）一起切出 `GridHeaderRow.tsx`（217 行）。宿主 1,120 → 933 行（+15 / −202），`CheckSquare` / `Square` / `GripVertical` / `FieldMenu` / `AddFieldButton` / `RenameInput` / `needsFieldSettings` / `clampColumnWidth` / `SortSpec` / `ReactMouseEvent` 十个 import 符号与 `sorts` 这条读数一起搬走。
+- 边界按「谁跨边界」定：全选按钮走 `onToggleSelectAll`（勾了哪些行归宿主），字段设置弹层走 `onConfigure`（弹层本体在宿主，改完关联/公式类型也要用它），`<table>` 的 ref 也归宿主下传——列宽拖拽按 `fieldId` 找 `<col>` 改宽度，而 `<colgroup>` 留在宿主；`fields` / `sorts` 与七条字段动作由组件自己从 `useDbStore()` 取（与宿主同一份 Context 实例，不是第二份快照）。
+- 字节审计：`GridHeaderRow.tsx` 179 行逐字来自 `git show HEAD:src/features/database/GridView.tsx`、34 行不匹配（4 行头注释、9 行 import、11 行 props 声明、6 行函数签名与解构、1 行 `const { fields, sorts } = store`、4 行标识符改写 `toggleSelectAll`→`onToggleSelectAll` 与 `setOptionsEditorFor`→`onConfigure`、3 行 prettier 合行）。搬移体仍用脚本做「统一 dedent + 逐区间取原文」。
+- 新增 `GridHeaderRow.test.tsx`（288 行 / 12 条 jsdom 用例），钉住这五件以前只能在原生窗口里肉眼验的事：全选按钮只递动作给宿主且勾选态只换图标、排序循环「追加升序 → 转降序 → 取消」并且双列排序时第二列显示次序号、双击才开该列菜单且主列不可拖不可标 primary、菜单里的删除/隐藏各自打到 store 并顺手关菜单、重命名的 Enter 落库 / Escape 不落库 / 同名不写库、改成关联类才接着打开字段设置（普通类型不打开）、列宽拖拽「拖动只改 `<col>`、松手才落一次库、越界夹到 600、落库失败撤掉预览宽度并出声」、拖列换序把隐藏列一起带进重排（漏了就等于从 `store.fields` 里剔掉它）。
+- 三条变异核验（跑完逐字节还原）：`onFieldDrop` 的 `sortable` 从 `fields` 换成 `visibleFields` → 1 红（拖列换序那条，正是代码注释里点名的风险）；升序点击后不转降序 → 1 红（排序循环）；松手落库落成起始宽度 → 1 红（列宽拖拽）。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`vitest run` 100 文件 / 1,332 通过（+12）、`npm run format:check` 干净、`npm run build` exit 0（48.59s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① 真机没复验——表头挂在原位置、`data-testid="resize-*"` 与冻结主列的 sticky 层级都没改，但拖列宽与拖列换序在原生窗口里的手感这轮没复验（jsdom 量不出真实列宽）。② `AddFieldButton` 仍在组件里渲染但没有用例覆盖它（它自己走 `store.addField`，属另一条链）。③ 用例把 `FieldMenu` 替成了 stub（它有自己的 radix 菜单用例），所以「双击 → 菜单里真点一条」在组件层是断言 props 传递，不是断言菜单弹层真出现。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
