@@ -220,6 +220,16 @@
 - 落差：① `rejectAction` 与 `exportMessage` 全仓零用例（`grep` 过 `*.test.ts(x)` 无命中，本批之前就没有），搬运只靠静态对账，属既有测试缺口，不是本批引入；② `format:check` 第一次报红是删除块尾巴上留下的一个空行（`  };` 前），删掉即绿，非行为变更。
 - 下一批候选（不需拍板）：`streamRound` + `planAction` + `finalizeAssistant` + `settleIncomplete` 这 149 行收成 `stream-slice.ts`，`planAction` 按引用注入 `cancelledTurns`；`send` / `retry` / `regenerate` / `resend` 只要调 `runStream`，可以留到 `turnRegistry` 定案之后。
 
+### 工程：流式一轮请求与收尾的四个助手切出 `stream-slice.ts`（`index.ts` 598 → 428）
+
+- 新增 `src/stores/ai/stream-slice.ts`（179 行）：`settleIncomplete`（中断收尾：空的助手占位直接丢弃，有内容的半截回答留下并标记中断类型）、`planAction`（一条写动作先预览，再按 `confirm_edit` 与被停止的轮次决定停在待确认还是立即落地）、`finalizeAssistant`（正文剥掉指令块、写动作逐条预览落地、检索被丢弃时补说明）、`streamRound`（发一轮模型请求，含 60ms 增量节流、思考增量单独累积、用量累积与取消/报错归类）。
+- 形制沿用第三批 `persist.ts`：**这四个不是 store 动作、`AiState` 上没有它们**，所以工厂返回一个具名函数对象、由 `index` 解构使用（不是 spread 进 `return {`）。工厂体本身就是 2 格缩进，与原 `create` 闭包体一致，于是四个助手**原样搬过去、连缩进都不用改**，158 行实现体与 `HEAD` 逐字节相等，零 dedent、零 prettier 重排——比 6c 的属性写法更机械，代价是切片末尾多一行具名 `return`。
+- 注入的是两个**按引用即可**的捕获：`cancelledTurns`（`const` 的 `Set`，切片只 `has`）与 `ctxScope`（出请求切片里的函数，`streamRound` 用它判「仅本页」不下发工具）。参数类型写成 `AiRequestActions["ctxScope"]` 索引类型，不重抄签名，省掉一处最容易写错的地方。`index` 侧的解构同步改名成三个（`planAction` 只被同切片的 `finalizeAssistant` 调，不再暴露给 `index`）。
+- `index.ts` 摘掉 8 个不再被引用的 specifier：`aiChat` / `AiChatEvent` / `AiToolCallRaw` / `extractCalls` / `hideEditBlock` / `aiToolSpecs` / `AiActionRecord` / `addUsage` / `contentOf` / `invalidActionRecord` / `summaryOf`，`./edit-ops` 那条整行删掉（`landAction` / `previewAction` 已随切片走）；剪短后 `@/lib/ai` 与 `./calls` 两条 import 从多行折成单行（prettier 口径，token 流不变）。diff 实测 11 增 181 删，增行只有 import 折叠后的三行、`createStreamSlice` 的解构与注释。
+- 验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`vitest run` 93 文件 / 1287 用例全过、`npm run build` exit 0、`npm run format:check` 干净、`cargo test` 343 通过 / 1 忽略。这四个助手在 `stores/ai.test.ts` 里没有按名引用，但它们是 `send` 唯一能走的通路，用例覆盖到每一条分支：`streamRound` 由「send 走通」「cancelled 尾帧：保留半截不计为错误」打到；`planAction` / `finalizeAssistant` 由「停止后迟到的 done 帧带编辑指令：停在待确认，不自动写文档」「`confirm_edit` 关闭时直接落地为 applied」「多个写动作各一张卡片」打到——**这条注入 `cancelledTurns` 尤其要真跑**，用例证明注入进来的还是同一个 `Set` 实例；`settleIncomplete` 由「retry：半截失败/用户停止的回答被丢弃重发」与「检索阶段点停止」打到。没碰界面，也没做浏览器冒烟（白屏限制照旧）。
+- 落差：上一批预告「预计 598 → ~450」，实际 **428**，差在两条 import 被 prettier 折成单行、以及 `planAction` 不再从 `index` 解构，属预估偏保守，不是漏搬。
+- 剩下 `index.ts` 428 行里，`runStream`（现 `index.ts:82`）与 `stop`（`:292`）仍要等 `turnRegistry`：`runStream` 给两个 `let` 标量**重新赋值**（`streamingAssistantId = assistantId`、`const turnId = ++turnSeq`），`stop` 则**读它们的当前值**（`if (streamingAssistantId) cancelledTurns.add(turnSeq)`）。按引用注入只能传进那一刻的快照，传不了「以后会被改掉的标量」，所以这两个必须把 `streamingAssistantId` / `turnSeq` / `cancelledTurns` 先收成一个小对象（`turnRegistry`）才搬得动——那是形状变更，另案。`send` / `retry` / `regenerate` / `resend` 只是调 `runStream`，跟着同一批定。机械搬运这条路到此已经见底。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
