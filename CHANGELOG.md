@@ -277,6 +277,18 @@
 - 落差：① 真机只做到「编辑器带着新模块挂载成功」——原生窗口 CDP 探针读到 `.ProseMirror` 在、可编辑、正文是原文，0 未捕获异常；但当前文档里没有表格，`CenteredTableCell` 的 `text-align: center` 没有屏幕证据，补插表格会写用户的真实库，冒烟不该顺手做。② `reportSaveMetrics` 这条路径没跑到：要它执行得改一次正文触发自动保存，同样是写真实数据。它只有「逐字节相同 + 类型通过 + 构建通过」三件证据，而 `vitest` 里也没有覆盖它的用例。③ `EditorPage.tsx` 1,163 行仍 >800：剩下的都是组件本体（状态、效果与 JSX），下一处接缝（反链面板、AI bridge 那个 183 行 effect）要透传 state 归属，属边界决定，不在「只搬不改」里能推出。
 - 全仓 >800 行的前端文件还是 3 个，只是排序换了：`EditorPage.tsx` 1,163 / `GridView.tsx` 1,120 / `AiPanel.tsx` 968（`i18n/{en,zh}.ts` 一语言一份，不算债）。
 
+### 工程：`grid-io-slice.ts` 剩下三条接缝各补一条用例（产品代码零改动）
+
+- `src/features/database/grid-view.test.tsx` 134 → 337 行、用例 3 → 6 条（套件 1,291 通过 / 95 文件）。上一批切出切片时只有「导出 CSV」一条管住了注入接缝，`exportXlsx` / `onPasteTsv` / `runAppendCsv` 三条当时明确记为落差，本批补齐：
+  - **导出 xlsx**：断言发给 Rust 的载荷形状——`sheet.name` 取宿主标题、`columns` 带列种类（text / number 决定写数值还是文本）、没写过的格是 `null` 而不是空串（否则导出会多出满屏空单元格），加上 `path` 与保存对话框的 `defaultPath="客户.xlsx"`。
+  - **TSV 粘贴**：单击锚点格（本仓取态是单击即开编辑框）后按一下 Esc 收手，再派发 paste；三行数据落在只有两行的表上，断言**一次** `row_create_many` 建出缺的那行（不是逐行 await），再逐格核对 `cell_set_many` 的 6 条 snake_case 写入——行 id、列 id、值形态（数字写 `7`、文本写 `"甲"`）全在里面，且没有跳过告警。
+  - **CSV 追加到当前表**：在确认对话框里选「追加到」而非「新表」，断言既不打 `view_create` 也不打 `csv_import`（那是建新表那条路的命令），改打建行 + 批量写格；CSV 的第三列「备注」在表里没有同名字段 → 整列跳过并出「已跳过 1 列」的告警。
+- 三条都做了变异核验（改 `grid-io-slice.ts` 一处、跑完立刻还原，`git diff` 确认该文件与 `HEAD` 无差异）：`missingRows` 写死 0 → 粘贴那条红；`buildXlsxSheet(… displayRows …)` 换成 `[]` → xlsx 那条红；`runAppendCsv` 里 `const plan = null` → 追加那条红。每次恰好红对应的那一条，说明三条各自管住了自己的接缝。
+- 顺带挖出一个**跨用例串数据**的隐患：数据 store 是模块级单例（`DatabaseStoreContext` 的默认值就是它），`cleanup()` 不会清它。上一条用例留下的两字段快照会让本条首帧渲染出旧列——粘贴因此把第三列当成「超出最右列」跳过，写得少一格且不出错。现在 `beforeEach` 里显式 `useDatabaseStore.setState({ viewId: null, view: null, fields: [], rows: [], cells: {}, loading: false })`，粘贴用例 additionally 等到第三列渲染出来才点锚点。这个坑在只读同一份两字段夹具的旧用例里不会露头。
+- jsdom 缺的两件按空操作补在用例文件里：`Element.prototype.scrollIntoView`（光标落定后网格要把目标格滚进视口，缺它会抛，而滚动不是这条链要验的东西）；剪贴板则手搓 `paste` 事件、只挂 handler 真正读的 `clipboardData.getData`（jsdom 没有可用的 `DataTransfer`，`fireEvent.paste` 传进去的对象会被丢掉）。
+- 夹具收成 `fieldOf` / `rowOf` / `twoByTwo()` / `echoCreatedRows` / `cellWrites()` 五个小件：`echoCreatedRows` 按前端生成的 id 出行（与 Rust 侧同形），断言才认得新行 id；「导出 CSV」那条既有用例改用同一份夹具，断言一字未改。
+- 落差：① 这三条走的是各自的主干，切片里的低频分支仍未覆盖——粘贴的「只读/关联列跳过」「选择列缺选项要补建（`degraded`）」「`addRows` 没建够就整片放弃」「没有锚点时提示先点一格」，追加的「附件列 `save_asset` 复制」「全部列都不匹配的报错」，xlsx 的计算列与隐藏列。② 粘贴与追加两条是在 jsdom 里派发事件跑的，浏览器/WebView 的真机行为（真实 `DataTransfer`、真实滚动位置）没验；`row_create_many` 与 `cell_set_many` 的参数形状是对着 `src/lib/database.ts` 的调用点断言的，Rust 侧的落库结果不在本批证据内（`cargo test` 没碰，仍是 343 通过 / 0 失败 / 1 忽略）。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
