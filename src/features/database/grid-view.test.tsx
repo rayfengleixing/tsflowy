@@ -8,7 +8,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event";
 
 import { GridView } from "./GridView";
-import { useDatabaseStore } from "@/stores/database";
+import { resetStores } from "@/test/store-reset";
 import {
   callsFor,
   dialogCalls,
@@ -91,9 +91,8 @@ const view: View = {
 beforeEach(() => {
   cleanup();
   resetIpcMock();
-  // 数据 store 是模块级单例（Context 默认值），用例之间会串数据：
-  // 上一条留下的 fields 会让本条渲染出旧列，粘贴锚点因此落在「最右列」上，写得少一格也不报错
-  useDatabaseStore.setState({ viewId: null, view: null, fields: [], rows: [], cells: {}, loading: false });
+  // 数据 store 是模块级单例（Context 的默认值），上一条留下的 fields 会让本条渲染出旧列：整份复位
+  resetStores();
   toastSuccess.mockReset();
   toastWarning.mockReset();
   toastInfo.mockReset();

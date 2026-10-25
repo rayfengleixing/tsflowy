@@ -8,6 +8,7 @@ import userEvent from "@testing-library/user-event";
 
 import { CellLink } from "./cell-display";
 import { failNextOpenUrl, openUrl, openedUrls, resetIpcMock } from "@/test/tauri-mock";
+import { resetStores } from "@/test/store-reset";
 
 // vi.mock 会被提到文件最前，工厂里用动态 import 取同一份替身实例
 vi.mock("@/lib/ipc-shell", async () => (await import("@/test/tauri-mock")).ipcShellMock());
@@ -20,6 +21,8 @@ vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn() } }));
 beforeEach(() => {
   cleanup();
   resetIpcMock();
+  // 本模块的关联列渲染真 relation store 单例（模块级，cleanup() 不清）：整份复位
+  resetStores();
   toastError.mockReset();
 });
 

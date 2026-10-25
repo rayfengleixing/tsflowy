@@ -289,6 +289,16 @@
 - 夹具收成 `fieldOf` / `rowOf` / `twoByTwo()` / `echoCreatedRows` / `cellWrites()` 五个小件：`echoCreatedRows` 按前端生成的 id 出行（与 Rust 侧同形），断言才认得新行 id；「导出 CSV」那条既有用例改用同一份夹具，断言一字未改。
 - 落差：① 这三条走的是各自的主干，切片里的低频分支仍未覆盖——粘贴的「只读/关联列跳过」「选择列缺选项要补建（`degraded`）」「`addRows` 没建够就整片放弃」「没有锚点时提示先点一格」，追加的「附件列 `save_asset` 复制」「全部列都不匹配的报错」，xlsx 的计算列与隐藏列。② 粘贴与追加两条是在 jsdom 里派发事件跑的，浏览器/WebView 的真机行为（真实 `DataTransfer`、真实滚动位置）没验；`row_create_many` 与 `cell_set_many` 的参数形状是对着 `src/lib/database.ts` 的调用点断言的，Rust 侧的落库结果不在本批证据内（`cargo test` 没碰，仍是 343 通过 / 0 失败 / 1 忽略）。
 
+### 工程：组件用例之间的 store 串状态有了统一复位（产品代码零改动）
+
+- 新增 `src/test/store-reset.ts`（33 行）：`resetStores()` 把四条模块级单例（`useDatabaseStore` / `useRelationStore` / `useRowFocusStore` / `useSettingsStore`）整份还原到 import 期抓的那份 `getState()`。
+- 为什么不是手写初值清单：上一批加在 `grid-view.test.tsx` 里的内联复位只写了 6 个键，`sorts` / `filters` / `filterMode` 这些都留在外面——漏哪个键就漏一种串数据，而串数据的表现是整文件并行时随机红，不是报错。快照口径一次盖住全部键，以后 store 加字段也不用回来改这里。
+- 只走 `setState`、不调 action：settings 的 `setLang` 那类 action 会顺手写 localStorage 并拉起原生侧同步，复位不该产生这些副作用。
+- 采用点三处：`grid-view.test.tsx` 换掉内联复位；`stores/app-binding-lang.test.tsx` 的 `afterEach` 原来只清 `{lang, typewriter}` 两项；`cell-display.test.tsx` 也接上——它渲染的 `cell-display.tsx` 读的是真 relation 单例，此前没有任何复位。
+- 新增 `src/test/store-reset.test.ts`（2 条用例，node 环境）：四份单例各脏一遍再复位，逐份与 import 期那份 `toEqual`；另一条专挑内联清单漏掉的键断言。变异核验：把 `resetStores` 里 database 那行退回上一批那 6 个键的清单 → 两条用例同时红，红在 `sorts` 没还原（`expected [ { field_id: 'f-1', dir: 'asc' } ] to deeply equal []`），改回即绿。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`vitest run` 96 文件 / 1,293 通过（+2）、`npm run format:check` 干净、`npm run build` exit 0、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① `relation.ts:25` 那个模块级 `inflight` 去重集不在 state 里，`resetStores()` 够不着；它靠每次拉取的 `finally` 自行出队，但没有断言兜着。② `useWorkspaceStore` / `useEditorStore` / `useAiStore` 没纳入：现有组件用例要么把这几条整条 `vi.mock` 掉、要么根本不碰，等真有用例渲染到它们再纳入。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）

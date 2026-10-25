@@ -11,6 +11,7 @@ const syncNativeLang = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/app-shell", () => ({ syncNativeLang }));
 
 import { t, useLanguage } from "@/lib/i18n";
+import { resetStores } from "@/test/store-reset";
 import { useSettingsStore } from "./settings";
 
 function LangProbe() {
@@ -30,7 +31,8 @@ function CountingProbe() {
 afterEach(() => {
   cleanup();
   renders = 0;
-  useSettingsStore.setState({ lang: "zh-CN", typewriter: false });
+  // 语言与打字机之外还有别的设置项，整份还原比手写清单可靠（复位口径见 @/test/store-reset）
+  resetStores();
 });
 
 describe("stores 侧的语言订阅绑定", () => {
