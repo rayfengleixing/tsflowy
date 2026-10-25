@@ -109,12 +109,42 @@ describe("ai store：一轮问答", () => {
     expect(M.aiSessionSave.mock.calls[0][0]).toMatchObject({ id: s.activeSessionId });
   });
 
+  // send 里那句 `messages.length === 0 ? currentPageRef() : null` 与 run-slice 顶部的 currentPageRef：
+  // 会话列表靠这两个值标注「这一问是在哪一页发起的」，没有断言的话搬动它等于没验。
+  it("会话首条提问标注发起时所在页面，之后的提问不再改标", async () => {
+    const store = await loadConfiguredStore();
+    M.workspaceState.currentViewId = "v-report";
+    M.workspaceState.tree = [{ id: "v-report", name: "周报", layout: "document", children: [] }];
+    await completeTurn(store, "第一问");
+    expect(store.getState().sessionPageId).toBe("v-report");
+    expect(store.getState().sessionPageTitle).toBe("周报");
+
+    M.workspaceState.currentViewId = "v-other";
+    await completeTurn(store, "第二问");
+    expect(store.getState().sessionPageId).toBe("v-report");
+  });
+
   it("停止后迟到的 done 帧带编辑指令：停在待确认，不自动写文档", async () => {
     const store = await loadConfiguredStore();
     const { p, feed } = await startTurn(store, "改一下");
     feed({ type: "chunk", delta: "回答" });
     store.getState().stop();
     expect(M.aiCancel).toHaveBeenCalled();
+    feed({ type: "done", full: EDIT_FULL });
+    await p;
+    const msg = store.getState().messages[1];
+    expect(msg.actions?.[0].state).toBe("pending");
+    expect(M.applyEdit).not.toHaveBeenCalled();
+  });
+
+  // 上面那条在 `confirm_edit` 默认开着时成立，两条路都会停在待确认，看不出「轮次登记」有没有生效：
+  // 这条把确认关掉，只剩「这一轮被用户停过」这一个理由能拦住自动落地，才真正盯住 run-slice 与
+  // stream-slice 之间共享的那个被停轮号集合。
+  it("确认关闭时迟到的 done 仍不写数据：拦它的是轮次登记，不是 confirm_edit", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ confirm_edit: false }) });
+    const { p, feed } = await startTurn(store, "改一下");
+    feed({ type: "chunk", delta: "回答" });
+    store.getState().stop();
     feed({ type: "done", full: EDIT_FULL });
     await p;
     const msg = store.getState().messages[1];
@@ -646,5 +676,58 @@ describe("ai store：上下文预算与截断提示", () => {
     const ref = outgoing.find((m) => m.role === "system" && m.content.startsWith("【用户 @ 引用的文档】"));
     expect(ref).toBeDefined();
     expect(ref!.content).toContain("未命中相关片段");
+  });
+});
+
+describe("ai store：快捷动作与继续生成", () => {
+  it("「总结当前页」取整页纯文本，按 max_chars 截断后作为提问发出", async () => {
+    const store = await loadConfiguredStore({ config: defaultConfig({ max_chars: 6 }) });
+    M.getAiEditor.mockImplementation(() => ({ ...M.bridge, getPageText: () => "一二三四五六七八九十" }));
+    const p = store.getState().quickAction("summarize");
+    await vi.waitFor(() => expect(M.aiChat).toHaveBeenCalledTimes(1));
+    const outgoing = M.aiChat.mock.calls[0][0] as AiChatMessage[];
+    expect(outgoing[outgoing.length - 1].content).toBe('ai.prompt.summarize:{"content":"一二三四五六"}');
+    pump([{ type: "done", full: "摘要" }]);
+    await p;
+    expect(store.getState().messages[1].content).toBe("摘要");
+  });
+
+  it("「续写」不需要选中文本，但没有编辑器桥时提示没有页面且一个请求都不发", async () => {
+    const store = await loadConfiguredStore({ bridgeNull: true });
+    await store.getState().quickAction("continue");
+    expect(M.toastError).toHaveBeenCalledWith("ai.noPage");
+    expect(M.aiChat).not.toHaveBeenCalled();
+  });
+
+  it("自定义快捷指令：模板里的 {content} 换成选中的文本", async () => {
+    const store = await loadConfiguredStore();
+    M.getAiEditor.mockImplementation(() => ({ ...M.bridge, getSelectionText: () => "选中的话" }));
+    const p = store
+      .getState()
+      .runQuickAction({ id: "q1", name: "缩写", prompt: "请缩写：{content}", scope: "selection" });
+    await vi.waitFor(() => expect(M.aiChat).toHaveBeenCalledTimes(1));
+    const outgoing = M.aiChat.mock.calls[0][0] as AiChatMessage[];
+    expect(outgoing[outgoing.length - 1].content).toBe("请缩写：选中的话");
+    pump([{ type: "done", full: "缩写结果" }]);
+    await p;
+  });
+
+  it("继续生成：空列表与最后一条是提问时都不发请求，最后一条是回答才追加", async () => {
+    const store = await loadConfiguredStore();
+    await store.getState().continueGenerate();
+    expect(M.aiChat).not.toHaveBeenCalled();
+    M.workspaceState.currentViewId = "p1";
+    await completeTurn(store, "第一问", "答到一半");
+    const lastUser = store.getState().messages[store.getState().messages.length - 1];
+    expect(lastUser.role).toBe("assistant");
+
+    const before = streamHandlers.length;
+    const p = store.getState().continueGenerate();
+    await vi.waitFor(() => expect(streamHandlers.length).toBe(before + 1));
+    const outgoing = M.aiChat.mock.calls[1][0] as AiChatMessage[];
+    expect(outgoing[outgoing.length - 1].content).toBe("ai.continueGeneratePrompt");
+    pump([{ type: "done", full: "接着写完" }]);
+    await p;
+    expect(store.getState().messages.map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
   });
 });

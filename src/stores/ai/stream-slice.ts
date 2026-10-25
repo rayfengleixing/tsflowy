@@ -10,7 +10,8 @@ import type { AiActionRecord, AiGet, AiSet } from "./types";
 // （settleIncomplete）、写动作怎么预览落地（planAction / finalizeAssistant）。
 // 它们不在 `AiState` 上，是 `runStream` 的内部编排件，所以工厂返回四个具名函数，由 index 解构。
 // `cancelledTurns` 是 `const` 的 `Set`、`ctxScope` 是出请求切片里的函数：按引用同名注入，
-// 下面四个助手的实现文本一字不用改。真正被 `let` 标量锁住的 `runStream` / `stop` 留在 index。
+// 下面四个助手的实现文本一字不用改。轮次那三个值后来收进了 `turn-registry.ts`，`runStream` / `stop`
+// 因此也搬得动了，见 `run-slice.ts`。
 
 export const createStreamSlice = (
   set: AiSet,
@@ -177,3 +178,6 @@ export const createStreamSlice = (
   };
   return { settleIncomplete, planAction, finalizeAssistant, streamRound };
 };
+
+/** 流式切片对外返回的四个助手；`planAction` 只被 `finalizeAssistant` 内部调用，注入方按名字挑要传的 */
+export type AiStreamActions = ReturnType<typeof createStreamSlice>;

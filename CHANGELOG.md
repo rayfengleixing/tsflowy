@@ -312,6 +312,28 @@
 - 落差：① 上下文行与来源名的点击行为完全一样（都 `openView(srcId)`），那个 `role="button"` 只是让整行可点、不是另一条路；用例照现状断言，没顺手改。② 分组顺序沿用 `backlinks` 数组序（Rust JOIN 的返回序），用例不断言顺序、真机上只有一组也看不出来；要稳定按来源页排序得改 SQL 或加一次 sort，属行为变更。③ `EditorPage.tsx` 1,076 行仍 >800：剩下最大的一块是 AI bridge 那个约 183 行的 effect，它要往外透传十几个编辑器方法，属边界决定，不在「只搬不改」里能推出。
 - 全仓 >800 行的前端文件还是 3 个，但第一名换了：`GridView.tsx` 1,120 / `EditorPage.tsx` 1,076 / `AiPanel.tsx` 968（`i18n/{en,zh}.ts` 一语言一份，不算债）。
 
+### 工程：AI 的轮次登记收成容器，agent 循环与「停止」搬出 store 闭包（`index.ts` 428 → 272 行）
+
+- 新增 `src/stores/ai/turn-registry.ts`（26 行）：把 `create` 闭包里的 `let streamingAssistantId` / `let turnSeq` / `const cancelledTurns` 收成一个 `TurnRegistry` 对象（`assistantId` / `seq` / `cancelled`）。卡点就是那两个 `let` 标量——闭包变量被别的模块接走后那边重新赋值、这边读不到，所以 agent 循环与 `stop` 一直是 `index.ts` 里剩下的最后一块。改成对象字段与 `Set` 之后共享的是引用，两边读写同一份；三个值的语义逐字对齐，没有加也没减状态。
+- 新增 `src/stores/ai/run-slice.ts`（223 行）：`runStream`（154 行的 agent 循环）与 `stop`（9 行）搬出，注入的是轮次登记 + 出请求切片与流式切片的读数 + `persistSessions`，形制与 `session-slice` / `message-slice` 一致。字节审计：搬的 163 行里只有 8 行不同，全部是 `streamingAssistantId`→`turn.assistantId`、`turnSeq`→`turn.seq`、`cancelledTurns`→`turn.cancelled` 这三个标识符，缩进与语句顺序零改动。
+- `src/stores/ai/index.ts`：删掉那三个闭包变量、`runStream` 整块与 `stop` 整块（返回对象里换成 `stop,`），随循环一起走的是 5 条只它用的 import（`aiCancel` / `aiErrorText` / `AiChatMessage` / `AiToolCallRef` / `ai-edit` 与 `ai-tools` 的检索件 / `calls` 的三个判定）。给流式切片注入的那份被停轮号集合换成 `turn.cancelled`——同一个 `Set`、从未重新赋值，所以 `stream-slice.ts` 那四个助手的实现文本一字未改。
+- `src/stores/ai/stream-slice.ts`：头部那句「真正被 `let` 标量锁住的 `runStream` / `stop` 留在 index」搬走以后不成立，改成指向 `run-slice.ts`；末尾补一行 `export type AiStreamActions = ReturnType<typeof createStreamSlice>`，供 run 切片按名字 `Pick` 注入项（签名不重写，避免两处漂移）。
+- 顺手挖出一个**断言分不清理由**的覆盖洞（本批唯一的用例新增）：既有的那条「停止后迟到的 done 帧带编辑指令：停在待确认」跑在 `confirm_edit` 默认开着的路径上，而 `planAction` 里拦住落地的是「这一轮被停过」**或**「配置要确认」两个理由任一——把流式切片收到的那个 `Set` 换成一个新空集（等于取消判定彻底失效）33 条用例全绿。补了一条 `confirm_edit: false` 的同类用例，只剩轮次登记这一个理由能拦住，同一变异现在恰好红这一条。产品代码没动。
+- 三条变异核验（跑完逐字节还原，`diff` 与变异前一致）：`stop` 里不打轮号标记 → 4 红（新增那条 + 检索阶段停止 + 停止后不再执行剩余检索 + 停止后立刻重新提问）；`runStream` 收尾的 `turn.seq === turnId` 改成恒真 → 1 红（旧循环把新轮的 streaming 拆掉那条）；上面那个空集注入 → 1 红（新增那条）。三次各红在各自管的那条接缝上。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`vitest run` 97 文件 / 1,300 通过（+1）、`npm run format:check` 干净、`npm run build` exit 0、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① 本批没跑真机——动的是 store 内部编排，`send` / `stop` 的签名与调用点一字未改，用例那 89 条是桩流式（`aiChat` 被 mock），原生窗口里的真实流式与 `aiCancel` 这轮没复验。② `send` / `retry` / `regenerate` / `resend` / `quickAction` / `runQuickAction` / `continueGenerate` 这七条仍留在 `index.ts` 的返回对象里：它们只需要 `runStream` 与 `set` / `get`，下一批可以整体搬进 run 切片，`index.ts` 会只剩状态默认值与切片组装。③ 新增那条用例覆盖的是「done 迟到」这一条取消路径；「检索进行到一半被停、随后的 done 又带编辑指令」这个组合仍未覆盖。④ 被停轮号还是在 `runStream` 的 finally 里出队（与原实现同位置同写法），也就是说如果那一轮的 finally 没跑到（进程被杀这类），轮号会留在集合里；本批没有改这个口径。
+
+### 工程：AI 的八条动作与 agent 循环合成 `run-slice.ts`（`stores/ai/index.ts` 428 → 99 行）
+
+- 搬动：`send` / `retry` / `quickAction` / `runQuickAction` / `continueGenerate` / `regenerate` / `resend` 七条（144 行）连同模块级 helper `currentPageRef`（6 行）搬进 `run-slice.ts`；`runStream` 由「切片对外返回」改成切片私有，`AiRunActions` 换成 `Pick<AiState, 那八条>`，`index.ts` 里那行解构改成 `...createRunSlice(set, get, {…})` 展开——与 config / panel / session / message 四片同形制。
+- 字节审计：搬的 150 行与 `git show HEAD:src/stores/ai/index.ts` 里的原实现**逐行相同、0 处差异**（H 批那 8 处标识符替换只落在循环与 `stop` 上，这七条本来就没动过）。
+- `index.ts` 现在只剩「装配五组切片 + 给状态初值 + 对外 re-export」，`create` 闭包里一个可变量都不留（轮次那三个值在 `turn-registry.ts`）；随之删掉 7 条只服务于动作实现的 import（`toast` / `newId` / `getAiEditor` / `flattenTree` / `useWorkspaceStore` / `t` / `QUICK_PROMPT_KEY`）。
+- 搬的过程挖出两处**搬了等于没验**的洞，各补了用例（产品代码没动）：① `quickAction` / `runQuickAction` / `continueGenerate` 在整个 AI store 用例里一次都没被调用过（`grep` 三条名字为零），而 `quickAction` 恰好是这批新要用注入读数 `maxChars` 的那条——补 4 条：总结取整页并按 `max_chars` 截断、续写没有编辑器桥时提示且不发请求、自定义指令的 `{content}` 替换、继续生成的两道守卫。② 把 `send` 里的 `pageRef` 写死成 `null`（来源页标注彻底失效）时 `ai-session` 那 33 条全绿——那条 `sessionPageId` 断言走的是 `loadSessions` 从库里读 `page_id`，与 `send` 当时的标注无关；补了一条「首条提问标注所在页面、之后的提问不改标」。
+- 夹具的坑记在这里免得再踩：用例里换 `getAiEditor` 的桩要 `{ ...M.bridge, getPageText: … }` 这样展开，只给一个方法会让 `requestMessages` 组装上下文时抛错，表现成「`aiChat` 一次都没被调用」，看着像动作没生效，其实请求根本没发出去。
+- 三条变异核验（跑完逐字节还原，`diff` 与变异前一致）：`send` 去掉先行落盘 → 1 红（「结束后按条落库」盯 `aiSessionSave` 两次）；总结不截断（`page.slice(0, limit)` 换成 `page`）→ 1 红（新增那条）；`pageRef` 写死 `null` → 1 红（新增那条标注用例）。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`vitest run` 97 文件 / 1,305 通过（+5）、`npm run format:check` 干净、`npm run build` exit 0（59.27s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① 真机仍未跑——八条动作在 `AiState` 上的签名与界面调用点一字未改，但快捷动作在原生窗口里点出来的效果这轮没复验。② `regenerate` / `resend` 的守卫分支（最后一条不是 user、找不到那条消息）与 `quickAction` 的 translate / rewrite / explain 三条（共用同一段选中文本代码）仍只覆盖主干。③ `runStream` 对外可见性没变（它本来就不在 `AiState` 上，只是从 index 的闭包局部挪进切片局部），但以后若要有「整段重跑」这类入口，得再显式暴露一次。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
