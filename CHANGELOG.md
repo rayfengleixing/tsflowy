@@ -299,6 +299,19 @@
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`vitest run` 96 文件 / 1,293 通过（+2）、`npm run format:check` 干净、`npm run build` exit 0、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
 - 落差：① `relation.ts:25` 那个模块级 `inflight` 去重集不在 state 里，`resetStores()` 够不着；它靠每次拉取的 `finally` 自行出队，但没有断言兜着。② `useWorkspaceStore` / `useEditorStore` / `useAiStore` 没纳入：现有组件用例要么把这几条整条 `vi.mock` 掉、要么根本不碰，等真有用例渲染到它们再纳入。
 
+### 工程：`EditorPage.tsx` 的反链面板切出 `BacklinksPanel.tsx`（1,163 → 1,076 行）
+
+- 新增 `src/features/editor/BacklinksPanel.tsx`（111 行）：面板的三份 state（`backlinks` / `backlinkViews` / `backlinksOpen`）、拉取 effect、按来源分组的 memo 与整块 JSX 原样搬出；对外只接 `viewId` 与 `hidden` 两个值 props，由宿主传 `view.id` 与 `focusMode`。
+- 形制：JSX 用一对 `<>…</>` 包住原来的条件块，缩进与宿主文件逐格对齐（6 / 8 格），搬过去的 93 行里只有 5 处差异，全是标识符：effect 内 4 处 `view.id` → 参数 `viewId`（含那行注释里的同一个词），条件里 `!focusMode` → `!hidden`。零 dedent、零重排。
+- `EditorPage.tsx` 的 diff 共 +3 / −90：加一行 import、删两行只服务于面板的 import（`Link2/ChevronDown/ChevronUp` 与 `mentionsApi`+`MentionRow`，由 `noUnusedLocals` 报出）、面板整块换成 `<BacklinksPanel viewId={view.id} hidden={focusMode} />`。
+- 挂载语义没变：原来那块是 JSX 条件，专注模式或没有反链时只是不渲染，state 一直挂在 EditorPage 上；现在不渲染的仍是条件本身，state 归面板自己、组件保持挂载，所以收起状态与已拉到的数据都不丢，切页也只发一次查询。effect 依赖从 `[view.id]` 变成 `[viewId]`，同一个值。
+- 一处随迁改写：字数浮层上面那行注释原本举了「`hoverMention`、反链开合」两个纯 UI 重渲染的例子，搬走以后反链开合不再触发 EditorPage 重渲染，例子只留 `hoverMention`。
+- 顺带补 `BacklinksPanel.test.tsx`（6 条 jsdom 用例）：切出来的那一刻它第一次能被单独渲染，原来只能肉眼看的几件事有了断言——按来源分组、每组最多露三条但组尾计数是全量、点来源名与点上下文行都打到 `openView`、收起与专注模式都只藏渲染不重拉（`callsFor("mention_list_backlinks")` 恒为 1）、换文档不留旧数据、没有反链时不占位。三条变异核验各红对应的：条件里去掉 `!hidden` → 专注那条红；`slice(0, 3)` 放宽成 `slice(0, 9)` → 4 条红（夹具按「一组 4 条 + 一组 1 条」造，多处依赖三条上限）；effect 里删掉 `setBacklinks([])` → 换文档残留那条红。跑完产品文件逐字节还原。
+- 真机（原生窗口 + CDP，全程只读）：当前文档「P4」在库里有 1 条反链，面板标题「被 1 个页面引用」、来源 chip「提示词」、上下文 1 行都在，DOM 里仍位于内容区与字数浮层之间；在窗口里点收起 → 列表变 0 行而标题还在，再点 → 1 行回来。dev 日志 0 error / 0 warn。`workspace_list` / `view_list_by_workspace` / `mention_list_backlinks` 都是读命令，没有写任何用户数据。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`vitest run` 97 文件 / 1,299 通过（+6）、`npm run format:check` 干净、`npm run build` exit 0、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① 上下文行与来源名的点击行为完全一样（都 `openView(srcId)`），那个 `role="button"` 只是让整行可点、不是另一条路；用例照现状断言，没顺手改。② 分组顺序沿用 `backlinks` 数组序（Rust JOIN 的返回序），用例不断言顺序、真机上只有一组也看不出来；要稳定按来源页排序得改 SQL 或加一次 sort，属行为变更。③ `EditorPage.tsx` 1,076 行仍 >800：剩下最大的一块是 AI bridge 那个约 183 行的 effect，它要往外透传十几个编辑器方法，属边界决定，不在「只搬不改」里能推出。
+- 全仓 >800 行的前端文件还是 3 个，但第一名换了：`GridView.tsx` 1,120 / `EditorPage.tsx` 1,076 / `AiPanel.tsx` 968（`i18n/{en,zh}.ts` 一语言一份，不算债）。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
