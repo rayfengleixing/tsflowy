@@ -354,6 +354,17 @@
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`vitest run` 100 文件 / 1,332 通过（+12）、`npm run format:check` 干净、`npm run build` exit 0（48.59s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
 - 落差：① 真机没复验——表头挂在原位置、`data-testid="resize-*"` 与冻结主列的 sticky 层级都没改，但拖列宽与拖列换序在原生窗口里的手感这轮没复验（jsdom 量不出真实列宽）。② `AddFieldButton` 仍在组件里渲染但没有用例覆盖它（它自己走 `store.addField`，属另一条链）。③ 用例把 `FieldMenu` 替成了 stub（它有自己的 radix 菜单用例），所以「双击 → 菜单里真点一条」在组件层是断言 props 传递，不是断言菜单弹层真出现。
 
+### 工程：`EditorPage.tsx` 的 AI 桥接切出 `ai-bridge.ts`（1,076 → 906 行）
+
+- 搬动：宿主那段 172 行的 `useEffect` 体（`toSlice` / `topBlocks` / `locateHeadingSection` / `locateTextRange` 四个 helper 加桥的 11 个方法）搬进 `createAiEditorBridge({ editor, viewName })`；`registerAiEditor` / `registerAiEditorForView` 的登记、卸载闭包与依赖数组仍留在宿主，形制对齐 `grid-io-slice.ts`。
+- 边界：桥只吃两个输入（编辑器实例与页面名），不碰 store，所以 AI 面板侧 `getAiEditor()` 与各条动作的调用点一字未改。唯一标识符改写是 `getPageTitle`：原来读闭包里的 `view.name`，现在读入参 `viewName`。
+- 字节审计：新文件 192 行里 **175 行逐字**能在 `git show HEAD:src/features/editor/EditorPage.tsx` 中找到，另 15 行是 3 行头注释、4 行 import、接口与函数签名 5 行、`return bridge;`，以及被 prettier 合成一行的 `getPageText`。
+- 用例：新增 `ai-bridge.test.ts` 29 条（读侧 / 回填侧 / 定位侧 / 改写侧 / 撤销侧 / 边界），这段逻辑第一次能脱离整页渲染被单独驱动。夹具是真 schema（`getSchema([StarterKit])`）+ 真 `EditorState` + `prosemirror-history`，只把 DOM 侧的 `view` 换成会记账的假件，`STRUCTURE_SYNC_META` 这类元信息就断在记下来的事务上。
+- 夹具的坑记在这里免得再踩：① prosemirror-history 按 `tr.time`（取自 `Date.now()`）把相邻输入并成一个可撤事件，真实时钟下「AI 改完用户又编辑」会被并成一步、撤掉的正好是整体，`undoAiEdit` 直接返回 `true`，那条最要紧的守卫根本走不到——用例用假时钟跨过 500ms 的 `newGroupDelay` 才分得开组。② `toSlice` 返回 null 的退化分支靠夹具 schema 里没有 `mention` 节点触发：`@[报表](view:123)` 会让 `PMNode.fromJSON` 抛错。③ tsconfig 的 lib 里没有 `Array.prototype.at`，取末元素得自己写 helper。
+- 六条变异核验（跑完逐字节还原，`diff` 与变异前一致）：去掉 `sec.index === 0` 守卫 → 1 红；`revert` 存成改后快照 → 3 红（撤销链路整体失配）；兜底写回不带 `STRUCTURE_SYNC_META` → 1 红；去掉 `hit.index === 0` 守卫 → 1 红；`insert_under_heading` 的落点从 `sec.end` 挪到 `sec.start` → 1 红；锚点标题不去 markdown 记号 → 1 红。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`vitest run` 101 文件 / 1,361 通过（+29）、`npm run format:check` 干净、`npm run build` exit 0（54.26s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① `ai.locateBlockedByLock`（结构锁 `filterTransaction` 拒掉事务后据实回报）这条分支假件里没有对应物——假 `view.dispatch` 从不拒收事务，要覆盖它得连真 `DocumentStructureLock` 插件一起挂上，而真插件又要求真 `view`；这条只能在原生窗口里靠「让 AI 改标题行」验，本轮没验。② `replace_text` 跨顶层块的匹配（设计上宁可失败）与 `undoAiEdit` 的「撤销栈被清空」极端路径仍只覆盖主干。③ 整轮没跑真机：桥的方法签名没变，但 AI 面板就地改文档在原生窗口里这轮没复验。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
