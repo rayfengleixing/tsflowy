@@ -334,6 +334,16 @@
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`vitest run` 97 文件 / 1,305 通过（+5）、`npm run format:check` 干净、`npm run build` exit 0（59.27s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
 - 落差：① 真机仍未跑——八条动作在 `AiState` 上的签名与界面调用点一字未改，但快捷动作在原生窗口里点出来的效果这轮没复验。② `regenerate` / `resend` 的守卫分支（最后一条不是 user、找不到那条消息）与 `quickAction` 的 translate / rewrite / explain 三条（共用同一段选中文本代码）仍只覆盖主干。③ `runStream` 对外可见性没变（它本来就不在 `AiState` 上，只是从 index 的闭包局部挪进切片局部），但以后若要有「整段重跑」这类入口，得再显式暴露一次。
 
+### 工程：`AiPanel.tsx` 的历史会话弹层与输入区切出两个组件（968 → 548 行）
+
+- 搬动：历史会话弹层（遮罩 + 搜索框 + 「进行中 / 已归档」两个分区 + 每行的改名 / 归档 / 删除）切出 `SessionHistoryPopover.tsx`（151 行），输入区（附件条、@ 引用下拉、优化提问候选、编辑器带入的选中内容、发送 / 停止按钮）切出 `AiComposer.tsx`（332 行）。`AiPanel.tsx` 随之从 968 行降到 548 行（+21 / −441），只剩面板外壳、消息列表与两个挂载点，14 个只服务于这两块的 import 符号（`ImagePlus` / `Send` / `Square` / `viewIcon` / `MAX_AI_IMAGES` / `saveAiImageFile` / `filesFromDataTransfer` / `ai-mention` 整行 / `flattenTree` / `parseViewAliases` / `cn` / `ImageThumb` / `AI_IMAGE_ACCEPT` / `AiImageAttachment`）与 4 个弹层图标（`Archive` / `ArchiveRestore` / `Search` / `Trash2`）一起搬走。
+- 边界按「谁跨边界」定：两块对外都只留真正需要的口子。弹层只有 `onClose`（收起要改宿主的 `showHistory`）与 `onRequestDelete`（删除要过宿主的确认框）两个回调，六条 store 读数与五个动作在它自己里面取；输入区因为 `textareaRef`（唤起时 focus）、`fillInput`（快捷动作把提示词填回）、`setPinned`（发送后把消息列表拉回底部）都归宿主，走的是 state / setter / ref 下传，`mention` 的行内对象类型顺手提成共用 `interface AiMention`——宿主 `fillInput` 也要清它，原来就是两处重复。
+- 字节审计（新文件里每行去掉缩进后必须逐字出现在 `git show HEAD:src/features/ai/AiPanel.tsx`，不匹配的只允许是显式改写的行）：`SessionHistoryPopover.tsx` 87 行逐字来自 HEAD、11 行不匹配（2 行 props 声明、4 行摘掉 `showHistory ? … : []` 守卫的派生、1 行 `onClose()`、1 行 `onRequestDelete`、3 行 prettier 合行）；`AiComposer.tsx` 194 行逐字来自 HEAD、19 行不匹配（14 行 props 类型与解构、3 行 `AiMention` 接口、2 行 prettier 合行）。搬移体一律用脚本做统一 dedent + 逐区间取原文，不手抄。
+- 新增 15 条 jsdom 用例（`SessionHistoryPopover.test.tsx` 7 条、`AiComposer.test.tsx` 8 条），这两块此前只能靠肉眼在原生窗口里看：搜索按标题与正文筛、分区页签的计数是全量而列表只露当前分区、点会话名切过去并收起、改名的 Enter / Escape、删除只把 id 递给宿主而组件自己不碰会话数据、归档按当前取反下发、「加载更多」只在超出显示窗口且非归档区时出现；输入区则钉住 Enter 发送走 `send(text, undefined)` 并清空 + 拉回底部、Shift+Enter 只换行、空输入且无附件时禁用、改提问态走 `resend` 与 `cancelEdit`、流式中换成停止、@ 引用候选来自页面树且方向键挪高亮 / Enter 选中写回「@名称 」（末尾空格进输入框但不进请求，发送前 `trim`）、优化提问候选点一条填回并清空候选、带入的选中内容显示条数且清掉走宿主的 `setPendingContext(null)`。
+- 四条变异核验（跑完逐字节还原，`grep` 确认四处原样回来了）：点会话名不再收起 → 1 红；`historyList` 绕过筛选函数 → 2 红（搜索 + 分区）；发送不再 `setPinned(true)` → 1 红；@ 引用选中时不补尾随空格 → 1 红。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`vitest run` 99 文件 / 1,320 通过（+15）、`npm run format:check` 干净、`npm run build` exit 0（55.89s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① 真机没复验——两块挂在同一个位置、props 全是原宿主的变量，界面观感这轮只在 jsdom 里看过。② `AiComposer` 里图片附件的落盘（`saveAiImageFile`）与粘贴取文件（`filesFromDataTransfer`）只测到「被调用」，没测真写进 `assets/`；③ 输入区 12 条 store 读数仍是组件自取，`AiPanel` 那边同名读数已经删干净，若以后要在面板层读同一个值，得注意别读成两份快照。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）

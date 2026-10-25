@@ -1,50 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Archive,
-  ArchiveRestore,
   ArrowDown,
   Copy,
   Eraser,
   FileText,
   History,
-  ImagePlus,
   Languages,
   Lightbulb,
   MessageSquarePlus,
   PenLine,
-  Search,
-  Send,
   Settings,
   Sparkles,
-  Square,
-  Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { viewIcon } from "@/components/view-icon";
-import { useAiStore, visibleSessionWindow, type AiActionRecord, type AiMessage } from "@/stores/ai";
+import { useAiStore, type AiActionRecord, type AiMessage } from "@/stores/ai";
 import { useWorkspaceStore } from "@/stores/workspace";
-import {
-  aiErrorText,
-  estimateAiCost,
-  formatAiCost,
-  MAX_AI_IMAGES,
-  saveAiImageFile,
-  type AiImageAttachment,
-} from "@/lib/ai";
-import { filesFromDataTransfer } from "@/lib/assets";
+import { aiErrorText, estimateAiCost, formatAiCost } from "@/lib/ai";
 import { getAiEditor } from "@/lib/ai-editor";
-import { bestMentionScore, detectMentionQuery } from "@/lib/ai-mention";
-import { flattenTree } from "@/lib/tree";
-import { parseViewAliases } from "@/types/models";
 import { t } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
 import { EditDiffDialog } from "./EditDiffDialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { type BubbleApi, MessageBubble } from "./MessageBubble";
-import { ImageThumb, QuickButton, RowAction } from "./AiParts";
-import { AI_ERROR_HINT, AI_IMAGE_ACCEPT, filterHistorySessions, safeHost } from "./ai-utils";
+import { QuickButton } from "./AiParts";
+import { SessionHistoryPopover } from "./SessionHistoryPopover";
+import { AiComposer, type AiMention } from "./AiComposer";
+import { AI_ERROR_HINT, safeHost } from "./ai-utils";
 /** AI 助手右侧面板（约 360px、可折叠、可拖拽调宽） */
 export function AiPanel() {
   const open = useAiStore((s) => s.open);
@@ -59,8 +41,6 @@ export function AiPanel() {
   const usage = useAiStore((s) => s.usage);
   const usageTotal = useAiStore((s) => s.usageTotal);
   const usageSummary = useAiStore((s) => s.usageSummary);
-  const pendingContext = useAiStore((s) => s.pendingContext);
-  const setPendingContext = useAiStore((s) => s.setPendingContext);
   const focusTick = useAiStore((s) => s.focusTick);
   const config = useAiStore((s) => s.config);
   const configLoaded = useAiStore((s) => s.configLoaded);
@@ -69,81 +49,38 @@ export function AiPanel() {
   const loadConfig = useAiStore((s) => s.loadConfig);
   const loadSessions = useAiStore((s) => s.loadSessions);
   const sessionsLoaded = useAiStore((s) => s.sessionsLoaded);
-  const sessionsShown = useAiStore((s) => s.sessionsShown);
-  const loadMoreSessions = useAiStore((s) => s.loadMoreSessions);
   const switchProfile = useAiStore((s) => s.switchProfile);
   const setCtxScope = useAiStore((s) => s.setCtxScope);
   const runQuickAction = useAiStore((s) => s.runQuickAction);
   const continueGenerate = useAiStore((s) => s.continueGenerate);
-  const send = useAiStore((s) => s.send);
-  const stop = useAiStore((s) => s.stop);
   const clear = useAiStore((s) => s.clear);
   const retry = useAiStore((s) => s.retry);
   const quickAction = useAiStore((s) => s.quickAction);
   const undoAction = useAiStore((s) => s.undoAction);
   const newChat = useAiStore((s) => s.newChat);
-  const switchSession = useAiStore((s) => s.switchSession);
   const activeSessionId = useAiStore((s) => s.activeSessionId);
   const deleteSession = useAiStore((s) => s.deleteSession);
-  const renameSession = useAiStore((s) => s.renameSession);
-  const setSessionArchived = useAiStore((s) => s.setSessionArchived);
   const rateMessage = useAiStore((s) => s.rateMessage);
   const applyAction = useAiStore((s) => s.applyAction);
   const rejectAction = useAiStore((s) => s.rejectAction);
-  const editingId = useAiStore((s) => s.editingId);
-  const promptIdeas = useAiStore((s) => s.promptIdeas);
-  const refining = useAiStore((s) => s.refining);
   const regenerate = useAiStore((s) => s.regenerate);
-  const resend = useAiStore((s) => s.resend);
   const startEdit = useAiStore((s) => s.startEdit);
-  const cancelEdit = useAiStore((s) => s.cancelEdit);
   const branchFrom = useAiStore((s) => s.branchFrom);
   const saveMessageAsPage = useAiStore((s) => s.saveMessageAsPage);
   const exportMessage = useAiStore((s) => s.exportMessage);
-  const refinePrompt = useAiStore((s) => s.refinePrompt);
-  const clearPromptIdeas = useAiStore((s) => s.clearPromptIdeas);
   const setRoute = useWorkspaceStore((s) => s.setRoute);
 
   const [input, setInput] = useState("");
-  // 待发送的图片附件（assets/ 相对路径）；发送后随消息留在对话里
-  const [attachments, setAttachments] = useState<AiImageAttachment[]>([]);
   // 正在查看的改动对比（AI 下发的某个动作 + 所属消息与下标，便于弹窗内直接「应用」）
   const [diff, setDiff] = useState<{ id: string; index: number; record: AiActionRecord } | null>(null);
-  const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
-  const [mentionActive, setMentionActive] = useState(0);
+  const [mention, setMention] = useState<AiMention | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   // 破坏性操作（清空当前对话 / 删除会话）先确认：这些都会直接删库里的会话行
   const [pendingDanger, setPendingDanger] = useState<{ kind: "clear" } | { kind: "session"; id: string } | null>(null);
-  // 历史会话面板：搜索词 + 是否在看归档区 + 正在改名的那一行
-  const [historyQuery, setHistoryQuery] = useState("");
-  const [historyArchived, setHistoryArchived] = useState(false);
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameDraft, setRenameDraft] = useState("");
   // 是否停留在列表底部：流式增量只在此时自动跟随，用户上滑看历史不被拽回
   const [pinned, setPinned] = useState(true);
   const listRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const tree = useWorkspaceStore((s) => s.tree);
-
-  // @ 引用的候选文档：当前工作区树（排除行详情），按查询词模糊匹配打分取前 8
-  const mentionItems = useMemo(() => {
-    if (!mention) return [];
-    return flattenTree(tree)
-      .flatMap((v) => {
-        try {
-          if ((JSON.parse(v.extra) as { row_detail?: unknown }).row_detail) return [];
-        } catch {
-          /* extra 解析失败当作普通文档 */
-        }
-        // 标题与别名一起打分取最高：@ 缩写/旧名也能把这页带进候选
-        const score = bestMentionScore([v.name, ...parseViewAliases(v.aliases)], mention.query);
-        return score === null ? [] : [{ v, score }];
-      })
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 8)
-      .map((x) => x.v);
-  }, [mention, tree]);
 
   useEffect(() => {
     if (open && !configLoaded) void loadConfig();
@@ -274,129 +211,11 @@ export function AiPanel() {
     : null;
   const showUsage = !!usage || usageTotal.total > 0 || !!usageSummary;
 
-  // 历史列表只在面板展开时算：正文逐条比对不便宜，没必要跟着流式增量每帧跑一遍。
-  // 先取显示窗口（归档全留 + 最近 MAX_SESSIONS×n 条普通会话），再按分区/关键词筛。
-  const windowedSessions = showHistory ? visibleSessionWindow(sessions, sessionsShown) : [];
-  const hiddenNormalCount = showHistory ? sessions.length - windowedSessions.length : 0;
-  const archivedCount = showHistory ? sessions.filter((x) => x.archived).length : 0;
-  const historyList = showHistory ? filterHistorySessions(windowedSessions, historyArchived, historyQuery) : [];
-
-  const closeHistory = () => {
-    setShowHistory(false);
-    setRenamingId(null);
-  };
-
-  const commitRename = (id: string) => {
-    renameSession(id, renameDraft);
-    setRenamingId(null);
-  };
-
   // 用户滚动时重新判断是否停在底部（48px 容差）
   const onListScroll = () => {
     const el = listRef.current;
     if (!el) return;
     setPinned(el.scrollHeight - el.scrollTop - el.clientHeight < 48);
-  };
-
-  const submit = () => {
-    const text = input.trim();
-    if ((!text && attachments.length === 0) || streaming) return;
-    setInput("");
-    setAttachments([]);
-    setMention(null);
-    setPinned(true);
-    // 正在修改某条提问时，发送表示「改后重发」：替换那条提问并重跑它之后的回答
-    // 没重新附图就沿用原提问的图片（传 undefined 表示不改）
-    const images = attachments.length > 0 ? attachments : undefined;
-    if (editingId) void resend(editingId, text, images);
-    else void send(text, images);
-  };
-
-  // 图片附件：粘贴与选择框拿到的都是 File，先落进 assets/，会话与请求里只带相对路径
-  const addImageFiles = async (files: File[]) => {
-    const room = MAX_AI_IMAGES - attachments.length;
-    if (room <= 0) {
-      toast.error(t("ai.attachFull", { count: MAX_AI_IMAGES }));
-      return;
-    }
-    const saved: AiImageAttachment[] = [];
-    for (const file of files.slice(0, room)) {
-      try {
-        saved.push(await saveAiImageFile(file));
-      } catch (e) {
-        toast.error(aiErrorText(e));
-      }
-    }
-    if (saved.length > 0) setAttachments((cur) => [...cur, ...saved].slice(0, MAX_AI_IMAGES));
-  };
-
-  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = filesFromDataTransfer(e.clipboardData);
-    // 纯文本粘贴不拦截，交回输入框默认行为
-    if (files.length === 0) return;
-    e.preventDefault();
-    void addImageFiles(files);
-  };
-
-  const removeAttachment = (path: string) => setAttachments((cur) => cur.filter((i) => i.path !== path));
-
-  const stopEdit = () => {
-    cancelEdit();
-    setInput("");
-  };
-
-  // 选中 @ 引用：把 @查询词 替换为 @文件名 （带一个尾随空格），并把光标移到其后
-  const pickMention = (name: string) => {
-    if (!mention) return;
-    const caret = textareaRef.current?.selectionStart ?? input.length;
-    const next = input.slice(0, mention.start) + "@" + name + " " + input.slice(caret);
-    setInput(next);
-    setMention(null);
-    const pos = mention.start + name.length + 2;
-    requestAnimationFrame(() => {
-      const el = textareaRef.current;
-      if (el) {
-        el.focus();
-        el.setSelectionRange(pos, pos);
-      }
-    });
-  };
-
-  const onInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value;
-    setInput(value);
-    setMention(detectMentionQuery(value, e.target.selectionStart));
-    setMentionActive(0);
-  };
-
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // 文件下拉打开时，方向键/回车/退出优先归下拉
-    if (mention && mentionItems.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setMentionActive((i) => (i + 1) % mentionItems.length);
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setMentionActive((i) => (i - 1 + mentionItems.length) % mentionItems.length);
-        return;
-      }
-      if (e.key === "Enter" || e.key === "Tab") {
-        e.preventDefault();
-        pickMention(mentionItems[mentionActive]?.name ?? mentionItems[0].name);
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setMention(null);
-        return;
-      }
-    }
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      submit();
-    }
   };
 
   const copyLast = () => {
@@ -486,115 +305,12 @@ export function AiPanel() {
         </div>
       </div>
 
-      {/* 历史会话下拉：可搜索、可改名/归档；切换时当前对话自动归档 */}
+      {/* 历史会话下拉：搜索、分区、改名、归档都在组件里；删除仍要过本文件的确认框 */}
       {showHistory && (
-        <>
-          <button
-            className="fixed inset-0 z-20 cursor-default"
-            aria-label={t("ai.closeHistory")}
-            onClick={closeHistory}
-          />
-          <div className="absolute top-9 right-2 z-30 w-72 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800">
-            <div className="flex items-center gap-1.5 border-b border-neutral-200 px-2.5 py-1.5 dark:border-neutral-700">
-              <Search className="h-3 w-3 shrink-0 text-neutral-400" />
-              <input
-                autoFocus
-                value={historyQuery}
-                onChange={(e) => setHistoryQuery(e.target.value)}
-                placeholder={t("ai.searchSessions")}
-                aria-label={t("ai.searchSessions")}
-                className="min-w-0 flex-1 bg-transparent text-[12px] text-neutral-700 outline-none placeholder:text-neutral-400 dark:text-neutral-200"
-              />
-            </div>
-            <div className="flex gap-1 px-2 pt-1.5">
-              {[false, true].map((flag) => (
-                <button
-                  key={String(flag)}
-                  className={cn(
-                    "rounded px-1.5 py-0.5 text-[11px] text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-700",
-                    historyArchived === flag &&
-                      "bg-neutral-100 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200",
-                  )}
-                  onClick={() => setHistoryArchived(flag)}
-                >
-                  {flag ? t("ai.historyArchivedTab") : t("ai.historyRecentTab")}
-                  {flag && archivedCount > 0 ? ` · ${archivedCount}` : ""}
-                </button>
-              ))}
-            </div>
-            <div className="max-h-64 overflow-y-auto py-1">
-              {historyList.length === 0 ? (
-                <p className="px-3 py-2 text-[11px] text-neutral-400">{t("ai.noSessionMatch")}</p>
-              ) : (
-                historyList.map((sess) => (
-                  <div key={sess.id} className="group flex items-center pr-1">
-                    {renamingId === sess.id ? (
-                      <input
-                        autoFocus
-                        value={renameDraft}
-                        onChange={(e) => setRenameDraft(e.target.value)}
-                        onBlur={() => commitRename(sess.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") commitRename(sess.id);
-                          else if (e.key === "Escape") setRenamingId(null);
-                        }}
-                        aria-label={t("ai.renameSessionField")}
-                        className="mx-1.5 my-0.5 min-w-0 flex-1 rounded border border-brand-500 bg-white px-1.5 py-1 text-[12px] text-neutral-700 outline-none dark:bg-neutral-900 dark:text-neutral-200"
-                      />
-                    ) : (
-                      <button
-                        className="min-w-0 flex-1 truncate rounded px-2.5 py-1.5 text-left text-[12px] text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-700"
-                        onClick={() => {
-                          switchSession(sess.id);
-                          closeHistory();
-                        }}
-                      >
-                        {sess.title}
-                        {/* 标注这个会话是基于哪一页问的，避免切页后张冠李戴 */}
-                        {sess.pageTitle && (
-                          <span className="ml-1 text-[10px] text-neutral-400">· {sess.pageTitle}</span>
-                        )}
-                      </button>
-                    )}
-                    {renamingId !== sess.id && (
-                      <>
-                        <RowAction
-                          icon={<PenLine className="h-3 w-3" />}
-                          label={t("ai.renameSession")}
-                          onClick={() => {
-                            setRenamingId(sess.id);
-                            setRenameDraft(sess.title);
-                          }}
-                        />
-                        <RowAction
-                          icon={
-                            sess.archived ? <ArchiveRestore className="h-3 w-3" /> : <Archive className="h-3 w-3" />
-                          }
-                          label={sess.archived ? t("ai.unarchiveSession") : t("ai.archiveSession")}
-                          onClick={() => setSessionArchived(sess.id, !sess.archived)}
-                        />
-                        <RowAction
-                          icon={<Trash2 className="h-3 w-3" />}
-                          label={t("ai.deleteSession")}
-                          danger
-                          onClick={() => setPendingDanger({ kind: "session", id: sess.id })}
-                        />
-                      </>
-                    )}
-                  </div>
-                ))
-              )}
-              {!historyArchived && hiddenNormalCount > 0 && (
-                <button
-                  className="block w-full px-3 py-1.5 text-left text-[11px] text-brand-600 hover:bg-neutral-100 dark:hover:bg-neutral-700"
-                  onClick={loadMoreSessions}
-                >
-                  {t("ai.loadMoreSessions")}（{t("ai.moreSessionCount", { count: hiddenNormalCount })}）
-                </button>
-              )}
-            </div>
-          </div>
-        </>
+        <SessionHistoryPopover
+          onClose={() => setShowHistory(false)}
+          onRequestDelete={(id) => setPendingDanger({ kind: "session", id })}
+        />
       )}
 
       {!configLoaded ? (
@@ -788,151 +504,15 @@ export function AiPanel() {
           </div>
 
           {/* 输入区：Enter 发送、Shift+Enter 换行；输入 @ 引用工作区文件 */}
-          <div className="relative shrink-0 border-t border-neutral-200 p-2 dark:border-neutral-700">
-            {/* 改后重发：输入框内容对应一条既有提问，发送会替换它并重跑其后的回答 */}
-            {editingId && (
-              <div className="mb-1 flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-700 dark:border-amber-600 dark:bg-neutral-800 dark:text-amber-300">
-                <span className="min-w-0 flex-1">{t("ai.editingBanner")}</span>
-                <button className="shrink-0 underline hover:no-underline" onClick={stopEdit}>
-                  {t("ai.cancelMsgEdit")}
-                </button>
-              </div>
-            )}
-            {/* 「优化提问」的候选：点一条填回输入框 */}
-            {promptIdeas.length > 0 && (
-              <div className="mb-1 rounded-md border border-neutral-200 px-2 py-1 dark:border-neutral-700">
-                <div className="flex items-center justify-between text-[11px] text-neutral-500">
-                  <span>{t("ai.refineCandidates")}</span>
-                  <button className="underline hover:no-underline" onClick={clearPromptIdeas}>
-                    {t("ai.clearPendingContext")}
-                  </button>
-                </div>
-                <div className="mt-1 space-y-1">
-                  {promptIdeas.map((idea, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      title={idea}
-                      className="block w-full truncate rounded border border-neutral-200 px-1.5 py-0.5 text-left text-[11px] text-neutral-600 hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-                      onClick={() => {
-                        fillInput(idea);
-                        clearPromptIdeas();
-                      }}
-                    >
-                      {idea}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {/* 编辑器带入的选中内容：随本轮提问一起下发 */}
-            {pendingContext && (
-              <div className="mb-1 flex items-center gap-1.5 rounded-md border border-brand-300 bg-brand-50 px-2 py-1 text-[11px] text-brand-700 dark:border-brand-600 dark:bg-neutral-800 dark:text-neutral-200">
-                <span className="min-w-0 flex-1 truncate">
-                  {t("ai.pendingContext", { count: pendingContext.length })}
-                </span>
-                <button className="shrink-0 underline hover:no-underline" onClick={() => setPendingContext(null)}>
-                  {t("ai.clearPendingContext")}
-                </button>
-              </div>
-            )}
-            {/* 待发送的图片：缩略图 + 移除；发送后原样留在用户消息里 */}
-            {attachments.length > 0 && (
-              <div className="mb-1 flex flex-wrap gap-1.5">
-                {attachments.map((img) => (
-                  <ImageThumb
-                    key={img.path}
-                    path={img.path}
-                    name={img.name}
-                    onRemove={() => removeAttachment(img.path)}
-                  />
-                ))}
-              </div>
-            )}
-            {mention && (
-              <div className="absolute inset-x-2 bottom-full mb-1 overflow-hidden rounded-md border border-neutral-200 bg-white shadow-lg dark:border-neutral-700 dark:bg-neutral-800">
-                {mentionItems.length === 0 ? (
-                  <div className="px-3 py-2 text-[12px] text-neutral-400">{t("mention.empty")}</div>
-                ) : (
-                  <div role="listbox" aria-label={t("ai.inputPlaceholder")} className="max-h-56 overflow-y-auto py-1">
-                    {mentionItems.map((v, i) => (
-                      <button
-                        key={v.id}
-                        type="button"
-                        role="option"
-                        aria-selected={i === mentionActive}
-                        data-active={i === mentionActive}
-                        className={cn(
-                          "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px]",
-                          i === mentionActive
-                            ? "bg-brand-100 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100"
-                            : "text-neutral-600 dark:text-neutral-300",
-                        )}
-                        onMouseEnter={() => setMentionActive(i)}
-                        onClick={() => pickMention(v.name)}
-                      >
-                        <span className="text-base leading-none">{viewIcon(v)}</span>
-                        <span className="min-w-0 flex-1 truncate">{v.name || t("common.untitled")}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={onInputChange}
-              onPaste={onPaste}
-              onKeyDown={onKeyDown}
-              rows={3}
-              aria-label={t("ai.inputPlaceholder")}
-              placeholder={t("ai.inputPlaceholder")}
-              className="w-full resize-none rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-[12px] text-neutral-800 outline-none focus:border-brand-500 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
-            />
-            <div className="mt-1.5 flex items-center justify-end gap-1.5">
-              {/* 图片附件走隐藏的原生选择框：能拿到 File，体积/类型可在校验后再入库 */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept={AI_IMAGE_ACCEPT}
-                multiple
-                aria-hidden="true"
-                className="hidden"
-                onChange={(e) => {
-                  const files = Array.from(e.target.files ?? []);
-                  e.target.value = "";
-                  if (files.length > 0) void addImageFiles(files);
-                }}
-              />
-              <QuickButton
-                icon={<ImagePlus className="h-3 w-3" />}
-                label={t("ai.attachImage")}
-                disabled={streaming || attachments.length >= MAX_AI_IMAGES}
-                onClick={() => fileInputRef.current?.click()}
-              />
-              {/* 优化提问：让模型把输入框里这句改写成几条候选，不进对话 */}
-              {!streaming && (
-                <QuickButton
-                  icon={<Sparkles className="h-3 w-3" />}
-                  label={refining ? t("ai.refining") : t("ai.refine")}
-                  disabled={!input.trim() || refining}
-                  onClick={() => void refinePrompt(input)}
-                />
-              )}
-              {streaming ? (
-                <Button size="sm" variant="outline" onClick={stop}>
-                  <Square className="mr-1 h-3.5 w-3.5" />
-                  {t("ai.stop")}
-                </Button>
-              ) : (
-                <Button size="sm" onClick={submit} disabled={!input.trim() && attachments.length === 0}>
-                  <Send className="mr-1 h-3.5 w-3.5" />
-                  {t("ai.send")}
-                </Button>
-              )}
-            </div>
-          </div>
+          <AiComposer
+            textareaRef={textareaRef}
+            input={input}
+            setInput={setInput}
+            mention={mention}
+            setMention={setMention}
+            setPinned={setPinned}
+            fillInput={fillInput}
+          />
         </>
       )}
       <EditDiffDialog
