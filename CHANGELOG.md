@@ -241,6 +241,17 @@
 - 落差：① 三份 mock 表是 vitest 提升规则的必然结果，收成一份要动 `setupFiles` 或 `__mocks__`，属全局测试配置变更，另案；② `AiStoreMocks` 用宽松的 `Mock`，桩的入参/返回类型不再逐个校验（原文件的 `M` 是 `vi.hoisted` 匿名对象，本来也只有个别处带类型标注），这层严格度靠 `loadStore` 里的默认实现与运行期用例兜住；③ 全仓 >800 行的文件现在只剩三个界面组件（`GridView.tsx` 1,450 / `AiPanel.tsx` 1,383 / `EditorPage.tsx` 1,216），切它们要先拍板组件边界，不在「只搬不改」里能推出。
 - 下一批：机械搬运两条线都见底了——`stores/ai/index.ts` 卡在 `turnRegistry`（上面那条），>800 的只剩三个组件。要么拍板 `turnRegistry` 的形状，要么给组件切分定边界，要么转去做有用户价值的功能。
 
+### 工程：`AiPanel.tsx` 的顶层小件与纯函数外迁（1,383 → 968 行）
+
+- 新增 `src/features/ai/MessageBubble.tsx`（295 行）：一条消息的渲染（正文气泡 + AI 动作卡片 + 写回与消息级操作），连同只有它用得上的私有件 `MarkdownMemo`、`TOOL_LABEL` / `actionStatusText`、`LEGACY_DETAIL_KEYS` / `detailText`、`canShowDiff`、`IconAction`、`MiniButton`；对外导出 `MessageBubble` 与 `BubbleApi` 两个名字（`BubbleApi` 是 `AiPanel` 用 `useMemo<BubbleApi>` 组出来的稳定操作集，引用不变才保得住 memo 链，跨文件必须可见）。
+- 新增 `src/features/ai/AiParts.tsx`（104 行）：面板与气泡共用的三个展示小件——`ImageThumb`（附件缩略图，URL 异步解析、组件自持 alive 状态）、`RowAction`（历史会话行的悬浮改名/归档/删除）、`QuickButton`（快捷动作条的小按钮）。
+- 新增 `src/features/ai/ai-utils.ts`（39 行）：`AI_IMAGE_ACCEPT`（选择框只放行 Rust 侧认得的四种图片）、`filterHistorySessions`（归档分区 + 关键词命中标题或任一消息正文）、`AI_ERROR_HINT`（Rust 下发的错误归类码 → 引导文案）、`safeHost`（Base URL 取主机名，解析失败原样返回）。
+- 形制：**整块摘出、零 dedent**——这些本来全是 0 格缩进的顶层声明，15 个块与 `HEAD` 逐字节相等，唯一差异是跨文件用得上的 9 个符号加了 `export ` 前缀；**prettier 一处都没重排**（加前缀后最长行仍在 120 列内）。`AiPanel.tsx` 的主组件主体（原 122–1042 行）逐字节保留，diff 只剩 import 头：摘掉因此不再被引用的 13 个 specifier（`memo`、9 个 lucide 图标、`StoredSession`、`resolveAssetUrl`、`MessageKey`，由 `noUnusedLocals` 逐个报出）与整行 `./Markdown`（改由新文件引）。命名与出处注释沿用本仓先例（组件 PascalCase、纯函数模块 kebab，首行「从 AiPanel.tsx 原样搬出」同 `features/database/grid-row.tsx` 那一族）。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 95 文件 / 1287 用例全过（`AiPanel` 没有组件用例，这条只证明没把别处碰坏）、`npm run build` exit 0、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 因为 `AiPanel` 零测试，这批补了一次**原生窗口 CDP 真机冒烟**（`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 npm run tauri dev` + `scripts/cdp-inspect.mjs`）：面板展开后 139 个按钮、25 个 `max-w-[85%]` 气泡件、Markdown 块 27 个；`IconAction` 那排消息级操作（改这条提问 / 复制这条 / 从此处分出新会话 / 替换选中 / 插入到光标处 / 从此处重新生成 / 存为页面 / 导出为 Markdown / 这个回答有用 / 这个回答不行）逐个在 DOM 里命中；`MiniButton`「查看改动」在动作卡片上命中；`QuickButton`「继续生成」命中；空态隐私提示渲染出「本轮对话与当前文档将发送至 api.deepseek.com」，即搬到 `ai-utils.ts` 的 `safeHost()` 真跑过并取到了主机名。全程 0 未捕获异常，结尾把面板收起还原窗口状态。
+- 落差：① `RowAction` 与整个历史弹层、以及 `ImageThumb` **没能在真机验到**——这台机器当前 `sessions.length === 0`（历史按钮 `disabled`），要让它出现得先归档一条会话或发一次提问，那是写用户数据、且提问会真打外部 API，冒烟不该顺手做；这两块只有「逐字节相同 + 类型通过 + 构建通过」三件证据。② 动作卡片另外三个 `MiniButton`（应用 / 忽略 / 撤销）要 `confirm_edit` 开着且正有待落地动作才出现，同样没验到。③ `AiPanel.tsx` 968 行仍 >800：剩下的是主组件本体的 JSX，下一处接缝（历史弹层现 `AiPanel.tsx:490–598`、输入区 `:791–937`）都要透传 `pendingDanger` 或 `textareaRef`，属边界决定，不在「只搬不改」里能推出。
+- 全仓 >800 行文件现在剩 4 个：`GridView.tsx` 1,450 / `EditorPage.tsx` 1,216 / `i18n/{en,zh}.ts`（一语言一份，不算债），`AiPanel.tsx` 已降到 968。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
