@@ -8,7 +8,14 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 
 import { GridView } from "./GridView";
-import { callsFor, queueOpenDialog, resetIpcMock, setIpcHandlers } from "@/test/tauri-mock";
+import {
+  callsFor,
+  dialogCalls,
+  queueOpenDialog,
+  queueSaveDialog,
+  resetIpcMock,
+  setIpcHandlers,
+} from "@/test/tauri-mock";
 import type { View } from "@/types/models";
 
 vi.mock("@/lib/ipc-core", async () => (await import("@/test/tauri-mock")).ipcCoreMock());
@@ -130,5 +137,62 @@ describe("GridView 的 CSV 导入入口", () => {
 
     expect(callsFor("view_create")).toHaveLength(0);
     expect(callsFor("csv_import")).toHaveLength(0);
+  });
+});
+
+// 导出这条链原先零覆盖：切片搬走后它靠 13 个注入值喂数据，这里钉住「行列单元格真到了导出函数里」
+describe("GridView 的导出入口", () => {
+  it("导出 CSV：可见行列折成文本，文件名取宿主页面标题", async () => {
+    const user = userEvent.setup();
+    setIpcHandlers({
+      field_list: () => [
+        {
+          id: "f-name",
+          database_view_id: "v-grid",
+          name: "名称",
+          field_type: "text",
+          width: 200,
+          is_hidden: 0,
+          position: 0,
+        },
+        {
+          id: "f-num",
+          database_view_id: "v-grid",
+          name: "数量",
+          field_type: "number",
+          width: 120,
+          is_hidden: 0,
+          position: 1,
+        },
+      ],
+      row_list: () =>
+        ["r-1", "r-2"].map((id, i) => ({
+          id,
+          database_view_id: "v-grid",
+          position: i,
+          document_id: null,
+          parent_id: null,
+          created_at: 0,
+          updated_at: 0,
+        })),
+      cells_load: () => [{ row_id: "r-1", field_id: "f-name", value: JSON.stringify("甲") }],
+      write_text_file: () => undefined,
+    });
+    queueSaveDialog("D:/out/客户.csv");
+    render(<GridView view={view} source={view} />);
+
+    await user.click(await screen.findByRole("button", { name: "导出 CSV" }));
+
+    await waitFor(() => expect(callsFor("write_text_file")).toHaveLength(1));
+    const args = callsFor("write_text_file")[0].args;
+    // 前置 BOM + 表头 + 两行数据（第二行没写过值，仍按空行带出）
+    const content = String(args?.content);
+    expect(content.charCodeAt(0)).toBe(0xfeff); // 前置 BOM：Excel 才不会把中文显示成乱码
+    // 表头 + 两行都带出（第二行没写过值，是一行空逗号）：可见行列真到了导出函数里
+    expect(content.slice(1).split(/\r?\n/).slice(0, 3)).toEqual(["名称,数量", "甲,", ","]);
+    // 存盘路径来自 save 对话框，默认名由宿主标题 + 扩展名拼出
+    expect(args?.path).toBe("D:/out/客户.csv");
+    expect(dialogCalls[dialogCalls.length - 1]?.options?.defaultPath).toBe("客户.csv");
+    expect(toastSuccess).toHaveBeenCalledWith("已导出 CSV");
   });
 });

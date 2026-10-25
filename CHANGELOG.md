@@ -250,7 +250,19 @@
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 95 文件 / 1287 用例全过（`AiPanel` 没有组件用例，这条只证明没把别处碰坏）、`npm run build` exit 0、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
 - 因为 `AiPanel` 零测试，这批补了一次**原生窗口 CDP 真机冒烟**（`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 npm run tauri dev` + `scripts/cdp-inspect.mjs`）：面板展开后 139 个按钮、25 个 `max-w-[85%]` 气泡件、Markdown 块 27 个；`IconAction` 那排消息级操作（改这条提问 / 复制这条 / 从此处分出新会话 / 替换选中 / 插入到光标处 / 从此处重新生成 / 存为页面 / 导出为 Markdown / 这个回答有用 / 这个回答不行）逐个在 DOM 里命中；`MiniButton`「查看改动」在动作卡片上命中；`QuickButton`「继续生成」命中；空态隐私提示渲染出「本轮对话与当前文档将发送至 api.deepseek.com」，即搬到 `ai-utils.ts` 的 `safeHost()` 真跑过并取到了主机名。全程 0 未捕获异常，结尾把面板收起还原窗口状态。
 - 落差：① `RowAction` 与整个历史弹层、以及 `ImageThumb` **没能在真机验到**——这台机器当前 `sessions.length === 0`（历史按钮 `disabled`），要让它出现得先归档一条会话或发一次提问，那是写用户数据、且提问会真打外部 API，冒烟不该顺手做；这两块只有「逐字节相同 + 类型通过 + 构建通过」三件证据。② 动作卡片另外三个 `MiniButton`（应用 / 忽略 / 撤销）要 `confirm_edit` 开着且正有待落地动作才出现，同样没验到。③ `AiPanel.tsx` 968 行仍 >800：剩下的是主组件本体的 JSX，下一处接缝（历史弹层现 `AiPanel.tsx:490–598`、输入区 `:791–937`）都要透传 `pendingDanger` 或 `textareaRef`，属边界决定，不在「只搬不改」里能推出。
-- 全仓 >800 行文件现在剩 4 个：`GridView.tsx` 1,450 / `EditorPage.tsx` 1,216 / `i18n/{en,zh}.ts`（一语言一份，不算债），`AiPanel.tsx` 已降到 968。
+- 全仓 >800 行文件现在剩 5 个：`GridView.tsx` 1,450 / `EditorPage.tsx` 1,216 / `AiPanel.tsx` 968 / `i18n/{en,zh}.ts`（一语言一份，不算债）。
+
+### 工程：`GridView.tsx` 的导入导出簇切出 `grid-io-slice.ts`（1,450 → 1,120 行）
+
+- 新增 `src/features/database/grid-io-slice.ts`（404 行）：CSV / xlsx 导出、TSV 剪贴板粘贴、CSV 导入（建新表 + 追加到当前表）这一簇共 7 个闭包助手——`exportCells`（私有）、`exportCsv`、`exportXlsx`、`onPasteTsv`、`importCsv`、`runAppendCsv`（私有）、`runImportCsv`，原样来自 `GridView.tsx` 609–931。
+- 形制：这批不是顶层声明，是组件体内的闭包，所以走 `createGridIoSlice(ctx)` 工厂 + **同参数名解构**——函数体在工厂体内仍是 2 格缩进，与在组件体里一模一样，323 行整块与 `HEAD` 逐字节相等、零 dedent、零改写；宿主每次渲染调一次工厂，解构出 5 个动作（`exportCells` / `runAppendCsv` 留在切片内部）。
+- 注入的 13 个值全部来自宿主当次渲染（`source` / `fields` / `cells` / `displayRows` / `displayCells` / `relationDbOf` / `visibleFields` / `editing` / `pasteAnchorRef` / `store` / `storeApi` / `importPlan` / `setImportPlan`）。这里的关键是 `importPlan`：它是 React state，闭包读的必须是「本次渲染的快照」才与搬前等价——工厂每次渲染重新求值，快照语义原样保持；`pasteAnchorRef` 传的是 ref 对象本体，`.current` 仍在调用时才读。
+- 类型不重抄签名：`fields` 写成 `DatabaseState["fields"]`，`displayRows` / `visibleFields` 写成 `GridModel[……]`，`displayCells` / `relationDbOf` 写成 `UseGridViewModelResult[……]` 索引类型。原先内联在 `useState<{…}>` 里的那个匿名类型（`GridView.tsx` 135–141）收成导出的 `GridImportPlan`，宿主改成 `useState<GridImportPlan | null>(null)`——字段与顺序不变，这是本批唯一一处非「整块摘取」的改动面。
+- 因此 `GridView.tsx` 的 diff 只有三处：import 头（`noUnusedLocals` 报出 9 条整行 import 与 `mapWithConcurrency` 一项，删掉；`@/types/database`、`@/lib/database-values` 两行各自减短）、那一条 useState 的类型实参、簇换成 16 行工厂接线。其余逐字节保留（HEAD 的 99–133 / 142–608 / 932–1450 三段全部原样可寻）。
+- 补了一条用例（`grid-view.test.tsx` 现 3 条，套件 1,288）：导出 CSV 用替身喂 2 字段 / 2 行 / 1 个格值，断言前置 BOM、`名称,数量` 表头、两行都带出（第二行没写过值是一行空逗号）、`write_text_file` 的 `path` 与 `save` 对话框的 `defaultPath="客户.csv"`（文件名取宿主页面标题）。这条链此前零覆盖，而它正是「切片靠注入拿数据」的接缝所在——做了变异核验：把传给工厂的 `displayRows` 换成 `[]`，用例当场红（只出 `['名称,数量','']`）。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净（搬运部分零重排，prettier 只动新写的用例与 import 行）、`vitest run` 95 文件 / 1,288 用例全过、`npm run build` exit 0、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① `exportXlsx`、`onPasteTsv`、`runAppendCsv` 三个仍无运行时证据。前两者与 `exportCsv` 同形（读同一批注入值，分别走 `export_xlsx` 命令与剪贴板事件），追加路径要在 `CsvImportDialog` 里选「追加到当前表」；补三条用例各自要造 fixture，建议另开一批（`queueSaveDialog` 与 `dialogCalls` 已在替身里，成本约 60 行）。② `GridView.tsx` 1,120 行仍 >800：剩下的全是 JSX 与本地 UI state（22 个 `useState`），下一处接缝要么像 `grid-row.tsx` 那样透传几十个字段的 ctx，要么先定 state 归属，属边界决定，不在「只搬不改」里能推出。
+- 全仓 >800 行的前端文件从 5 个降到 4 个：`EditorPage.tsx` 1,216 / `AiPanel.tsx` 968 / `i18n/{en,zh}.ts`（一语言一份，不算债）。
 
 ## v0.8.33（2026-10-20）
 
