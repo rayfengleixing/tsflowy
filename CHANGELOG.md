@@ -396,6 +396,14 @@
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 101 文件 / 1,375 通过（+1）、`npm run build` exit 0（50.92s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
 - 落差：① `lib/ai-tokens.ts`（40 行，估 token）唯一消费点是 `stores/ai/request-slice.ts`，按「公共状态留 stores」的口径它归 lib 还是归 stores 都没错，本批没定。② `Markdown.tsx:155` 认的是字面量 `"ai-math-block"` 而不是同目录的 `MATH_CLASS_BLOCK` 常量——现在两者挨在一起，改常量不改字面量会静默错版，属一致性/行为另案。③ 引用点击跳转与公式排版只能在 `npm run tauri dev` 的原生窗口里看，本批未跑真机。
 
+### 工程：AI 取证工具喂给模型的正文有断言盯着了（产品代码零改动）
+
+- `runRetrievalTool` 的四条只读取证分支此前只有「返回了字符串」级别的断言，而它的返回值是原样喂回模型的正文——格式改坏不会报错，只会让模型下一步答得离谱。补 6 条用例钉住：命中行 `- 标题 [id=页面 id] (布局)：片段`（`<em>` 标记与换行不进上下文、单条片段 200 字封顶、最多列 12 条但计数说的是全部命中）；字段清单过滤隐藏列、选择类带上「（选项：待办 / 进行中）」；表数据首列是行 id（模型改/删行时唯一的凭据），新建还没写格子的行按空列走而不是整条检索抛错；正文超长时先按片段召回（`docSearchSnippets(页面, 问题, 8)`）、片段空手才退回硬截断，没给问题就根本不查片段；空正文、坏 JSON、只有空白都回「「x」还没有正文。」；三条拒绝文案（没关键词 / 没打开空间 / 不认识的工具名）。
+- 用例面：`src/lib/ai-tools.test.ts` 22 → 28 条。原来的 `documentApi` 替身写死「正文恒为 null」，换成可当场摆正文的 `docs.get`，另加 `searchApi.search` 与 `docSearchSnippets` 两个替身；产品代码一行没动（`git diff --stat` 只有这一个文件）。
+- 17 条变异核验（每次改坏 `retrieval.ts` 的一处 → 跑用例 → 逐字节还原并断言一致）：命中行去掉 id、只剥 `<em>` 开标签、清单从 12 条放宽、选项串分隔符去空格、隐藏列进正文、表头首列换文案、缺 cell 的行不兜底、行数不按 30 封顶、空正文不回兜底、超长不走片段召回、片段条数 8 改 5、行详情页混进检索清单、片段上限 200 改 400、没关键词也打搜索、零命中回「检索到 0 个结果」、不认识的工具回空串、没空间也打搜索——17 条全部转红。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 101 文件 / 1,381 通过（+6）、`npm run build` exit 0（52.72s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① `get_page_content` 的正文形态走的是真 `jsonToMarkdown`，用例喂的是「一个段落一行文本」的最小文档，列表 / 代码块 / 表格转出的 Markdown 长什么样仍无断言（那是 `lib/markdown` 的用例面）。② 命中顺序与权重来自 Rust 侧的 `doc_search`，前端只钉住「拿到什么就格式化成什么」。③ 本轮没跑真机。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）

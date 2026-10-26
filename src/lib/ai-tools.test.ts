@@ -20,9 +20,27 @@ const view = vi.hoisted(() => ({
   softDelete: vi.fn(() => Promise.resolve()),
 }));
 
+// 正文与检索都做成可换返回值的替身：拆文件前只读取证那四条分支一次没被测过，
+// 需要「这篇文档的正文是什么 / 命中了哪些页」由用例当场摆。
+const docs = vi.hoisted(() => ({
+  get: vi.fn((): Promise<string | null> => Promise.resolve(null)),
+  save: vi.fn((): Promise<void> => Promise.resolve()),
+}));
+
+const search = vi.hoisted(() => ({
+  search: vi.fn((_workspaceId: string, _input: string, _views: unknown[]): Promise<unknown[]> => Promise.resolve([])),
+}));
+
+/** 单篇文档内的片段召回：用它区分「超长正文走了片段这条路」与「直接硬截断」 */
+const snippets = vi.hoisted(() => ({
+  docSearchSnippets: vi.fn((_viewId: string, _query: string, _limit: number): Promise<string[]> => Promise.resolve([])),
+}));
+
 vi.mock("./database", () => ({ databaseApi: api }));
 vi.mock("./db", () => ({ viewApi: view }));
-vi.mock("./documents", () => ({ documentApi: { get: () => Promise.resolve(null), save: () => Promise.resolve() } }));
+vi.mock("./documents", () => ({ documentApi: docs }));
+vi.mock("./search", () => ({ searchApi: search }));
+vi.mock("./ai", () => ({ docSearchSnippets: snippets.docSearchSnippets }));
 
 import {
   aiToolSpecs,
@@ -350,5 +368,135 @@ describe("拆文件后的三条接缝", () => {
       expect(s.function.description.length).toBeGreaterThan(0);
       expect((s.function.parameters as { type: string }).type).toBe("object");
     }
+  });
+});
+
+// 只读取证的返回值是原样喂回模型的正文：id 让模型后一步能说清改哪一行、选项名让它别把 id 当文本写回、
+// 行 id 表头是 update/delete 的唯一凭据。「返回了非空字符串」这种粗断言挡不住这些格式被改坏。
+describe("检索工具喂回模型的正文", () => {
+  const docJson = (text: string): string =>
+    JSON.stringify({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] });
+
+  beforeEach(() => {
+    app.set({ workspaceId: "w1", viewId: null, tree: [tableNode] });
+    for (const fn of [docs.get, search.search, snippets.docSearchSnippets]) fn.mockReset();
+    docs.get.mockResolvedValue(null);
+    search.search.mockResolvedValue([]);
+    snippets.docSearchSnippets.mockResolvedValue([]);
+  });
+
+  it("search_workspace：命中行带页面 id 与布局，<em> 标记和换行不进上下文", async () => {
+    search.search.mockResolvedValue([
+      { view_id: "v1", title: "任务", icon: null, layout: "grid", snippet: "本<em>周</em>完成\n下周见", row_id: "r1" },
+      { view_id: "p1", title: "", icon: null, layout: "document", snippet: "", row_id: null },
+      { view_id: "p2", title: "长文", icon: null, layout: "document", snippet: "字".repeat(400), row_id: null },
+    ]);
+    expect(await runRetrievalCall("search_workspace", { query: " 周 " }, 6000)).toBe(
+      "检索到 3 个结果：\n- 任务 [id=v1] (grid)：本周完成 下周见\n- 无标题页面 [id=p1] (document)\n- 长文 [id=p2] (document)：" +
+        "字".repeat(200),
+    );
+
+    // 只列前 12 条，但计数说的是全部命中：模型据此判断「还要不要再检索一轮」
+    search.search.mockResolvedValue(
+      Array.from({ length: 20 }, (_, i) => ({
+        view_id: "p" + i,
+        title: "页面" + i,
+        icon: null,
+        layout: "document",
+        snippet: "",
+        row_id: null,
+      })),
+    );
+    const many = await runRetrievalCall("search_workspace", { query: "页面" }, 6000);
+    expect(many.split("\n")).toHaveLength(13);
+    expect(many).toContain("检索到 20 个结果：");
+    expect(many).not.toContain("页面19");
+  });
+
+  it("search_workspace：没关键词 / 没空间 / 零命中 / 不认识的工具各回一句能懂的话", async () => {
+    expect(await runRetrievalCall("search_workspace", {}, 6000)).toBe("未提供检索关键词。");
+    expect(search.search).not.toHaveBeenCalled();
+    app.set({ workspaceId: null });
+    expect(await runRetrievalCall("search_workspace", { query: "周" }, 6000)).toBe("当前没有打开的工作区。");
+    app.set({ workspaceId: "w1" });
+    expect(await runRetrievalCall("search_workspace", { query: "周" }, 6000)).toBe("没有检索到相关内容。");
+    expect(await runRetrievalCall("forget_about_it", { query: "周" }, 6000)).toBe("未知的检索工具 forget_about_it。");
+  });
+
+  it("检索清单里的行详情页不是页面，不喂给搜索", async () => {
+    app.set({
+      tree: [viewNode("d1", "周报"), viewNode("rd1", "表里的一行", { extra: '{"row_detail":true}' })],
+    });
+    await runRetrievalCall("search_workspace", { query: "周报" }, 6000);
+    expect(search.search.mock.calls[0][2]).toHaveLength(1);
+  });
+
+  it("list_database_fields：隐藏列不喂给模型，选择类带上选项名", async () => {
+    api.listFields.mockResolvedValue([
+      col("f1", "标题"),
+      col("f2", "状态", "status", selectOptions(["待办", "进行中"])),
+      { ...col("f3", "内部备注"), is_hidden: 1 },
+    ]);
+    expect(await runRetrievalCall("list_database_fields", { database: "任务" }, 6000)).toBe(
+      "- 标题 [text]\n- 状态 [status]（选项：待办 / 进行中）",
+    );
+    // 字段全被隐藏等于没有字段：回一句「这个表没有字段」比回空串好懂
+    api.listFields.mockResolvedValue([{ ...col("f3", "内部备注"), is_hidden: 1 }]);
+    expect(await runRetrievalCall("list_database_fields", { database: "任务" }, 6000)).toBe("这个表没有字段。");
+    // 页面本身对不上时不说「没有字段」，免得模型以为表是空的
+    expect(await runRetrievalCall("list_database_fields", { database: "没这页" }, 6000)).toBe(
+      "找不到页面或表「没这页」。",
+    );
+  });
+
+  it("query_database：行 id 打头，缺 cell 的行留空列而不是整行漏掉", async () => {
+    api.listFields.mockResolvedValue([col("f1", "标题"), col("f2", "状态", "status", selectOptions(["待办"]))]);
+    api.listRows.mockResolvedValue([{ id: "r1" }, { id: "r2" }]);
+    api.loadCells.mockResolvedValue({ r1: { f1: "写周报", f2: "opt0" } });
+    expect(await runRetrievalCall("query_database", { database: "任务" }, 6000)).toBe(
+      ["共 2 行，以下为前 2 行：", "行 id | 标题 | 状态", "r1 | 写周报 | 待办", "r2 |  |"].join("\n"),
+    );
+
+    // limit 只管行数，不动表头与计数
+    api.listRows.mockResolvedValue(Array.from({ length: 40 }, (_, i) => ({ id: "r" + i })));
+    const limited = await runRetrievalCall("query_database", { database: "任务", limit: 2 }, 6000);
+    expect(limited).toContain("共 40 行，以下为前 2 行：");
+    expect(limited.split("\n")).toHaveLength(4);
+    // 不给 limit、或开口要 200 行，都按 30 行封顶：一次取证不该把整张表灌进上下文
+    for (const args of [{}, { limit: 200 }]) {
+      const capped = await runRetrievalCall("query_database", { database: "任务", ...args }, 6000);
+      expect(capped).toContain("以下为前 30 行");
+      expect(capped.split("\n")).toHaveLength(32);
+    }
+  });
+
+  it("get_page_content：空正文与坏 JSON 都回兜底文案，超长先按片段召回", async () => {
+    expect(await runRetrievalCall("get_page_content", { page: "任务" }, 6000)).toBe("「任务」还没有正文。");
+    docs.get.mockResolvedValue("{这不是 json");
+    expect(await runRetrievalCall("get_page_content", { page: "任务" }, 6000)).toBe("「任务」还没有正文。");
+    docs.get.mockResolvedValue("   ");
+    expect(await runRetrievalCall("get_page_content", { page: "任务" }, 6000)).toBe("「任务」还没有正文。");
+
+    docs.get.mockResolvedValue(docJson("本周完成三张卡片。"));
+    expect(await runRetrievalCall("get_page_content", { page: "任务" }, 6000)).toBe("本周完成三张卡片。");
+
+    // 超上限且给了 query：用片段检索，别把半截正文当全文喂给模型
+    docs.get.mockResolvedValue(docJson("字".repeat(300)));
+    snippets.docSearchSnippets.mockResolvedValue(["片段甲", "片段乙"]);
+    expect(await runRetrievalCall("get_page_content", { page: "任务", query: "字" }, 100)).toBe("片段甲\n…\n片段乙");
+    expect(snippets.docSearchSnippets).toHaveBeenCalledWith("v1", "字", 8);
+
+    // 片段检索空手而归（这篇还没进索引）才退回硬截断
+    snippets.docSearchSnippets.mockResolvedValue([]);
+    expect(await runRetrievalCall("get_page_content", { page: "任务", query: "字" }, 100)).toBe(
+      "字".repeat(100) + "\n…（已截断 200 字）",
+    );
+
+    // 没给 query 就不查片段，直接按上限截断
+    snippets.docSearchSnippets.mockClear();
+    expect(await runRetrievalCall("get_page_content", { page: "任务" }, 100)).toBe(
+      "字".repeat(100) + "\n…（已截断 200 字）",
+    );
+    expect(snippets.docSearchSnippets).not.toHaveBeenCalled();
   });
 });
