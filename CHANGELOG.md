@@ -404,6 +404,17 @@
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 101 文件 / 1,381 通过（+6）、`npm run build` exit 0（52.72s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
 - 落差：① `get_page_content` 的正文形态走的是真 `jsonToMarkdown`，用例喂的是「一个段落一行文本」的最小文档，列表 / 代码块 / 表格转出的 Markdown 长什么样仍无断言（那是 `lib/markdown` 的用例面）。② 命中顺序与权重来自 Rust 侧的 `doc_search`，前端只钉住「拿到什么就格式化成什么」。③ 本轮没跑真机。
 
+### 工程：AI 设置页按 JSX 边界切成三个子件（`SettingsAi.tsx` 749 行 → 父级 357 行）
+
+- 搬动：`src/features/settings/SettingsAi.tsx` 里三块成形的编辑区切出去——`SettingsAiTuning.tsx`（198 行：采样参数、思考模式、上下文范围、网络与 agent 调优、自定义系统提示）、`SettingsAiProfiles.tsx`（179 行：模型档位的增删改）、`SettingsAiQuickActions.tsx`（105 行：自定义快捷指令的增删改）。父级留下服务商/协议/模型/Key 的连接区与整份配置的读写编排（`applyAiConfig` / `persistAi` / `saveAi` / `testAi` / `fetchModels`）。
+- 两个模块私有常量 `AI_NUM_INPUT` / `AI_TEXT_INPUT` 一并搬进 `settings-parts.tsx` 并加 `export`（三块共用，父件搬完一行都不再引用）；档位与快捷指令的六个动作函数（`addProfile` / `removeProfile` / `addQuickAction` / `updateQuickAction` / `removeQuickAction` 及其 `// — 模型档位 —`、`// — 自定义快捷指令 —` 两行分节注释）跟着各自的 UI 落到子件里，位置没变、内容没改。
+- 「纯移动」的证明有两条。① 引用方零改动：全仓唯一引用点 `SettingsPage.tsx:16` 的 `from "./SettingsAi"` 与 `:57` 的 `<SettingsAi />` 一字未动，导出符号仍只有 `SettingsAi`。② 字节审计：切出去的 396 行（调优 176、档位 JSX 124 + 动作 17、快捷指令 JSX 63 + 动作 16）在子件里与 `git show HEAD:src/features/settings/SettingsAi.tsx` **整段逐字节相同、含缩进**——父级 JSX 在 `<Section>` 下是 6 空格，子件在 `return (<>…` 下也是 6 空格，所以这次连 dedent 都不需要；反向对四个改动文件做行级归类，未归类行 0。
+- 子件是纯受控展示件，保存仍归父级：`ai_save_config` 是覆盖式整份保存，表单值一旦分成两份真值就会互相冲掉。档位 Key 草稿 `profileKeys` 与 `aiConfig` 必须由父级传入——`persistAi` 要按档位 id 判「草稿留空 = 不改该档已存 Key」，把草稿下放到子件等于把这条规则拆断。
+- 用例：`SettingsAi.test.tsx` 3 → 16 条（+321 行）。拆文件把三处没人盯的接缝变成真接缝，逐条钉住：调优侧「温度改完离开输入框整份落库、其余采样字段原样带回」「系统提示只在 blur 时落库（边打字边存要红）」「思考模式与上下文范围两个下拉各自只改自己那一项」；档位侧「地址/模型/温度/协议四格回填」「改模型后落库的档位数组必须正好是那七项——`has_api_key` / 掩码泄进 IPC 入参就是往服务端写脏字段」「Key 草稿留空传 null、填了才覆盖、落库后草稿作废，掩码文案与明文警告都跟着 `aiConfig`」「删当前档 active 收回、删非当前档 active 不动」「新档继承当前地址/模型/温度」；快捷指令侧「三格回填」「改作用范围即时落库并带回整份数组」「新增的空壳默认只吃选区」「删除收回空数组」。夹具里把 `AI_PROTOCOL_OPTIONS` 的替身从 `[]` 换成四条真值，档位协议下拉的选中值才进得了断言。
+- 十条变异核验（每次改坏一处 → 跑用例 → 逐字节还原并断言与变异前一致）：父级把 `profileKeys` 接成 `{}` → 1 红；把 `aiConfig` 接成 `null` → 1 红；子件丢掉系统提示的 `onBlur` 保存 → 1 红；思考模式下拉接到 `ctxScope` → 1 红；档位 Key 输入框不读草稿（恒空） → 1 红；删档位恒把 `activeProfile` 收回 → 1 红；加档位不再继承 `base_url` → 1 红；快捷指令下拉把 scope 接到 name → 1 红；删指令不再带回数组 → 1 红；保存时 `...p` 整份铺开档位对象 → 1 红。十条各自只打死预期的那一条，没有互相误伤。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 101 文件 / 1,394 通过（+13）、`npm run build` exit 0（54.35s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① 父级留下的连接区（服务商预设切换、`testAi` / `fetchModels` 两个按钮、全局 Base URL 与 Key、`maxChars` / `confirmEdit` / `useTools`）搬迁前后都没有直接用例，本批只通过「改调优字段 → 整份保存」间接带到过 `apiKey: null` 与 `maxChars`；要钉它们得再往这个文件里加渲染用例，属另批。② 三个子件的界面只在 jsdom 里渲染验证过，档位下拉的真机选项文案与 `dark:` 配色没在 `npm run tauri dev` 的原生窗口复验。③ 两个样式常量现住在 `settings-parts.tsx`，那是「部件」文件而它们只是字符串；原注释写的是「档位与快捷指令」，随三块共用改成了「调优、档位与快捷指令三块」。④ 子件接了 `setAiForm` / `setProfileKeys` 两个 setter，是搬迁的最小代价；按项目卡的 MVVM 方向将来该把保存下沉一层，本批不夹带。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）

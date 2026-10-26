@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { RefreshCw, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -13,18 +13,13 @@ import {
   AI_PROVIDER_PRESETS,
   AI_PROTOCOL_OPTIONS,
   type AiConfig,
-  type AiProfile,
-  type AiQuickActionDef,
 } from "@/lib/ai";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { AI_PROVIDER_LABEL_KEY, AI_PROTOCOL_LABEL_KEY, Section, Row, type AiFormState } from "./settings-parts";
-
-// AI 设置里反复用到的输入控件样式（档位与快捷指令的编辑行数较多，抽出来避免重复）
-const AI_NUM_INPUT =
-  "h-7 w-24 rounded-md border border-neutral-300 bg-white px-2 text-[12px] text-neutral-800 outline-none focus:border-brand-500";
-const AI_TEXT_INPUT =
-  "h-7 rounded-md border border-neutral-300 bg-white px-2 text-[12px] text-neutral-800 outline-none focus:border-brand-500";
+import { SettingsAiProfiles } from "./SettingsAiProfiles";
+import { SettingsAiQuickActions } from "./SettingsAiQuickActions";
+import { SettingsAiTuning } from "./SettingsAiTuning";
 
 /** AI 助手配置：服务商/协议/模型/Key/采样参数/档位/快捷指令 */
 export function SettingsAi() {
@@ -192,41 +187,6 @@ export function SettingsAi() {
     }
   };
 
-  // — 模型档位 —
-  const addProfile = () => {
-    const profile: AiProfile = {
-      id: `p${Date.now().toString(36)}`,
-      name: t("settings.aiProfileDefaultName"),
-      base_url: aiForm.baseUrl,
-      model: aiForm.model,
-      temperature: aiForm.temperature,
-    };
-    saveAi({ profiles: [...aiForm.profiles, profile] });
-  };
-  const removeProfile = (id: string) => {
-    saveAi({
-      profiles: aiForm.profiles.filter((p) => p.id !== id),
-      activeProfile: aiForm.activeProfile === id ? "" : aiForm.activeProfile,
-    });
-  };
-
-  // — 自定义快捷指令 —
-  const addQuickAction = () => {
-    const action: AiQuickActionDef = {
-      id: `q${Date.now().toString(36)}`,
-      name: t("settings.aiActionDefaultName"),
-      prompt: "",
-      scope: "selection",
-    };
-    saveAi({ quickActions: [...aiForm.quickActions, action] });
-  };
-  const updateQuickAction = (id: string, patch: Partial<AiQuickActionDef>) => {
-    saveAi({ quickActions: aiForm.quickActions.map((a) => (a.id === id ? { ...a, ...patch } : a)) });
-  };
-  const removeQuickAction = (id: string) => {
-    saveAi({ quickActions: aiForm.quickActions.filter((a) => a.id !== id) });
-  };
-
   return (
     <Section title={t("settings.ai")}>
       <p className="max-w-lg text-xs text-neutral-500">{t("settings.aiDesc")}</p>
@@ -362,371 +322,19 @@ export function SettingsAi() {
       </label>
       <p className="-mt-2 text-[11px] text-neutral-500">{t("settings.aiConfirmEditDesc")}</p>
 
-      {/* 采样参数 */}
-      <div className="grid gap-2 sm:grid-cols-2">
-        <Row label={t("settings.aiTemperature")}>
-          <input
-            type="number"
-            min={0}
-            max={2}
-            step={0.1}
-            value={aiForm.temperature}
-            onChange={(e) => setAiForm((f) => ({ ...f, temperature: Number(e.target.value) }))}
-            onBlur={() => saveAiQuietly()}
-            className={AI_NUM_INPUT}
-          />
-        </Row>
-        <Row label={t("settings.aiMaxTokens")}>
-          <input
-            type="number"
-            min={0}
-            max={200000}
-            step={100}
-            value={aiForm.maxTokens}
-            onChange={(e) => setAiForm((f) => ({ ...f, maxTokens: Number(e.target.value) }))}
-            onBlur={() => saveAiQuietly()}
-            className={AI_NUM_INPUT}
-          />
-        </Row>
-        <Row label={t("settings.aiCtxBudget")}>
-          <input
-            type="number"
-            min={100}
-            max={200000}
-            step={100}
-            value={aiForm.ctxTokenBudget}
-            onChange={(e) => setAiForm((f) => ({ ...f, ctxTokenBudget: Number(e.target.value) }))}
-            onBlur={() => saveAiQuietly()}
-            className={AI_NUM_INPUT}
-          />
-        </Row>
-        <Row label={t("settings.aiCtxMaxMessages")}>
-          <input
-            type="number"
-            min={1}
-            max={500}
-            step={1}
-            value={aiForm.ctxMaxMessages}
-            onChange={(e) => setAiForm((f) => ({ ...f, ctxMaxMessages: Number(e.target.value) }))}
-            onBlur={() => saveAiQuietly()}
-            className={AI_NUM_INPUT}
-          />
-        </Row>
-        <Row label={t("settings.aiPriceIn")}>
-          <input
-            type="number"
-            min={0}
-            max={100000}
-            step={0.1}
-            value={aiForm.priceInput}
-            onChange={(e) => setAiForm((f) => ({ ...f, priceInput: Math.max(0, Number(e.target.value)) }))}
-            onBlur={() => saveAiQuietly()}
-            className={AI_NUM_INPUT}
-          />
-        </Row>
-        <Row label={t("settings.aiPriceOut")}>
-          <input
-            type="number"
-            min={0}
-            max={100000}
-            step={0.1}
-            value={aiForm.priceOutput}
-            onChange={(e) => setAiForm((f) => ({ ...f, priceOutput: Math.max(0, Number(e.target.value)) }))}
-            onBlur={() => saveAiQuietly()}
-            className={AI_NUM_INPUT}
-          />
-        </Row>
-      </div>
-      <p className="-mt-2 text-[11px] text-neutral-400">{t("settings.aiPriceDesc")}</p>
-      <p className="-mt-2 text-[11px] text-neutral-400">
-        {t("settings.aiCtxDesc", { budget: aiForm.ctxTokenBudget, messages: aiForm.ctxMaxMessages })}
-      </p>
+      <SettingsAiTuning aiForm={aiForm} setAiForm={setAiForm} saveAi={saveAi} saveAiQuietly={saveAiQuietly} />
 
-      {/* 思考模式 */}
-      <Row label={t("settings.aiThinking")}>
-        <div className="flex flex-col gap-1">
-          <select
-            value={aiForm.thinking === "off" ? "off" : "auto"}
-            onChange={(e) => saveAi({ thinking: e.target.value })}
-            className="w-fit rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs outline-none focus:border-brand-500"
-          >
-            <option value="auto">{t("settings.aiThinkingAuto")}</option>
-            <option value="off">{t("settings.aiThinkingOff")}</option>
-          </select>
-          <p className="max-w-80 text-[11px] text-neutral-500">{t("settings.aiThinkingDesc")}</p>
-        </div>
-      </Row>
+      <SettingsAiProfiles
+        aiForm={aiForm}
+        setAiForm={setAiForm}
+        aiConfig={aiConfig}
+        profileKeys={profileKeys}
+        setProfileKeys={setProfileKeys}
+        saveAi={saveAi}
+        saveAiQuietly={saveAiQuietly}
+      />
 
-      {/* 上下文范围 */}
-      <Row label={t("settings.aiCtxScope")}>
-        <div className="flex flex-col gap-1">
-          <select
-            value={["page_only", "off"].includes(aiForm.ctxScope) ? aiForm.ctxScope : "full"}
-            onChange={(e) => saveAi({ ctxScope: e.target.value })}
-            className="w-fit rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs outline-none focus:border-brand-500"
-          >
-            <option value="full">{t("settings.aiCtxScopeFull")}</option>
-            <option value="page_only">{t("settings.aiCtxScopePageOnly")}</option>
-            <option value="off">{t("settings.aiCtxScopeOff")}</option>
-          </select>
-          <p className="max-w-80 text-[11px] text-neutral-500">{t("settings.aiCtxScopeDesc")}</p>
-        </div>
-      </Row>
-
-      {/* 网络与 agent 循环参数：本地模型 / 自建网关慢时唯一的自救口子 */}
-      <div className="grid gap-2 sm:grid-cols-2">
-        <Row label={t("settings.aiAgentRounds")}>
-          <input
-            type="number"
-            min={0}
-            max={12}
-            step={1}
-            value={aiForm.agentRounds}
-            onChange={(e) => setAiForm((f) => ({ ...f, agentRounds: Math.trunc(Number(e.target.value)) }))}
-            onBlur={() => saveAiQuietly()}
-            className={AI_NUM_INPUT}
-          />
-        </Row>
-        <Row label={t("settings.aiStreamRetries")}>
-          <input
-            type="number"
-            min={0}
-            max={5}
-            step={1}
-            value={aiForm.streamRetries}
-            onChange={(e) => setAiForm((f) => ({ ...f, streamRetries: Math.trunc(Number(e.target.value)) }))}
-            onBlur={() => saveAiQuietly()}
-            className={AI_NUM_INPUT}
-          />
-        </Row>
-        <Row label={t("settings.aiFirstByteTimeout")}>
-          <input
-            type="number"
-            min={0}
-            max={600}
-            step={5}
-            value={aiForm.firstByteTimeout}
-            onChange={(e) => setAiForm((f) => ({ ...f, firstByteTimeout: Math.trunc(Number(e.target.value)) }))}
-            onBlur={() => saveAiQuietly()}
-            className={AI_NUM_INPUT}
-          />
-        </Row>
-        <Row label={t("settings.aiIdleTimeout")}>
-          <input
-            type="number"
-            min={0}
-            max={1800}
-            step={10}
-            value={aiForm.idleTimeout}
-            onChange={(e) => setAiForm((f) => ({ ...f, idleTimeout: Math.trunc(Number(e.target.value)) }))}
-            onBlur={() => saveAiQuietly()}
-            className={AI_NUM_INPUT}
-          />
-        </Row>
-      </div>
-      <p className="-mt-2 text-[11px] text-neutral-400">{t("settings.aiTuningDesc")}</p>
-
-      {/* 自定义系统提示 */}
-      <div>
-        <p className="mb-1 text-sm font-medium text-neutral-800">{t("settings.aiSystemPrompt")}</p>
-        <textarea
-          rows={3}
-          value={aiForm.systemPrompt}
-          onChange={(e) => setAiForm((f) => ({ ...f, systemPrompt: e.target.value }))}
-          onBlur={() => saveAiQuietly()}
-          placeholder={t("settings.aiSystemPromptPlaceholder")}
-          className="w-full resize-y rounded-md border border-neutral-300 bg-white px-2 py-1 text-[12px] text-neutral-800 outline-none focus:border-brand-500"
-        />
-      </div>
-
-      {/* 模型档位 */}
-      <div>
-        <div className="mb-1 flex items-center justify-between">
-          <p className="text-sm font-medium text-neutral-800">{t("settings.aiProfiles")}</p>
-          <Button size="sm" variant="outline" onClick={addProfile}>
-            <Plus className="mr-1 h-3.5 w-3.5" />
-            {t("settings.aiAddProfile")}
-          </Button>
-        </div>
-        {aiForm.profiles.length === 0 ? (
-          <p className="text-[11px] text-neutral-500">{t("settings.aiProfilesEmpty")}</p>
-        ) : (
-          <div className="space-y-1.5">
-            {aiForm.profiles.map((p) => (
-              <div key={p.id} className="rounded-md border border-neutral-200 p-2 dark:border-neutral-700">
-                <div className="flex items-center gap-1.5">
-                  <input
-                    value={p.name}
-                    onChange={(e) =>
-                      setAiForm((f) => ({
-                        ...f,
-                        profiles: f.profiles.map((x) => (x.id === p.id ? { ...x, name: e.target.value } : x)),
-                      }))
-                    }
-                    onBlur={() => saveAiQuietly()}
-                    placeholder={t("settings.aiProfileName")}
-                    className={`${AI_TEXT_INPUT} w-24`}
-                  />
-                  <input
-                    value={p.model}
-                    onChange={(e) =>
-                      setAiForm((f) => ({
-                        ...f,
-                        profiles: f.profiles.map((x) => (x.id === p.id ? { ...x, model: e.target.value } : x)),
-                      }))
-                    }
-                    onBlur={() => saveAiQuietly()}
-                    placeholder={t("settings.aiModelPlaceholder")}
-                    className={`${AI_TEXT_INPUT} min-w-0 flex-1 font-mono`}
-                  />
-                  <input
-                    type="number"
-                    min={0}
-                    max={2}
-                    step={0.1}
-                    value={p.temperature}
-                    onChange={(e) =>
-                      setAiForm((f) => ({
-                        ...f,
-                        profiles: f.profiles.map((x) =>
-                          x.id === p.id ? { ...x, temperature: Number(e.target.value) } : x,
-                        ),
-                      }))
-                    }
-                    onBlur={() => saveAiQuietly()}
-                    title={t("settings.aiTemperature")}
-                    className={`${AI_NUM_INPUT} w-16`}
-                  />
-                  <button
-                    className="shrink-0 rounded p-1 text-neutral-400 hover:text-red-500"
-                    title={t("settings.aiRemoveProfile")}
-                    onClick={() => removeProfile(p.id)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                <input
-                  value={p.base_url}
-                  onChange={(e) =>
-                    setAiForm((f) => ({
-                      ...f,
-                      profiles: f.profiles.map((x) => (x.id === p.id ? { ...x, base_url: e.target.value } : x)),
-                    }))
-                  }
-                  onBlur={() => saveAiQuietly()}
-                  placeholder={t("settings.aiBaseUrlPlaceholder")}
-                  className={`${AI_TEXT_INPUT} mt-1 w-full font-mono`}
-                />
-                <div className="mt-1 flex items-center gap-1.5">
-                  <select
-                    value={p.protocol ?? ""}
-                    onChange={(e) =>
-                      saveAi({
-                        profiles: aiForm.profiles.map((x) => (x.id === p.id ? { ...x, protocol: e.target.value } : x)),
-                      })
-                    }
-                    title={t("settings.aiProtocol")}
-                    className={`${AI_TEXT_INPUT} w-36`}
-                  >
-                    <option value="">{t("settings.aiProfileInherit")}</option>
-                    {AI_PROTOCOL_OPTIONS.filter((o) => o !== "").map((o) => (
-                      <option key={o} value={o}>
-                        {t(AI_PROTOCOL_LABEL_KEY[o])}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="password"
-                    value={profileKeys[p.id] ?? ""}
-                    onChange={(e) => setProfileKeys((k) => ({ ...k, [p.id]: e.target.value }))}
-                    onBlur={() => saveAiQuietly()}
-                    autoComplete="off"
-                    placeholder={
-                      aiConfig?.profiles.some((x) => x.id === p.id && x.has_api_key)
-                        ? t("settings.aiProfileKeySavedPlaceholder")
-                        : t("settings.aiProfileKeyPlaceholder")
-                    }
-                    className={`${AI_TEXT_INPUT} min-w-0 flex-1 font-mono`}
-                  />
-                </div>
-                {aiConfig?.profiles.some((x) => x.id === p.id && x.has_api_key && x.api_key_masked) && (
-                  <p className="mt-0.5 text-[11px] text-neutral-400">
-                    {`${t("settings.aiApiKeySaved")}：${aiConfig.profiles.find((x) => x.id === p.id)?.api_key_masked ?? ""}`}
-                  </p>
-                )}
-                {/* 档位 Key 未能写进凭据库时才会明文落 config.json：与全局 Key 同样明示 */}
-                {aiConfig?.profiles.some((x) => x.id === p.id && x.has_api_key && x.api_key_plaintext) && (
-                  <p className="mt-0.5 text-[11px] text-amber-600">{t("settings.aiApiKeyPlaintextWarn")}</p>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* 自定义快捷指令 */}
-      <div>
-        <div className="mb-1 flex items-center justify-between">
-          <p className="text-sm font-medium text-neutral-800">{t("settings.aiActions")}</p>
-          <Button size="sm" variant="outline" onClick={addQuickAction}>
-            <Plus className="mr-1 h-3.5 w-3.5" />
-            {t("settings.aiAddAction")}
-          </Button>
-        </div>
-        {aiForm.quickActions.length === 0 ? (
-          <p className="text-[11px] text-neutral-500">{t("settings.aiActionsEmpty")}</p>
-        ) : (
-          <div className="space-y-1.5">
-            {aiForm.quickActions.map((a) => (
-              <div key={a.id} className="rounded-md border border-neutral-200 p-2 dark:border-neutral-700">
-                <div className="flex items-center gap-1.5">
-                  <input
-                    value={a.name}
-                    onChange={(e) =>
-                      setAiForm((f) => ({
-                        ...f,
-                        quickActions: f.quickActions.map((x) => (x.id === a.id ? { ...x, name: e.target.value } : x)),
-                      }))
-                    }
-                    onBlur={() => saveAiQuietly()}
-                    placeholder={t("settings.aiActionName")}
-                    className={`${AI_TEXT_INPUT} w-24`}
-                  />
-                  <select
-                    value={a.scope}
-                    onChange={(e) => updateQuickAction(a.id, { scope: e.target.value as AiQuickActionDef["scope"] })}
-                    className={`${AI_TEXT_INPUT} w-28`}
-                  >
-                    <option value="selection">{t("settings.aiScopeSelection")}</option>
-                    <option value="page">{t("settings.aiScopePage")}</option>
-                    <option value="none">{t("settings.aiScopeNone")}</option>
-                  </select>
-                  <button
-                    className="shrink-0 rounded p-1 text-neutral-400 hover:text-red-500"
-                    title={t("settings.aiRemoveAction")}
-                    onClick={() => removeQuickAction(a.id)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                <textarea
-                  rows={2}
-                  value={a.prompt}
-                  onChange={(e) =>
-                    setAiForm((f) => ({
-                      ...f,
-                      quickActions: f.quickActions.map((x) => (x.id === a.id ? { ...x, prompt: e.target.value } : x)),
-                    }))
-                  }
-                  onBlur={() => saveAiQuietly()}
-                  placeholder={t("settings.aiActionPromptPlaceholder")}
-                  className="mt-1 w-full resize-y rounded-md border border-neutral-300 bg-white px-2 py-1 text-[12px] text-neutral-800 outline-none focus:border-brand-500"
-                />
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <SettingsAiQuickActions aiForm={aiForm} setAiForm={setAiForm} saveAi={saveAi} saveAiQuietly={saveAiQuietly} />
 
       <label className="flex items-center gap-2 text-sm font-medium text-neutral-800">
         <input type="checkbox" checked={aiForm.useTools} onChange={(e) => saveAi({ useTools: e.target.checked })} />

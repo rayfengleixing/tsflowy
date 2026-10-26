@@ -223,6 +223,12 @@ export const AI_PROTOCOL_LABEL_KEY: Record<string, MessageKey> = {
   gemini: "settings.aiProtocolGemini",
 };
 
+// AI 设置里反复用到的输入控件样式（调优、档位与快捷指令三块的编辑行数较多，抽到公共件避免重复）
+export const AI_NUM_INPUT =
+  "h-7 w-24 rounded-md border border-neutral-300 bg-white px-2 text-[12px] text-neutral-800 outline-none focus:border-brand-500";
+export const AI_TEXT_INPUT =
+  "h-7 rounded-md border border-neutral-300 bg-white px-2 text-[12px] text-neutral-800 outline-none focus:border-brand-500";
+
 /**
  * 更新器报错转成人话：DNS 解析失败、连接超时/被重置、TLS 握手失败都会抛 reqwest 的
  * "error sending request for url (...)"，对用户毫无意义，统一收敛成一句网络提示；
