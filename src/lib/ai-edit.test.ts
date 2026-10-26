@@ -1,11 +1,29 @@
 import { describe, expect, it } from "vitest";
+import * as aiEditModule from "./ai-edit";
 import {
-  CALL_BLOCK_TAG,
-  EDIT_BLOCK_TAG,
   buildEditSystemPrompt,
+  buildNoContextSystemPrompt,
+  CALL_BLOCK_TAG,
+  CHAT_ONLY_SYSTEM_PROMPT,
+  CTX_SCOPE_PAGE_ONLY_NOTE,
+  EDIT_BLOCK_TAG,
   extractCalls,
   extractEdit,
   hideEditBlock,
+  RETRIEVAL_BLOCKED_BY_SCOPE_NOTE,
+  RETRIEVAL_TOOLS,
+  retrievalResultMessage,
+} from "./ai-edit";
+import type {
+  AiCall,
+  AiEditAnchor,
+  AiEditContext,
+  AiEditOp,
+  AiWriteCall,
+  ExtractCallsResult,
+  RetrievalCall,
+  RetrievalKind,
+  WriteTool,
 } from "./ai-edit";
 
 /** 拼一个编辑指令代码块 */
@@ -174,8 +192,9 @@ describe("buildEditSystemPrompt", () => {
     expect(p).toContain("周报");
     expect(p).toContain("选中内容");
     expect(p).toContain("全文内容");
-    expect(p).toContain(EDIT_BLOCK_TAG);
-    expect(p).toContain(CALL_BLOCK_TAG);
+    // 断言整行开栏：协议正文若把标记接成硬编码假名（哪怕是真标记的前缀/扩展），模型就会输出前端不认的块
+    expect(p).toContain("```" + EDIT_BLOCK_TAG + "\n");
+    expect(p).toContain("```" + CALL_BLOCK_TAG + "\n");
   });
 
   it("没有选区时提示改动目标，空标题有兜底", () => {
@@ -183,5 +202,87 @@ describe("buildEditSystemPrompt", () => {
     expect(p).toContain("没有选中");
     expect(p).toContain("（未命名）");
     expect(p).toContain("（空文档）");
+  });
+});
+
+describe("protocol 层的其余导出", () => {
+  it("没有可编辑文档时协议照常下发，只是没有当前页", () => {
+    expect(CHAT_ONLY_SYSTEM_PROMPT).toContain("```" + EDIT_BLOCK_TAG + "\n");
+    expect(CHAT_ONLY_SYSTEM_PROMPT).toContain("没有打开中的可编辑文档");
+    expect(CHAT_ONLY_SYSTEM_PROMPT).not.toContain("标题：");
+  });
+
+  it("关闭上下文时按有没有可编辑文档换说明段", () => {
+    const off = buildNoContextSystemPrompt(true);
+    expect(off).toContain("用户已关闭当前文档上下文");
+    expect(off).not.toContain("没有打开中的可编辑文档");
+    const none = buildNoContextSystemPrompt(false);
+    expect(none).toContain("没有打开中的可编辑文档");
+    expect(none).not.toContain("用户已关闭当前文档上下文");
+  });
+
+  it("检索结果回灌带上前端执行出的真实数据", () => {
+    const msg = retrievalResultMessage([
+      { tool: "search_workspace", result: "命中 2 条" },
+      { tool: "list_pages", result: "首页" },
+    ]);
+    expect(msg).toContain("【检索结果】");
+    expect(msg).toContain("### search_workspace\n命中 2 条");
+    expect(msg).toContain("### list_pages\n首页");
+  });
+
+  it("「仅本页」的两段说明点名全部检索工具", () => {
+    for (const name of RETRIEVAL_TOOLS) expect(CTX_SCOPE_PAGE_ONLY_NOTE).toContain(name);
+    expect(RETRIEVAL_BLOCKED_BY_SCOPE_NOTE).toContain("仅本页");
+  });
+});
+
+describe("ai-edit 的对外符号面", () => {
+  // 拆成目录模块后 index.ts 手写 re-export：漏一行且当下没人用那个符号，tsc 也不会报
+  const VALUE_EXPORTS = [
+    "AI_EDIT_OPS",
+    "CALL_BLOCK_TAG",
+    "CHAT_ONLY_SYSTEM_PROMPT",
+    "CTX_SCOPE_PAGE_ONLY_NOTE",
+    "EDIT_BLOCK_TAG",
+    "RETRIEVAL_BLOCKED_BY_SCOPE_NOTE",
+    "RETRIEVAL_TOOLS",
+    "WRITE_TOOLS",
+    "buildEditSystemPrompt",
+    "buildNoContextSystemPrompt",
+    "extractCalls",
+    "extractEdit",
+    "hideEditBlock",
+    "retrievalResultMessage",
+    "validateCall",
+  ];
+
+  it("运行时的 15 个值导出一个不少（类型导出由下面的编译期引用验）", () => {
+    expect(Object.keys(aiEditModule).sort()).toEqual([...VALUE_EXPORTS].sort());
+  });
+
+  it("九个类型导出可经 index 路径引用（少一行 export type 这里就编不过）", () => {
+    const surface: {
+      op: AiEditOp;
+      anchor: AiEditAnchor;
+      call: AiCall;
+      kind: RetrievalKind;
+      retrieval: RetrievalCall;
+      write: WriteTool;
+      writeCall: AiWriteCall;
+      ctx: AiEditContext;
+      extracted: ExtractCallsResult;
+    } = {
+      op: "replace_selection",
+      anchor: { heading: "## 背景" },
+      call: { tool: "set_page_title", args: { page: "周报", title: "第 41 周周报" } },
+      kind: "list_pages",
+      retrieval: { tool: "list_pages", args: {} },
+      write: "apply_edit",
+      writeCall: { tool: "create_page", args: { title: "新页" } },
+      ctx: { title: "", selection: "", pageText: "" },
+      extracted: extractCalls("普通回答"),
+    };
+    expect(Object.keys(surface)).toHaveLength(9);
   });
 });

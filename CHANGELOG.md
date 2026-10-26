@@ -415,6 +415,17 @@
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 101 文件 / 1,394 通过（+13）、`npm run build` exit 0（54.35s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
 - 落差：① 父级留下的连接区（服务商预设切换、`testAi` / `fetchModels` 两个按钮、全局 Base URL 与 Key、`maxChars` / `confirmEdit` / `useTools`）搬迁前后都没有直接用例，本批只通过「改调优字段 → 整份保存」间接带到过 `apiKey: null` 与 `maxChars`；要钉它们得再往这个文件里加渲染用例，属另批。② 三个子件的界面只在 jsdom 里渲染验证过，档位下拉的真机选项文案与 `dark:` 配色没在 `npm run tauri dev` 的原生窗口复验。③ 两个样式常量现住在 `settings-parts.tsx`，那是「部件」文件而它们只是字符串；原注释写的是「档位与快捷指令」，随三块共用改成了「调优、档位与快捷指令三块」。④ 子件接了 `setAiForm` / `setProfileKeys` 两个 setter，是搬迁的最小代价；按项目卡的 MVVM 方向将来该把保存下沉一层，本批不夹带。
 
+### 工程：AI 动作协议从单文件拆成四个职责文件（`lib/ai-edit.ts` 429 行 → 目录模块）
+
+- 搬动：`src/lib/ai-edit.ts`（429 行，AI 域剩下的最大一个前端单体）按职责切成 `src/lib/ai-edit/` 目录模块——`types.ts`（78 行，原 8-83：`AiCall` 六种动作的形状、`AiEditOp` 七个 op、`RETRIEVAL_TOOLS` / `WRITE_TOOLS` 两组名单、两个代码块标记）、`protocol.ts`（110 行，原 87-192：`PROTOCOL` 正文与三种上下文范围的说明、`buildEditSystemPrompt` / `buildNoContextSystemPrompt` / `CHAT_ONLY_SYSTEM_PROMPT` / `retrievalResultMessage`）、`validate.ts`（103 行，原 194-285：`validateCall` 与三个私有收窄助手）、`extract.ts`（150 行，原 85 的 `FENCE` + 287-429：`scanBlocks` / `stripBlocks` / `extractCalls` / `extractEdit` / `hideEditBlock`）、`index.ts`（23 行：沿用原文件头注释 + 手写 re-export）。
+- 「纯移动」的证明有两条。① 引用方零改动：12 个 import 点（`ai-editor.ts`、`ai-locate.ts`、`stores/ai/` 的 `calls` / `edit-ops` / `request-slice` / `run-slice` / `session-codec` / `stream-slice` / `types`、用例文件）的 `from "./ai-edit"` / `from "@/lib/ai-edit"` 一字未动，路径自己指向目录 index；对外符号面仍是 24 个（15 个值 + 9 个类型）。② 字节审计：四个正文文件共 417 行（76 + 106 + 92 + 143 含 `FENCE` 那一行）与 `git show HEAD:src/lib/ai-edit.ts` **整段逐字节相同、含缩进**——顶层声明本就都是 0 缩进，不需要 dedent；新增的 34 行全部归类为「四份文件头注释 + 按引用方向补的 import + index 的 re-export」，反向核对「HEAD 里没被搬走的行 = 0」。
+- 用例：`src/lib/ai-edit.test.ts` 21 → 27 条。协议层那 6 个符号（`CHAT_ONLY_SYSTEM_PROMPT`、`buildNoContextSystemPrompt`、`CTX_SCOPE_PAGE_ONLY_NOTE`、`RETRIEVAL_BLOCKED_BY_SCOPE_NOTE`、`retrievalResultMessage`、`WRITE_TOOLS`）此前只被 `stores/ai/` 消费、一条断言都没有，拆分把它们变成有人盯的：补了「无文档时协议照常下发但不给当前页」「关闭上下文按有没有可编辑文档换说明段，两段互斥」「检索结果回灌要按工具分节带出正文」「『仅本页』说明点名全部 5 个检索工具」。
+- 加了运行时符号面守卫（沿用 `ai.test.ts` 的做法）：`Object.keys(await import("./ai-edit"))` 必须正好是那 15 个值导出，另用一份九字段对象把 9 个类型导出各自引用一次。理由是 index 的 re-export 是手写的——漏一行而当下没人用那个符号，`tsc` 和原有 21 条用例都不会报。
+- 断言口径也收紧扣了一遍：原来只写 `expect(p).toContain(EDIT_BLOCK_TAG)`，而 `"tsflowy-edits"` 这种硬编码假名包含 `"tsflowy-edit"`，照样绿；改成断言整行开栏 `"```" + EDIT_BLOCK_TAG + "\n"`，协议正文若把标记接错就立刻红。
+- 十二条变异核验（每次改坏一处 → 跑检查 → 逐字节还原并断言与变异前一致）：index 漏 re-export 一个当下没人用的值（`AI_EDIT_OPS`）→ 值导出用例红；漏 `export type { AiEditContext }` → `tsc` 红（证明类型那侧的守卫靠编译期）；漏 `hideEditBlock` → 值导出用例红；协议正文里编辑块标记接成检索块标记 → 2 红；检索标记写成硬编码假名 → 1 红；`buildNoContextSystemPrompt` 两个分支接反 → 1 红；`retrievalResultMessage` 不再点名工具 → 1 红；`apply_edit` 不再要求 `content` → 1 红；默认分支不再认检索工具名 → 2 红；`scanBlocks` 只认编辑块 → 2 红；`stripBlocks` 不再压回段落间距 → 1 红；`hideEditBlock` 漏掉检索块 → 1 红。十二条全部转红且都点到了预期的用例。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 101 文件 / 1,400 通过（+6）、`npm run build` exit 0（48.88s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① `FENCE` 那个常量现在只住在 `extract.ts`，而 `protocol.ts` 的协议正文里 ``` 是模板字符串中的字面量，两处不共用一个符号——这与拆分前一样，但分成两个文件后更容易被误读成「改 `FENCE` 就同时改协议」，实际只有取块那一侧跟着它走。② 新增符号要改三处（正文文件 + `index.ts` 的值导出行 + 值导出用例的名字数组），守卫只能保证「漏了会被发现」，不能让漏报变少。③ 用例文件仍是一个 `ai-edit.test.ts`（27 条），没跟着拆成四个：它测的是这套协议的整体对外行为，按文件拆反而要把块标记的夹具复制四遍。④ 本轮没跑真机。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
