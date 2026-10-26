@@ -1,5 +1,6 @@
 // AI 答案里的 TeX 公式（`$…$` 行内、`$$…$$` 独立）→ 交给 KaTeX 渲染的占位节点。
-// 只碰 text 节点：代码块里的 `$` 天然不被改写（与 lib/ai-citation 同一套做法）。
+// 只碰 text 节点：代码块里的 `$` 天然不被改写（与 ./ai-citation 同一套做法）。
+// 放在 feature 而不是 lib：全仓只有 AI 面板的 Markdown 渲染用它（公式排版由渲染层认类名）。
 import type { Root } from "mdast";
 
 /** 占位节点的类型名；不经 remark-math（未安装），改由 hName 落成 <span class="ai-math-*">，由渲染层识别 */

@@ -24,7 +24,15 @@ vi.mock("./database", () => ({ databaseApi: api }));
 vi.mock("./db", () => ({ viewApi: view }));
 vi.mock("./documents", () => ({ documentApi: { get: () => Promise.resolve(null), save: () => Promise.resolve() } }));
 
-import { coerceCell, resolvePage, runUndoPlan, runWriteAction, sanitizeUndoPlan } from "./ai-tools";
+import {
+  aiToolSpecs,
+  coerceCell,
+  resolvePage,
+  runRetrievalCall,
+  runUndoPlan,
+  runWriteAction,
+  sanitizeUndoPlan,
+} from "./ai-tools";
 import { onDatabaseChanged } from "./database-changed";
 import type { DatabaseField, FieldType, SelectOption } from "@/types/database";
 
@@ -280,5 +288,67 @@ describe("resolvePage 认页面别名", () => {
     expect(resolvePage("复盘")?.id).toBe("p6");
     expect(resolvePage("不存在的叫法")).toBeNull();
     expect(resolvePage("")).toBeNull();
+  });
+});
+
+// 拆成目录模块后新增的三条接缝用例：搬动之前它们同样没有用例盯着，
+// 变异核验（分发漏一条 / coerceCell 落 0 / 同名两页猜第一个）能被现有用例打死，
+// 但「撤销不通知界面 / 出口不截断 / 工具表少下发一条」三条改坏后全绿——就是这三条补上的。
+describe("拆文件后的三条接缝", () => {
+  beforeEach(() => {
+    app.set({ workspaceId: "w1", viewId: null, tree: [tableNode] });
+    api.listFields.mockResolvedValue([col("f1", "标题"), col("f2", "数量", "number")]);
+    api.listRows.mockResolvedValue([{ id: "r1" }, { id: "r2" }]);
+    api.loadCells.mockResolvedValue({ r1: { f1: "旧标题" } });
+    for (const fn of [api.setCell, api.setCellsMany, api.purgeRow, api.restoreRow]) fn.mockClear();
+    for (const fn of Object.values(app.actions)) fn.mockClear();
+  });
+
+  it("撤销「改的若干格」同样通知正显示这张表的页面（与写动作一侧对齐）", async () => {
+    const out = await runWriteAction({
+      tool: "update_database_row",
+      args: { database: "任务", row: "r1", cells: { 标题: "新标题" } },
+    });
+    const seen: string[][] = [];
+    const off = onDatabaseChanged((ids) => seen.push(ids));
+    await runUndoPlan(out.undo!);
+    off();
+    expect(seen).toEqual([["v1"]]);
+    expect(app.actions.invalidateRelations).toHaveBeenCalledWith(["v1"]);
+  });
+
+  it("检索出口按上限截断，绝不把整棵大树原样塞进上下文", async () => {
+    const long = Array.from({ length: 250 }, (_, i) => viewNode("p" + i, "页面" + "名".repeat(40) + i));
+    app.set({ tree: long });
+    const out = await runRetrievalCall("list_pages", {}, 6000);
+    expect(out).toContain("…（已截断");
+    expect(out.length).toBeLessThan(6100);
+    // 没超上限时不动内容：模型拿到的就是清单本身
+    app.set({ tree: [tableNode] });
+    expect(await runRetrievalCall("list_pages", {}, 6000)).toBe("- 任务 [id=v1] (grid)");
+  });
+
+  it("下发的工具表 11 条动作齐全，少一条模型就少一种能力", () => {
+    const specs = aiToolSpecs();
+    expect(specs.map((s) => s.function.name).sort()).toEqual(
+      [
+        "add_database_row",
+        "apply_edit",
+        "create_page",
+        "delete_database_row",
+        "get_page_content",
+        "list_database_fields",
+        "list_pages",
+        "query_database",
+        "search_workspace",
+        "set_page_title",
+        "update_database_row",
+      ].sort(),
+    );
+    for (const s of specs) {
+      expect(s.type).toBe("function");
+      expect(s.function.description.length).toBeGreaterThan(0);
+      expect((s.function.parameters as { type: string }).type).toBe("object");
+    }
   });
 });

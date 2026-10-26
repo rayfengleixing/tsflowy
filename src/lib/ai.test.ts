@@ -1,19 +1,61 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment jsdom
+// 默认跑在 node 里，imageLike / Blob 够用；但「大图真的缩放」那组要碰 document.createElement("canvas")
+// 与 HTMLCanvasElement.prototype，得把整个文件放进 jsdom（node 下那条兜底用例照样绿）。
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const uploadMock = vi.hoisted(() => vi.fn((_bytes: Uint8Array, _ext: string) => Promise.resolve("assets/1712345.png")));
 const invokeMock = vi.hoisted(() => vi.fn((_cmd: string, _args?: unknown) => Promise.resolve(undefined)));
+// Channel 替身要能事后往里投事件：aiChat 把上层的 onEvent 挂到实例的 onmessage 上，
+// 记不住实例就没法验「服务端帧到底走到哪」
+interface FakeChannel {
+  onmessage?: (ev: unknown) => void;
+}
+const channels = vi.hoisted(() => [] as FakeChannel[]);
 
 vi.mock("@/lib/assets", () => ({ uploadImageBytes: uploadMock }));
-vi.mock("@tauri-apps/api/core", () => ({ Channel: class {}, invoke: invokeMock }));
+vi.mock("@tauri-apps/api/core", () => ({
+  Channel: class {
+    onmessage?: (ev: unknown) => void;
+    constructor() {
+      channels.push(this);
+    }
+  },
+  invoke: invokeMock,
+}));
 
+import * as aiModule from "./ai";
 import {
   MAX_AI_IMAGE_BYTES,
+  aiCancel,
+  aiChat,
+  aiErrorText,
+  aiGetConfig,
+  aiListModels,
   aiProfileKeyInput,
   aiSaveConfig,
+  aiSessionDelete,
+  aiSessionList,
+  aiSessionSave,
+  aiTestConnection,
+  aiUsageSummary,
+  docSearchSnippets,
   estimateAiCost,
   formatAiCost,
   saveAiImageFile,
+  type AiChatEvent,
+  type AiSessionRow,
+  type AiToolSpec,
 } from "./ai";
+
+/** 调完取最后一次 invoke 记录（tsconfig 的 lib 里没有 Array.prototype.at） */
+function lastCall(): [string, unknown] {
+  const call = invokeMock.mock.calls[invokeMock.mock.calls.length - 1];
+  return [call[0], call[1]];
+}
+
+function lastChannel(): FakeChannel {
+  return channels[channels.length - 1];
+}
 
 /** File 在 jsdom 里缺 arrayBuffer()；这里只需要 name/type/size 三个属性参与判断 */
 function imageLike(init: { name?: string; type?: string; size?: number; payload?: number }): File {
@@ -24,6 +66,38 @@ function imageLike(init: { name?: string; type?: string; size?: number; payload?
     arrayBuffer: () => Promise.resolve(new Uint8Array(init.payload ?? 3).buffer),
   } as unknown as File;
 }
+
+describe("@/lib/ai 的对外符号面", () => {
+  // 拆成目录模块后 index.ts 手写 12 行 re-export：漏一行且当下没人用那个符号，tsc 也不会报
+  const VALUE_EXPORTS = [
+    "aiProfileKeyInput",
+    "AI_PROVIDER_PRESETS",
+    "AI_PROTOCOL_OPTIONS",
+    "aiGetConfig",
+    "aiListModels",
+    "aiSaveConfig",
+    "aiTestConnection",
+    "saveAiImageFile",
+    "AI_IMAGE_MIME_BY_EXT",
+    "MAX_AI_IMAGES",
+    "MAX_AI_IMAGE_BYTES",
+    "aiSessionList",
+    "aiSessionSave",
+    "aiSessionDelete",
+    "aiUsageSummary",
+    "estimateAiCost",
+    "formatAiCost",
+    "AI_PRICE_PER_MILLION",
+    "aiChat",
+    "aiCancel",
+    "aiErrorText",
+    "docSearchSnippets",
+  ];
+
+  it("运行时的 22 个值导出一个不少（类型导出由 tsc 在消费点验）", () => {
+    expect(Object.keys(aiModule).sort()).toEqual([...VALUE_EXPORTS].sort());
+  });
+});
 
 describe("saveAiImageFile", () => {
   beforeEach(() => {
@@ -210,5 +284,147 @@ describe("token 费用估算", () => {
 
   it("大额保留 2 位小数", () => {
     expect(formatAiCost(12.3456)).toBe("12.35");
+  });
+
+  it("拆文件后单价口径仍是每 100 万 token", () => {
+    // AI_PRICE_PER_MILLION 从 usage.ts 换到了 index 的另一行 re-export 上，值本身是最容易搬错的东西
+    expect(aiModule.AI_PRICE_PER_MILLION).toBe(1_000_000);
+  });
+});
+
+describe("aiChat 的 Channel 接线", () => {
+  beforeEach(() => {
+    invokeMock.mockClear();
+    channels.length = 0;
+  });
+
+  it("不传 tools 时下发 tools: null：这是与 Rust 的契约，缺字段会反序列化失败", async () => {
+    const onEvent = vi.fn();
+    await aiChat([{ role: "user", content: "你好" }], onEvent);
+    const [cmd, args] = lastCall();
+    expect(cmd).toBe("ai_chat");
+    const sent = args as { req: { messages: unknown; tools: unknown }; onEvent: unknown };
+    expect(sent.req.messages).toEqual([{ role: "user", content: "你好" }]);
+    expect(sent.req.tools).toBeNull();
+    // Rust 侧签名的第二个参数名是 onEvent，写成 on_event 会收不到任何流式帧
+    expect(sent.onEvent).toBe(lastChannel());
+  });
+
+  it("带 tools 时原样下发，服务端帧从 channel.onmessage 透传给上层回调", async () => {
+    const tools: AiToolSpec[] = [
+      { type: "function", function: { name: "list_pages", description: "列页面", parameters: {} } },
+    ];
+    const seen: AiChatEvent[] = [];
+    await aiChat([], (ev) => seen.push(ev), tools);
+    const sent = lastCall()[1] as { req: { tools: unknown } };
+    expect(sent.req.tools).toEqual(tools);
+    const channel = lastChannel();
+    channel.onmessage?.({ type: "chunk", delta: "片段" });
+    expect(seen).toEqual([{ type: "chunk", delta: "片段" }]);
+  });
+});
+
+describe("会话与片段检索的命令名与参数名", () => {
+  const row: AiSessionRow = {
+    id: "s1",
+    title: "会话",
+    page_id: null,
+    page_title: null,
+    updated_at: "2026-10-26T00:00:00",
+    messages: "[]",
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    archived: false,
+  };
+
+  beforeEach(() => invokeMock.mockClear());
+
+  it("保存走 { session }、删除走 { id }：与 Rust 命令签名对不上就整条失败", async () => {
+    await aiSessionSave(row);
+    expect(lastCall()).toEqual(["ai_session_save", { session: row }]);
+    await aiSessionDelete("s1");
+    expect(lastCall()).toEqual(["ai_session_delete", { id: "s1" }]);
+  });
+
+  it("片段检索用 camelCase 的 viewId，limit 默认 8", async () => {
+    await docSearchSnippets("v1", "季度复盘");
+    expect(lastCall()).toEqual(["doc_search_snippets", { viewId: "v1", query: "季度复盘", limit: 8 }]);
+    await docSearchSnippets("v1", "季度复盘", 2);
+    expect(lastCall()).toEqual(["doc_search_snippets", { viewId: "v1", query: "季度复盘", limit: 2 }]);
+  });
+
+  it("剩下几条单行转调壳逐条打对自己的命令名：搬进别的文件时最容易顺手改错", async () => {
+    await aiGetConfig();
+    expect(lastCall()[0]).toBe("ai_get_config");
+    await aiTestConnection();
+    expect(lastCall()[0]).toBe("ai_test_connection");
+    await aiListModels();
+    expect(lastCall()[0]).toBe("ai_list_models");
+    await aiSessionList();
+    expect(lastCall()[0]).toBe("ai_session_list");
+    await aiUsageSummary();
+    expect(lastCall()[0]).toBe("ai_usage_summary");
+    await aiCancel();
+    expect(lastCall()[0]).toBe("ai_cancel");
+  });
+});
+
+describe("aiErrorText", () => {
+  it("字符串原样、Error 取 message、其余走 String()", () => {
+    expect(aiErrorText("服务商返回 401")).toBe("服务商返回 401");
+    expect(aiErrorText(new Error("超时"))).toBe("超时");
+    expect(aiErrorText(null)).toBe("null");
+  });
+});
+
+// jsdom 没有 createImageBitmap 与 canvas 2d，所以「小图直通 / 动图不缩 / 解码失败退回原字节」
+// 三条兜底一跑就过，真正的缩放主路径从来没被走过。这里替出解码与重编码的最小形状，把两条
+// 只在真浏览器里成立的分支钉住：缩完的宽高、以及「重编码反而更大就不换」。
+describe("大图真的缩放并重编码", () => {
+  const canvasProto = HTMLCanvasElement.prototype as unknown as Record<string, unknown>;
+  const drawImage = vi.fn();
+  let saved: [string, PropertyDescriptor | undefined][] = [];
+
+  const putProto = (key: string, value: unknown) => {
+    canvasProto[key] = value;
+  };
+
+  beforeEach(() => {
+    saved = ["getContext", "toBlob"].map((key) => [key, Object.getOwnPropertyDescriptor(canvasProto, key)]);
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(() => Promise.resolve({ width: 3000, height: 2000, close: vi.fn() })),
+    );
+    putProto("getContext", () => ({ drawImage }));
+    putProto("toBlob", (cb: (blob: Blob | null) => void, mime?: string) => {
+      cb(new Blob([new Uint8Array(10)], { type: mime ?? "" }));
+    });
+    uploadMock.mockClear();
+    drawImage.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    for (const [key, desc] of saved) {
+      if (desc) Object.defineProperty(canvasProto, key, desc);
+      else Object.defineProperty(canvasProto, key, { value: undefined, configurable: true, writable: true });
+    }
+  });
+
+  it("长边夹到 1568、按原格式重编码，入库的是重编码后的字节", async () => {
+    await saveAiImageFile(imageLike({ name: "shot.png", type: "image/png", size: 2_000_000, payload: 2_000_000 }));
+    expect(drawImage).toHaveBeenCalledOnce();
+    // 3000×2000 → 1568×1045（等比，长边正好落在上限）
+    expect(drawImage.mock.calls[0]).toEqual([expect.anything(), 0, 0, 1568, 1045]);
+    expect(uploadMock.mock.calls[0][0].length).toBe(10);
+    expect(uploadMock.mock.calls[0][1]).toBe("png");
+  });
+
+  it("重编码后反而更大时保留原始字节：省体积是这件事的唯一理由", async () => {
+    putProto("toBlob", (cb: (blob: Blob | null) => void) => {
+      cb(new Blob([new Uint8Array(5_000_000)], { type: "image/png" }));
+    });
+    await saveAiImageFile(imageLike({ name: "shot.png", type: "image/png", size: 2_000_000, payload: 2_000_000 }));
+    expect(uploadMock.mock.calls[0][0].length).toBe(2_000_000);
   });
 });

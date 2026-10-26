@@ -9,7 +9,7 @@ import {
   splitCitations,
   transformCitations,
   type CitationNode,
-} from "@/lib/ai-citation";
+} from "./ai-citation";
 
 const resolveKnown = (id: string) => (id === "abc" || id === "def" ? `页面-${id}` : null);
 

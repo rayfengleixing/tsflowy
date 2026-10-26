@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MATH_CLASS_BLOCK, MATH_CLASS_INLINE, splitMath, transformMath, type MathNode } from "@/lib/ai-math";
+import { MATH_CLASS_BLOCK, MATH_CLASS_INLINE, splitMath, transformMath, type MathNode } from "./ai-math";
 
 const inline = (tex: string): MathNode => ({
   type: "aiMath",
@@ -26,6 +26,10 @@ describe("ai-math 行内公式切分", () => {
     expect(splitMath("要 $100 和 $200")).toEqual([text("要 $100 和 $200")]);
     expect(splitMath("$ a$ 与 $b $")).toEqual([text("$ a$ 与 $b $")]);
     expect(splitMath("5$ 到 10$")).toEqual([text("5$ 到 10$")]);
+  });
+
+  it("闭合 $ 后紧跟数字不算公式（只有这一条挡得住 `$x$2`）", () => {
+    expect(splitMath("共 $x$2 个")).toEqual([text("共 $x$2 个")]);
   });
 
   it("内容为空或纯空白不当公式", () => {

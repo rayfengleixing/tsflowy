@@ -1,4 +1,5 @@
 // AI 答案里的引用标记（`[id=<页面 id>]`）→ 可点跳转。
+// 放在 feature 而不是 lib：全仓只有 AI 面板的 Markdown 渲染用它，它不是给别的域共用的。
 // 模型看到的检索结果每行都带 `[id=…]`（见 lib/ai-tools），它照抄进答案时原本只是一串死文本；
 // 这里在 Markdown 的 text 节点上就地换成链接节点，代码块里的同样子串不受影响（只碰 text 节点）。
 import type { Root } from "mdast";

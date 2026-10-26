@@ -365,6 +365,37 @@
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`vitest run` 101 文件 / 1,361 通过（+29）、`npm run format:check` 干净、`npm run build` exit 0（54.26s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
 - 落差：① `ai.locateBlockedByLock`（结构锁 `filterTransaction` 拒掉事务后据实回报）这条分支假件里没有对应物——假 `view.dispatch` 从不拒收事务，要覆盖它得连真 `DocumentStructureLock` 插件一起挂上，而真插件又要求真 `view`；这条只能在原生窗口里靠「让 AI 改标题行」验，本轮没验。② `replace_text` 跨顶层块的匹配（设计上宁可失败）与 `undoAiEdit` 的「撤销栈被清空」极端路径仍只覆盖主干。③ 整轮没跑真机：桥的方法签名没变，但 AI 面板就地改文档在原生窗口里这轮没复验。
 
+### 工程：`lib/ai-tools.ts` 按职责拆成目录模块（754 行 → 单文件最大 175 行）
+
+- 搬动：AI 的工具执行层从单个 `src/lib/ai-tools.ts` 拆成 `src/lib/ai-tools/` 九个文件——`resolve-page`（页面引用解析，28）、`retrieval`（五个只读取证工具与 6000 字截断，155）、`write-page`（建页 / 改名，81）、`write-rows`（加行 / 改行 / 删行与行引用解析，175）、`write-dispatch`（`WriteCall` 与分发，35）、`undo-plan`（`UndoPlan` / `WriteOutcome` / `sanitizeUndoPlan` / `runUndoPlan`，118）、`cell-coerce`（模型给的值 → 字段类型能存的值，85）、`specs`（喂给模型的 11 条工具定义表，129）、`index.ts`（23 行，逐字沿用原文件的域头注释 + 只做 re-export）。对外符号面拆前拆后一致：`coerceCell` / `resolvePage` / `runRetrievalCall` / `runUndoPlan` / `sanitizeUndoPlan` / `UndoPlan` / `WriteOutcome` / `aiToolSpecs` / `runWriteAction` / `WriteCall`。
+- 「纯移动」的证明是引用方零改动：`stores/ai` 的六处 import（`edit-ops` / `message-slice` / `run-slice` / `session-codec` / `stream-slice` / `types`）与 `features/ai` 一字未动，`@/lib/ai-tools` 与 `./ai-tools` 两个 import 源都还命中——因为目录里有 `index.ts`。`git status` 只有「原文件删除 + 目录新增 + 测试文件改动」三类。`vi.mock("./database")` 从 `src/lib/ai-tools.test.ts` 仍作用于 `ai-tools/../database`，vitest 按解析后的绝对模块 id 匹配，测试的替身机制也没改。
+- 只有三类非逐字节改动：① 九份文件头注释与按需 import（原来 14 行共享 import 摊成 44 行，路径由 `./x` 变 `../x`）；② 五个写动作函数加 `export`（`write-dispatch` 跨文件要调它们；`index.ts` 不 re-export，对外可见性不变）；③ 加 `export` 后两条签名超行宽被 prettier 拆成多行。字节审计（新文件每行去缩进后必须逐字出现在 `git show HEAD:src/lib/ai-tools.ts`）：714 行逐字命中、79 行属于上面三类；反向查 HEAD 的 729 个非空行，未被搬走的 19 行 = 14 行旧 import + 5 行加 `export` 的签名，没有漏搬。
+- 用例：`ai-tools.test.ts` 19 → 22 条，新增「拆文件后的三条接缝」——撤销 `reset_cells` 也要发 `onDatabaseChanged` 并失效 relation 缓存（原来只有加行走这条，删行/改行的通知各自有测，撤销链没有）、`runRetrievalCall` 在 250 页的长树下确实截断到 6000 字以内（`renderTree` 的 limit 与 `truncate` 的 limit 是两层，谁都得真的生效一次）、`aiToolSpecs()` 的名称集合就是那 11 条且每条形状完整（拆文件时 `TOOL_DEFS` 与 `aiToolSpecs` 分家，漏一条模型就少一个动作且没有任何报错）。
+- 六条变异核验（跑完逐字节还原，`diff` 与变异前一致）：分发层删掉 `delete_database_row` case → 1 红；数字强赋去掉「一个数字都没有」的判空（`Number("")` 是 0，会把「待定」静默写成零）→ 1 红；`resolvePage` 同名多页时改为返回第一个 → 1 红；撤销 `reset_cells` 不发通知 → 补测前 0 红 / 补测后 1 红；`runRetrievalCall` 不截断 → 补测前 0 红 / 补测后 1 红；`TOOL_DEFS` 少一条 → 补测前 0 红 / 补测后 1 红。后三条正是这次拆文件能碰坏的地方，所以补测是为它们补的。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 101 文件 / 1,364 通过（+3）、`npm run build` exit 0（55.28s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① `runRetrievalTool` 的 `search_workspace` / `get_page_content` / `list_database_fields` / `query_database` 四条只有「返回什么文案」的粗断言，喂回模型的正文（命中行格式、字段选项串、表头行）没有逐条钉住；`get_page_content` 空文档的兜底文案同样未覆盖。② 本轮没跑真机：AI 面板走一遍取证与写卡片要在 `npm run tauri dev` 原生窗口里看，浏览器打开必白屏。③ 禁区按约不动：恢复会话时刻意不还原 `apply_edit` 的 revert 句柄，现在写在 `stores/ai/session-codec.ts:80`（项目卡上的 `stores/ai.ts:330` 已随 I 批迁移），只记不改。
+
+### 工程：`lib/ai.ts` 按职责拆成目录模块（443 行 → 单文件最大 143 行）
+
+- 搬动：AI 与 Rust 的 invoke 封装从单个 `src/lib/ai.ts` 拆成 `src/lib/ai/` 八个文件——`types`（对话契约：消息 / 工具调用 / 流式事件 / 用量，49 行）、`profile`（档位与服务商预设，68 行）、`config`（`AiConfig` + 读写与连接测试四个命令，143 行）、`image`（视觉输入：白名单、上限、压缩、落盘，93 行）、`session`（会话行与三条 CRUD，34 行）、`usage`（用量汇总与成本口径，35 行）、`request`（流式对话、取消、片段检索、错误文案，37 行）、`index.ts`（20 行：域头注释逐字沿用 + 12 行 re-export）。对外 36 个符号（22 个值 + 14 个类型）拆前拆后一致。
+- 「纯移动」的证明同样是引用方零改动：25 个引用点一字未改——22 个文件 `from "@/lib/ai"`（`features/ai` 3、`features/settings` 2、`stores/ai/*` 12、`stores/ai-*.test.ts` 3、`test/ai-store-harness.ts` 与 `test/tauri-mock.test.ts` 各 1）、`lib/ai-tools/` 里 2 处 `from "../ai"`，再加 `ai.test.ts` 自己的 `"./ai"`。其中三处 stores 用例与 harness 是整模块 `vi.mock("@/lib/ai", …)` 替身，按解析后的绝对模块 id 匹配，换成目录 index 后照样拦得住。`git status` 里产品代码只有「原文件 D + 目录 ??」两类加一个测试文件。原文件的三条 import 按需落到各文件、路径仍用 `@/lib/...` 别名，所以它们逐字命中 HEAD 而没被改写。
+- 只有两类非逐字节改动：8 份文件头注释与 4 行新增的 per-file import（`config` 要 `./profile` 的两个档位类型、`request` 要 `./types` 的三个契约类型）、`index.ts` 的 3 行目录说明与 12 行 re-export。字节审计：406 行逐字命中 `git show HEAD:src/lib/ai.ts`、27 行属于这两类；反向查 HEAD 的非空行，**未被搬走的 0 行**（一个字符都没丢，也没有归类不明的行）。
+- 用例：`ai.test.ts` 16 → 26 条。原先这 443 行里只有图片附件、`aiSaveConfig` 的 snake_case 下发与成本换算有断言，`aiChat` 与三条会话命令、`docSearchSnippets` 一次都没被测过——拆文件恰好把它们的接缝露出来：Channel 替身改成会自登记的实例，补「不带 tools 时下发 `tools: null`」「`onEvent` 挂的是 `onEvent` 这个参数名」「服务端帧从 `channel.onmessage` 透回上层回调」「删会话走 `{ id }` 不是 `{ sessionId }`」「片段检索的 `viewId` 用 camelCase 且 `limit` 默认 8」「六条单行转调壳各自打对自己的命令名」「`aiErrorText` 的三种抛法」。再加一条运行时符号面守卫：`Object.keys(import * as ai)` 必须正好是那 22 个值导出。
+- 顺手补了拆文件前就存在的两个断言洞：`downscaleImage` 的真实缩放主路径以前从没跑过（默认 node 环境里 `createImageBitmap` 不存在，三条用例全走在「解码失败退回原字节」的兜底上），文件切到 jsdom 后替出解码与重编码的最小形状，钉住「3000×2000 夹到 1568×1045、入库的是重编码后的字节」与「重编码反而更大就保留原始字节」——这两条只在真浏览器里成立的分支现在是断言得动的。
+- 九条变异核验（跑完逐字节还原，脚本对每个文件断言还原后与原内容一致）：index 少 re-export 一个当前无人使用的值导出（`AI_IMAGE_MIME_BY_EXT`）→ 符号面用例红，**且 `tsc --noEmit` 全绿**（这正是那条用例存在的理由：漏一行导出、等以后有人用时才发现）；`tools ?? null` 改成 `tools` → 1 红；不把回调挂到 `channel.onmessage` → 1 红；片段检索默认 `limit` 8 改 5 → 1 红；`{ id }` 改 `{ sessionId: id }` → 1 红；`AI_PRICE_PER_MILLION` 从 100 万改 1 千 → 3 红（口径用例 + 两条换算用例）；`ai_list_models` 写错成 `ai_models_list` → 1 红；边长上限 1568 改 784 → 1 红；去掉「重编码更大就不换」的守卫 → 1 红。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 101 文件 / 1,374 通过（+10）、`npm run build` exit 0（49.03s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① 图片附件的 `MAX_AI_IMAGES`（一条消息最多 4 张）由 `AiComposer` 消费，本批没动它也没有针对它的断言（超限拦截在组件层，属 `features/ai` 的用例面）。② `aiChat` 的真机帧序与 `aiCancel` 的生效仍只能在原生窗口里对着服务商接口验；本批把 `downscaleImage` 的解码路径搬进 jsdom 替身，替身给的是「一定解码成功」的形状，真机上「解码失败退回原字节」这条已有用例覆盖、但「真实缩放的画质损失」无从断言。③ 本轮没跑真机，也没写库数据（开发库是真实数据，冒烟只许读）。
+
+### 工程：只服务 AI 面板渲染的两个 lib 模块下沉进 `features/ai`
+
+- 搬动：`src/lib/ai-citation.ts`（95 行）与 `src/lib/ai-math.ts`（101 行）连同各自用例（109 / 79 行）搬进 `src/features/ai/`，`Markdown.tsx:10-11` 的 import 源由 `@/lib/…` 换成 `./…`，符号名与路径别名 `@/lib/i18n`、`@/lib/app-context` 那些都不受影响。这两个模块只做「答案正文里的 `[id=…]` 变可点链接」「`$…$` 变 KaTeX 占位节点」，全仓唯一消费点就是 AI 面板的 Markdown 渲染；留在 lib 会让人以为别的域也能用。
+- 为什么只搬这两个：AI 域散在 lib 的其余模块确实被跨域共用——`katex-render` 由 `features/ai` 与 `features/editor` 同用、`code-highlight` 4 个消费点跨两域、`ai-editor` 7 处、`ai-edit` 8 处、`ai-locate` 5 处、`ai-mention` 2 处，按「公共的留 lib」一律不动。
+- 「纯移动」的证明：四个文件与 `git show HEAD:src/lib/<同名文件>` 逐字节对齐，总差异 5 行——两个用例各 1 行 import 源、两条「为什么放在 feature」的头注释、1 行把旧注释里的 `lib/ai-citation` 写成 `./ai-citation`（模块自己的位置变了，不改会指错）。`Markdown.tsx` 的 `git diff --stat` 只有 4 ++--。
+- 七条变异核验（跑完逐字节还原并断言一致）：`MATH_NODE_TYPE` 改名 → 7 红；`CITED_ID_RE` 去掉首尾锚点 → 1 红；引用标记正则去掉右括号 → 3 红；`transformMath` 的 `includes("$")` 改成 `"$$"` → 2 红；`Markdown.tsx` 的两处 import 指回已删除的 `@/lib/…` → `tsc` 报 TS2307（证明 lib 里的副本真的没了、不存在两份真值）。
+- 顺手补了一个搬迁前就存在的断言洞：行内公式规则里「闭合 `$` 后是数字就不算公式」这条负向前瞻原本去掉后 10 条用例全绿——补「共 $x$2 个」把它钉住（`ai-math.test.ts` 10 → 11 条）。核对时还确认旧注释的说法不准：`要 $100 和 $200` 实际是被「闭合 `$` 前是空白」挡下的，数字前瞻管的是 `$x$2` 这种形态；注释属文案订正，本批没改。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 101 文件 / 1,375 通过（+1）、`npm run build` exit 0（50.92s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① `lib/ai-tokens.ts`（40 行，估 token）唯一消费点是 `stores/ai/request-slice.ts`，按「公共状态留 stores」的口径它归 lib 还是归 stores 都没错，本批没定。② `Markdown.tsx:155` 认的是字面量 `"ai-math-block"` 而不是同目录的 `MATH_CLASS_BLOCK` 常量——现在两者挨在一起，改常量不改字面量会静默错版，属一致性/行为另案。③ 引用点击跳转与公式排版只能在 `npm run tauri dev` 的原生窗口里看，本批未跑真机。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
