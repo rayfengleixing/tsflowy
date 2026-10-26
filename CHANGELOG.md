@@ -426,6 +426,16 @@
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 101 文件 / 1,400 通过（+6）、`npm run build` exit 0（48.88s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
 - 落差：① `FENCE` 那个常量现在只住在 `extract.ts`，而 `protocol.ts` 的协议正文里 ``` 是模板字符串中的字面量，两处不共用一个符号——这与拆分前一样，但分成两个文件后更容易被误读成「改 `FENCE` 就同时改协议」，实际只有取块那一侧跟着它走。② 新增符号要改三处（正文文件 + `index.ts` 的值导出行 + 值导出用例的名字数组），守卫只能保证「漏了会被发现」，不能让漏报变少。③ 用例文件仍是一个 `ai-edit.test.ts`（27 条），没跟着拆成四个：它测的是这套协议的整体对外行为，按文件拆反而要把块标记的夹具复制四遍。④ 本轮没跑真机。
 
+### 工程：agent 循环从动作切片里切出 `run-stream.ts`（`run-slice.ts` 390 → 204 行）
+
+- 搬动：`src/stores/ai/run-slice.ts` 里那段 154 行的 agent 循环（发请求 → 本机执行模型要的只读检索 → 把结果喂回下一轮 → 收敛后落地写动作）连它上面的 JSDoc 一起切进新文件 `src/stores/ai/run-stream.ts`（206 行）；切片只剩界面上的八条动作（send / stop / retry / 两条快捷动作 / 继续生成 / regenerate / resend）与 `currentPageRef`，204 行。
+- 切这一刀的依据是注入清单的真实用量：原来那份 `AiRunDeps`（`turn` + 出请求切片 6 项 + 流式切片 3 项 + 落盘 1 项，共 11 项）**只有循环在用**，八条动作只用得到其中三项（`maxChars` / `persistSessions` / `turn`）。类型与 11 个名字整体搬进 `run-stream.ts` 并 `export`，切片签名改成 `(set, get, deps: AiRunDeps)`，把 `deps` 原样转发给 `createRunStream`——装配方 `src/stores/ai/index.ts:61-73` 那 12 行调用一字未动，`createRunSlice` 的对外形状也不变。
+- 「纯移动」的证明：新文件套一层 `createRunStream(set, get, { …11 项 }): RunStream` 的工厂外壳，里面仍是 `const runStream = async (assistantId: string) => {` 的两格缩进，所以**循环体 154 行连缩进逐字节不变**（这是继 P5-5 的 JSX 之后第二次不需要 dedent）；八条动作 165 行、`currentPageRef` + `AiRunActions` 13 行同样整段逐字节命中；`AiRunDeps` 那五行只在一行前面加了 `export`，是本轮唯一的字符级改动。反向核对：390 行里没被搬走的只有 5 行（两份工厂签名、被拆成两条的那行 import、被改写的一行头注释），新增 21 行全部归类为「文件头注释 + 按引用方向拆开的 import + 外壳」。
+- 十条变异核验（每次改坏一处 → 跑三个 AI store 用例文件 → 逐字节还原并断言与变异前一致）：循环收尾不再落盘 → 3 红；旧循环替新一轮拆掉 `streaming`（`turn.seq === turnId` 守卫失效）→ 1 红；检索步骤之间不再核对停止 → 1 红；超限不再降预算补发 → 1 红；到轮次上限仍继续执行检索 → 2 红；「仅本页」档不再拦检索 → 1 红；转发时把 `maxChars` 换成写死的 7 → 「文本协议检索块」红（截断上限真从注入的读数走到检索执行处）；转发时把 `finalizeAssistant` 换成空实现 → 多条写动作用例红；`send` 不再标注发起时所在页面 → 1 红；`stop` 标记了 `turn.seq + 1`（跨两个文件共享的那个 Set 接错）→ 「拦它的是轮次登记」红。
+- 其中两条是踩出来才改对的：原本以为 `maxChars` 接错会打到「总结当前页」那条用例，实际红的是检索块那条——快捷动作走的切片自己解构的那份，循环走的是转发那份，正好证明两侧读数各管各的；`stop` 标错轮号在 `confirm_edit` 默认开着时看不出差别（两条路都停在待确认），只有那条关掉确认、专门盯轮次登记的用例红。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 101 文件 / 1,400 通过（用例数不变，纯移动）、`npm run build` exit 0（56.95s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① 循环与动作现在跨两个文件共享同一个 `TurnRegistry` 对象引用，靠变异 M2 / M3 / M10 三条盯住「读写的是同一份」；但类型层面给不了这个保证——注入方换成新建的 registry 也照样过编译。② 动作侧只解构三项，将来某条新动作要用 `ctxScope` 之类，得自己加进解构行；忘了加不会报错，只会拿不到值（`deps` 仍在手边，改起来是一行的事）。③ 两个文件的头注释现在互相指认（「循环在 run-stream.ts」/「八条动作在 run-slice.ts」），改一侧的分工描述要记得改另一侧。④ 没给 `run-stream.ts` 单开用例文件：94 条 AI store 用例继续从 store 的公开动作打进来，这正是纯移动的前提——真要单测循环本身，得先给它造一套比 store 装配更薄的夹具。⑤ 本轮没跑真机。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
