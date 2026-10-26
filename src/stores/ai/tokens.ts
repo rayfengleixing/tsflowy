@@ -1,6 +1,9 @@
 // 粗略 token 估算：项目里上下文预算全部按「字符」计会明显失真——中文约 1 字 1 token，
 // 拉丁文本约 4 字符 1 token。这里按码点区分宽文字（CJK / 假名 / 韩文 / 全角标点）与其余，
 // 给一个不依赖分词器、误差对预算目的足够小的近似。
+//
+// 原先住在 `src/lib/ai-tokens.ts`；全仓只有出请求切片一处用得上（截历史、截单条消息），
+// 就跟着使用者搬进 stores/ai——将来别的模块也要估 token，再提回 lib 不迟。
 
 function isWide(cp: number): boolean {
   return (

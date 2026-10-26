@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estimateTokens, tailTokens } from "./ai-tokens";
+import { estimateTokens, tailTokens } from "./tokens";
 
 describe("estimateTokens", () => {
   it("空文本为 0", () => {

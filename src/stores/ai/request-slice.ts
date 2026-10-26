@@ -7,7 +7,7 @@ import {
 } from "@/lib/ai-edit";
 import { getAiEditor } from "@/lib/ai-editor";
 import { parseMentions } from "@/lib/ai-mention";
-import { estimateTokens, tailTokens } from "@/lib/ai-tokens";
+import { estimateTokens, tailTokens } from "./tokens";
 import { documentApi } from "@/lib/documents";
 import { logger } from "@/lib/logger";
 import { jsonToMarkdown } from "@/lib/markdown";

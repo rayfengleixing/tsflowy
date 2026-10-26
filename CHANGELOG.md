@@ -436,6 +436,14 @@
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 101 文件 / 1,400 通过（用例数不变，纯移动）、`npm run build` exit 0（56.95s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
 - 落差：① 循环与动作现在跨两个文件共享同一个 `TurnRegistry` 对象引用，靠变异 M2 / M3 / M10 三条盯住「读写的是同一份」；但类型层面给不了这个保证——注入方换成新建的 registry 也照样过编译。② 动作侧只解构三项，将来某条新动作要用 `ctxScope` 之类，得自己加进解构行；忘了加不会报错，只会拿不到值（`deps` 仍在手边，改起来是一行的事）。③ 两个文件的头注释现在互相指认（「循环在 run-stream.ts」/「八条动作在 run-slice.ts」），改一侧的分工描述要记得改另一侧。④ 没给 `run-stream.ts` 单开用例文件：94 条 AI store 用例继续从 store 的公开动作打进来，这正是纯移动的前提——真要单测循环本身，得先给它造一套比 store 装配更薄的夹具。⑤ 本轮没跑真机。
 
+### 工程：token 估算跟着唯一的使用者搬进 stores/ai（P5 收口）
+
+- 搬动：`src/lib/ai-tokens.ts`（40 行）→ `src/stores/ai/tokens.ts`，用例 `src/lib/ai-tokens.test.ts`（58 行）→ `src/stores/ai/tokens.test.ts`；git 认出两对改名（相似度 87% / 96%），内容改动只有三行头注释加两条 import 路径。
+- 依据是引用面：全仓只有 `src/stores/ai/request-slice.ts` 一处用得上（截历史、截单条超预算的消息），估出来的数字也只服务于「这次请求带多少上下文」这一件事——属出请求那一层自己的口径，不是跨模块共享的 lib 能力。这与 P5-3 把两个渲染专属模块下沉 `features/ai` 是同一条规矩：代码住在用它的那一层；将来第二个模块也要估 token，再提回 lib。
+- 这一刀之后，`src/lib` 里以 `ai-` 开头的顶层单体只剩三个真正跨层的：`ai-editor.ts`（编辑器桥的登记表，features/editor 与 stores/ai 两边都用）、`ai-locate.ts`（按标题/原文定位块，`edit-ops.ts` 与取证工具共用）、`ai-mention.ts`（@ 解析，编辑器的补全与出请求两侧都用）。
+- 静态验证：`tsc --noEmit` exit 0（改错路径当场报，这一刀没有运行期新接缝，故不做变异核验）、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 101 文件 / 1,400 通过（用例数不变）、`npm run build` exit 0（49.13s）、`cargo test` 343 通过 / 0 失败 / 1 忽略。
+- 落差：① 搬动后 `stores/ai` 里出现了「纯计算」文件，与「store 只放状态与动作」的直觉不完全一致——同目录的 `limits.ts` / `prompts.ts` / `session-codec.ts` 已经是这个形状，本次按既有先例走。② `estimateTokens` 的宽字符区间表仍是硬编码的五段码点，遇到新增的全角区段要手改；本批不改行为。③ 本轮没跑真机。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
