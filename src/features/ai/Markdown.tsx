@@ -152,7 +152,7 @@ function MathSpan({ tex, display }: { tex: string; display: boolean }) {
       cancelled = true;
     };
   }, [tex, display]);
-  const className = display ? "ai-math-block" : undefined;
+  const className = display ? MATH_CLASS_BLOCK : undefined;
   if (!html) return <span className={className}>{tex}</span>;
   return <span className={className} dangerouslySetInnerHTML={{ __html: html }} />;
 }

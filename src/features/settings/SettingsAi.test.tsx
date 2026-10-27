@@ -12,10 +12,12 @@ const api = vi.hoisted(() => ({
   aiListModels: vi.fn(),
   aiTestConnection: vi.fn(),
   setConfig: vi.fn(),
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
 }));
 
 vi.mock("@/lib/i18n", () => ({ t: (key: string) => key }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { success: api.toastSuccess, error: api.toastError } }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn() } }));
 vi.mock("@/stores/ai", () => ({ useAiStore: { getState: () => ({ setConfig: api.setConfig }) } }));
 vi.mock("@/lib/ai", () => ({
@@ -24,7 +26,12 @@ vi.mock("@/lib/ai", () => ({
   aiListModels: api.aiListModels,
   aiTestConnection: api.aiTestConnection,
   aiProfileKeyInput: (draft: string) => (draft.trim() === "" ? null : draft.trim()),
-  AI_PROVIDER_PRESETS: [{ id: "custom", baseUrl: "" }],
+  // 预设要给两种形态：带原生协议的（anthropic）与不带的（OpenAI 兼容），才能验「协议回到自动识别」
+  AI_PROVIDER_PRESETS: [
+    { id: "custom", baseUrl: "", model: "" },
+    { id: "deepseek", baseUrl: "https://api.deepseek.com", model: "deepseek-chat" },
+    { id: "anthropic", baseUrl: "https://api.anthropic.com", model: "claude-3", protocol: "anthropic" },
+  ],
   // 档位行有协议下拉：给全四个真值，才能核对「下拉选中的协议原样进了保存入参」
   AI_PROTOCOL_OPTIONS: ["", "openai", "anthropic", "gemini"],
 }));
@@ -435,5 +442,227 @@ describe("AI 设置：自定义快捷指令子件", () => {
     await user.click(cardBy("摘要").querySelector<HTMLButtonElement>('button[title="settings.aiRemoveAction"]')!);
     await waitFor(() => expect(api.aiSaveConfig).toHaveBeenCalled());
     expect(savedActions(0)).toEqual([]);
+  });
+});
+
+describe("AI 设置：父级连接区（没切成子件的那几块）", () => {
+  /** 三个开关是 `<label><input/>{文案}</label>` 结构，控件与文案靠父子关系定位 */
+  const checkboxOf = (labelKey: string): HTMLInputElement => {
+    const el = screen.getByText(labelKey).closest("label")?.querySelector<HTMLInputElement>("input");
+    if (!el) throw new Error(`未找到「${labelKey}」对应的复选框`);
+    return el;
+  };
+
+  /** Row 里的按钮（测试连接 / 拉取模型）按标题文案定位 */
+  const buttonNamed = (text: string): HTMLButtonElement => {
+    const el = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes(text));
+    if (!el) throw new Error(`未找到文案含「${text}」的按钮`);
+    return el;
+  };
+
+  /** 谁先谁后是有语义的：Rust 侧读的是持久化配置，没先落库就等于测的是上一次的连接 */
+  const savedBefore = (later: () => number) => {
+    expect(api.aiSaveConfig.mock.invocationCallOrder[0]).toBeLessThan(later());
+  };
+
+  it("首帧拉到配置：界面回填，同一份原样交给 AI store", async () => {
+    const cfg = config({ model: "gpt-x", max_chars: 12000 });
+    api.aiGetConfig.mockResolvedValue(cfg);
+    render(<SettingsAi />);
+    await waitFor(() => expect(inputInRow("settings.aiMaxChars").value).toBe("12000"));
+    expect(screen.getByDisplayValue("gpt-x")).toBeTruthy();
+    // 面板里的截断上限、快捷动作读数都从这条 setConfig 来，接错就成了「设置改了、面板没换」
+    expect(api.setConfig).toHaveBeenCalledWith(cfg);
+  });
+
+  it("选带原生协议的服务商：地址、模型、协议三项一起带过去", async () => {
+    const user = userEvent.setup();
+    render(<SettingsAi />);
+    await waitFor(() => expect(inputInRow("settings.aiFirstByteTimeout").value).toBe("30"));
+
+    await user.selectOptions(selectInRow("settings.aiProvider"), "anthropic");
+    await waitFor(() => expect(api.aiSaveConfig).toHaveBeenCalled());
+    expect(savedInput().provider).toBe("anthropic");
+    expect(savedInput().baseUrl).toBe("https://api.anthropic.com");
+    expect(savedInput().model).toBe("claude-3");
+    expect(savedInput().protocol).toBe("anthropic");
+  });
+
+  it("选 OpenAI 兼容的服务商：协议收回自动识别，而不是留着上一家的原生协议", async () => {
+    const user = userEvent.setup();
+    api.aiGetConfig.mockResolvedValue(config({ provider: "anthropic", protocol: "anthropic" }));
+    render(<SettingsAi />);
+    await waitFor(() => expect(selectInRow("settings.aiProvider").value).toBe("anthropic"));
+
+    await user.selectOptions(selectInRow("settings.aiProvider"), "deepseek");
+    await waitFor(() => expect(api.aiSaveConfig).toHaveBeenCalled());
+    expect(savedInput().baseUrl).toBe("https://api.deepseek.com");
+    expect(savedInput().protocol).toBe("");
+  });
+
+  it("服务商下拉里没有的历史值：收回 custom 再落库，而不是把野值原样存回去", async () => {
+    const user = userEvent.setup();
+    // 直接断 select.value 是断不出来的：jsdom 里 value 指向不存在的选项会退回首个选项，改不改兜底都一样
+    // 「显示成自定义」。真正的代价在落库那一步——野值会被原样写回服务端，下次读取就对不上任何预设。
+    api.aiGetConfig.mockResolvedValue(config({ provider: "ollama", base_url: "http://localhost:11434/v1" }));
+    render(<SettingsAi />);
+    await waitFor(() => expect(inputInRow("settings.aiModel").value).toBe("m"));
+
+    await user.clear(inputInRow("settings.aiMaxChars"));
+    await user.type(inputInRow("settings.aiMaxChars"), "9000");
+    await user.tab();
+    await waitFor(() => expect(api.aiSaveConfig).toHaveBeenCalled());
+    expect(savedInput().provider).toBe("custom");
+    // 收回 id 的同时不能顺手把地址与模型洗掉：那是本地 Ollama 唯一的接线信息
+    expect(savedInput().baseUrl).toBe("http://localhost:11434/v1");
+    expect(savedInput().model).toBe("m");
+  });
+
+  it("协议族可单独改，只动 protocol 这一项", async () => {
+    const user = userEvent.setup();
+    render(<SettingsAi />);
+    await waitFor(() => expect(inputInRow("settings.aiFirstByteTimeout").value).toBe("30"));
+
+    await user.selectOptions(selectInRow("settings.aiProtocol"), "gemini");
+    await waitFor(() => expect(api.aiSaveConfig).toHaveBeenCalled());
+    expect(savedInput().protocol).toBe("gemini");
+    expect(savedInput().provider).toBe("custom");
+    expect(savedInput().model).toBe("m");
+  });
+
+  it("全局 Key：填了才覆盖，落库成功后输入框清空", async () => {
+    const user = userEvent.setup();
+    render(<SettingsAi />);
+    await waitFor(() => expect(inputInRow("settings.aiFirstByteTimeout").value).toBe("30"));
+    const key = inputInRow("settings.aiApiKey");
+    expect(key.placeholder).toBe("settings.aiApiKeyPlaceholderSaved");
+    expect(screen.getByText("settings.aiApiKeySaved：sk-***")).toBeTruthy();
+
+    await user.type(key, "sk-global");
+    await user.tab();
+    await waitFor(() => expect(api.aiSaveConfig).toHaveBeenCalled());
+    expect(savedInput().apiKey).toBe("sk-global");
+    await waitFor(() => expect(inputInRow("settings.aiApiKey").value).toBe(""));
+  });
+
+  it("Key 还没存过时给的是「未设置」占位，且不出掩码行", async () => {
+    api.aiGetConfig.mockResolvedValue(config({ has_api_key: false, api_key_masked: "" }));
+    render(<SettingsAi />);
+    await waitFor(() => expect(inputInRow("settings.aiApiKey").placeholder).toBe("settings.aiApiKeyPlaceholderEmpty"));
+    expect(screen.queryByText(/^settings\.aiApiKeySaved/)).toBeNull();
+  });
+
+  it("凭据库不可用：Key 明文躺在 config.json 里要提示出来", async () => {
+    api.aiGetConfig.mockResolvedValue(config({ has_api_key: true, api_key_plaintext: true }));
+    render(<SettingsAi />);
+    await waitFor(() => expect(screen.getByText("settings.aiApiKeyPlaintextWarn")).toBeTruthy());
+  });
+
+  it("上下文上限改完离开输入框即落库", async () => {
+    const user = userEvent.setup();
+    render(<SettingsAi />);
+    await waitFor(() => expect(inputInRow("settings.aiMaxChars").value).toBe("8000"));
+
+    await user.clear(inputInRow("settings.aiMaxChars"));
+    await user.type(inputInRow("settings.aiMaxChars"), "16000");
+    await user.tab();
+    await waitFor(() => expect(api.aiSaveConfig).toHaveBeenCalled());
+    expect(savedInput().maxChars).toBe(16000);
+    expect(savedInput().confirmEdit).toBe(true);
+    expect(savedInput().useTools).toBe(false);
+  });
+
+  it("启用、改前确认、工具调用三个开关各只翻自己那一项，且改动会被下一次保存带走", async () => {
+    const user = userEvent.setup();
+    // aiSaveConfig 是覆盖式的：下一份入参得把上一次改的值带回去。无状态的桩做不到这件事，
+    // 所以这里给这条用例装一台最小假服务端——保存写进 state，读取回 state（字段名按服务端契约换蛇形）。
+    const state: Record<string, unknown> = { ...config() };
+    const toServer: Record<string, string> = {
+      enabled: "enabled",
+      confirmEdit: "confirm_edit",
+      useTools: "use_tools",
+    };
+    api.aiGetConfig.mockImplementation(() => Promise.resolve({ ...state }));
+    api.aiSaveConfig.mockImplementation((input: Record<string, unknown>) => {
+      for (const [form, wire] of Object.entries(toServer)) state[wire] = input[form];
+      return Promise.resolve();
+    });
+
+    render(<SettingsAi />);
+    await waitFor(() => expect(checkboxOf("settings.aiEnable").checked).toBe(true));
+
+    await user.click(checkboxOf("settings.aiEnable"));
+    await waitFor(() => expect(api.aiSaveConfig).toHaveBeenCalled());
+    expect(savedInput().enabled).toBe(false);
+    expect(savedInput().confirmEdit).toBe(true);
+    expect(savedInput().useTools).toBe(false);
+
+    await user.click(checkboxOf("settings.aiConfirmEdit"));
+    await waitFor(() => expect(api.aiSaveConfig.mock.calls.length).toBeGreaterThan(1));
+    // enabled 必须仍是 false：落库后表单是从服务端配置回填的，回填没接好就会被下一份入参悄悄改回去
+    expect(savedAt(1).enabled).toBe(false);
+    expect(savedAt(1).confirmEdit).toBe(false);
+    expect(checkboxOf("settings.aiEnable").checked).toBe(false);
+
+    await user.click(checkboxOf("settings.aiUseTools"));
+    await waitFor(() => expect(api.aiSaveConfig.mock.calls.length).toBeGreaterThan(2));
+    expect(savedAt(2).useTools).toBe(true);
+    expect(savedAt(2).enabled).toBe(false);
+    expect(savedAt(2).confirmEdit).toBe(false);
+  });
+
+  it("测试连接：先落库再测，成功后给提示", async () => {
+    const user = userEvent.setup();
+    api.aiTestConnection.mockResolvedValue("pong");
+    render(<SettingsAi />);
+    await waitFor(() => expect(inputInRow("settings.aiFirstByteTimeout").value).toBe("30"));
+
+    await user.click(buttonNamed("settings.aiTest"));
+    await waitFor(() => expect(api.aiTestConnection).toHaveBeenCalled());
+    savedBefore(() => api.aiTestConnection.mock.invocationCallOrder[0]);
+    await waitFor(() => expect(api.toastSuccess).toHaveBeenCalledWith("settings.aiTestOk"));
+    expect(api.toastError).not.toHaveBeenCalled();
+  });
+
+  it("测试连接失败：报错进 toast，按钮回到可点", async () => {
+    const user = userEvent.setup();
+    api.aiTestConnection.mockRejectedValue(new Error("boom"));
+    render(<SettingsAi />);
+    await waitFor(() => expect(inputInRow("settings.aiFirstByteTimeout").value).toBe("30"));
+
+    await user.click(buttonNamed("settings.aiTest"));
+    await waitFor(() => expect(api.toastError).toHaveBeenCalledWith("settings.aiTestFailed"));
+    await waitFor(() => expect(buttonNamed("settings.aiTest").disabled).toBe(false));
+  });
+
+  it("拉取模型：先落库再列，回来后模型从手填改成下拉并保住当前值", async () => {
+    const user = userEvent.setup();
+    api.aiListModels.mockResolvedValue(["gpt-a", "gpt-b"]);
+    render(<SettingsAi />);
+    await waitFor(() => expect(inputInRow("settings.aiFirstByteTimeout").value).toBe("30"));
+
+    await user.click(buttonNamed("settings.aiFetchModels"));
+    await waitFor(() => expect(api.aiListModels).toHaveBeenCalled());
+    savedBefore(() => api.aiListModels.mock.invocationCallOrder[0]);
+
+    const model = selectInRow("settings.aiModel");
+    expect([...model.options].map((o) => o.value)).toEqual(["m", "gpt-a", "gpt-b"]);
+    expect(model.value).toBe("m");
+
+    await user.selectOptions(model, "gpt-b");
+    await waitFor(() => expect(api.aiSaveConfig.mock.calls.length).toBeGreaterThan(1));
+    expect(savedAt(1).model).toBe("gpt-b");
+  });
+
+  it("拉取模型失败：留在手填输入框，不让界面卡在空下拉", async () => {
+    const user = userEvent.setup();
+    api.aiListModels.mockRejectedValue(new Error("offline"));
+    render(<SettingsAi />);
+    await waitFor(() => expect(inputInRow("settings.aiFirstByteTimeout").value).toBe("30"));
+
+    await user.click(buttonNamed("settings.aiFetchModels"));
+    await waitFor(() => expect(api.toastError).toHaveBeenCalledWith("settings.aiFetchModelsFailed"));
+    expect(inputInRow("settings.aiModel").value).toBe("m");
+    expect(buttonNamed("settings.aiFetchModels").disabled).toBe(false);
   });
 });

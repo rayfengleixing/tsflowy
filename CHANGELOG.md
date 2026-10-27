@@ -444,6 +444,19 @@
 - 静态验证：`tsc --noEmit` exit 0（改错路径当场报，这一刀没有运行期新接缝，故不做变异核验）、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 101 文件 / 1,400 通过（用例数不变）、`npm run build` exit 0（49.13s）、`cargo test` 343 通过 / 0 失败 / 1 忽略。
 - 落差：① 搬动后 `stores/ai` 里出现了「纯计算」文件，与「store 只放状态与动作」的直觉不完全一致——同目录的 `limits.ts` / `prompts.ts` / `session-codec.ts` 已经是这个形状，本次按既有先例走。② `estimateTokens` 的宽字符区间表仍是硬编码的五段码点，遇到新增的全角区段要手改；本批不改行为。③ 本轮没跑真机。
 
+### 工程：公式类名收口成常量 + AI 设置父级连接区补用例（M 批，机械路线之外的收口）
+
+- 这一批不做拆分，只清 P5 结束时留下的两条「补断言级别」的落差：一处渲染层写死了字面量、一处父级连接区没有直接用例。产品代码总共动了一行，且改的是耦合而不是行为。
+- 改动一：`src/features/ai/Markdown.tsx:155` 的 `display ? "ai-math-block" : undefined` 换成 `display ? MATH_CLASS_BLOCK : undefined`。常量的值就是那串，所以界面一个字都没变；变的是「谁跟着改名走」——`ai-math.ts:32` 造占位节点用常量，`Markdown.tsx:250` 认占位节点也用常量，唯独 KaTeX 出图前那个兜底 span 写死字面量：真把类名换掉，就会变成「认得出是公式、渲染出来却没类名」，配色与按类名取节点的选择器同时落空。
+- 新建 `src/features/ai/Markdown.test.tsx`（5 条，jsdom）。KaTeX 的替身给两种状态——一条永不 settle 的 Promise（停在 TeX 原文兜底）与立即出图，断言：块级兜底 span 的类名取自 `MATH_CLASS_BLOCK`、行内故意不带类名、块级与行内分别按 `displayMode` 的 true / false 调 KaTeX（即「认类」与「回写类名」是同一条链而不是两处各判）、出图后类名仍在且正文换成渲染结果、代码块里的 `$` 一次 KaTeX 都不调。用例按 `.${MATH_CLASS_BLOCK}` 查节点，所以「类名与常量脱钩」是看得见的。
+- 五条变异核验（每次改坏一处 → 跑用例 → 逐字节还原并断言与变异前一致）：MathSpan 退回字面量**同时**把常量改名（真脱钩）→ 2 红；兜底 span 丢掉类名 → 2 红；块级错用行内常量 → 2 红；认类判定把块级当行内（`displayMode` 接反）→ 4 红；出图后丢类名 → 1 红。
+- 改动二：`src/features/settings/SettingsAi.test.tsx` 16 → 30 条，补 P5-5 明写过的落差——父级留下的连接区（服务商/协议/全局 Key/`maxChars`/三个开关/两个按钮 + 首帧 effect）在拆分前后都没有直接用例。新钉住的：首帧拉到配置既回填界面、又把同一份原样 `setConfig` 交给 AI store；选带原生协议的服务商时地址/模型/协议三项一起带过去；选 OpenAI 兼容的服务商时协议收回自动识别而不是留着上一家的；服务商下拉里没有的历史值收回 `custom` 再落库；协议族单独可改且只动 `protocol`；全局 Key 填了才覆盖、落库成功后输入框清空、未存过时给「未设置」占位且不出掩码行、凭据库不可用时明文警告出现；`maxChars` 离开输入框即落库；启用/改前确认/工具调用三个开关各只翻自己那一项；测试连接与拉取模型都是**先落库再打**（按 `invocationCallOrder` 断先后），成功后给提示、失败后报错进 toast 且按钮回到可点、拉回来的模型把手填输入框换成下拉并保住当前值。
+- 夹具两处必要改动（都在测试侧）：`AI_PROVIDER_PRESETS` 的替身从 1 条扩到 3 条，才有「带原生协议」与「OpenAI 兼容」两种形态可分；`sonner` 的 `toast` 从匿名 `vi.fn()` 换成 hoisted 的两个 spy，成功/失败提示本身成了被测对象。三个开关那条用例给本文件装了一台最小假服务端（`aiSaveConfig` 写进 `state`、`aiGetConfig` 读回 `state`）：`ai_save_config` 是覆盖式的，无状态的桩根本断不出「下一次保存有没有把上一次的改动带走」。
+- 十五条变异核验（改坏 `SettingsAi.tsx` 一处 → 跑该文件 → 逐字节还原）：预设切换漏带协议 → 1 红；漏带模型 → 1 红；provider 回填不认的兜底删掉 → 1 红；兜底改成写死 `custom` 但洗掉地址 → 1 红；`maxChars` 不回填 → 1 红；首帧不交给 AI store → 1 红；留空 Key 也当覆盖 → 1 红；保存后不清空 Key 输入框 → 1 红；测试连接不先落库 → 1 红；拉取结果没进下拉 → 1 红；拉取失败不提示 → 1 红；测试失败后按钮不复位 → 1 红；落库不带当前表单 → 23 红；`useTools` 硬编码 → 1 红；协议下拉不即时落库 → 1 红。
+- 有一条断言是假的，改对了才留下：最初写的是「服务商下拉里回填成 custom」，把兜底整条删掉它仍然绿——jsdom 里 `<select value="…">` 指向不存在的选项会退回首个选项，「显示成自定义」根本断不出差异。改成走落库那一步断（野值 `ollama` 会被原样写回服务端），才真打死那次删除。教训与 H 批那条同源：**新用例配一条变异，别只看它绿不绿。**
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 102 文件 / 1,419 通过（+19：Markdown 5 条 + SettingsAi 14 条）、`npm run build` exit 0（51.47s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰，只复跑基线）。
+- 落差：① 手改 Base URL 后离开输入框落库这条仍没单独钉，只在「收回 custom 再落库」那条里断过它被原样带回。② `ai-math.ts` 里关于 `(?!\d)` 的旧注释说法仍不准，本批不碰（改注释属另一类批次）。③ `get_page_content` 复杂块的 Markdown 形态还是没断言。④ 新增用例只到 jsdom 的 DOM 层，档位/预设下拉的真机选项文案与配色没在 `npm run tauri dev` 的原生窗口复验。⑤ Markdown 的用例文件只覆盖了公式那一族组件（表格、代码高亮、mermaid、引用链接仍无渲染用例），本批不为凑数往外扩。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
