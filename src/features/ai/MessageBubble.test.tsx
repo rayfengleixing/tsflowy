@@ -4,9 +4,11 @@
 // 流式进行中消息级操作整排消失。这些都是「点错一下就动到文档」那一类，原来只能靠肉眼在原生窗口里看。
 // 本文件刻意不 mock `@/lib/i18n`：detailText 那条「旧版本把裸 key 存进 detail」的路，
 // 翻没翻只有真字典看得出差别——替身按 house style 原样返回 key 时，两条分支是同一个字符串。
+// 也正因为用的是真字典，「待确认」那一档才改用英文钉：中文里两条分支恰好拼出同一句话（见下面那条用例）。
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { AiActionRecord, AiMessage } from "@/stores/ai";
+import { bindFakeApp, type FakeApp } from "@/test/app-fakes";
 import { MessageBubble, type BubbleApi } from "./MessageBubble";
 
 /** Markdown 与图片缩略图各有自己的用例，这里只关心气泡的判定；替身把真正喂进去的正文记下来 */
@@ -73,9 +75,14 @@ function cardText(container: HTMLElement, index = 0): string {
 
 const btn = (label: string) => screen.queryByRole("button", { name: label });
 
+/** 只有换语言那条用例需要绑假运行态；统一在 afterEach 里解绑，免得脏语言留给后面的用例 */
+let app: FakeApp | null = null;
+
 afterEach(() => {
   cleanup();
   mdSpy.texts.length = 0;
+  app?.dispose();
+  app = null;
 });
 
 describe("动作卡片的状态文案：改文档与其它写动作各一套", () => {
@@ -108,6 +115,24 @@ describe("动作卡片的状态文案：改文档与其它写动作各一套", (
       unmount();
       cleanup();
     }
+  });
+
+  // 中文里「AI 建议修改文档」与「AI 建议{修改文档}」拼出同一句话，这一档的分岔在 zh 下断不出（R 批记为不可观察）。
+  // 换到英文就断得出：isEdit 那句带冠词（"a document change"），插 {name} 那条只会得到 "document change"。
+  // 语言是 app-context 的读值，绑一棵假运行态就切得过去——字典与产品代码都不动；「：」是卡片硬编码的分隔符，两种语言都在。
+  it("「待确认」的分岔只有换到英文才断得出：改文档那句带冠词", () => {
+    app = bindFakeApp({ lang: "en-US" });
+    const { container, rerender } = render(
+      <MessageBubble message={msgOf({ actions: [actionOf({ summary: "shorten" })] })} api={apiOf()} />,
+    );
+    expect(cardText(container)).toBe("Pending: the AI suggests a document change：shorten");
+    rerender(
+      <MessageBubble
+        message={msgOf({ actions: [actionOf({ tool: "create_page", summary: "weekly" })] })}
+        api={apiOf()}
+      />,
+    );
+    expect(cardText(container)).toBe("Pending: the AI suggests page creation：weekly");
   });
 
   it("已撤销压过已应用：undone 的卡片说「已撤销本次修改」", () => {
@@ -224,6 +249,14 @@ describe("气泡与消息级操作", () => {
     one(msgOf({ content: "已建页", actions: [actionOf({ summary: "已建页" })] }));
     expect(screen.queryByTestId("md")).toBeNull();
     expect(screen.queryAllByTitle("替换选中")).toHaveLength(0);
+    expect(mdSpy.texts).toEqual([]);
+  });
+
+  // 本文件把 ./Markdown 换成了替身（钉的是「喂进去的是哪段正文、喂了几次」），记号真被解析成标签的另一半
+  // 证据在 MessageBubble.markdown.test.tsx——那条用**真** Markdown 渲染，两边合起来才接得住这条接缝。
+  it("交给 Markdown 的就是正文那一段：不拼卡片说明，也只交一次", () => {
+    one(msgOf({ content: "**加粗** 的正文", actions: [actionOf({ summary: "把第三段改短" })] }));
+    expect(mdSpy.texts).toEqual(["**加粗** 的正文"]);
   });
 
   it("回写编辑器用的是整条正文，插入与替换两种模式各打一次", () => {
