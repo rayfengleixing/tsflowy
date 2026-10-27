@@ -32,6 +32,11 @@ describe("ai-math 行内公式切分", () => {
     expect(splitMath("共 $x$2 个")).toEqual([text("共 $x$2 个")]);
   });
 
+  it("金额之间不留空格时，也是闭合 $ 后是数字这条挡的（`(?<!\\s)` 帮不上）", () => {
+    expect(splitMath("价 $100，$200 元")).toEqual([text("价 $100，$200 元")]);
+    expect(splitMath("价 $100。$200 元")).toEqual([text("价 $100。$200 元")]);
+  });
+
   it("内容为空或纯空白不当公式", () => {
     expect(splitMath("$$$$")).toEqual([text("$$$$")]);
     expect(splitMath("$ $")).toEqual([text("$ $")]);
