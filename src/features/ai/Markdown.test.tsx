@@ -5,23 +5,51 @@
 // 改常量名就会让「认得出、但渲染出来没类名」——CSS 与选择器同时落空，而纯逻辑测试看不见。
 // 同一个渲染层里另一条异步兜底是 mermaid 围栏：出图前后都退回源码、失败才给提示，而它是
 // 「等笔停 350ms 再画」的防抖形状，只有假计时器能看出半截语法那一帧根本没去画。
+// 这批之后还钉了两件事：代码块的按需高亮（语言没注册就退回纯文本，正文一个字不许丢）与链接的
+// 分岔（引用链接只跳站内、外链只交系统浏览器——两边都不许让 WebView2 整页跳走）。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { bindFakeApp } from "@/test/app-fakes";
+import { viewNode } from "@/test/view-node";
 
 const katex = vi.hoisted(() => ({ renderTex: vi.fn() }));
 const mermaid = vi.hoisted(() => ({ renderMermaid: vi.fn<(code: string) => Promise<string>>() }));
+/** 跳转的两个出口做成可断言的替身：引用链接与外链各走一边，走错一边就是「站内页被浏览器接管」 */
+const nav = vi.hoisted(() => ({ openRowInView: vi.fn(), openUrl: vi.fn(() => Promise.resolve()) }));
+const toaster = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+/**
+ * lowlight 替身：只认 "ts" 这一种语言，highlight 产出真实 lowlight 会出现的那两类 hast 节点
+ * （element + text），类名带上语言名好让用例点名查。
+ */
+const hl = vi.hoisted(() => ({
+  registered: vi.fn((lang: string) => lang === "ts"),
+  highlight: vi.fn((lang: string, code: string) => ({
+    children: [
+      {
+        type: "element",
+        tagName: "span",
+        properties: { className: [`hljs-${lang}`] },
+        children: [{ type: "text", value: code }],
+      },
+    ],
+  })),
+}));
 
 vi.mock("@/lib/i18n", () => ({ t: (key: string) => key }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: toaster }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn() } }));
 vi.mock("@/lib/katex-render", () => ({ renderTex: katex.renderTex }));
 vi.mock("@/lib/mermaid-render", () => ({ renderMermaid: mermaid.renderMermaid }));
-vi.mock("@/lib/ipc-shell", () => ({ openUrl: vi.fn(() => Promise.resolve()) }));
-vi.mock("@/lib/deep-link", () => ({ openRowInView: vi.fn() }));
+vi.mock("@/lib/ipc-shell", () => ({ openUrl: nav.openUrl }));
+vi.mock("@/lib/deep-link", () => ({ openRowInView: nav.openRowInView }));
 vi.mock("@/lib/ai", () => ({ aiErrorText: (e: unknown) => String(e) }));
+vi.mock("@/lib/code-highlight", () => ({ lowlight: hl }));
 
 import { Markdown } from "./Markdown";
 import { MATH_CLASS_BLOCK, MATH_CLASS_INLINE } from "./ai-math";
+
+// 引用链接的标题要在页面树里解析得到（解析不到就留原样文本），所以本文件也得绑一棵假树
+bindFakeApp({ workspaceId: "w1", tree: [viewNode("v1", "周报")] });
 
 /** KaTeX 还没出图的那个状态：一条永不 resolve 的 Promise，界面停在 TeX 原文兜底 */
 const PENDING: Promise<string> = new Promise<string>(() => undefined);
@@ -211,5 +239,95 @@ describe("Markdown mermaid 围栏：等笔停才画，出图前后都退回源�
     });
     expect(container.querySelector('svg[data-mermaid="stale"]')).toBeNull();
     expect(container.querySelector('svg[data-mermaid="second"]')).toBeTruthy();
+  });
+});
+
+// 高亮那几百 KB 是按需拉的，拉回来只做一件事：语言注册过就把 lowlight 的 hast 换成带类名的 span，
+// 没注册（模型臆造的别名）一律退回纯文本。两种形态给用户的正文必须一模一样——丢字符比不高亮严重得多。
+describe("Markdown 代码块高亮：注册过的语言才上色，认不出就原样", () => {
+  const codeFence = (lang: string, body: string) => "```" + lang + "\n" + body + "\n```";
+  const bodyText = (container: HTMLElement) => container.querySelector("code")?.textContent?.trim();
+
+  it("注册过的语言出带类名的高亮节点，正文一个字不丢", async () => {
+    const { container } = render(<Markdown text={codeFence("ts", "const a = 1;")} />);
+    await waitFor(() => expect(container.querySelector("span.hljs-ts")).toBeTruthy());
+    expect(hl.highlight).toHaveBeenCalledWith("ts", expect.stringContaining("const a = 1;"));
+    // 高亮是「同一份文本换进带类名的 span」，不是重写：外层 <code> 读出来还得是原正文
+    expect(bodyText(container)).toBe("const a = 1;");
+  });
+
+  it("模型臆造的语言别名退回纯文本，且一次 highlight 都不调（不做自动嗅探）", async () => {
+    const { container } = render(<Markdown text={codeFence("typescriptx", "x = 1")} />);
+    await waitFor(() => expect(hl.registered).toHaveBeenCalledWith("typescriptx"));
+    expect(hl.highlight).not.toHaveBeenCalled();
+    expect(container.querySelector("span")).toBeNull();
+    expect(bodyText(container)).toBe("x = 1");
+  });
+
+  it("流式里正文接着写：按新正文再高亮一次，界面上留的不是旧文本", async () => {
+    const { rerender, container } = render(<Markdown text={codeFence("ts", "第一版")} />);
+    await waitFor(() => expect(container.querySelector("span.hljs-ts")?.textContent).toBe("第一版\n"));
+    rerender(<Markdown text={codeFence("ts", "第二版")} />);
+    await waitFor(() => expect(hl.highlight).toHaveBeenCalledTimes(2));
+    expect(container.querySelector("span.hljs-ts")?.textContent).toBe("第二版\n");
+    expect(bodyText(container)).toBe("第二版");
+  });
+});
+
+// 引用链接与外链的分岔是这条链上唯一「点一下就换地方」的口子：答案出自模型，链接文字与 href
+// 都算不可信输入，所以站内跳转绝不能被当成 http 交出去，外链也不能让 WebView2 整页跳走。
+describe("Markdown 链接分岔：引用跳站内，外链交系统浏览器", () => {
+  it("答案里的 [id=v1] 变成站内引用链接，点击只跳页面、不碰系统浏览器", () => {
+    render(<Markdown text={"结论见 [id=v1]。"} />);
+    const link = screen.getByTitle("ai.citationOpen");
+    expect(link.tagName).toBe("A");
+    // 站内引用用的是相对形态的 href：自定义协议会被 react-markdown 的默认清洗剥掉，链接就点不动了
+    expect(link.getAttribute("href")).toBe("tsflowy-citation/v1");
+    expect(link.textContent).toBe("周报");
+    // fireEvent.click 返回「默认动作是否没被阻止」：false 才是拦住了整页跳转
+    expect(fireEvent.click(link)).toBe(false);
+    expect(nav.openRowInView).toHaveBeenCalledWith("v1");
+    expect(nav.openUrl).not.toHaveBeenCalled();
+  });
+
+  it("指向不存在页面的 [id=…] 留成原样文本，不造一个点不动的假链接", () => {
+    const { container } = render(<Markdown text={"见 [id=ghost]。"} />);
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toBe("见 [id=ghost]。");
+  });
+
+  it("代码块里的 [id=v1] 是源码不是正文，不换成链接", async () => {
+    const { container } = render(<Markdown text={'```ts\nconst who = "[id=v1]";\n```'} />);
+    await waitFor(() => expect(container.querySelector("span.hljs-ts")).toBeTruthy());
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("code")?.textContent).toContain("[id=v1]");
+  });
+
+  it("普通外链交给系统浏览器，标签上带着 noopener，站内跳转不掺和", () => {
+    const { container } = render(<Markdown text={"看 [官网](https://example.com)"} />);
+    const link = container.querySelector("a");
+    expect(link?.getAttribute("target")).toBe("_blank");
+    expect(link?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(fireEvent.click(link as HTMLElement)).toBe(false);
+    expect(nav.openUrl).toHaveBeenCalledWith("https://example.com");
+    expect(nav.openRowInView).not.toHaveBeenCalled();
+  });
+
+  it("外链打开失败：错误文案进 toast，不是点了一下没反应", async () => {
+    nav.openUrl.mockRejectedValueOnce(new Error("没有可用的浏览器"));
+    render(<Markdown text={"看 [官网](https://bad.example)"} />);
+    fireEvent.click(screen.getByText("官网"));
+    await waitFor(() => expect(toaster.error).toHaveBeenCalledWith(expect.stringContaining("没有可用的浏览器")));
+  });
+
+  it("GFM 生效：模型给的表格成表格、任务列表成勾选框，不是竖线和方括号原文", () => {
+    const { container } = render(
+      <Markdown text={"| 项目 | 状态 |\n| --- | --- |\n| 周报 | 进行中 |\n\n- [x] 已发\n- [ ] 待发"} />,
+    );
+    expect(container.querySelectorAll("th")).toHaveLength(2);
+    expect(container.querySelector("tbody td")?.textContent).toBe("周报");
+    const boxes = Array.from(container.querySelectorAll<HTMLInputElement>("input[type=checkbox]"));
+    expect(boxes.map((b) => b.checked)).toEqual([true, false]);
+    expect(container.textContent).not.toContain("| --- |");
   });
 });
