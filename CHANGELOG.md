@@ -481,6 +481,16 @@
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 102 文件 / 1,429 通过（+3：mermaid 2 条 + ai-math 1 条）、`npm run build` exit 0（1m，mermaid 独立块的产物大小即出自这次构建）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
 - 落差：① mermaid 真机首帧仍未复验，需要「允许在真机窗口里做一次带写入的冒烟」或「接一个真供应商」二者之一的授权。② 两份 mermaid 实现的合一口径等拍板（本批只交证据）。③ 组件被卸载重挂时（同一轮里 `code` 没变）会不会重复出图没钉住——jsdom 里造不出那条 React key 变化路径。④ `Markdown.tsx` 里 `CodeBody` 的高亮失败与 `MermaidSource` 之外的组件族（表格、引用链接）仍无渲染用例。
 
+### 工程：`get_page_content` 喂回模型的正文第一次按 Markdown 形状钉住（P 批）
+
+- 清 M 批留下的落差③（「`get_page_content` 复杂块的 Markdown 形态还是没断言」）。**产品代码零改动**：`git status` 从头到尾只有 `src/lib/ai-tools.test.ts` 一个文件。
+- 为什么值得钉：只读取证工具返回的字符串是原样喂回模型的正文，模型靠 `##`、`- `、表格那行 `| --- | --- |`、代码围栏上的 `ts` 这些记号认出「这是一张表 / 一段代码」。`readPageMarkdown` 里那次序列化一旦退成把库里的 JSON 直接 trim 端出去，界面不报错、老用例也不报错（此前只喂过单个段落），模型于是开始把 `{"type":"doc"...}` 抄进它写的正文里。
+- 三条新用例（`src/lib/ai-tools.test.ts` 的 `describe("检索工具喂回模型的正文")`）：① 二级标题 + 带加粗的段落 + 无序列表 + 表格 + 带语言的代码块 + 引用，逐字断言喂回去的**整串** Markdown，含块与块之间那个空行（少一个换行，列表和表格就粘成一行）；② 正文还有另一种真实存法——顶层直接是块数组、没有 `{ type: "doc" }` 包着，少掉那次归一化同样不报错，只会让模型拿到一整串 `<!-- unsupported block -->`；③ 截断口径按喂回去的**正文**算，不按库里的 JSON 长度算——三个字的内容包在列表结构里 JSON 有 336 字，按 JSON 判会把这篇误报成超长，`…（已截断 N 字）` 里那个 N 也说错数（模型正是拿它判断要不要再来一轮片段检索）。既有的兜底那条补 2 行：结构齐全、一个字的正文都没写，同样算「还没有正文」。
+- 六条变异核验（改坏 `retrieval.ts` 一处 → 跑该文件 → 逐字节还原并断言与变异前一致）：`jsonToMarkdown(doc).trim()` 换成 `raw.trim()` → 4 红；丢掉块数组归一化 → **恰好 1 红**且只红新那条（证明它在独力干活，此前没人钉）；`md.length <= limit` 换成按 JSON 长度判 → 1 红；「已截断 N 字」按 JSON 算 → 2 红；片段之间的 `\n…\n` 换成 `\n` → 1 红（早被既有那条钉着，本次复验）；空正文改成返回裸换行 → 1 红。六条全点到预期用例，无一条假绿。
+- 一处工具事故（不影响产物，记下来防再犯）：变异脚本第一版用 Python 文本模式读写 `retrieval.ts`，Windows 下 `\n` 被写成 `\r\n`，还原时留下整文件的行尾差异、脚本自己的逐字节断言当场报错。立刻按备份复制还原，`git status` 复验只剩用例文件；之后脚本一律改 `read_bytes` / `write_bytes`。
+- 静态验证：`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 102 文件 / 1,432 通过（+3）、`npm run build` exit 0（56.08s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰，只复跑基线）。那串预期 Markdown 是**第一次跑就命中的**，不是照实际输出回填——`## 周报` / `- 写测试` / `> 下周继续` 这些形状本就该由 `lib/markdown/render.ts` 保证，这次是确认取证这条路真的用了它。
+- 落差：① 只钉了 `get_page_content` 这一条取证路径，另三条（`search_workspace` 的 snippet、`list_database_fields` 的选项名、`query_database` 的行 id 表头）各有早于本批的形状断言。② 块类型只测到六种：toggle / columns / databaseView / attachment / math / outline 在 `markdown/render.test.ts` 有导出用例、但没走过取证工具这条路；callout 与 mermaid 连导出侧用例都没有（`render.test.ts` 里两个词各 0 次命中，`roundtrip.test.ts` 也没带上它们）——那是 markdown 域自己的债，不属本批范围。③ `docSearchSnippets` 召回的片段本身是 Markdown 还是纯文本没查，本批只钉了「片段之间用 `\n…\n` 连」。④ 本轮没跑真机。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）

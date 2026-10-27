@@ -376,6 +376,16 @@ describe("拆文件后的三条接缝", () => {
 describe("检索工具喂回模型的正文", () => {
   const docJson = (text: string): string =>
     JSON.stringify({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text }] }] });
+  // 一篇真实页面的正文远不止一个段落，逐个块类型造出来比堆 JSON 字面量好读
+  const docOf = (content: unknown[]): string => JSON.stringify({ type: "doc", content });
+  const para = (text: string): unknown => ({ type: "paragraph", content: [{ type: "text", text }] });
+  const heading = (level: number, text: string): unknown => ({
+    type: "heading",
+    attrs: { level },
+    content: [{ type: "text", text }],
+  });
+  const listItem = (text: string): unknown => ({ type: "listItem", content: [para(text)] });
+  const tableCell = (type: string, text: string): unknown => ({ type, content: [para(text)] });
 
   beforeEach(() => {
     app.set({ workspaceId: "w1", viewId: null, tree: [tableNode] });
@@ -476,6 +486,9 @@ describe("检索工具喂回模型的正文", () => {
     expect(await runRetrievalCall("get_page_content", { page: "任务" }, 6000)).toBe("「任务」还没有正文。");
     docs.get.mockResolvedValue("   ");
     expect(await runRetrievalCall("get_page_content", { page: "任务" }, 6000)).toBe("「任务」还没有正文。");
+    // 结构齐全、一个字的正文也没写，同样算没正文：喂回一个空串只会让模型以为取证失败
+    docs.get.mockResolvedValue(docOf([para("  ")]));
+    expect(await runRetrievalCall("get_page_content", { page: "任务" }, 6000)).toBe("「任务」还没有正文。");
 
     docs.get.mockResolvedValue(docJson("本周完成三张卡片。"));
     expect(await runRetrievalCall("get_page_content", { page: "任务" }, 6000)).toBe("本周完成三张卡片。");
@@ -498,5 +511,75 @@ describe("检索工具喂回模型的正文", () => {
       "字".repeat(100) + "\n…（已截断 200 字）",
     );
     expect(snippets.docSearchSnippets).not.toHaveBeenCalled();
+  });
+
+  // 模型是靠「#」「| ```」这些记号认出标题、表格、代码块的，拿到 JSON 大括号只会当正文抄回去；
+  // 块之间那个空行也是真内容：少一个换行，列表和表格就粘成一行。
+  it("get_page_content：标题/列表/表格/代码块/引用各按 Markdown 形状喂回去", async () => {
+    docs.get.mockResolvedValue(
+      docOf([
+        heading(2, "周报"),
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "本周完成" },
+            { type: "text", marks: [{ type: "bold" }], text: "三张卡片" },
+            { type: "text", text: "。" },
+          ],
+        },
+        { type: "bulletList", content: [listItem("写测试"), listItem("发布")] },
+        {
+          type: "table",
+          content: [
+            { type: "tableRow", content: [tableCell("tableHeader", "项目"), tableCell("tableHeader", "状态")] },
+            { type: "tableRow", content: [tableCell("tableCell", "周报"), tableCell("tableCell", "进行中")] },
+          ],
+        },
+        { type: "codeBlock", attrs: { language: "ts" }, content: [{ type: "text", text: "const done = true;" }] },
+        { type: "blockquote", content: [para("下周继续")] },
+      ]),
+    );
+    expect(await runRetrievalCall("get_page_content", { page: "任务" }, 6000)).toBe(
+      [
+        "## 周报",
+        "",
+        "本周完成**三张卡片**。",
+        "",
+        "- 写测试",
+        "- 发布",
+        "",
+        "| 项目 | 状态 |",
+        "| --- | --- |",
+        "| 周报 | 进行中 |",
+        "",
+        "```ts",
+        "const done = true;",
+        "```",
+        "",
+        "> 下周继续",
+      ].join("\n"),
+    );
+  });
+
+  // 正文还有另一种真实存法：顶层直接是块数组、没有 { type: "doc" } 包着。
+  // 少那次归一化不会报错，只会让模型拿到一整串 <!-- unsupported block --> 。
+  it("get_page_content：正文存成块数组时同样还原成 Markdown", async () => {
+    docs.get.mockResolvedValue(JSON.stringify([heading(1, "小结"), para("一段结论")]));
+    expect(await runRetrievalCall("get_page_content", { page: "任务" }, 6000)).toBe("# 小结\n\n一段结论");
+  });
+
+  it("get_page_content：截断按喂回去的正文算，不按库里的 JSON 长度算", async () => {
+    // 三个字的内容包在列表结构里有三百多字 JSON：按 JSON 判长度会把这篇当超长文档
+    docs.get.mockResolvedValue(
+      docOf([{ type: "bulletList", content: [listItem("甲"), listItem("乙"), listItem("丙")] }]),
+    );
+    expect(await runRetrievalCall("get_page_content", { page: "任务" }, 30)).toBe("- 甲\n- 乙\n- 丙");
+    expect(snippets.docSearchSnippets).not.toHaveBeenCalled();
+
+    // 真超长时「已截断 N 字」说的也是正文还剩多少字，模型据此判断要不要再来一轮片段检索
+    docs.get.mockResolvedValue(docOf([para("字".repeat(120))]));
+    expect(await runRetrievalCall("get_page_content", { page: "任务" }, 10)).toBe(
+      "字".repeat(10) + "\n…（已截断 110 字）",
+    );
   });
 });
