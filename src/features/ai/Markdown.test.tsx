@@ -7,6 +7,9 @@
 // 「等笔停 350ms 再画」的防抖形状，只有假计时器能看出半截语法那一帧根本没去画。
 // 这批之后还钉了两件事：代码块的按需高亮（语言没注册就退回纯文本，正文一个字不许丢）与链接的
 // 分岔（引用链接只跳站内、外链只交系统浏览器——两边都不许让 WebView2 整页跳走）。
+// 再往下列的是「界面对了但包胖了」那一族：high.js 那几百 KB 靠 `??= import(…)` 只在答案真出现代码块
+// 时进来一次，改回静态引入界面一模一样、只有加载次数看得出来；以及高亮抛异常时要退回**当前**正文的
+// 纯文本，残留上一版着色在流式里看不出来、只有换正文那一帧能看出来。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { bindFakeApp } from "@/test/app-fakes";
@@ -22,6 +25,8 @@ const toaster = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
  * （element + text），类名带上语言名好让用例点名查。
  */
 const hl = vi.hoisted(() => ({
+  /** `@/lib/code-highlight` 这个模块被求值过几次：几百 KB 的 high.js 只该在答案真出现代码块时进来一次 */
+  imports: 0,
   registered: vi.fn((lang: string) => lang === "ts"),
   highlight: vi.fn((lang: string, code: string) => ({
     children: [
@@ -43,7 +48,14 @@ vi.mock("@/lib/mermaid-render", () => ({ renderMermaid: mermaid.renderMermaid })
 vi.mock("@/lib/ipc-shell", () => ({ openUrl: nav.openUrl }));
 vi.mock("@/lib/deep-link", () => ({ openRowInView: nav.openRowInView }));
 vi.mock("@/lib/ai", () => ({ aiErrorText: (e: unknown) => String(e) }));
-vi.mock("@/lib/code-highlight", () => ({ lowlight: hl }));
+vi.mock("@/lib/code-highlight", () => ({
+  // 数的是「取了几次这个导出」，不是「工厂跑了几次」——vi.resetModules() 不重放 mock 工厂，
+  // 而 `??= import(…).then((m) => m.lowlight)` 每份 Markdown 模块只可能取一次，正好是缓存的代理。
+  get lowlight() {
+    hl.imports += 1;
+    return hl;
+  },
+}));
 
 import { Markdown } from "./Markdown";
 import { MATH_CLASS_BLOCK, MATH_CLASS_INLINE } from "./ai-math";
@@ -272,6 +284,48 @@ describe("Markdown 代码块高亮：注册过的语言才上色，认不出就�
     expect(container.querySelector("span.hljs-ts")?.textContent).toBe("第二版\n");
     expect(bodyText(container)).toBe("第二版");
   });
+
+  it("包还没到位那一帧就是纯文本：渲染不挂在加载上", () => {
+    // 同步返回的 render 里 effect 已跑过，`import()` 的 then 还在微任务队列——这一帧必须读得到正文
+    const { container } = render(<Markdown text={codeFence("ts", "const a = 1;")} />);
+    expect(hl.registered).not.toHaveBeenCalled();
+    expect(container.querySelector("span")).toBeNull();
+    expect(bodyText(container)).toBe("const a = 1;");
+  });
+
+  it("高亮这一步抛异常：退回当前正文的纯文本，不残留上一版的着色", async () => {
+    const { rerender, container } = render(<Markdown text={codeFence("ts", "第一版")} />);
+    await waitFor(() => expect(container.querySelector("span.hljs-ts")?.textContent).toBe("第一版\n"));
+    hl.highlight.mockImplementationOnce(() => {
+      throw new Error("high.js 内部炸了");
+    });
+    rerender(<Markdown text={codeFence("ts", "第二版")} />);
+    await waitFor(() => expect(hl.highlight).toHaveBeenCalledTimes(2));
+    expect(container.querySelector("span")).toBeNull();
+    expect(bodyText(container)).toBe("第二版");
+  });
+});
+
+// `Markdown.tsx:20` 的 `lowlightPromise ??= import(…)` 是「几百 KB 按需进来一次」的唯一守卫：
+// 改回静态引入，主包当场胖回去，而界面一模一样、纯逻辑测试全绿。所以这里查的是模块被求值的次数。
+describe("Markdown 的高亮包是按需加载、且只加载一次", () => {
+  const fence = (lang: string, body: string) => "```" + lang + "\n" + body + "\n```";
+
+  it("答案里没有代码块就不加载；有代码块时几个围栏也只加载一次", async () => {
+    vi.resetModules();
+    hl.imports = 0;
+    const { Markdown: Fresh } = await import("./Markdown");
+    render(<Fresh text="只有正文，没有围栏。" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(hl.imports).toBe(0);
+
+    const { container } = render(<Fresh text={`${fence("ts", "const a = 1;")}\n\n${fence("ts", "const b = 2;")}`} />);
+    await waitFor(() => expect(hl.registered).toHaveBeenCalled());
+    expect(hl.imports).toBe(1);
+    expect(container.querySelectorAll("span.hljs-ts")).toHaveLength(2);
+  });
 });
 
 // 引用链接与外链的分岔是这条链上唯一「点一下就换地方」的口子：答案出自模型，链接文字与 href
@@ -311,6 +365,21 @@ describe("Markdown 链接分岔：引用跳站内，外链交系统浏览器", (
     expect(fireEvent.click(link as HTMLElement)).toBe(false);
     expect(nav.openUrl).toHaveBeenCalledWith("https://example.com");
     expect(nav.openRowInView).not.toHaveBeenCalled();
+  });
+
+  it("模型写的裸 URL 自动成外链：一样走 openUrl、一样带 noopener，不是让 WebView2 接管", () => {
+    const { container } = render(<Markdown text={"详见 https://example.com/a?b=1 这一页"} />);
+    const link = container.querySelector("a");
+    expect(link?.getAttribute("href")).toBe("https://example.com/a?b=1");
+    expect(link?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(fireEvent.click(link as HTMLElement)).toBe(false);
+    expect(nav.openUrl).toHaveBeenCalledWith("https://example.com/a?b=1");
+  });
+
+  it("模型写的删除线成 del，不成一对波浪号原文", () => {
+    const { container } = render(<Markdown text={"这段 ~~作废了~~ 留着"} />);
+    expect(container.querySelector("del")?.textContent).toBe("作废了");
+    expect(container.textContent).not.toContain("~~");
   });
 
   it("外链打开失败：错误文案进 toast，不是点了一下没反应", async () => {
