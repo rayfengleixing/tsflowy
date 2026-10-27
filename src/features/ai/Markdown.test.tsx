@@ -139,6 +139,44 @@ describe("Markdown mermaid 围栏：等笔停才画，出图前后都退回源�
     expect(container.textContent).toContain(FAIL_HINT);
   });
 
+  it("先画成功、再改正文改失败：失败态压掉旧图，退回新源码并给提示", async () => {
+    vi.useFakeTimers();
+    mermaid.renderMermaid.mockResolvedValueOnce('<svg data-mermaid="one" />');
+    mermaid.renderMermaid.mockRejectedValueOnce(new Error("语法错了"));
+    const { rerender, container } = render(<Markdown text={fence("graph TD; A-->B")} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+    expect(container.querySelector('svg[data-mermaid="one"]')).toBeTruthy();
+
+    rerender(<Markdown text={fence("graph TD; A-->[B")} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+    expect(container.querySelector("svg")).toBeNull();
+    expect(screen.getByText("graph TD; A-->[B").tagName).toBe("CODE");
+    expect(container.textContent).toContain(FAIL_HINT);
+  });
+
+  it("改坏了再改回来：画成功后提示撤掉，源码让位给新图", async () => {
+    vi.useFakeTimers();
+    mermaid.renderMermaid.mockRejectedValueOnce(new Error("语法错了"));
+    mermaid.renderMermaid.mockResolvedValueOnce('<svg data-mermaid="fixed" />');
+    const { rerender, container } = render(<Markdown text={fence("graph TD; A-->[B")} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+    expect(container.textContent).toContain(FAIL_HINT);
+
+    rerender(<Markdown text={fence("graph TD; A-->B")} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+    expect(container.querySelector('svg[data-mermaid="fixed"]')).toBeTruthy();
+    expect(container.textContent).not.toContain(FAIL_HINT);
+    expect(screen.queryByText("graph TD; A-->B")).toBeNull();
+  });
+
   it("正文还没写（空围栏）不调渲染器，也不报失败", () => {
     vi.useFakeTimers();
     mermaid.renderMermaid.mockResolvedValue('<svg data-mermaid="never" />');

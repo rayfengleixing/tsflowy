@@ -37,6 +37,10 @@ describe("ai-math 行内公式切分", () => {
     expect(splitMath("价 $100。$200 元")).toEqual([text("价 $100。$200 元")]);
   });
 
+  it("闭合 $ 前留空格的 `$b $` 由 `(?<!\\s)` 独力挡下，同段的真公式照常命中", () => {
+    expect(splitMath("值 $b $ 与 $c$")).toEqual([text("值 $b $ 与 "), inline("c")]);
+  });
+
   it("内容为空或纯空白不当公式", () => {
     expect(splitMath("$$$$")).toEqual([text("$$$$")]);
     expect(splitMath("$ $")).toEqual([text("$ $")]);

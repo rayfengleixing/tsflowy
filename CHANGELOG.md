@@ -469,6 +469,18 @@
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 102 文件 / 1,426 通过（+7：mermaid 6 条 + ai-math 1 条）、`npm run build` exit 0（52.20s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰，只复跑基线）。
 - 落差：① 「先画成功、随后改正文画失败」这个 `svg → 提示` 的过渡没单独钉，变异打死的是终态而不是那次翻转。② 用例只到 jsdom；真机里 mermaid 的脚本是按需加载，首次出图要拉包，350ms 防抖盖不住那段耗时，本批没在 `npm run tauri dev` 的原生窗口复验。③ 编辑器里的 `features/editor/extensions/mermaid/component.tsx` 是第二份相近的 mermaid 渲染实现（同样用 `renderMermaid`），本批只钉 AI 面板这一份；把两处的防抖与兜底口径收成一个属形状变更，需拍板。④ `(?<!\s)` 的独力挡位（`$b $`）落在既有用例里，没为注释另补新条。
 
+### 工程：mermaid 出图的状态机补上两条过渡用例，公式挡位补成一对一（O 批）
+
+- 目标是把 N 批留下的四条落差清掉：①④是能补的用例，本批补完；②③取证后判定**不属机械路线**，只给证据与选项，不动工。**产品代码一字未改**（`Markdown.tsx` / `ai-math.ts` 都不在改动清单里）。
+- 补 ④：`ai-math.test.ts` +1 条「值 `$b $` 与 `$c$`」——断言 `$b $` 不算公式、同段的 `$c$` 照常命中。这类「独力挡位」的断言得两头都验才算数：去掉 `(?<!\s)` 这条**红**（挡位没了），去掉 `(?!\d)` 这条**不红**（说明 `(?<!\s)` 确实在独力干活、且没顺带把一个真公式也挡掉）。
+- 补 ①：`Markdown.test.tsx` +2 条过渡用例。「先画成功、再改正文改失败」——旧图在屏上时正文改坏，界面要撤掉图、退回**新**源码并给提示；「改坏了再改回来」——失败过一次之后重新画成功，提示要撤掉、源码让位给新图。
+- 落差①最初的描述本身被实测纠正了：原话是「catch 里的 `setSvg("")` 没人钉」。把那行删掉跑全量 13 条**全绿**——失败态早就被 `if (failed)` 挡在 `if (!svg)` 前面返回源码了，那行只是防御性清理，没有任何可观察行为。于是用例改成钉两处真接缝：`if (failed)` 的优先级（删掉判定 → 4 红，含这两条新用例）与画成功时的 `setFailed(false)` 复位（不清 → 恰好 1 红，就是「改坏了再改回来」）。**教训：补用例前先问「这行删掉界面会不会不一样」，别照着代码行的位置许诺断言**——与 M 批那条 jsdom `<select>` 假绿是同一类事。
+- 落差②（真机里 mermaid 首帧的观感）取证到能取证的地步：`npm run build` 产物里 `dist/assets/mermaid.core-*.js` 是 **654KB 的独立懒加载块**（`src/lib/mermaid-render.ts:6` 的 `mermaidPromise ??= import("mermaid")`），所以「首次出图要先多取一个包」是真的。但要在真机窗口里看那一帧只有两条路：在编辑器插一个 mermaid 块（会写真实开发库 `appflowy.db`，那是本人数据，属禁区），或在 AI 面板问出一张图（要真供应商、真花费、还会落会话）。本批不冒这个险，列为待拍板。
+- 落差③（两份 mermaid 实现要不要合一）取证后判定是**行为变更**：AI 侧 `MermaidBlock` 防抖 350ms（`Markdown.tsx:127`，为了流式增量不闪半截图）、失败退回**源码**；编辑器侧 `MermaidNodeView` 防抖 0ms（`extensions/mermaid/component.tsx:47`）、失败显示**错误文案 + 可滚动的错误正文**（`:89-95`），还带 draft / editing / commit 与双击进编辑整套 NodeView 语义。真正该共用的一层——`securityLevel: "strict"`、离屏渲染宿主、临时元素兜底清理——本来就已经收在 `lib/mermaid-render.ts` 里；再往上合，就得先回答「退出编辑后晚 350ms 出图能不能接受」「AI 面板要不要也显示错误正文」，这是产品口径而不是搬代码。
+- 变异核验 5 条（改坏一处 → 跑该文件 → 逐字节还原并断言与变异前一致）：去掉 `(?<!\s)` → 2 红（新用例 + 既有金额那条）；去掉 `(?!\d)` → 2 红但**不含**新用例（正是「独力」的意思）；catch 里不清 svg → **全绿**（据此判定该行不可观察，改钉别处）；去掉 `if (failed)` 判定 → 4 红；画成功不清 `failed` → 1 红。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 102 文件 / 1,429 通过（+3：mermaid 2 条 + ai-math 1 条）、`npm run build` exit 0（1m，mermaid 独立块的产物大小即出自这次构建）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰）。
+- 落差：① mermaid 真机首帧仍未复验，需要「允许在真机窗口里做一次带写入的冒烟」或「接一个真供应商」二者之一的授权。② 两份 mermaid 实现的合一口径等拍板（本批只交证据）。③ 组件被卸载重挂时（同一轮里 `code` 没变）会不会重复出图没钉住——jsdom 里造不出那条 React key 变化路径。④ `Markdown.tsx` 里 `CodeBody` 的高亮失败与 `MermaidSource` 之外的组件族（表格、引用链接）仍无渲染用例。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
