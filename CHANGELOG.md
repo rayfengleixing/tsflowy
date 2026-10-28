@@ -562,6 +562,18 @@
 - jsdom 断不出的仍然要说清：真的日历面板打字（`fireEvent.change` 打在 date 输入上会被清空，所以日期族只断「按存量值算出的草稿」与「按草稿交出的 ISO」），滑条的真实拖动手势（`fireEvent.pointerUp` 送不进 React，要手工派发 bubbles 的 `pointerup`），以及控件本身的越界夹取（上面 ② 说的就是它）。本轮没跑真机。
 - 静态验证：`npm run format` 与 `format:check` 干净、`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`vitest run` 109 文件 / 1,604 通过（+54）、`npm run build` exit 0、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰，只复跑基线）。
 
+### 工程：选项类编辑器（单选 / 多选）的输入落点与 draft 口径有用例盯着了（V 批 2）
+
+- 接着 V 批 1 的那份榜首清点：`src/features/database/editors.tsx` 里最重的一段是 `:297-482`（单选 + 多选 + 共用的 `matchOptions`，186 行）。新建 `editors-select.test.tsx`（502 行 / 35 条）：单选 19 / 多选 14 / 分派 2。**产品代码零改动**（`git diff --exit-code src/features/database/editors.tsx` 干净，收尾 sha256 与变异前一致）。
+- 这一族的判定面跟基础六族不是一个形状：基础族只看「交出去的那个值」，这里要多钉两条岔路。其一是**输入的三种落点**——`matchOptions` 把输入折成 `{text, list, exact}`，回车据此分「交精确名的 id」/「交过滤结果首条的 id」/「建新选项再交它的 id」，新建还是异步的（成功给 id、失败给 null，失败那档不许提交）；其二是**点选不提交**——多选用本地 `draft`，连点多少行都不许出声，只有遮罩上按与 Esc 才 `onCommit([...draft])`，而单选的遮罩是**取消**（两个编辑器口径相反，各有一条用例钉住，F25 把多选改成「跟单选一样取消」当场红）。分派那 2 条钉的是「同一个搜索框 placeholder 下，只有单选带 `common.clear` 那一行」。
+- 查询形状是这批的体力活：选项行是 `<button>`、行里的删除把手是嵌在按钮内的 `<span title>`（它自己 `stopPropagation`，所以点删除不会连带选中那一行——单选/多选共有的误操作面，单独一条），选中态没有可断的文本，只能认 `svg.text-brand-600` 那个对勾与 `bg-brand-100` 底色；「清空全部」「清除」两行按 `textContent` 精确匹配取，取不到返回 `undefined` 好让用例断「不该出现」。
+- 探针实测的第③件事，直接改掉一条原本会假绿的用例：**React 事件处理器里抛出的异常不会顶回 `fireEvent`**（jsdom 把它交给 `window` 的 `error` 事件，vitest 只在末尾打一句 `Errors 1 error`，文件仍然算通过）。于是加了 `uncaughtWhile()`：动作期间挂 `window` 监听、收冒出来的异常消息。「没给 `onAddOption`」那条原先只断「不提交」，删掉 `createFromQuery` 里 `!onAddOption` 这道守卫后照样全绿——因为差别只是一句 `TypeError: onAddOption is not a function`；补上「这条路不许崩」的断言后 F08 转红，并按站点拆成 F08（单选）/F37（多选）两条分别定位。
+- 变异核验 37 条（每条只改 `editors.tsx` 一处、只跑这个用例文件、逐字节还原并断言哈希一致；产物在仓库外 `D:/Code/.v-batch/mutation-journal-2.md`，每条清洗输出留档 `mutants2/F<id>.txt`）：**35 红 / 2 绿**，红的每条都点到预期用例（无「没点到预期用例」标注）。两条绿都在动手前就预判成等价变异并按实测坐实：① **F31** 删掉预览里 `if (!o) return null;` 照样绿，因为 `OptionChip` 自己第一行就是 `if (!option) return null`，认不出来源的 id 由它兜住；② **F36** 把「精确命中交自己的 id」改成「交过滤结果首条」照样绿，因为夹具里没有重名选项——`exact` 与 `list[0]` 在这三份选项上不可能分岔，登记成夹具落差而不是覆盖已足。
+- 锚点这一环交了两笔学费，都在脚本层。① `str.count(锚点)` 是**子串**匹配：只写「12 个空格 + 正文」的锚点会被 relation 里 18 空格的那一行命中，`Escape` 提交、`setDraft(new Set())`、`toggle` 的 if/else 都被多算一次，首轮 `check` 报了 9 处数量不符。现在锚点一律带行首 `\n` 与真实缩进，同族共用代码的几条则把次数**如实写大**（F14 弹层外壳四处、F26 遮罩两处、F27 `commit` 两处），说明写在编号后面。② 按编号跑子集时脚本把整张 journal 冲成那两条——现在改成按编号合并回写（跑子集只替换执行到的行）。顺带给判红口径补了一格：没有失败用例但有未捕获异常时，记「GREEN，但运行期有 N 个未捕获异常」，不再默默算绿。
+- 静态检查抓出的两处夹具问题也记一下：`mount(["a", 7, null, "b"])` 在 `tsc` 里红两条（`CellValue` 的数组元素声明是 `string | AttachmentRef`，装不下数字与 null），改成 `as unknown as CellValue` 并注明「库里存的 JSON 不受 TS 约束」；`const ok = mount([])` 那个没人读的句柄红在 `no-unused-vars`。两者都不改运行形状，改完把受影响的 F22 / F31 之外的 F23 复跑一遍确认仍红，最后整表按最终用例文件重跑。
+- jsdom 断不出的仍然要说清：新建选项是真的落库（`onAddOption` 是替身，只断「交出去的是它给的 id」），`options` 野形状只有 `""` → `{kind:"none"}` 一种真形（`FieldOptions` 里除 `select` 没有别的成员带 `options` 数组，所以那道 kind 闸门对其它形状是等价的，F06 得改成「整个丢掉会崩」才拿得到信号），以及 relation / attachment 两个同族编辑器的行为本批没有用例——它们共用外壳与遮罩代码，是 V 批 3 的目标。本轮没跑真机。
+- 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`format:check` 干净、`vitest run` 110 文件 / 1,639 通过（+35）、`npm run build` exit 0、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰，只复跑基线）。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
