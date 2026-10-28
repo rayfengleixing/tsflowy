@@ -551,6 +551,17 @@
 - jsdom 断不出的还是那些：真的系统保存/打开对话框、真的落盘与 `save_asset` 复制（全部走替身），`mapWithConcurrency` 的实际上限，以及 `CsvImportDialog` 把「候选文件名 → 绝对路径」索引交进来那一段（属组件层，`grid-view.test.tsx` 与对话框自己的用例各钉一头）。本轮没跑真机。
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`npm run format:check` 干净、`vitest run` 108 文件 / 1,550 通过（+33）、`npm run build` exit 0（57.31s）、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰，只复跑基线）。
 
+### 工程：单元格编辑器的六族基础类型有用例盯着了（V 批 1）
+
+- 结构代理盘点排到数据库域的榜首是 `src/features/database/editors.tsx`：726 行 / 127 个分支，11 个值导出（十个内联编辑器 + 一个分派槽）此前**没有一个在任何用例里直接出现过**。本批只补「基础类型」这一族：新建 `editors-basic.test.tsx`（511 行 / 54 条），覆盖文本族 6 / 数字族 6 / 进度 8 / 星级 6 / 日期 9 / 复选 3 / 分派表 15 / 时区前提自证 1。**产品代码零改动**（`editors.tsx` 收尾 sha256 与变异前一致）。选项类（单选 / 多选 / `matchOptions`）与附件、关联两族留给 V 批 2 / 3——它们要顶的是另一套边界，混进这份夹具只会让夹具变大。
+- 这一族的对外行为全收在「交给 `onCommit` / `onCancel` 的那个值」上，所以断言一律落在提交口径，而不是样式或 DOM 结构；`@/lib/i18n` 用 key 恒等替身，钉的是走了哪条分岔。日期那一族把 `TZ` 钉在 `Asia/Shanghai`：编辑器把存量 ISO 按 UTC 解释、再按**本地墙钟**填进输入框，墙钟本身就是判定的一部分，不钉时区等于「用例只在跑它的那台机器的时区下成立」（CI 跑 UTC 就什么都区分不出来），并让本文件第一条用例自证钉得住。
+- 分派表那 15 条是这批里最便宜的一段：12 条 `it.each` 钉「哪个字段类型指到哪个输入控件」（`currency`→number、三个时间类→date、七个文本类→text），另加「progress 带滑条而 rating / checkbox 连输入框都没有」这种形状差、「同一个槽位换字段类型就换编辑器」（`rerender`，钉的是查表不是首挂载）与「19 种类型里没进表的 7 种一律落文本兜底」。删掉表里任一行、或把兜底从文本换成数字，都在这一段先红。
+- 变异核验 30 条（每条只改 `editors.tsx` 一处、只跑这个用例文件、逐字节还原并断言哈希一致；产物在仓库外 `D:/Code/.v-batch/mutation-journal.md`，每条的清洗输出留档在 `mutants/E<id>.txt`）：**29 红 / 1 绿**。红的绝大多数恰好只打死预期的那一条；`E30`（兜底换成数字编辑器）红 8 条、`E25`（两种日期输入类型互换）红 6 条，按设计就该宽打。
+- 一条绿、一条「差点记错」的绿、一条被绿逼出来的缺口，都按实测登记：① **E24 是等价变异**——`onCommit(draft.slice(0, 10))` 里那道截断走不到，`type=date` 控件装不下超过 10 位的值（探针实测：直接赋长串读回来是空串），草稿最长就是 10 位，登记成死守卫、不造断言。② **E10 首轮标了「没点到预期用例」**：滑条那路的交出值夹回删掉照样绿，因为 `range` 控件自己先把越界的 change 值夹回 min/max（探针实测 "150"→100、"-20"→0）——那层守卫在这条路上冗余、只在数字框那条路独力；于是把用例改成两端各测一次，并在注释里写明它**断不出**这道守卫，避免后来人把它当变异敏感的守卫。③ **E20 是真缺口**：原先只测了「没配 options」，那时 `opts.kind` 是 `none`，`include_time` 根本轮不到判断，漏掉产品真会写的 `{kind:"date", include_time:false}`（`FieldOptionsEditor.tsx:294` 取消勾选就是这一档）；补一条「关了 include_time 仍是纯日期」后转红，红的正是新那条。
+- 脚本这轮先交了两笔学费，都已修：① **判红失效**——vitest 的失败标记 `×` 外面裹着 ANSI 颜色码，`line.strip().startswith("×")` 一条都匹配不上，`E01` 被整轮记成 GREEN；现在判红前先剥 ANSI。② `subprocess.run(["npx", …])` 在 Windows 直接 `FileNotFoundError [WinError 2]`（npx 是 `npx.cmd`），脚本崩在半路把改坏的 `E01` 留在工作树里；还原走的是「备份字节 → 二进制写回 → 断言哈希一致」，没用 `git checkout -- <文件>`（协议禁用），随后脚本补了 `shell=True` + 先落原文字节 + try/finally 还原 + signal handler + 按编号续跑。
+- jsdom 断不出的仍然要说清：真的日历面板打字（`fireEvent.change` 打在 date 输入上会被清空，所以日期族只断「按存量值算出的草稿」与「按草稿交出的 ISO」），滑条的真实拖动手势（`fireEvent.pointerUp` 送不进 React，要手工派发 bubbles 的 `pointerup`），以及控件本身的越界夹取（上面 ② 说的就是它）。本轮没跑真机。
+- 静态验证：`npm run format` 与 `format:check` 干净、`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`vitest run` 109 文件 / 1,604 通过（+54）、`npm run build` exit 0、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰，只复跑基线）。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
