@@ -574,6 +574,16 @@
 - jsdom 断不出的仍然要说清：新建选项是真的落库（`onAddOption` 是替身，只断「交出去的是它给的 id」），`options` 野形状只有 `""` → `{kind:"none"}` 一种真形（`FieldOptions` 里除 `select` 没有别的成员带 `options` 数组，所以那道 kind 闸门对其它形状是等价的，F06 得改成「整个丢掉会崩」才拿得到信号），以及 relation / attachment 两个同族编辑器的行为本批没有用例——它们共用外壳与遮罩代码，是 V 批 3 的目标。本轮没跑真机。
 - 静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`format:check` 干净、`vitest run` 110 文件 / 1,639 通过（+35）、`npm run build` exit 0、`cargo test` 343 通过 / 0 失败 / 1 忽略（Rust 侧没碰，只复跑基线）。
 
+### 工程：附件与关联编辑器的三条添加路与目标库快照有用例盯着了（V 批 3）
+
+- 接 V 批 2 收尾那句「relation / attachment 两个同族编辑器本批没有用例」：`editors.tsx` 剩下最重的两段是 `:489-616`（`AttachmentCellEditor`）与 `:638-738`（`RelationCellEditor`）。新建 `src/features/database/editors-io.test.tsx`（735 行 / 34 条：附件 20 / 关联 12 / 分派 2）。**产品代码零改动**（`git diff --exit-code src/features/database/editors.tsx` 干净）。
+- 边界比前两批收得更窄：只顶掉四个 native 入口（`invoke` / `ipc-core` / `ipc-dialog` / `ipc-shell`）加 `sonner` 与 `t`，`@/lib/assets`、`@/lib/relation`、`@/stores/relation` **跑真实现**。于是 `filesFromDataTransfer` 的 0 字节过滤与 `items` 兜底、`saveAttachmentFile` 交出的 `{bytes, ext}`、`baseName`、`relationTarget` / `relationRowLabel` / `searchRelationRows` 被测的都是产品代码本身，断言落在「打到的命令名与参数」（`callsFor("save_asset_bytes")` 等）上。
+- 附件一族的口径是「三条添加路都只改本地 draft，交出那一下才落库」：对话框（`save_asset` 带所选绝对路径、名字取基名、接在存量之后而非覆盖）、拖拽（逐个存字节并带上各自的 `bytes` 与 `ext`，顺序进 draft；中途一个失败则**连已存好的那个也不进**——半批丢弃是这族最容易看漏的行为）、粘贴（与拖拽同一条存字节路，还要 `preventDefault` 免得正文吃掉粘贴）。另有 `busy` 关闸（保存途中按钮 `disabled`、第二次拖入不再发 IPC——替身得给一个永不 resolve 的 handler 才停在 `true` 上）、全是 0 字节时一条 IPC 都不发、图片渲染成 `img` 且 `src` 由 appData 路径拼出、X 只从 draft 去掉那一条。
+- 关联一族钉「目标库快照 → 候选 → draft」这条链：未配置目标时只给 `field.relationUnset`、不拉库、没有输入框、点外部等价于取消；配了目标但库还没到时给 `app.loading` 且**不许**同时冒 `field.relationEmpty`（两道闸门各管各的），并真的按目标 `ensure(["v-t"])` 一次、换目标库会再拉一次；候选 `.slice(0, 50)` 用 51 行实测成恰好 50 个按钮；搜索按整行文本命中（非主字段也算）、清空后列回全部；回车加首条并清空输入，零命中时一个都不交且关键词留着；点候选是 toggle（选中那行才有对勾与 `bg-brand-100`）；预览胶囊的 X 与计数、清空行同进同出；存量数组里的非字符串被滤掉、认不出的 id 退回显示原 id。遮罩与 Esc 都交 `[...draft]`（与单选相反，V 批 2 的 F25 已证这道改不动）。
+- 探针实测的口径写进了文件头，四条都是猜不出来的：① jsdom **没有 `ClipboardEvent`**（`typeof` 就是 `undefined`），粘贴只能 `new Event("paste", {bubbles, cancelable})` 再 `defineProperty` 挂 `clipboardData`；② `fireEvent.drop` / `dragOver` 的**返回值读不到 `preventDefault`**（连原生监听也返回 `false`），可观察的是 document 级监听里读 `e.defaultPrevented`，据此才有 `withPreventedCheck()`；③ 粘贴那个 `useEffect` **没有依赖数组**，每次渲染摘旧挂新，可观察面是「重渲染后第二次粘贴仍只加一次」与「卸载后不再响应」；④ 预览胶囊与清空行的 `button` 会顶掉候选行的下标，取候选必须限定在列表容器内（`candidateButtons()`）。查询形状沿用 V 批 1 的口径：`getByRole` / `getByPlaceholderText` 在本仓的 tsc 与 eslint 里判断相反，直接按 DOM 取并由函数签名给返回类型。
+- 变异核验**本批未跑**：按 2026-10-28 的指示，补用例阶段就此停止，V 批 3 只收到静态链。所以这批「抓得住回归」还没像 V 批 1/2 那样用 30 余条单点改坏验过（G 系列清单只在会话里排过，未落盘）。真机同样没跑：文件真的复制进 `assets/`、`open_asset` 拉起关联程序、关联搜索打到真库这三件事在 jsdom 里只断到「交出去的命令名与参数」。
+- 静态验证：`vitest run` 111 文件 / 1,673 通过（+34）、`tsc --noEmit` exit 0、`eslint` 该文件 `--max-warnings=0` exit 0、`format:check` 干净、`npm run build` exit 0；Rust 侧本批没碰，未复跑 `cargo test`。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
