@@ -637,6 +637,16 @@ describe("快捷区按配置长出来", () => {
     expect(h.setCtxScope).toHaveBeenCalledWith("off");
   });
 
+  it("配置里是认不出的范围值时，界面不许塌成空白选项", () => {
+    // 这条钉的是「显示出来的是那三个选项之一」。**别当成兜底逻辑的证据**：把 `:453` 整条
+    // `includes(...) ? … : "full"` 删掉（野值原样交给 select）在 jsdom 里断不出来——`AP44` 实测全绿，
+    // 因为找不到匹配选项时 jsdom 与 React 一起退回首个选项，显示的仍是 `full`（与 M 批那条
+    // 「select value 假绿」同源）。能打死的是「显示成另一个已知值」（`AP29`：改成恒显 off → 红）
+    mount({ config: baseConfig({ ctx_scope: "everything" }) });
+    const select = screen.getByRole<HTMLSelectElement>("combobox", { name: "ai.ctxScopeTitle" });
+    expect(select.value).toBe("full");
+  });
+
   it("五条内置动作 + 用户自定义指令；流式期间整排置灰", () => {
     const custom = { id: "q-1", name: "", prompt: "{content}", scope: "page" as const };
     mount({ config: baseConfig({ quick_actions: [custom] }) });
@@ -671,6 +681,17 @@ describe("快捷区按配置长出来", () => {
     patch({ config: baseConfig({ price_input: 1000, price_output: 0 }) });
     expect(h.estimateCost).toHaveBeenLastCalledWith({ prompt: 1000, completion: 0, total: 1000 }, 1000, 0);
     expect(screen.getByText(/ai\.usageCost:{"amount":"1\.00"}/)).toBeTruthy();
+  });
+
+  it("只有跨会话累计、本会话一个 token 没跑时：汇总那截出现，本会话那截不许出 0", () => {
+    // 用量行的总闸门（`showUsage`）与里面每一截的闸门是两回事：这里总量为 0 而汇总有数，
+    // 整行要出现、`ai.usageTotal` 那截要缺席（把内层 `usageTotal.total > 0` 删掉就露出「总计 0」）
+    mount({
+      usageTotal: { prompt: 0, completion: 0, total: 0 },
+      usageSummary: { sessions: 3, prompt_tokens: 500, completion_tokens: 200 },
+    });
+    expect(screen.queryByText(/ai\.usageTotal/)).toBeNull();
+    expect(screen.getByText('ai.usageAll:{"sessions":3,"total":"700"}')).toBeTruthy();
   });
 });
 
