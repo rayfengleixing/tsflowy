@@ -590,6 +590,8 @@ export const zh = {
   "board.ungrouped": "未分组",
   "board.cardFields": "卡片字段",
   "board.cardFieldsHint": "选择卡片上要显示的字段",
+  "board.subtotalField": "小计字段",
+  "board.subtotalNone": "不做小计",
   "gallery.coverField": "封面字段",
   "gallery.coverNone": "无附件字段",
   "gallery.noField": "画廊需要附件字段",

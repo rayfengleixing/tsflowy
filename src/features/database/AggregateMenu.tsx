@@ -14,8 +14,10 @@ import { t } from "@/lib/i18n";
 import type { CellValue, DatabaseField } from "@/types/database";
 
 /**
- * 列汇总选择器（表格底部汇总行）：每列一个，点击换汇总函数。
+ * 汇总选择器：一个字段一个，点击换汇总函数。
  * 值本身就地算，所以菜单既是配置入口也是结果展示，不需要额外一行。
+ * 挂载点有两处：表格底部的列页脚，与看板的分组列头（列头那份把 scopeRowIds 传成全筛集，
+ * 否则「占比」是每列自己除自己，恒等于 100%）。
  */
 export function AggregateMenu(props: {
   field: DatabaseField;
@@ -24,12 +26,17 @@ export function AggregateMenu(props: {
   /** 参与统计的行 id */
   rowIds: string[];
   cells: Record<string, Record<string, CellValue>>;
+  /** 占比的分母范围；不传即与 rowIds 同范围（表格页脚那份就是全筛集，两者本来就一致） */
+  scopeRowIds?: string[];
   onPick: (fn: AggregateFn | undefined) => void;
 }) {
-  const { field, fn, rowIds, cells, onPick } = props;
+  const { field, fn, rowIds, cells, scopeRowIds, onPick } = props;
   const candidates = aggregatesForType(field.field_type);
   // 结果值对外就是展示文本：记忆化到实际输入变化为止，滚动/选中引发的父级重渲染不再全表重算
-  const display = useMemo(() => (fn ? aggregateValue(fn, field, rowIds, cells) : null), [fn, field, rowIds, cells]);
+  const display = useMemo(
+    () => (fn ? aggregateValue(fn, field, rowIds, cells, scopeRowIds) : null),
+    [fn, field, rowIds, cells, scopeRowIds],
+  );
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

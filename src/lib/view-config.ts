@@ -39,6 +39,10 @@ export interface ViewConfig {
   aggregates?: Record<string, AggregateFn>;
   /** 条件格式规则（按顺序判定，先到先得）；表格视图独有 */
   condFormats?: CondFormatRule[];
+  /** 看板列头的小计取自哪个字段（不配即列头不显示小计） */
+  boardSubtotalFieldId?: string;
+  /** 看板列头的小计函数：所有列共用一个，缺省按计数算 */
+  boardSubtotalFn?: AggregateFn;
   /** 看板卡片上额外展示的字段 id（按此顺序）；未配置沿用"前 3 个可见字段"启发式，空数组=只显示标题 */
   cardFieldIds?: string[];
   /** 画廊视图：封面图取自哪个附件字段 */
@@ -147,6 +151,9 @@ export function parseViewConfig(text: string | null | undefined): ViewConfig {
   if (aggregates) out.aggregates = aggregates;
   const condFormats = parseCondFormats(o.condFormats);
   if (condFormats) out.condFormats = condFormats;
+  if (typeof o.boardSubtotalFieldId === "string" && o.boardSubtotalFieldId)
+    out.boardSubtotalFieldId = o.boardSubtotalFieldId;
+  if (isAggregateFn(o.boardSubtotalFn)) out.boardSubtotalFn = o.boardSubtotalFn;
   const cardFieldIds = specArray<string>(o.cardFieldIds, isString);
   if (cardFieldIds) out.cardFieldIds = cardFieldIds;
   if (typeof o.activeViewId === "string" && o.activeViewId) out.activeViewId = o.activeViewId;
@@ -171,6 +178,8 @@ export function mergeViewConfig(text: string | null | undefined, patch: Partial<
   if (patch.galleryFieldId !== undefined) next.galleryFieldId = patch.galleryFieldId;
   if (patch.aggregates !== undefined) next.aggregates = patch.aggregates;
   if (patch.condFormats !== undefined) next.condFormats = patch.condFormats;
+  if (patch.boardSubtotalFieldId !== undefined) next.boardSubtotalFieldId = patch.boardSubtotalFieldId;
+  if (patch.boardSubtotalFn !== undefined) next.boardSubtotalFn = patch.boardSubtotalFn;
   if (patch.cardFieldIds !== undefined) next.cardFieldIds = patch.cardFieldIds;
   if (patch.activeViewId !== undefined) next.activeViewId = patch.activeViewId;
   return JSON.stringify(next);

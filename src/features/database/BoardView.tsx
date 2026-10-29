@@ -21,6 +21,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SelectChips } from "./editors";
+import { AggregateMenu } from "./AggregateMenu";
+import { normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
 import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
 import { RowDetailPanel } from "./RowDetail";
 import { cn } from "@/lib/utils";
@@ -56,6 +58,11 @@ export function BoardView({
   const [groupFieldId, setGroupFieldId] = useState<string | null>(() => readViewConfig(view).boardFieldId ?? null);
   // null = 未配置（沿用"主字段之后前 3 个可见字段"的默认启发式）；数组 = 用户显式勾选的字段
   const [cardFieldIds, setCardFieldIds] = useState<string[] | null>(() => readViewConfig(view).cardFieldIds ?? null);
+  // 列头小计：字段选一个，汇总函数全列共用（没选字段就没有小计，也没地方换函数）
+  const [subtotalFieldId, setSubtotalFieldId] = useState<string | null>(
+    () => readViewConfig(view).boardSubtotalFieldId ?? null,
+  );
+  const [subtotalFn, setSubtotalFn] = useState<AggregateFn | undefined>(() => readViewConfig(view).boardSubtotalFn);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [draggingRow, setDraggingRow] = useState<string | null>(null);
   const [dragOverGroup, setDragOverGroup] = useState<string | null>(null);
@@ -69,6 +76,20 @@ export function BoardView({
   const changeGroupField = (id: string | null) => {
     setGroupFieldId(id);
     patchViewConfig(view, { boardFieldId: id ?? "" });
+  };
+
+  const changeSubtotalField = (id: string | null) => {
+    setSubtotalFieldId(id);
+    patchViewConfig(view, { boardSubtotalFieldId: id ?? "" });
+  };
+  const changeSubtotalFn = (fn: AggregateFn | undefined) => {
+    // 小计只有整屏一份，没有「这一列不显示」的说法：列头选「无」就是把整件事关掉
+    if (!fn) {
+      changeSubtotalField(null);
+      return;
+    }
+    setSubtotalFn(fn);
+    patchViewConfig(view, { boardSubtotalFn: fn });
   };
 
   // 初始化默认分组字段
@@ -122,6 +143,14 @@ export function BoardView({
   // 条件格式（与表格视图同一份按视图持久化的规则）：判定读 sortable 图，与本视图筛选/排序同口径
   const condRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
   const cond = useCondFormat(view, condRowIds, sortableCells);
+
+  // 列头小计：字段按可见字段现找（被删/隐藏就整件事消失），函数不在候选里回落计数
+  const subtotalField = subtotalFieldId ? (visibleFields.find((f) => f.id === subtotalFieldId) ?? null) : null;
+  const subtotalFnEffective: AggregateFn | undefined = subtotalField
+    ? (normalizeAggregate(subtotalField.field_type, subtotalFn) ?? "count")
+    : undefined;
+  // 每列的行 id 收成一张稳定表：拖拽/搜索定位引发的重渲染不该让各列汇总重算一遍
+  const groupRowIds = useMemo(() => new Map(groups.map((g) => [g.key, g.rows.map((r) => r.id)])), [groups]);
 
   // 搜索命中定位：折叠键作 revision，命中卡片所在列一展开就能重新定位
   const collapsedKey = [...collapsedGroups].join("|");
@@ -201,6 +230,24 @@ export function BoardView({
             >
               {selectFields.length === 0 && <option value="">{t("board.noField")}</option>}
               {selectFields.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 列头小计的字段（汇总函数在每列列头上换） */}
+          <div className="flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700">
+            <span className="text-neutral-500">{t("board.subtotalField")}:</span>
+            <select
+              className="bg-transparent text-xs outline-none"
+              aria-label={t("board.subtotalField")}
+              value={subtotalField?.id ?? ""}
+              onChange={(e) => changeSubtotalField(e.target.value || null)}
+            >
+              <option value="">{t("board.subtotalNone")}</option>
+              {visibleFields.map((f) => (
                 <option key={f.id} value={f.id}>
                   {f.name}
                 </option>
@@ -320,6 +367,18 @@ export function BoardView({
                       {group.option?.tone === "done" && <Check className="ml-1 inline h-3 w-3 text-green-600" />}
                       <span className="ml-1.5 text-[10px] font-normal text-neutral-400">{group.rows.length}</span>
                     </div>
+                    {subtotalField && subtotalFnEffective && (
+                      <div className="w-24 shrink-0">
+                        <AggregateMenu
+                          field={subtotalField}
+                          fn={subtotalFnEffective}
+                          rowIds={groupRowIds.get(group.key) ?? []}
+                          cells={sortableCells}
+                          scopeRowIds={condRowIds}
+                          onPick={changeSubtotalFn}
+                        />
+                      </div>
+                    )}
                     <button
                       className="rounded p-0.5 text-neutral-500 hover:bg-neutral-200/60"
                       onClick={() => addCardInGroup(group.key)}

@@ -606,6 +606,8 @@ export const en: Record<MessageKey, string> = {
   "board.ungrouped": "No status",
   "board.cardFields": "Card fields",
   "board.cardFieldsHint": "Fields shown on each card",
+  "board.subtotalField": "Subtotal by",
+  "board.subtotalNone": "No subtotal",
   "gallery.coverField": "Cover",
   "gallery.coverNone": "No attachment field",
   "gallery.noField": "Gallery needs an attachment field",
