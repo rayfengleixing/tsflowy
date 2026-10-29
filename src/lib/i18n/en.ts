@@ -470,6 +470,7 @@ export const en: Record<MessageKey, string> = {
   "sort.dir.desc": "Descending",
   "row.selectAll": "Select all",
   "row.select": "Select row",
+  "row.deselect": "Deselect row",
   "row.selected": "{count} row(s) selected",
   "row.selectionClear": "Clear selection",
   "row.deleteSelected": "Delete selected",

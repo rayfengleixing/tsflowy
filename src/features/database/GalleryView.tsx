@@ -5,6 +5,13 @@ import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
 import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database-cond-format";
+import {
+  BulkEditDialogHost,
+  ROW_SELECTED_RING,
+  RowSelectMenu,
+  useRowBulkEdit,
+  type RowBulkEdit,
+} from "./row-bulk-edit";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
 import { attachmentRefs, formatCellValue, parseFieldOptions } from "@/lib/database-values";
@@ -106,8 +113,11 @@ export function GalleryView({
   );
 
   // 条件格式（与表格视图同一份按视图持久化的规则）：按展示图判定，公式列也能当条件
-  const condRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
-  const cond = useCondFormat(view, condRowIds, evaluated);
+  // 可见行 id 一份两用：条件格式取色按它算，批量改值的目标行也按它投影
+  const visibleRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
+  const cond = useCondFormat(view, visibleRowIds, evaluated);
+  // 批量改值：这一屏右键选中的卡片（表格视图有勾选列，画廊没有）
+  const bulk = useRowBulkEdit(visibleRowIds);
 
   const toggleCardField = (id: string) => {
     const current = cardFieldIds ?? defaultCardFieldIds;
@@ -218,6 +228,7 @@ export function GalleryView({
                   cardSubFields={cardSubFields}
                   rowCells={rowCellsOf(evaluated, cells, row.id)}
                   condToneIndex={cond.index}
+                  bulk={bulk}
                   focused={focusRowId === row.id}
                   onOpenDetail={() => void openRowDetail(row, source)}
                 />
@@ -230,6 +241,8 @@ export function GalleryView({
       {rowDetail && <RowDetailPanel row={rowDetail.row} view={rowDetail.view} onClose={closeRowDetail} />}
 
       <CondFormatDialogHost bar={cond} />
+
+      <BulkEditDialogHost bulk={bulk} />
     </div>
   );
 }
@@ -241,6 +254,7 @@ function GalleryCard({
   cardSubFields,
   rowCells,
   condToneIndex,
+  bulk,
   focused,
   onOpenDetail,
 }: {
@@ -250,6 +264,8 @@ function GalleryCard({
   cardSubFields: DatabaseField[];
   rowCells: Record<string, CellValue | undefined>;
   condToneIndex: Map<string, CondTone>;
+  /** 本视图的多选与批量改值状态；右键菜单挂在卡片根节点上 */
+  bulk: RowBulkEdit;
   focused: boolean;
   onOpenDetail: () => void;
 }) {
@@ -274,48 +290,52 @@ function GalleryCard({
   // 取色口径与表格视图一致：整行档铺满卡片，单元格档只铺它对应那一行副信息
   const rowTone = toneOfIndex(condToneIndex, row.id, "");
   const titleTone = primaryField ? toneOfIndex(condToneIndex, row.id, primaryField.id) : null;
+  const selected = bulk.isSelected(row.id);
 
   return (
-    <div
-      data-row-id={row.id}
-      role="button"
-      tabIndex={0}
-      className={cn(
-        "group/card cursor-pointer overflow-hidden rounded-lg border border-neutral-200 bg-white text-left shadow-sm transition hover:border-neutral-300 hover:shadow-md active:scale-[.99] dark:border-neutral-700 dark:bg-neutral-800",
-        focused && ROW_FOCUS_CLASS,
-        rowTone && COND_TONE_CELL[rowTone],
-      )}
-      onClick={onOpenDetail}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpenDetail();
-        }
-      }}
-    >
-      <GalleryCover path={coverPath} />
-      <div className="flex flex-col gap-1 px-2.5 py-2">
-        <span
-          className={cn(
-            "truncate text-[13px] font-medium text-neutral-900 dark:text-neutral-100",
-            titleTone && COND_TONE_CELL[titleTone],
-          )}
-        >
-          {title || <span className="font-normal text-neutral-400">{t("board.cardNamePlaceholder")}</span>}
-        </span>
-        {props.map((p) => {
-          const tone = toneOfIndex(condToneIndex, row.id, p.field.id);
-          return (
-            <span key={p.field.id} className="flex min-w-0 items-center gap-1.5 text-[11px]">
-              <span className="w-20 shrink-0 truncate text-neutral-400 dark:text-neutral-500">{p.field.name}</span>
-              <span className={cn("min-w-0 flex-1", tone && COND_TONE_CELL[tone])}>
-                <CellReadValue field={p.field} value={p.value} />
+    <RowSelectMenu bulk={bulk} rowId={row.id}>
+      <div
+        data-row-id={row.id}
+        role="button"
+        tabIndex={0}
+        className={cn(
+          "group/card cursor-pointer overflow-hidden rounded-lg border border-neutral-200 bg-white text-left shadow-sm transition hover:border-neutral-300 hover:shadow-md active:scale-[.99] dark:border-neutral-700 dark:bg-neutral-800",
+          focused && ROW_FOCUS_CLASS,
+          rowTone && COND_TONE_CELL[rowTone],
+          selected && ROW_SELECTED_RING,
+        )}
+        onClick={onOpenDetail}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpenDetail();
+          }
+        }}
+      >
+        <GalleryCover path={coverPath} />
+        <div className="flex flex-col gap-1 px-2.5 py-2">
+          <span
+            className={cn(
+              "truncate text-[13px] font-medium text-neutral-900 dark:text-neutral-100",
+              titleTone && COND_TONE_CELL[titleTone],
+            )}
+          >
+            {title || <span className="font-normal text-neutral-400">{t("board.cardNamePlaceholder")}</span>}
+          </span>
+          {props.map((p) => {
+            const tone = toneOfIndex(condToneIndex, row.id, p.field.id);
+            return (
+              <span key={p.field.id} className="flex min-w-0 items-center gap-1.5 text-[11px]">
+                <span className="w-20 shrink-0 truncate text-neutral-400 dark:text-neutral-500">{p.field.name}</span>
+                <span className={cn("min-w-0 flex-1", tone && COND_TONE_CELL[tone])}>
+                  <CellReadValue field={p.field} value={p.value} />
+                </span>
               </span>
-            </span>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
-    </div>
+    </RowSelectMenu>
   );
 }
 

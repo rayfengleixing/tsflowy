@@ -456,6 +456,7 @@ export const zh = {
   "sort.dir.desc": "降序",
   "row.selectAll": "全选",
   "row.select": "选择该行",
+  "row.deselect": "取消选择该行",
   "row.selected": "已选 {count} 行",
   "row.selectionClear": "取消选择",
   "row.deleteSelected": "删除所选",

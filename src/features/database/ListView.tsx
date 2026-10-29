@@ -5,6 +5,13 @@ import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
 import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database-cond-format";
+import {
+  BulkEditDialogHost,
+  ROW_SELECTED_RING,
+  RowSelectMenu,
+  useRowBulkEdit,
+  type RowBulkEdit,
+} from "./row-bulk-edit";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
@@ -70,8 +77,11 @@ export function ListView({
   );
 
   // 条件格式（与表格视图同一份按视图持久化的规则）：按展示图判定，公式列也能当条件
-  const condRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
-  const cond = useCondFormat(view, condRowIds, evaluated);
+  // 可见行 id 一份两用：条件格式取色按它算，批量改值的目标行也按它投影
+  const visibleRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
+  const cond = useCondFormat(view, visibleRowIds, evaluated);
+  // 批量改值：这一屏右键选中的行（表格视图有勾选列，列表没有）
+  const bulk = useRowBulkEdit(visibleRowIds);
 
   const { scrollerRef, focusRowId } = useRowFocus(displayRows.length);
 
@@ -120,6 +130,7 @@ export function ListView({
                 propFields={propFields}
                 rowCells={rowCellsOf(evaluated, cells, row.id)}
                 condToneIndex={cond.index}
+                bulk={bulk}
                 focused={focusRowId === row.id}
                 onOpenDetail={() => void openRowDetail(row, source)}
               />
@@ -131,6 +142,8 @@ export function ListView({
       {rowDetail && <RowDetailPanel row={rowDetail.row} view={rowDetail.view} onClose={closeRowDetail} />}
 
       <CondFormatDialogHost bar={cond} />
+
+      <BulkEditDialogHost bulk={bulk} />
     </div>
   );
 }
@@ -142,6 +155,7 @@ function ListRow({
   propFields,
   rowCells,
   condToneIndex,
+  bulk,
   focused,
   onOpenDetail,
 }: {
@@ -152,6 +166,8 @@ function ListRow({
   rowCells: Record<string, CellValue | undefined>;
   /** 条件格式取色索引（行 × 列 → 颜色），由列表视图整屏算好传进来 */
   condToneIndex: Map<string, CondTone>;
+  /** 本视图的多选与批量改值状态；右键菜单挂在行根节点上 */
+  bulk: RowBulkEdit;
   focused: boolean;
   onOpenDetail: () => void;
 }) {
@@ -166,50 +182,54 @@ function ListRow({
   // 取色口径与表格视图一致：整行档铺满这一行，单元格档只铺它对应那个属性
   const rowTone = toneOfIndex(condToneIndex, row.id, "");
   const titleTone = primaryField ? toneOfIndex(condToneIndex, row.id, primaryField.id) : null;
+  const selected = bulk.isSelected(row.id);
 
   return (
-    <div
-      data-row-id={row.id}
-      className={cn(
-        "group/row flex cursor-pointer items-start gap-3 px-6 py-2 transition hover:bg-neutral-50 dark:hover:bg-neutral-800/40",
-        focused && ROW_FOCUS_CLASS,
-        rowTone && COND_TONE_CELL[rowTone],
-      )}
-      onClick={onOpenDetail}
-    >
-      <span
+    <RowSelectMenu bulk={bulk} rowId={row.id}>
+      <div
+        data-row-id={row.id}
         className={cn(
-          "w-64 shrink-0 truncate text-[13px] font-medium text-neutral-900 dark:text-neutral-100",
-          titleTone && COND_TONE_CELL[titleTone],
+          "group/row flex cursor-pointer items-start gap-3 px-6 py-2 transition hover:bg-neutral-50 dark:hover:bg-neutral-800/40",
+          focused && ROW_FOCUS_CLASS,
+          rowTone && COND_TONE_CELL[rowTone],
+          selected && ROW_SELECTED_RING,
         )}
+        onClick={onOpenDetail}
       >
-        {title || <span className="font-normal text-neutral-400">{t("board.cardNamePlaceholder")}</span>}
-      </span>
-      <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-        {props.map((p) => {
-          const tone = toneOfIndex(condToneIndex, row.id, p.field.id);
-          return (
-            <span key={p.field.id} className="inline-flex min-w-0 max-w-[280px] items-center gap-1">
-              <span className="shrink-0 text-neutral-400 dark:text-neutral-500">{p.field.name}</span>
-              <span className={cn("min-w-0", tone && COND_TONE_CELL[tone])}>
-                <CellReadValue field={p.field} value={p.value} />
+        <span
+          className={cn(
+            "w-64 shrink-0 truncate text-[13px] font-medium text-neutral-900 dark:text-neutral-100",
+            titleTone && COND_TONE_CELL[titleTone],
+          )}
+        >
+          {title || <span className="font-normal text-neutral-400">{t("board.cardNamePlaceholder")}</span>}
+        </span>
+        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          {props.map((p) => {
+            const tone = toneOfIndex(condToneIndex, row.id, p.field.id);
+            return (
+              <span key={p.field.id} className="inline-flex min-w-0 max-w-[280px] items-center gap-1">
+                <span className="shrink-0 text-neutral-400 dark:text-neutral-500">{p.field.name}</span>
+                <span className={cn("min-w-0", tone && COND_TONE_CELL[tone])}>
+                  <CellReadValue field={p.field} value={p.value} />
+                </span>
               </span>
-            </span>
-          );
-        })}
-      </span>
-      <button
-        type="button"
-        className="mt-0.5 hidden h-5 w-5 shrink-0 items-center justify-center rounded text-neutral-400 group-hover/row:inline-flex hover:bg-neutral-200 hover:text-brand-600"
-        title={t("row.openDetail")}
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={(e) => {
-          e.stopPropagation();
-          onOpenDetail();
-        }}
-      >
-        <ExternalLink className="h-3 w-3" />
-      </button>
-    </div>
+            );
+          })}
+        </span>
+        <button
+          type="button"
+          className="mt-0.5 hidden h-5 w-5 shrink-0 items-center justify-center rounded text-neutral-400 group-hover/row:inline-flex hover:bg-neutral-200 hover:text-brand-600"
+          title={t("row.openDetail")}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenDetail();
+          }}
+        >
+          <ExternalLink className="h-3 w-3" />
+        </button>
+      </div>
+    </RowSelectMenu>
   );
 }
