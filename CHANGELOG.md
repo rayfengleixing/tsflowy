@@ -646,6 +646,17 @@
 - 已知落差（与 2b 同一条，没变）：这条链零用例，jsdom 里 Radix ContextMenu 能否靠派生 `contextmenu` 事件打开从未验过；本仓不能浏览器冒烟，所以三个视图的右键菜单、选中圈、批量弹窗都只到类型/静态层绿，真机没跑。看板与日历的卡片本身是 `draggable`，右键与拖拽在同一节点上共存是否互相打断，只有真机答得了。
 - 静态验证：`tsc --noEmit` exit 0、`eslint`（本批 3 文件）exit 0、`npm run build` exit 0（✓ built in 53.52s）、全量 `vitest run` 111 文件 / 1,673 用例通过。
 
+### 右键多选批量改值在原生窗口里整条验了一遍（Y 批，CDP 冒烟脚本）
+
+- X 批 2b/2c 那条「这条链零用例、真机没验」的落差结案：新增 `scripts/cdp-row-bulk-smoke.mjs`，用 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 npm run tauri dev` 起真窗口，经 CDP 派发**真实鼠标右键**（`Input.dispatchMouseEvent` 的 `button: "right"`，不是往 DOM 上打合成 `contextmenu`），在列表／画廊／看板／日历／时间线五个视图各跑一遍「右键 → 选择该行 → 第二行 → 再右键看首项翻成「取消选择该行」且「批量修改」带角标 2 → 弹窗 → 选字段 → 填值 → 应用」。67 条断言全过、0 未捕获异常，连跑两遍结果一致。
+- 落库侧不靠界面自证：每个视图应用完直接读 `cells_load`，钉住「新值只落在勾选的两行」与「没勾选的行一格没动」，并断言应用后选中圈清掉（`apply()` 里那句 `clear()` 真机生效）。
+- 数据口径：全程只写自建沙箱表「CDP批量冒烟」（宿主 + 5 个派生视图 + 4 行），开跑先清历史残留、收尾 `view_purge` 硬删并复验 `leftover: none`，用户真实数据一格不碰；可反复运行。界面文案按中英双写匹配、视图名用 ASCII，用户切了语言也不会误判成回归。
+- 落差②（卡片既拖又右键）结案：看板与日历卡片的 `draggable="true"` 在「右键按下 → 横拖 → 松开」完整序列里 **0 条 `dragstart`**；时间线的拖拽是 `onPointerDown` 手写的、`beginDrag`（`TimelineView.tsx:191-209`）没有 `e.button` 闸门，实测右键按住横拖 40px 后日期单元格值没变（2026-10-29 → 2026-10-29）且菜单照常打开——那条缺闸门目前无可观察后果。
+- 顺手钉一条现状（不是回归，是取舍）：同一个视图里批量弹窗「取消 → 再开」，字段与草稿框原样保留（`BulkEditDialog` 组件不随开合卸载，只有内容 DOM 重挂，而重置那条 `useEffect` 只认 `[field]`）；换视图则整个重挂、干净起步。要不要在关闭时清草稿留给拍板。
+- 三条取证口径已写进脚本注释：视图标签栏是 `overflow-x-auto`，标签一多，第 4 个起 rect 有宽度却已在视口外，点了等于没点——先 `scrollIntoView` 再用 `elementFromPoint` 命中测试，并断言激活标签真的变了；日历把一个日期折成 2 行 + 「查看全部」（`CalendarView.tsx:287,345`），4 行同一天时 DOM 里只有 2 个行锚点；选中圈要连 `z-10` 一起认，日历「今天」的日格（`:295`）与拖拽中的卡片（`:462`）也带 `ring-brand-500`，只认那个类名会把「圈没清掉」判成恒成立。另外记一笔：同目录几条老 CDP 脚本用的锚点 `data-view-id` 在侧栏重构后已经不存在了，本脚本改用 `data-tree-row`。
+- 静态验证：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`prettier --check` 干净、`npm run build` exit 0（✓ built in 51.30s）、全量 `vitest run` 111 文件 / 1,673 用例通过；本批零产品代码改动（只加脚本），Rust 侧未跑。
+- 脚本是手工冒烟工具，没进 CI（CI 里没有可用的 WebView2 会话），跑法写在脚本头部注释。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
