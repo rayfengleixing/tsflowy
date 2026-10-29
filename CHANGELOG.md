@@ -594,6 +594,14 @@
 - 新用例 `write_rejects_an_archive_that_fails_the_post_write_check`：目录里先放一份真库写出的好档，再喂一个内容是垃圾字节的快照——打包本身会成功（zip 只管搬字节），断言拿到 `post-write check` 错误、旧档字节不变、目录里没有 `.tmp-` 与 `integrity-` 残留。变异核验：把 `.and_then(|()| validate_backup_zip(&tmp))` 摘掉，用例当场红在 `backup/tests.rs:504`（`unwrap_err` 拿到了 Ok），改回即绿。
 - 静态验证：`cargo test` **344 通过 / 0 失败 / 1 忽略**（基线 343，多出的就是这条）、`cargo clippy --all-targets` 0 告警、`cargo fmt --check` exit 0；本批没碰前端代码，`tsc --noEmit` exit 0 一并复跑为证。
 
+### 表单视图里可以直接筛和排了（W 批 2）
+
+- Form 一直只**消费**筛选/排序、不给编辑入口：`FormView.tsx:62-63` 早就在跑 `applyFilters` / `sortRows`，顶栏却没有那两个按钮。想筛剩十来个客户再逐条录入，只能先切去表格视图设好、再切回来——配置是按视图持久化的（`stores/database.ts:249` 读的是本视图自己那份），切回 Form 时它还是空的，等于每次都得重设。
+- 接的是六视图共用的那一条：`query-bar.tsx` 的 `useQueryBar` + `QueryButtons` + `QueryPanels`，形制照抄 GalleryView（按钮进顶栏右侧那一组 `:118`，面板挂在顶栏下方整宽 `:147`）。本批 FormView 一共 6 行：1 处 import、1 行说明注释 + 1 处 hook（`:40-41`）、2 处挂载。
+- 翻页语义顺带有了用处：「上一行 / 下一行」走的是 `displayRows`，先前它等于全表；现在筛完就是「在筛出来的这些行之间翻页」，顶栏那个 `1 / n` 计数跟着变。
+- 两条落差本批没改，说清楚。① 筛到零命中时界面仍显示「暂无数据」（`:152` 走 `databaseView.noRows`），不区分「库里真没行」与「被筛掉了」——Grid/List/Gallery 同样如此，要改是一条 i18n 分支铺四个视图，单独一批。② 带筛选点「新增」，新行若不命中当前筛选，会被 `:66-68` 那道具意写的回落逻辑盖成「显示第一条」，看着像没建成。这条回落代码早就在，但**在 Form 里此前不可达**（Form 自己筛不了、又读不到别的视图的配置），是本批让它第一次可达。
+- 真机没跑：界面只能在 `npm run tauri dev` 的原生窗口里看。静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`format:check` 干净、`vitest run` 111 文件全过、`npm run build` exit 0；本批没碰 Rust，`cargo test` 未复跑（上一批的 344/0/1 仍是基线）。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）

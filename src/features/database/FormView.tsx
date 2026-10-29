@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, ExternalLink, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
+import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { applyFilters, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
 import { isReadonlyType } from "@/types/database";
@@ -36,6 +37,8 @@ export function FormView({
   tabs?: React.ReactNode;
 }) {
   const store = useDbStore();
+  // 筛选/排序条（与表格视图同一份按视图持久化的配置）
+  const bar = useQueryBar();
   const load = useDbStore((s) => s.load);
   const { fields, rows, cells, loading, sorts, filters, filterMode, rowDetail } = store;
   const { openRowDetail, closeRowDetail } = store;
@@ -112,6 +115,7 @@ export function FormView({
         <div className="flex min-w-0 flex-1 items-center">{tabs}</div>
 
         <div className="flex shrink-0 items-center gap-1">
+          <QueryButtons bar={bar} />
           <div className="flex items-center rounded-md border border-neutral-300 bg-white text-xs">
             <button
               className="rounded-l-md px-2 py-1 text-neutral-600 hover:bg-neutral-100 disabled:cursor-default disabled:text-neutral-300"
@@ -139,6 +143,8 @@ export function FormView({
           </Button>
         </div>
       </div>
+
+      <QueryPanels bar={bar} />
 
       {!row ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
