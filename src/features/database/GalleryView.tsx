@@ -3,6 +3,8 @@ import { ChevronDown, ImageOff, LayoutList, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
+import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
+import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database-cond-format";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
 import { attachmentRefs, formatCellValue, parseFieldOptions } from "@/lib/database-values";
@@ -103,6 +105,10 @@ export function GalleryView({
     [displayRows, cells, fields, relationDbOf],
   );
 
+  // 条件格式（与表格视图同一份按视图持久化的规则）：按展示图判定，公式列也能当条件
+  const condRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
+  const cond = useCondFormat(view, condRowIds, evaluated);
+
   const toggleCardField = (id: string) => {
     const current = cardFieldIds ?? defaultCardFieldIds;
     const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
@@ -132,6 +138,7 @@ export function GalleryView({
 
         <div className="flex shrink-0 items-center gap-1">
           <QueryButtons bar={bar} />
+          <CondFormatButton bar={cond} />
           <div className="flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700">
             <span className="text-neutral-500">{t("gallery.coverField")}:</span>
             <select
@@ -210,6 +217,7 @@ export function GalleryView({
                   coverField={coverField}
                   cardSubFields={cardSubFields}
                   rowCells={rowCellsOf(evaluated, cells, row.id)}
+                  condToneIndex={cond.index}
                   focused={focusRowId === row.id}
                   onOpenDetail={() => void openRowDetail(row, source)}
                 />
@@ -220,6 +228,8 @@ export function GalleryView({
       )}
 
       {rowDetail && <RowDetailPanel row={rowDetail.row} view={rowDetail.view} onClose={closeRowDetail} />}
+
+      <CondFormatDialogHost bar={cond} />
     </div>
   );
 }
@@ -230,6 +240,7 @@ function GalleryCard({
   coverField,
   cardSubFields,
   rowCells,
+  condToneIndex,
   focused,
   onOpenDetail,
 }: {
@@ -238,6 +249,7 @@ function GalleryCard({
   coverField: DatabaseField;
   cardSubFields: DatabaseField[];
   rowCells: Record<string, CellValue | undefined>;
+  condToneIndex: Map<string, CondTone>;
   focused: boolean;
   onOpenDetail: () => void;
 }) {
@@ -259,6 +271,10 @@ function GalleryCard({
     .map((f) => ({ field: f, value: rowCells[f.id] ?? null }))
     .filter((p) => !isCellEmpty(p.value));
 
+  // 取色口径与表格视图一致：整行档铺满卡片，单元格档只铺它对应那一行副信息
+  const rowTone = toneOfIndex(condToneIndex, row.id, "");
+  const titleTone = primaryField ? toneOfIndex(condToneIndex, row.id, primaryField.id) : null;
+
   return (
     <div
       data-row-id={row.id}
@@ -267,6 +283,7 @@ function GalleryCard({
       className={cn(
         "group/card cursor-pointer overflow-hidden rounded-lg border border-neutral-200 bg-white text-left shadow-sm transition hover:border-neutral-300 hover:shadow-md active:scale-[.99] dark:border-neutral-700 dark:bg-neutral-800",
         focused && ROW_FOCUS_CLASS,
+        rowTone && COND_TONE_CELL[rowTone],
       )}
       onClick={onOpenDetail}
       onKeyDown={(e) => {
@@ -278,17 +295,25 @@ function GalleryCard({
     >
       <GalleryCover path={coverPath} />
       <div className="flex flex-col gap-1 px-2.5 py-2">
-        <span className="truncate text-[13px] font-medium text-neutral-900 dark:text-neutral-100">
+        <span
+          className={cn(
+            "truncate text-[13px] font-medium text-neutral-900 dark:text-neutral-100",
+            titleTone && COND_TONE_CELL[titleTone],
+          )}
+        >
           {title || <span className="font-normal text-neutral-400">{t("board.cardNamePlaceholder")}</span>}
         </span>
-        {props.map((p) => (
-          <span key={p.field.id} className="flex min-w-0 items-center gap-1.5 text-[11px]">
-            <span className="w-20 shrink-0 truncate text-neutral-400 dark:text-neutral-500">{p.field.name}</span>
-            <span className="min-w-0 flex-1">
-              <CellReadValue field={p.field} value={p.value} />
+        {props.map((p) => {
+          const tone = toneOfIndex(condToneIndex, row.id, p.field.id);
+          return (
+            <span key={p.field.id} className="flex min-w-0 items-center gap-1.5 text-[11px]">
+              <span className="w-20 shrink-0 truncate text-neutral-400 dark:text-neutral-500">{p.field.name}</span>
+              <span className={cn("min-w-0 flex-1", tone && COND_TONE_CELL[tone])}>
+                <CellReadValue field={p.field} value={p.value} />
+              </span>
             </span>
-          </span>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

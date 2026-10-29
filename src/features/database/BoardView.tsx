@@ -3,6 +3,8 @@ import { ChevronDown, ChevronRight, Check, Plus, ExternalLink, LayoutList } from
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
+import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
+import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database-cond-format";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
 import { NO_GROUP, cellValueForGroup, defaultBoardField, groupRowsForBoard } from "@/lib/board-calendar";
@@ -117,6 +119,10 @@ export function BoardView({
     return groupRowsForBoard(displayRows, cells, groupField);
   }, [groupField, displayRows, cells]);
 
+  // 条件格式（与表格视图同一份按视图持久化的规则）：判定读 sortable 图，与本视图筛选/排序同口径
+  const condRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
+  const cond = useCondFormat(view, condRowIds, sortableCells);
+
   // 搜索命中定位：折叠键作 revision，命中卡片所在列一展开就能重新定位
   const collapsedKey = [...collapsedGroups].join("|");
   const { scrollerRef, focusRowId } = useRowFocus(collapsedKey);
@@ -183,6 +189,7 @@ export function BoardView({
 
         <div className="flex shrink-0 items-center gap-1">
           <QueryButtons bar={bar} />
+          <CondFormatButton bar={cond} />
           {/* 分组字段切换 */}
           <div className="flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700">
             <span className="text-neutral-500">{t("board.groupBy")}:</span>
@@ -338,6 +345,7 @@ export function BoardView({
                           subFields={cardSubFields}
                           subFieldsExplicit={cardFieldIds !== null}
                           cells={cells}
+                          condToneIndex={cond.index}
                           relationDbOf={relationDbOf}
                           dragging={draggingRow === row.id}
                           focused={focusRowId === row.id}
@@ -401,6 +409,8 @@ export function BoardView({
       )}
 
       {rowDetail && <RowDetailPanel row={rowDetail.row} view={rowDetail.view} onClose={closeRowDetail} />}
+
+      <CondFormatDialogHost bar={cond} />
     </div>
   );
 }
@@ -413,6 +423,8 @@ function BoardCard(props: {
   /** subFields 是否为用户显式勾选：决定时间戳字段是否显示 */
   subFieldsExplicit: boolean;
   cells: Record<string, Record<string, CellValue>>;
+  /** 条件格式取色索引（行 × 列 → 颜色），由看板视图整屏算好传进来 */
+  condToneIndex: Map<string, CondTone>;
   /** 关联列解析目标行标题（视图级缓存，见 BoardView 顶部的 ensure） */
   relationDbOf: (viewId: string) => RelationDb | undefined;
   dragging: boolean;
@@ -422,7 +434,8 @@ function BoardCard(props: {
   onDragEnd: () => void;
   onOpenDetail: () => void;
 }) {
-  const { row, primaryField, subFields, subFieldsExplicit, cells, relationDbOf, dragging, focused } = props;
+  const { row, primaryField, subFields, subFieldsExplicit, cells, condToneIndex, relationDbOf, dragging, focused } =
+    props;
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
   const value = primaryField ? (cells[row.id]?.[primaryField.id] ?? null) : null;
   const title = primaryField
@@ -437,6 +450,10 @@ function BoardCard(props: {
     .map((f) => ({ field: f, value: cells[row.id]?.[f.id] ?? null }))
     .filter((s) => cardSubShown(s.field, s.value, subFieldsExplicit));
 
+  // 取色口径与表格视图一致：整行档铺满卡片，单元格档铺标题或对应的那条副信息
+  const rowTone = toneOfIndex(condToneIndex, row.id, "");
+  const titleTone = primaryField ? toneOfIndex(condToneIndex, row.id, primaryField.id) : null;
+
   return (
     <div
       data-row-id={row.id}
@@ -449,10 +466,16 @@ function BoardCard(props: {
           ? "opacity-40 ring-1 ring-brand-500"
           : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 hover:shadow",
         focused && ROW_FOCUS_CLASS,
+        rowTone && COND_TONE_CELL[rowTone],
       )}
     >
       <div className="flex items-start justify-between gap-1">
-        <div className="min-h-[1.25rem] min-w-0 flex-1 break-words text-[13px] font-medium leading-snug text-neutral-800 dark:text-neutral-100">
+        <div
+          className={cn(
+            "min-h-[1.25rem] min-w-0 flex-1 break-words text-[13px] font-medium leading-snug text-neutral-800 dark:text-neutral-100",
+            titleTone && COND_TONE_CELL[titleTone],
+          )}
+        >
           {title || <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>}
         </div>
         <button
@@ -470,9 +493,14 @@ function BoardCard(props: {
       </div>
       {subs.length > 0 && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
-          {subs.map((s) => (
-            <CardSub key={s.field.id} field={s.field} value={s.value} relationDbOf={relationDbOf} />
-          ))}
+          {subs.map((s) => {
+            const tone = toneOfIndex(condToneIndex, row.id, s.field.id);
+            return (
+              <span key={s.field.id} className={cn("inline-flex min-w-0", tone && COND_TONE_CELL[tone])}>
+                <CardSub field={s.field} value={s.value} relationDbOf={relationDbOf} />
+              </span>
+            );
+          })}
         </div>
       )}
     </div>

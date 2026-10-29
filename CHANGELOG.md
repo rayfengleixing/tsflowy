@@ -602,6 +602,18 @@
 - 两条落差本批没改，说清楚。① 筛到零命中时界面仍显示「暂无数据」（`:152` 走 `databaseView.noRows`），不区分「库里真没行」与「被筛掉了」——Grid/List/Gallery 同样如此，要改是一条 i18n 分支铺四个视图，单独一批。② 带筛选点「新增」，新行若不命中当前筛选，会被 `:66-68` 那道具意写的回落逻辑盖成「显示第一条」，看着像没建成。这条回落代码早就在，但**在 Form 里此前不可达**（Form 自己筛不了、又读不到别的视图的配置），是本批让它第一次可达。
 - 真机没跑：界面只能在 `npm run tauri dev` 的原生窗口里看。静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`format:check` 干净、`vitest run` 111 文件全过、`npm run build` exit 0；本批没碰 Rust，`cargo test` 未复跑（上一批的 344/0/1 仍是基线）。
 
+### 条件格式不再是表格视图的专利（X 批 1）
+
+- 缺口来源是功能审计第五轮第 1 条：`CondFormatDialog` 全仓唯一挂载点在 `GridView.tsx:894`（改前），其余六个视图连入口都没有。规则本来就按视图存进 `views.extra.condFormats`（`lib/view-config.ts:41,148-149,173` 已解析与回写），只是没人读。
+- 收口方式与筛选/排序那条同形：新增 `src/features/database/cond-format-bar.tsx`（64 行），`useCondFormat(view, rowIds, cells)` 交回规则、取色索引、弹窗开关与落库动作，`CondFormatButton` 进顶栏那一行，`CondFormatDialogHost` 挂在 JSX 末尾——照 `query-bar.tsx` 的 `useQueryBar` + `QueryButtons` + `QueryPanels` 抄，接线口径一致，七个视图共用一份。
+- 表格视图换到这条上，行为逐字不变：删掉自带的 `condFormats` / `condOpen` 两份 state、`condToneIndex` 的 useMemo 与 `changeCondFormats`，改把 `cond.index` 塞进行渲染上下文（`GridView.tsx:139,553`），所以 `grid-row.tsx` 一行没动——它读的仍是同名同类型的 `condToneIndex`、同一个 `buildCondIndex` 的结果。按钮位置、文案、徽章数、高亮判定原样搬走。tsc 唯一揪出来的连带是 `cn`：表格里它只剩那个按钮在用，抽走即成未用导入，删掉。
+- 六个视图接上：Gallery / List 给卡片与行的根节点铺「整行档」、标题与各条副信息铺「单元格档」；Form 一次只看一行，索引也只算这一行（`condRowIds` 就一个 id，`:85`），字段行容器与值容器分别取色；Board / Calendar 同卡片形制；Timeline 原本打算跳过（它不逐列铺单元格），看下去才发现它有整条轨道与左侧主字段标题两个宿主，接了（`:142`、轨道根与标题各一处取色）。六个新挂载的按钮统一摆在「筛选 / 排序」之后；表格视图那个仍在原位（`HiddenColumnsMenu` 与「筛选」之间），因为按钮挪位也算界面变更。
+- 判定读的图分了两派，说清楚。Grid / Gallery / List / Form 传求值后的**展示图**（`display`）：规则判的就是屏幕上那串字，公式列也能当条件——表格视图原本就是这个口径，一个字没改。Board / Calendar / Timeline 传**数字规范化图**（`sortable`）：这三个视图自己的筛选与排序读的就是这份图，取同一份才不会「筛出来的行按另一套值染色」。两派只在公式 / 汇总 / 反向关系列上有分歧（纯存值列两份图等于原图）；要不要把它们并成一派属行为变更，另案。
+- 一处注释归位：「批量改值：改完清掉勾选，避免…」本来挂在 `<CondFormatDialog>` 头上，说的却是下面的 `<BulkEditDialog>`（`GridView.tsx:869,871` 现在各自挂对了）。除此之外本批没有非代码行的意外改动。
+- 本批没补用例（「补用例先停止」的令仍生效），这条缝目前是裸的：套件里对条件格式的断言只有纯逻辑的 `lib/database-cond-format.test.ts`（测 `buildCondIndex` 本身），`grid-view.test.tsx` 7 条用例零覆盖。也就是「六个视图真把颜色渲染出来了」目前没有任何用例钉住，接坏了不会红。
+- 剩下两件仍在表格视图：`AggregateMenu` 挂在列页脚（非表格视图没有页脚这个宿主）、`BulkEditDialog` 要一份「选中行」数组（六个视图全都没有行选择集），都不是机械接线，另批处理。
+- 真机没跑：界面只能在 `npm run tauri dev` 的原生窗口里看。静态验证：`tsc --noEmit` exit 0、`eslint . --max-warnings=0` exit 0、`prettier --check` 干净、`vitest run` 见下条数字；本批没碰 Rust，`cargo test` 未复跑（344 通过 / 1 忽略仍是基线）。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）

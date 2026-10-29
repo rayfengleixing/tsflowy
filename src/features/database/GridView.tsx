@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, Copy, Download, FileUp, FileSpreadsheet, Palette, SquarePen, Trash2, X } from "lucide-react";
+import { Archive, Copy, Download, FileUp, FileSpreadsheet, SquarePen, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
@@ -7,12 +7,11 @@ import { useDbStore, useDbStoreApi } from "@/stores/database-context";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
 import { MAX_GROUP_DEPTH, cellAt } from "@/lib/database-query";
 import type { AggregateFn } from "@/lib/database-aggregate";
-import { buildCondIndex, type CondFormatRule } from "@/lib/database-cond-format";
 import { CsvImportDialog } from "./CsvImportDialog";
 import { RowTrashDialog } from "./RowTrashDialog";
 import { RowParentDialog } from "./RowParentDialog";
 import { BulkEditDialog } from "./BulkEditDialog";
-import { CondFormatDialog } from "./CondFormatDialog";
+import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
 import { useGridViewModel } from "./use-grid-view-model";
 import {
   collapsedAncestorsOfRow,
@@ -48,7 +47,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 
-import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { patchViewConfig, readViewConfig } from "@/lib/view-config";
@@ -91,9 +89,6 @@ export function GridView({
   const [aggregates, setAggregates] = useState<Record<string, AggregateFn>>(
     () => readViewConfig(view).aggregates ?? {},
   );
-  // 条件格式规则（表格视图独有）与规则编辑弹窗
-  const [condFormats, setCondFormats] = useState<CondFormatRule[]>(() => readViewConfig(view).condFormats ?? []);
-  const [condOpen, setCondOpen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   // 父子行层级里被折叠的父行（只在未分组时生效，与分组折叠各管一套）
   const [collapsedRows, setCollapsedRows] = useState<Set<string>>(new Set());
@@ -140,16 +135,8 @@ export function GridView({
     collapsedKey,
   } = model;
 
-  // 条件格式：整屏一次算出「行 × 列 → 颜色」索引，每格只做两次 Map 查（读的是求值后的展示图，公式列也能当条件）
-  const condToneIndex = useMemo(
-    () => buildCondIndex(condFormats, displayRowIds, displayCells, fields),
-    [condFormats, displayRowIds, displayCells, fields],
-  );
-
-  const changeCondFormats = (rules: CondFormatRule[]) => {
-    setCondFormats(rules);
-    patchViewConfig(view, { condFormats: rules });
-  };
+  // 条件格式：规则、取色索引与编辑弹窗由共用条子接管（传求值后的展示图，公式列也能当条件）
+  const cond = useCondFormat(view, displayRowIds, displayCells);
 
   const toggleRowChecked = (rowId: string) => {
     // 用上回调形式：连点同一行时不能都基于同一份旧集合
@@ -563,7 +550,7 @@ export function GridView({
     setCursor,
     setEditing,
     pasteAnchorRef,
-    condToneIndex,
+    condToneIndex: cond.index,
   };
   /** 折叠/展开某父行的子树（只影响本地视图，不落库） */
   const toggleRowCollapse = (rowId: string) => {
@@ -726,19 +713,7 @@ export function GridView({
             {t("row.trash")}
           </Button>
           <HiddenColumnsMenu fields={fields} onShow={(id) => void store.toggleFieldHidden(id)} />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setCondOpen(true)}
-            title={t("cond.title")}
-            className={cn(condFormats.length > 0 && "bg-brand-100 text-brand-600")}
-          >
-            <Palette className="h-3.5 w-3.5" />
-            {t("cond.title")}
-            {condFormats.length > 0 && (
-              <span className="ml-1 rounded-full bg-brand-500 px-1.5 text-[10px] text-white">{condFormats.length}</span>
-            )}
-          </Button>
+          <CondFormatButton bar={cond} />
           <QueryButtons bar={bar} />
           <Button variant="ghost" size="sm" onClick={importCsv}>
             <FileUp className="h-3.5 w-3.5" />
@@ -890,15 +865,10 @@ export function GridView({
         }}
       />
 
-      {/* 批量改值：改完清掉勾选，避免「刚改的行还挂着选」让人以为没生效 */}
-      <CondFormatDialog
-        open={condOpen}
-        onOpenChange={setCondOpen}
-        fields={fields}
-        rules={condFormats}
-        onChange={changeCondFormats}
-      />
+      {/* 条件格式规则编辑（与其余视图同一份按视图持久化的配置） */}
+      <CondFormatDialogHost bar={cond} />
 
+      {/* 批量改值：改完清掉勾选，避免「刚改的行还挂着选」让人以为没生效 */}
       <BulkEditDialog
         open={bulkEditOpen}
         onOpenChange={setBulkEditOpen}

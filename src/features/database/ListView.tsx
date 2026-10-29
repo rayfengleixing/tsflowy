@@ -3,6 +3,8 @@ import { ExternalLink, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
+import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
+import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database-cond-format";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
 import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
@@ -67,6 +69,10 @@ export function ListView({
     [displayRows, cells, fields, relationDbOf],
   );
 
+  // 条件格式（与表格视图同一份按视图持久化的规则）：按展示图判定，公式列也能当条件
+  const condRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
+  const cond = useCondFormat(view, condRowIds, evaluated);
+
   const { scrollerRef, focusRowId } = useRowFocus(displayRows.length);
 
   const addRow = async () => {
@@ -88,6 +94,7 @@ export function ListView({
         <div className="flex min-w-0 flex-1 items-center">{tabs}</div>
         <div className="flex shrink-0 items-center gap-2">
           <QueryButtons bar={bar} />
+          <CondFormatButton bar={cond} />
           <span className="text-xs text-neutral-400">{displayRows.length}</span>
           <Button variant="ghost" size="sm" onClick={() => void addRow()}>
             <Plus className="h-3.5 w-3.5" />
@@ -112,6 +119,7 @@ export function ListView({
                 primaryField={primaryField}
                 propFields={propFields}
                 rowCells={rowCellsOf(evaluated, cells, row.id)}
+                condToneIndex={cond.index}
                 focused={focusRowId === row.id}
                 onOpenDetail={() => void openRowDetail(row, source)}
               />
@@ -121,6 +129,8 @@ export function ListView({
       </div>
 
       {rowDetail && <RowDetailPanel row={rowDetail.row} view={rowDetail.view} onClose={closeRowDetail} />}
+
+      <CondFormatDialogHost bar={cond} />
     </div>
   );
 }
@@ -131,6 +141,7 @@ function ListRow({
   primaryField,
   propFields,
   rowCells,
+  condToneIndex,
   focused,
   onOpenDetail,
 }: {
@@ -139,6 +150,8 @@ function ListRow({
   propFields: DatabaseField[];
   /** 该行已求值的单元格图（计算列在内）；按行稀疏存储，没有条目即空值 */
   rowCells: Record<string, CellValue | undefined>;
+  /** 条件格式取色索引（行 × 列 → 颜色），由列表视图整屏算好传进来 */
+  condToneIndex: Map<string, CondTone>;
   focused: boolean;
   onOpenDetail: () => void;
 }) {
@@ -150,27 +163,40 @@ function ListRow({
     .map((f) => ({ field: f, value: rowCells[f.id] ?? null }))
     .filter((p) => !isCellEmpty(p.value));
 
+  // 取色口径与表格视图一致：整行档铺满这一行，单元格档只铺它对应那个属性
+  const rowTone = toneOfIndex(condToneIndex, row.id, "");
+  const titleTone = primaryField ? toneOfIndex(condToneIndex, row.id, primaryField.id) : null;
+
   return (
     <div
       data-row-id={row.id}
       className={cn(
         "group/row flex cursor-pointer items-start gap-3 px-6 py-2 transition hover:bg-neutral-50 dark:hover:bg-neutral-800/40",
         focused && ROW_FOCUS_CLASS,
+        rowTone && COND_TONE_CELL[rowTone],
       )}
       onClick={onOpenDetail}
     >
-      <span className="w-64 shrink-0 truncate text-[13px] font-medium text-neutral-900 dark:text-neutral-100">
+      <span
+        className={cn(
+          "w-64 shrink-0 truncate text-[13px] font-medium text-neutral-900 dark:text-neutral-100",
+          titleTone && COND_TONE_CELL[titleTone],
+        )}
+      >
         {title || <span className="font-normal text-neutral-400">{t("board.cardNamePlaceholder")}</span>}
       </span>
       <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-        {props.map((p) => (
-          <span key={p.field.id} className="inline-flex min-w-0 max-w-[280px] items-center gap-1">
-            <span className="shrink-0 text-neutral-400 dark:text-neutral-500">{p.field.name}</span>
-            <span className="min-w-0">
-              <CellReadValue field={p.field} value={p.value} />
+        {props.map((p) => {
+          const tone = toneOfIndex(condToneIndex, row.id, p.field.id);
+          return (
+            <span key={p.field.id} className="inline-flex min-w-0 max-w-[280px] items-center gap-1">
+              <span className="shrink-0 text-neutral-400 dark:text-neutral-500">{p.field.name}</span>
+              <span className={cn("min-w-0", tone && COND_TONE_CELL[tone])}>
+                <CellReadValue field={p.field} value={p.value} />
+              </span>
             </span>
-          </span>
-        ))}
+          );
+        })}
       </span>
       <button
         type="button"

@@ -3,6 +3,8 @@ import { ChevronLeft, ChevronRight, Plus, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
+import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
+import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database-cond-format";
 import { applyFilters, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
 import { buildCalendarMonth, cellValueForDate, defaultCalendarField, rowDateKey } from "@/lib/board-calendar";
@@ -93,6 +95,10 @@ export function CalendarView({
     return sortRows(filtered, sortableCells, sorts);
   }, [rows, sortableCells, filters, fields, filterMode, sorts]);
 
+  // 条件格式（与表格视图同一份按视图持久化的规则）：判定读 sortable 图，与本视图筛选/排序同口径
+  const condRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
+  const cond = useCondFormat(view, condRowIds, sortableCells);
+
   const today = useMemo(() => {
     const d = new Date();
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -178,6 +184,7 @@ export function CalendarView({
 
         <div className="flex shrink-0 items-center gap-1">
           <QueryButtons bar={bar} />
+          <CondFormatButton bar={cond} />
           <div className="flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700">
             <span className="text-neutral-500">{t("calendar.dateBy")}:</span>
             <select
@@ -333,6 +340,7 @@ export function CalendarView({
                           primaryField={visibleFields[0] ?? null}
                           visibleFields={visibleFields}
                           cells={cells}
+                          condToneIndex={cond.index}
                           dragging={draggingRow === row.id}
                           focused={focusRowId === row.id}
                           onDragStart={() => setDraggingRow(row.id)}
@@ -378,6 +386,8 @@ export function CalendarView({
       )}
 
       {rowDetail && <RowDetailPanel row={rowDetail.row} view={rowDetail.view} onClose={closeRowDetail} />}
+
+      <CondFormatDialogHost bar={cond} />
     </div>
   );
 }
@@ -391,6 +401,8 @@ function CalCard(props: {
   primaryField: DatabaseField | null;
   visibleFields: DatabaseField[];
   cells: Record<string, Record<string, CellValue>>;
+  /** 条件格式取色索引（行 × 列 → 颜色），由日历视图整屏算好传进来 */
+  condToneIndex: Map<string, CondTone>;
   dragging: boolean;
   /** 搜索命中的卡片：滚动定位后短时高亮 */
   focused: boolean;
@@ -398,7 +410,7 @@ function CalCard(props: {
   onDragEnd: () => void;
   onOpenDetail: () => void;
 }) {
-  const { row, primaryField, visibleFields, cells, dragging, focused } = props;
+  const { row, primaryField, visibleFields, cells, condToneIndex, dragging, focused } = props;
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
   const value = primaryField ? (cells[row.id]?.[primaryField.id] ?? null) : null;
   const title = primaryField
@@ -417,6 +429,11 @@ function CalCard(props: {
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- 同上
   const sub = subField ? { field: subField, value: cells[row.id]?.[subField.id] ?? null } : null;
 
+  // 取色口径与表格视图一致：整行档铺满卡片，单元格档铺标题或那条副信息
+  const rowTone = toneOfIndex(condToneIndex, row.id, "");
+  const titleTone = primaryField ? toneOfIndex(condToneIndex, row.id, primaryField.id) : null;
+  const subTone = sub ? toneOfIndex(condToneIndex, row.id, sub.field.id) : null;
+
   return (
     <div
       data-row-id={row.id}
@@ -429,10 +446,16 @@ function CalCard(props: {
           ? "opacity-40 ring-1 ring-brand-500"
           : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 hover:shadow-sm",
         focused && ROW_FOCUS_CLASS,
+        rowTone && COND_TONE_CELL[rowTone],
       )}
     >
       <div className="flex items-center justify-between gap-0.5 px-1.5 py-1">
-        <span className="min-w-0 flex-1 truncate font-medium text-neutral-800 dark:text-neutral-100">
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate font-medium text-neutral-800 dark:text-neutral-100",
+            titleTone && COND_TONE_CELL[titleTone],
+          )}
+        >
           {title || <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>}
         </span>
         <button
@@ -449,7 +472,12 @@ function CalCard(props: {
         </button>
       </div>
       {sub && (
-        <div className="border-t border-neutral-100 px-1.5 py-0.5 dark:border-neutral-700">
+        <div
+          className={cn(
+            "border-t border-neutral-100 px-1.5 py-0.5 dark:border-neutral-700",
+            subTone && COND_TONE_CELL[subTone],
+          )}
+        >
           <CalSub field={sub.field} value={sub.value} />
         </div>
       )}

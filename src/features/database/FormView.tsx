@@ -3,6 +3,8 @@ import { ChevronLeft, ChevronRight, ExternalLink, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
+import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
+import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database-cond-format";
 import { applyFilters, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
 import { isReadonlyType } from "@/types/database";
@@ -68,12 +70,19 @@ export function FormView({
     displayRows.find((r) => r.id === currentRowId) ?? (displayRows.length > 0 ? displayRows[0] : null);
   const rowIndex = row ? displayRows.findIndex((r) => r.id === row.id) : -1;
 
-  const rowCells: Record<string, CellValue> = useMemo(() => {
-    if (!row) return {};
-    // 计算列（公式/汇总/反向关系）没有存储值，本行现算一次
-    const evaluated = computeEvaluatedCells([row], cells, fields, relationDbOf).display;
-    return rowCellsOf(evaluated, cells, row.id);
-  }, [row, cells, fields, relationDbOf]);
+  // 计算列（公式/汇总/反向关系）没有存储值：本行现算一次，行渲染与条件格式都读这份图
+  const rowEvaluated = useMemo<Record<string, Record<string, CellValue>>>(
+    () => (row ? computeEvaluatedCells([row], cells, fields, relationDbOf).display : {}),
+    [row, cells, fields, relationDbOf],
+  );
+  const rowCells: Record<string, CellValue> = useMemo(
+    () => (row ? rowCellsOf(rowEvaluated, cells, row.id) : {}),
+    [row, rowEvaluated, cells],
+  );
+
+  // 条件格式（与表格视图同一份按视图持久化的规则）：表单一次只看一行，索引也只算这一行
+  const condRowIds = useMemo(() => (row ? [row.id] : []), [row]);
+  const cond = useCondFormat(view, condRowIds, rowEvaluated);
 
   const commit = useCallback(
     async (fieldId: string, value: CellValue) => {
@@ -116,6 +125,7 @@ export function FormView({
 
         <div className="flex shrink-0 items-center gap-1">
           <QueryButtons bar={bar} />
+          <CondFormatButton bar={cond} />
           <div className="flex items-center rounded-md border border-neutral-300 bg-white text-xs">
             <button
               className="rounded-l-md px-2 py-1 text-neutral-600 hover:bg-neutral-100 disabled:cursor-default disabled:text-neutral-300"
@@ -171,6 +181,8 @@ export function FormView({
                 field={field}
                 value={rowCells[field.id] ?? null}
                 primary={i === 0}
+                tone={toneOfIndex(cond.index, row.id, field.id)}
+                rowTone={toneOfIndex(cond.index, row.id, "")}
                 editing={editingFieldId === field.id}
                 onStartEdit={() => setEditingFieldId(field.id)}
                 onCancel={() => setEditingFieldId(null)}
@@ -182,6 +194,8 @@ export function FormView({
       )}
 
       {rowDetail && <RowDetailPanel row={rowDetail.row} view={rowDetail.view} onClose={closeRowDetail} />}
+
+      <CondFormatDialogHost bar={cond} />
     </div>
   );
 }
@@ -191,6 +205,8 @@ function FormRow({
   field,
   value,
   primary,
+  tone,
+  rowTone,
   editing,
   onStartEdit,
   onCancel,
@@ -199,6 +215,10 @@ function FormRow({
   field: DatabaseField;
   value: CellValue;
   primary: boolean;
+  /** 该字段的条件格式取色（含整行档的回落） */
+  tone: CondTone | null;
+  /** 整行那一档的取色，铺满这一字段行 */
+  rowTone: CondTone | null;
   editing: boolean;
   onStartEdit: () => void;
   onCancel: () => void;
@@ -208,7 +228,12 @@ function FormRow({
   const readonly = isReadonlyType(field.field_type);
 
   return (
-    <div className="flex items-start gap-3 border-b border-neutral-100 py-1.5 last:border-b-0 dark:border-neutral-800">
+    <div
+      className={cn(
+        "flex items-start gap-3 border-b border-neutral-100 py-1.5 last:border-b-0 dark:border-neutral-800",
+        rowTone && COND_TONE_CELL[rowTone],
+      )}
+    >
       <span className="flex w-40 shrink-0 items-center gap-1.5 pt-1.5 text-[12px] text-neutral-500 dark:text-neutral-400">
         <span className="flex h-4 w-4 shrink-0 items-center justify-center text-neutral-400">
           {fieldIcon(field.field_type)}
@@ -221,6 +246,7 @@ function FormRow({
         className={cn(
           "min-w-0 flex-1 rounded px-1.5 py-1 text-[13px]",
           readonly ? "opacity-70" : "cursor-text hover:bg-neutral-100 dark:hover:bg-neutral-800",
+          tone && COND_TONE_CELL[tone],
         )}
         onClick={() => !readonly && !editing && onStartEdit()}
       >
