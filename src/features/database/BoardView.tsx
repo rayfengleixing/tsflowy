@@ -5,6 +5,13 @@ import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
 import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database-cond-format";
+import {
+  BulkEditDialogHost,
+  ROW_SELECTED_RING,
+  RowSelectMenu,
+  useRowBulkEdit,
+  type RowBulkEdit,
+} from "./row-bulk-edit";
 import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
 import { NO_GROUP, cellValueForGroup, defaultBoardField, groupRowsForBoard } from "@/lib/board-calendar";
@@ -141,8 +148,11 @@ export function BoardView({
   }, [groupField, displayRows, cells]);
 
   // 条件格式（与表格视图同一份按视图持久化的规则）：判定读 sortable 图，与本视图筛选/排序同口径
-  const condRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
-  const cond = useCondFormat(view, condRowIds, sortableCells);
+  // 可见行 id 一份三用：取色、批量改值的目标行、列头「占比」的分母
+  const visibleRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
+  const cond = useCondFormat(view, visibleRowIds, sortableCells);
+  // 批量改值：这一屏右键选中的卡片（表格视图有勾选列，看板没有）
+  const bulk = useRowBulkEdit(visibleRowIds);
 
   // 列头小计：字段按可见字段现找（被删/隐藏就整件事消失），函数不在候选里回落计数
   const subtotalField = subtotalFieldId ? (visibleFields.find((f) => f.id === subtotalFieldId) ?? null) : null;
@@ -374,7 +384,7 @@ export function BoardView({
                           fn={subtotalFnEffective}
                           rowIds={groupRowIds.get(group.key) ?? []}
                           cells={sortableCells}
-                          scopeRowIds={condRowIds}
+                          scopeRowIds={visibleRowIds}
                           onPick={changeSubtotalFn}
                         />
                       </div>
@@ -405,6 +415,7 @@ export function BoardView({
                           subFieldsExplicit={cardFieldIds !== null}
                           cells={cells}
                           condToneIndex={cond.index}
+                          bulk={bulk}
                           relationDbOf={relationDbOf}
                           dragging={draggingRow === row.id}
                           focused={focusRowId === row.id}
@@ -470,6 +481,8 @@ export function BoardView({
       {rowDetail && <RowDetailPanel row={rowDetail.row} view={rowDetail.view} onClose={closeRowDetail} />}
 
       <CondFormatDialogHost bar={cond} />
+
+      <BulkEditDialogHost bulk={bulk} />
     </div>
   );
 }
@@ -484,6 +497,8 @@ function BoardCard(props: {
   cells: Record<string, Record<string, CellValue>>;
   /** 条件格式取色索引（行 × 列 → 颜色），由看板视图整屏算好传进来 */
   condToneIndex: Map<string, CondTone>;
+  /** 本视图的多选与批量改值状态；右键菜单挂在卡片根节点上 */
+  bulk: RowBulkEdit;
   /** 关联列解析目标行标题（视图级缓存，见 BoardView 顶部的 ensure） */
   relationDbOf: (viewId: string) => RelationDb | undefined;
   dragging: boolean;
@@ -493,8 +508,18 @@ function BoardCard(props: {
   onDragEnd: () => void;
   onOpenDetail: () => void;
 }) {
-  const { row, primaryField, subFields, subFieldsExplicit, cells, condToneIndex, relationDbOf, dragging, focused } =
-    props;
+  const {
+    row,
+    primaryField,
+    subFields,
+    subFieldsExplicit,
+    cells,
+    condToneIndex,
+    bulk,
+    relationDbOf,
+    dragging,
+    focused,
+  } = props;
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
   const value = primaryField ? (cells[row.id]?.[primaryField.id] ?? null) : null;
   const title = primaryField
@@ -512,57 +537,61 @@ function BoardCard(props: {
   // 取色口径与表格视图一致：整行档铺满卡片，单元格档铺标题或对应的那条副信息
   const rowTone = toneOfIndex(condToneIndex, row.id, "");
   const titleTone = primaryField ? toneOfIndex(condToneIndex, row.id, primaryField.id) : null;
+  const selected = bulk.isSelected(row.id);
 
   return (
-    <div
-      data-row-id={row.id}
-      draggable
-      onDragStart={props.onDragStart}
-      onDragEnd={props.onDragEnd}
-      className={cn(
-        "group/card cursor-grab rounded-md border bg-white p-2 shadow-sm transition active:cursor-grabbing dark:bg-neutral-800",
-        dragging
-          ? "opacity-40 ring-1 ring-brand-500"
-          : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 hover:shadow",
-        focused && ROW_FOCUS_CLASS,
-        rowTone && COND_TONE_CELL[rowTone],
-      )}
-    >
-      <div className="flex items-start justify-between gap-1">
-        <div
-          className={cn(
-            "min-h-[1.25rem] min-w-0 flex-1 break-words text-[13px] font-medium leading-snug text-neutral-800 dark:text-neutral-100",
-            titleTone && COND_TONE_CELL[titleTone],
-          )}
-        >
-          {title || <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>}
+    <RowSelectMenu bulk={bulk} rowId={row.id}>
+      <div
+        data-row-id={row.id}
+        draggable
+        onDragStart={props.onDragStart}
+        onDragEnd={props.onDragEnd}
+        className={cn(
+          "group/card cursor-grab rounded-md border bg-white p-2 shadow-sm transition active:cursor-grabbing dark:bg-neutral-800",
+          dragging
+            ? "opacity-40 ring-1 ring-brand-500"
+            : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 hover:shadow",
+          focused && ROW_FOCUS_CLASS,
+          rowTone && COND_TONE_CELL[rowTone],
+          selected && ROW_SELECTED_RING,
+        )}
+      >
+        <div className="flex items-start justify-between gap-1">
+          <div
+            className={cn(
+              "min-h-[1.25rem] min-w-0 flex-1 break-words text-[13px] font-medium leading-snug text-neutral-800 dark:text-neutral-100",
+              titleTone && COND_TONE_CELL[titleTone],
+            )}
+          >
+            {title || <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>}
+          </div>
+          <button
+            type="button"
+            className="shrink-0 rounded p-0.5 text-neutral-400 opacity-0 transition group-hover/card:opacity-100 hover:bg-neutral-200 hover:text-brand-600"
+            title={t("row.openDetail")}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onOpenDetail();
+            }}
+          >
+            <ExternalLink className="h-3 w-3" />
+          </button>
         </div>
-        <button
-          type="button"
-          className="shrink-0 rounded p-0.5 text-neutral-400 opacity-0 transition group-hover/card:opacity-100 hover:bg-neutral-200 hover:text-brand-600"
-          title={t("row.openDetail")}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={(e) => {
-            e.stopPropagation();
-            props.onOpenDetail();
-          }}
-        >
-          <ExternalLink className="h-3 w-3" />
-        </button>
+        {subs.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            {subs.map((s) => {
+              const tone = toneOfIndex(condToneIndex, row.id, s.field.id);
+              return (
+                <span key={s.field.id} className={cn("inline-flex min-w-0", tone && COND_TONE_CELL[tone])}>
+                  <CardSub field={s.field} value={s.value} relationDbOf={relationDbOf} />
+                </span>
+              );
+            })}
+          </div>
+        )}
       </div>
-      {subs.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-1">
-          {subs.map((s) => {
-            const tone = toneOfIndex(condToneIndex, row.id, s.field.id);
-            return (
-              <span key={s.field.id} className={cn("inline-flex min-w-0", tone && COND_TONE_CELL[tone])}>
-                <CardSub field={s.field} value={s.value} relationDbOf={relationDbOf} />
-              </span>
-            );
-          })}
-        </div>
-      )}
-    </div>
+    </RowSelectMenu>
   );
 }
 

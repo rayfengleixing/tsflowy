@@ -4,6 +4,13 @@ import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
+import {
+  BulkEditDialogHost,
+  ROW_SELECTED_RING,
+  RowSelectMenu,
+  useRowBulkEdit,
+  type RowBulkEdit,
+} from "./row-bulk-edit";
 import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database-cond-format";
 import { applyFilters, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
@@ -96,8 +103,10 @@ export function CalendarView({
   }, [rows, sortableCells, filters, fields, filterMode, sorts]);
 
   // 条件格式（与表格视图同一份按视图持久化的规则）：判定读 sortable 图，与本视图筛选/排序同口径
-  const condRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
-  const cond = useCondFormat(view, condRowIds, sortableCells);
+  const visibleRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
+  const cond = useCondFormat(view, visibleRowIds, sortableCells);
+  // 批量改值：这一屏右键选中的卡片（目标行按整屏筛剩算，与表格视图的折叠组同一口径）
+  const bulk = useRowBulkEdit(visibleRowIds);
 
   const today = useMemo(() => {
     const d = new Date();
@@ -341,6 +350,7 @@ export function CalendarView({
                           visibleFields={visibleFields}
                           cells={cells}
                           condToneIndex={cond.index}
+                          bulk={bulk}
                           dragging={draggingRow === row.id}
                           focused={focusRowId === row.id}
                           onDragStart={() => setDraggingRow(row.id)}
@@ -388,6 +398,8 @@ export function CalendarView({
       {rowDetail && <RowDetailPanel row={rowDetail.row} view={rowDetail.view} onClose={closeRowDetail} />}
 
       <CondFormatDialogHost bar={cond} />
+
+      <BulkEditDialogHost bulk={bulk} />
     </div>
   );
 }
@@ -403,6 +415,8 @@ function CalCard(props: {
   cells: Record<string, Record<string, CellValue>>;
   /** 条件格式取色索引（行 × 列 → 颜色），由日历视图整屏算好传进来 */
   condToneIndex: Map<string, CondTone>;
+  /** 本视图的多选与批量改值状态；右键菜单挂在卡片根节点上 */
+  bulk: RowBulkEdit;
   dragging: boolean;
   /** 搜索命中的卡片：滚动定位后短时高亮 */
   focused: boolean;
@@ -410,7 +424,7 @@ function CalCard(props: {
   onDragEnd: () => void;
   onOpenDetail: () => void;
 }) {
-  const { row, primaryField, visibleFields, cells, condToneIndex, dragging, focused } = props;
+  const { row, primaryField, visibleFields, cells, condToneIndex, bulk, dragging, focused } = props;
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cells 为按行稀疏映射，无单元格的行没有条目（运行时可能 undefined）
   const value = primaryField ? (cells[row.id]?.[primaryField.id] ?? null) : null;
   const title = primaryField
@@ -433,55 +447,59 @@ function CalCard(props: {
   const rowTone = toneOfIndex(condToneIndex, row.id, "");
   const titleTone = primaryField ? toneOfIndex(condToneIndex, row.id, primaryField.id) : null;
   const subTone = sub ? toneOfIndex(condToneIndex, row.id, sub.field.id) : null;
+  const selected = bulk.isSelected(row.id);
 
   return (
-    <div
-      data-row-id={row.id}
-      draggable
-      onDragStart={props.onDragStart}
-      onDragEnd={props.onDragEnd}
-      className={cn(
-        "group/card cursor-grab overflow-hidden rounded border bg-white text-[11px] leading-tight shadow-sm transition active:cursor-grabbing dark:bg-neutral-800",
-        dragging
-          ? "opacity-40 ring-1 ring-brand-500"
-          : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 hover:shadow-sm",
-        focused && ROW_FOCUS_CLASS,
-        rowTone && COND_TONE_CELL[rowTone],
-      )}
-    >
-      <div className="flex items-center justify-between gap-0.5 px-1.5 py-1">
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate font-medium text-neutral-800 dark:text-neutral-100",
-            titleTone && COND_TONE_CELL[titleTone],
-          )}
-        >
-          {title || <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>}
-        </span>
-        <button
-          type="button"
-          className="shrink-0 rounded p-0.5 text-neutral-400 opacity-0 transition group-hover/card:opacity-100 hover:bg-neutral-200 hover:text-brand-600"
-          title={t("row.openDetail")}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={(e) => {
-            e.stopPropagation();
-            props.onOpenDetail();
-          }}
-        >
-          <ExternalLink className="h-2.5 w-2.5" />
-        </button>
-      </div>
-      {sub && (
-        <div
-          className={cn(
-            "border-t border-neutral-100 px-1.5 py-0.5 dark:border-neutral-700",
-            subTone && COND_TONE_CELL[subTone],
-          )}
-        >
-          <CalSub field={sub.field} value={sub.value} />
+    <RowSelectMenu bulk={bulk} rowId={row.id}>
+      <div
+        data-row-id={row.id}
+        draggable
+        onDragStart={props.onDragStart}
+        onDragEnd={props.onDragEnd}
+        className={cn(
+          "group/card cursor-grab overflow-hidden rounded border bg-white text-[11px] leading-tight shadow-sm transition active:cursor-grabbing dark:bg-neutral-800",
+          dragging
+            ? "opacity-40 ring-1 ring-brand-500"
+            : "border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 hover:shadow-sm",
+          focused && ROW_FOCUS_CLASS,
+          rowTone && COND_TONE_CELL[rowTone],
+          selected && ROW_SELECTED_RING,
+        )}
+      >
+        <div className="flex items-center justify-between gap-0.5 px-1.5 py-1">
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate font-medium text-neutral-800 dark:text-neutral-100",
+              titleTone && COND_TONE_CELL[titleTone],
+            )}
+          >
+            {title || <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>}
+          </span>
+          <button
+            type="button"
+            className="shrink-0 rounded p-0.5 text-neutral-400 opacity-0 transition group-hover/card:opacity-100 hover:bg-neutral-200 hover:text-brand-600"
+            title={t("row.openDetail")}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onOpenDetail();
+            }}
+          >
+            <ExternalLink className="h-2.5 w-2.5" />
+          </button>
         </div>
-      )}
-    </div>
+        {sub && (
+          <div
+            className={cn(
+              "border-t border-neutral-100 px-1.5 py-0.5 dark:border-neutral-700",
+              subTone && COND_TONE_CELL[subTone],
+            )}
+          >
+            <CalSub field={sub.field} value={sub.value} />
+          </div>
+        )}
+      </div>
+    </RowSelectMenu>
   );
 }
 

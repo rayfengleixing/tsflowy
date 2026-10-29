@@ -3,6 +3,7 @@ import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
 import { COND_TONE_CELL, toneOfIndex } from "@/lib/database-cond-format";
+import { BulkEditDialogHost, ROW_SELECTED_RING, RowSelectMenu, useRowBulkEdit } from "./row-bulk-edit";
 import { applyFilters, sortRows } from "@/lib/database-query";
 import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
 import { defaultCalendarField, rowDateKey } from "@/lib/board-calendar";
@@ -138,8 +139,10 @@ export function TimelineView({
   }, [rows, sortableCells, filters, fields, filterMode, sorts]);
 
   // 条件格式（与表格视图同一份按视图持久化的规则）：判定读 sortable 图，与本视图筛选/排序同口径
-  const condRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
-  const cond = useCondFormat(view, condRowIds, sortableCells);
+  const visibleRowIds = useMemo(() => displayRows.map((r) => r.id), [displayRows]);
+  const cond = useCondFormat(view, visibleRowIds, sortableCells);
+  // 批量改值：这一屏右键选中的轨道（目标行按筛剩全集算，与折叠/滚动无关）
+  const bulk = useRowBulkEdit(visibleRowIds);
 
   const entries = useMemo(() => {
     if (!startField) return [];
@@ -414,90 +417,96 @@ export function TimelineView({
               const rowTone = toneOfIndex(cond.index, row.id, "");
               const titleTone = primaryField ? toneOfIndex(cond.index, row.id, primaryField.id) : null;
               return (
-                <div
-                  key={row.id}
-                  className={cn(
-                    "flex border-b border-neutral-100 dark:border-neutral-800",
-                    rowTone && COND_TONE_CELL[rowTone],
-                  )}
-                >
+                <RowSelectMenu key={row.id} bulk={bulk} rowId={row.id}>
                   <div
                     className={cn(
-                      "w-44 shrink-0 truncate border-r border-neutral-200 px-3 py-2 text-xs text-neutral-700 dark:border-neutral-700 dark:text-neutral-200",
-                      titleTone && COND_TONE_CELL[titleTone],
+                      "flex border-b border-neutral-100 dark:border-neutral-800",
+                      rowTone && COND_TONE_CELL[rowTone],
+                      bulk.isSelected(row.id) && ROW_SELECTED_RING,
                     )}
-                    title={title}
                   >
-                    {title || (
-                      <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>
-                    )}
-                  </div>
-                  <div data-track className="relative h-9 flex-1">
-                    {/* 刻度线/今天线由整列底衬统一绘制 */}
-                    {isSpan ? (
-                      <div
-                        data-row-id={row.id}
-                        role="button"
-                        tabIndex={0}
-                        className={cn(
-                          "absolute top-1/2 h-5 -translate-y-1/2 overflow-visible rounded bg-brand-500 text-left text-[11px] font-medium text-white shadow-sm transition",
-                          draggable ? "cursor-grab active:cursor-grabbing hover:bg-brand-600" : "hover:bg-brand-600",
-                          focused && ROW_FOCUS_CLASS,
-                          dragPreview?.rowId === row.id && "opacity-80",
-                        )}
-                        style={{ left: `${left}%`, width: `${Math.max(width, 1)}%` }}
-                        onClick={() => openFromClick(row)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            openFromClick(row);
+                    <div
+                      className={cn(
+                        "w-44 shrink-0 truncate border-r border-neutral-200 px-3 py-2 text-xs text-neutral-700 dark:border-neutral-700 dark:text-neutral-200",
+                        titleTone && COND_TONE_CELL[titleTone],
+                      )}
+                      title={title}
+                    >
+                      {title || (
+                        <span className="text-neutral-300 dark:text-neutral-600">{t("board.cardNamePlaceholder")}</span>
+                      )}
+                    </div>
+                    <div data-track className="relative h-9 flex-1">
+                      {/* 刻度线/今天线由整列底衬统一绘制 */}
+                      {isSpan ? (
+                        <div
+                          data-row-id={row.id}
+                          role="button"
+                          tabIndex={0}
+                          className={cn(
+                            "absolute top-1/2 h-5 -translate-y-1/2 overflow-visible rounded bg-brand-500 text-left text-[11px] font-medium text-white shadow-sm transition",
+                            draggable ? "cursor-grab active:cursor-grabbing hover:bg-brand-600" : "hover:bg-brand-600",
+                            focused && ROW_FOCUS_CLASS,
+                            dragPreview?.rowId === row.id && "opacity-80",
+                          )}
+                          style={{ left: `${left}%`, width: `${Math.max(width, 1)}%` }}
+                          onClick={() => openFromClick(row)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              openFromClick(row);
+                            }
+                          }}
+                          onPointerDown={(e) => beginDrag(e, entry, "move")}
+                          title={
+                            draggable
+                              ? `${title || t("board.cardNamePlaceholder")}（${t("timeline.dragHint")}）`
+                              : title
                           }
-                        }}
-                        onPointerDown={(e) => beginDrag(e, entry, "move")}
-                        title={
-                          draggable ? `${title || t("board.cardNamePlaceholder")}（${t("timeline.dragHint")}）` : title
-                        }
-                      >
-                        <span className="block truncate rounded bg-brand-500 leading-5 px-2">
-                          {title || t("board.cardNamePlaceholder")}
-                        </span>
-                        {startWritable && endWritable && (
-                          <span
-                            className="absolute inset-y-0 -right-1 w-2 cursor-ew-resize rounded-r bg-brand-700/60 hover:bg-brand-700"
-                            onPointerDown={(e) => beginDrag(e, entry, "resize")}
-                          />
-                        )}
-                      </div>
-                    ) : (
-                      <div
-                        data-row-id={row.id}
-                        role="button"
-                        tabIndex={0}
-                        className={cn(
-                          "absolute top-1/2 flex -translate-y-1/2 items-center gap-1 rounded px-1 py-0.5 text-left text-[11px] text-neutral-700 transition hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800",
-                          draggable && "cursor-grab active:cursor-grabbing",
-                          focused && ROW_FOCUS_CLASS,
-                          dragPreview?.rowId === row.id && "opacity-80",
-                        )}
-                        style={{ left: `${left}%` }}
-                        onClick={() => openFromClick(row)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            openFromClick(row);
+                        >
+                          <span className="block truncate rounded bg-brand-500 leading-5 px-2">
+                            {title || t("board.cardNamePlaceholder")}
+                          </span>
+                          {startWritable && endWritable && (
+                            <span
+                              className="absolute inset-y-0 -right-1 w-2 cursor-ew-resize rounded-r bg-brand-700/60 hover:bg-brand-700"
+                              onPointerDown={(e) => beginDrag(e, entry, "resize")}
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        <div
+                          data-row-id={row.id}
+                          role="button"
+                          tabIndex={0}
+                          className={cn(
+                            "absolute top-1/2 flex -translate-y-1/2 items-center gap-1 rounded px-1 py-0.5 text-left text-[11px] text-neutral-700 transition hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800",
+                            draggable && "cursor-grab active:cursor-grabbing",
+                            focused && ROW_FOCUS_CLASS,
+                            dragPreview?.rowId === row.id && "opacity-80",
+                          )}
+                          style={{ left: `${left}%` }}
+                          onClick={() => openFromClick(row)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              openFromClick(row);
+                            }
+                          }}
+                          onPointerDown={(e) => beginDrag(e, entry, "move")}
+                          title={
+                            draggable
+                              ? `${title || t("board.cardNamePlaceholder")}（${t("timeline.dragHint")}）`
+                              : title
                           }
-                        }}
-                        onPointerDown={(e) => beginDrag(e, entry, "move")}
-                        title={
-                          draggable ? `${title || t("board.cardNamePlaceholder")}（${t("timeline.dragHint")}）` : title
-                        }
-                      >
-                        <span className="-ml-[5px] h-2.5 w-2.5 shrink-0 rounded-full bg-brand-500" />
-                        <span className="truncate">{title || t("board.cardNamePlaceholder")}</span>
-                      </div>
-                    )}
+                        >
+                          <span className="-ml-[5px] h-2.5 w-2.5 shrink-0 rounded-full bg-brand-500" />
+                          <span className="truncate">{title || t("board.cardNamePlaceholder")}</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
+                </RowSelectMenu>
               );
             })}
           </div>
@@ -507,6 +516,8 @@ export function TimelineView({
       {rowDetail && <RowDetailPanel row={rowDetail.row} view={rowDetail.view} onClose={closeRowDetail} />}
 
       <CondFormatDialogHost bar={cond} />
+
+      <BulkEditDialogHost bulk={bulk} />
     </div>
   );
 }
