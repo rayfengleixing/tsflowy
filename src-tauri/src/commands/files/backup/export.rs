@@ -1,6 +1,8 @@
 // 导出与打包：把一致性快照 + assets/ + 设置/墓碑清单写成 zip，以及迁移前留档的落盘与清理
 // （从 backup.rs 原样搬入，逻辑未改）。fs / zip / 路径常量等共用导入见父模块。
 use super::*;
+// 写后校验复用恢复侧那一份（pub use 的 glob 不透出 pub(super) 项，故显式引入）
+use super::import::validate_backup_zip;
 
 /// 将数据库文件 + assets/ 目录 + 旁路文件（设置、附件墓碑清单）打包为 zip，
 /// 写到 target_path（由前端文件对话框选）。
@@ -63,6 +65,9 @@ pub(crate) fn write_backup_zip(
 ) -> Result<(), String> {
     // 先写同目录临时文件、成功后 rename 覆盖：中途失败不会留下半截 zip
     //（半截 zip 会被自动备份清理逻辑当成"最新一份备份"保留下来，真正需要时才发现坏了）
+    // rename 之前再用恢复链路同款校验把整档读回一遍：只保证 zip 写完不报错是不够的
+    // ——正文被截断、坏道、Deflate 流末尾丢了中央目录还指得过去，这些都要真解压才现形。
+    // 校验失败时临时文件删掉、旧档原封不动，于是那份坏档从来没进过备份目录。
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -77,7 +82,11 @@ pub(crate) fn write_backup_zip(
         unique
     ));
     let result = write_backup_zip_to(&tmp, snap, data_dir, assets, scope);
-    match result {
+    match result.and_then(|()| {
+        validate_backup_zip(&tmp)
+            .map_err(|e| format!("backup archive failed post-write check: {e}"))
+    }) {
+        // 校验通过才装档：旧档此刻还原封不动，失败路径不会多占一份保留名额
         Ok(()) => {
             if target.exists() {
                 let _ = fs::remove_file(target);

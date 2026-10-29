@@ -584,6 +584,16 @@
 - 变异核验**本批未跑**：按 2026-10-28 的指示，补用例阶段就此停止，V 批 3 只收到静态链。所以这批「抓得住回归」还没像 V 批 1/2 那样用 30 余条单点改坏验过（G 系列清单只在会话里排过，未落盘）。真机同样没跑：文件真的复制进 `assets/`、`open_asset` 拉起关联程序、关联搜索打到真库这三件事在 jsdom 里只断到「交出去的命令名与参数」。
 - 静态验证：`vitest run` 111 文件 / 1,673 通过（+34）、`tsc --noEmit` exit 0、`eslint` 该文件 `--max-warnings=0` exit 0、`format:check` 干净、`npm run build` exit 0；Rust 侧本批没碰，未复跑 `cargo test`。
 
+### 备份写完先自己读回一遍，坏档进不了备份目录（W 批 1）
+
+- 缺口来源是功能审计里「归档从不真正打开校验」那一条。恢复侧其实早就有全套校验（`src-tauri/src/commands/files/backup/import.rs:166-214` 的 `validate_backup_zip`：逐条解压把 CRC 走一遍，解出的库再跑 `PRAGMA integrity_check`），**但写入侧一次都不做**：`run_auto_backup`（`commands/files/auto_backup.rs:62-68`）写完即 `Ok(target)`，设置页照常报「备份完成」。于是坏档要到点「恢复」那一刻才暴露，而它一直占着「最新一份备份」的名额，把还能用的旧档挤掉。
+- 改法一处：`write_backup_zip`（`backup/export.rs:79-97`）在把同目录临时档 rename 成正式档**之前**，用恢复链路同一个 `validate_backup_zip` 把它读回一遍。校验失败就删临时档并返回 `backup archive failed post-write check: <原因>`；rename 没发生，正式目录里那份旧档一字未动。
+- 落点选在 `write_backup_zip` 而不是 `run_auto_backup`，因为三条写档路径共用这一个收口——自动备份与「立即备份」、手动导出、迁移前留档一次全带上。
+- 失败语义逐条核过，不会把启动带崩：迁移留档失败本来就只 `tracing::warn!` 不阻断（`db/migrations.rs:184-191`），内存库直接跳过（`:239`）；`run_auto_backup` 里 `outcome?` 先返回，`prune_auto_backups` 因此不执行，名额没被半成品吃掉；「立即备份」的报错原文经 `SettingsBackup.tsx:242` 的红字 toast 交给用户，前端零改动。
+- 代价说清楚：每次备份多付一整趟解压（全量 Deflate 读回 + 一次库结构检查）。这台机器上的库还很小（此前实测单表最多 12 行），感受不到；慢盘上带大批附件的整库备份会慢一档，换来的是「这份档一定能恢复」在写入的当下就被确认，而不是等到最需要它的那一刻。
+- 新用例 `write_rejects_an_archive_that_fails_the_post_write_check`：目录里先放一份真库写出的好档，再喂一个内容是垃圾字节的快照——打包本身会成功（zip 只管搬字节），断言拿到 `post-write check` 错误、旧档字节不变、目录里没有 `.tmp-` 与 `integrity-` 残留。变异核验：把 `.and_then(|()| validate_backup_zip(&tmp))` 摘掉，用例当场红在 `backup/tests.rs:504`（`unwrap_err` 拿到了 Ok），改回即绿。
+- 静态验证：`cargo test` **344 通过 / 0 失败 / 1 忽略**（基线 343，多出的就是这条）、`cargo clippy --all-targets` 0 告警、`cargo fmt --check` exit 0；本批没碰前端代码，`tsc --noEmit` exit 0 一并复跑为证。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）

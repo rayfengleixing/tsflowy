@@ -485,6 +485,49 @@ fn validate_accepts_real_archive_but_rejects_tampered_body() {
 }
 
 #[test]
+fn write_rejects_an_archive_that_fails_the_post_write_check() {
+    let base = std::env::temp_dir().join(format!("tsflowy-write-verify-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let dir = base.join("backups");
+    fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("tsflowy-backup-20260101-000000.zip");
+    // 目录里先有一份好档：新档写坏的那一刻，它是唯一能救命的东西
+    let good = base.join("good.db");
+    make_db_file(&good);
+    write_backup_zip(
+        &target,
+        &good,
+        &base,
+        &base.join("assets"),
+        BackupScope::DatabaseOnly,
+    )
+    .unwrap();
+    let before = fs::read(&target).unwrap();
+
+    // 快照里是垃圾字节：打包本身会成功（zip 只管把字节搬进去），只有真解压才拦得住
+    let junk = base.join("junk.db");
+    fs::write(&junk, b"this is not a sqlite database at all").unwrap();
+    let err = write_backup_zip(
+        &target,
+        &junk,
+        &base,
+        &base.join("assets"),
+        BackupScope::DatabaseOnly,
+    )
+    .unwrap_err();
+    assert!(err.contains("post-write check"), "{err}");
+    // 失败发生在 rename 之前：旧档一字未动，也没有半截档或校验探针留在目录里
+    assert_eq!(fs::read(&target).unwrap(), before);
+    let leftovers: Vec<String> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|n| n.contains(".tmp-") || n.contains("integrity-"))
+        .collect();
+    assert!(leftovers.is_empty(), "失败后目录里还留着：{leftovers:?}");
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
 fn prune_pre_migration_keeps_newest_three_and_ignores_other_archives() {
     let base = std::env::temp_dir().join(format!("tsflowy-premig-prune-{}", std::process::id()));
     let _ = fs::remove_dir_all(&base);
