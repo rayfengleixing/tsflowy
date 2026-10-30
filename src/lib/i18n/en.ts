@@ -1243,6 +1243,8 @@ export const en: Record<MessageKey, string> = {
   "ai.actionRowUpdated": "Updated a row in “{database}” (fields: {fields})",
   "ai.actionRowDeleted": "Moved a row of “{database}” to trash",
   "ai.actionNothingWritten": "Nothing was written; the table is unchanged",
+  "ai.actionRowRollbackFailed": ", but the row this action just created could not be removed — please check that row",
+  "ai.actionCellsRollbackFailed": ", and some cells already written could not be restored — please check this row",
   "ai.locateHeadingNotFound": "The heading was not found; the document was not changed",
   "ai.locateTextNotFound": "The text to replace was not found; the document was not changed",
   "ai.locateProtectedHeading": "The first-line title follows the page name and cannot be changed by the AI",

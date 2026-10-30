@@ -1196,6 +1196,8 @@ export const zh = {
   "ai.actionRowUpdated": "已更新「{database}」的一行（字段：{fields}）",
   "ai.actionRowDeleted": "已把「{database}」的一行移入回收站",
   "ai.actionNothingWritten": "一格都没写成，表格没有任何变化",
+  "ai.actionRowRollbackFailed": "，但这一行是本次动作刚建的、没能撤掉，请手动检查",
+  "ai.actionCellsRollbackFailed": "，且已写入的格子没能全部还原，请手动检查这一行",
   "ai.locateHeadingNotFound": "没找到对应标题，未修改文档",
   "ai.locateTextNotFound": "没找到要替换的原文，未修改文档",
   "ai.locateProtectedHeading": "文档首行标题由页面名管理，AI 不能改动它",

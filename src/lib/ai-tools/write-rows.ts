@@ -1,5 +1,7 @@
 // 表行写动作：加行 / 改若干格 / 删行（进回收站）。与页面类的共同点是每个动作成功时都带回一份 UndoPlan，
 // 差别只在改已有行要「先读旧值、撤销时按清单盖回去」。
+// 失败侧与页面类也不同：写一半崩了（补建选项或落格的 IPC 失败）就地回滚，不留孤儿——
+// 失败卡片上没有撤销入口，回滚的活儿不能交给用户。
 
 import { appInvalidateRelations } from "../app-context";
 import { databaseApi } from "../backend/database";
@@ -13,6 +15,22 @@ import type { CellValue, DatabaseField } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import type { ViewNode } from "@/types/models";
 
+/** 落库之后统一做这两件（成功、回滚都走它）：失效关联缓存 + 让正显示这张表的页面重取 */
+function afterTableWrite(databaseId: string): void {
+  appInvalidateRelations([databaseId]);
+  notifyDatabaseChanged([databaseId]);
+}
+
+/** 撤掉本次动作凭空建的行。撤不动时返回一句要拼进提示的话，而不是默默当成已回滚 */
+async function rollbackCreatedRow(rowId: string): Promise<string> {
+  try {
+    await databaseApi.purgeRow(rowId);
+    return "";
+  } catch {
+    return t("ai.actionRowRollbackFailed");
+  }
+}
+
 export async function addDatabaseRow(args: {
   database: string;
   cells?: Record<string, unknown>;
@@ -22,31 +40,46 @@ export async function addDatabaseRow(args: {
   const fields = await databaseApi.listFields(node.id);
   const byName = new Map(fields.map((f) => [f.name.trim().toLowerCase(), f]));
   const row = await databaseApi.createRow(node.id);
+  const wanted = Object.keys(args.cells ?? {}).length;
   const written: string[] = [];
   const skipped: string[] = [];
   const rejected: string[] = [];
-  for (const [key, value] of Object.entries(args.cells ?? {})) {
-    const field = pickField(fields, byName, key);
-    if (!field) {
-      skipped.push(key);
-      continue;
+  try {
+    for (const [key, value] of Object.entries(args.cells ?? {})) {
+      const field = pickField(fields, byName, key);
+      if (!field) {
+        skipped.push(key);
+        continue;
+      }
+      const cell = await coerceCell(field, value);
+      // 与 store 的写入口共用同一道闸门：这里直接调 databaseApi，不经 stores/database，
+      // 缺了它就等于给模型开了一条能往数字列塞文本、往日期列塞散文的旁路
+      if (isReadonlyType(field.field_type) || !cellWriteTypeSafe(field, cell)) {
+        rejected.push(field.name);
+        continue;
+      }
+      await databaseApi.setCell(row.id, field.id, cell);
+      written.push(field.name);
     }
-    const cell = await coerceCell(field, value);
-    // 与 store 的写入口共用同一道闸门：这里直接调 databaseApi，不经 stores/database，
-    // 缺了它就等于给模型开了一条能往数字列塞文本、往日期列塞散文的旁路
-    if (isReadonlyType(field.field_type) || !cellWriteTypeSafe(field, cell)) {
-      rejected.push(field.name);
-      continue;
-    }
-    await databaseApi.setCell(row.id, field.id, cell);
-    written.push(field.name);
+  } catch (e) {
+    // 写到一半失败：这行是本次动作凭空造的，就地删掉；留在表里就是一行没人要的半截数据。
+    // coerceCell 顺带补建的选项不回滚——那是加法、且与 store 写入口一样留着不碍事。
+    const note = await rollbackCreatedRow(row.id);
+    afterTableWrite(node.id);
+    return { ok: false, detail: `${e instanceof Error ? e.message : String(e)}${note}` };
   }
   const tail =
     (skipped.length > 0 ? t("ai.actionCellsSkipped", { fields: skipped.join(", ") }) : "") +
     (rejected.length > 0 ? t("ai.actionCellsRejected", { fields: rejected.join(", ") }) : "");
+  if (wanted > 0 && written.length === 0) {
+    // 与 update_database_row 同一条守卫：给了 cells 却一格都没写成，不能报「已新增一行」，
+    // 更不能在用户的表里留一行空行
+    const note = await rollbackCreatedRow(row.id);
+    afterTableWrite(node.id);
+    return { ok: false, detail: `${t("ai.actionNothingWritten")}${tail}${note}` };
+  }
   // 绕开了 database store 的写入口：手动失效 relation 缓存，否则其它库的关联/汇总列看不到这条新行
-  appInvalidateRelations([node.id]);
-  notifyDatabaseChanged([node.id]);
+  afterTableWrite(node.id);
   return {
     ok: true,
     id: row.id,
@@ -126,19 +159,34 @@ export async function updateDatabaseRow(args: {
   const skipped: string[] = [];
   const rejected: string[] = [];
   const resets: { row_id: string; field_id: string; value: CellValue }[] = [];
-  for (const [key, value] of Object.entries(args.cells ?? {})) {
-    const field = pickField(fields, byName, key);
-    if (!field) {
-      skipped.push(key);
-      continue;
+  try {
+    for (const [key, value] of Object.entries(args.cells ?? {})) {
+      const field = pickField(fields, byName, key);
+      if (!field) {
+        skipped.push(key);
+        continue;
+      }
+      const done = await writeCellWithUndo(found.row_id, current, field, value);
+      if (!done.ok) {
+        rejected.push(field.name);
+        continue;
+      }
+      resets.push(done.reset);
+      written.push(field.name);
     }
-    const done = await writeCellWithUndo(found.row_id, current, field, value);
-    if (!done.ok) {
-      rejected.push(field.name);
-      continue;
+  } catch (e) {
+    // 写一半失败：已经落进去的格子按刚记下的旧值盖回去，用户在表里看到的还是改前那副样子。
+    // 一格都没写成就别折腾（也没要通知的），盖回本身又崩了才在提示里点名
+    let note = "";
+    if (resets.length > 0) {
+      try {
+        await databaseApi.setCellsMany(resets.map((r) => ({ rowId: r.row_id, fieldId: r.field_id, value: r.value })));
+      } catch {
+        note = t("ai.actionCellsRollbackFailed");
+      }
+      afterTableWrite(node.id);
     }
-    resets.push(done.reset);
-    written.push(field.name);
+    return { ok: false, detail: `${e instanceof Error ? e.message : String(e)}${note}` };
   }
   const tail =
     (skipped.length > 0 ? t("ai.actionCellsSkipped", { fields: skipped.join(", ") }) : "") +
@@ -147,8 +195,7 @@ export async function updateDatabaseRow(args: {
     // 一格都没写成不能报「成功」：卡片会显示已更新，而用户的表什么都没变
     return { ok: false, detail: `${t("ai.actionNothingWritten")}${tail}` };
   }
-  appInvalidateRelations([node.id]);
-  notifyDatabaseChanged([node.id]);
+  afterTableWrite(node.id);
   return {
     ok: true,
     id: found.row_id,
@@ -164,8 +211,7 @@ export async function deleteDatabaseRow(args: { database: string; row: string })
   const found = await resolveRowId(node, args.row);
   if ("error" in found) return { ok: false, detail: found.error };
   await databaseApi.deleteRow(found.row_id);
-  appInvalidateRelations([node.id]);
-  notifyDatabaseChanged([node.id]);
+  afterTableWrite(node.id);
   return {
     ok: true,
     id: found.row_id,

@@ -728,6 +728,16 @@
 - 同批清掉两处仓外残留：P6 收尾那份一次性探针 `D:\Code\.p6-smoke-probe.js` 已由 `scripts/cdp-lib-layout-smoke.mjs`（e9fd77f）取代，删除；项目卡与 memory 里的引用、HEAD 与规模数字一并更正。
 - 验证链：**零产品代码改动**（变异全部还原），`src/stores/ai-stream.test.ts` 单跑 38 用例全绿，`git status` 干净；全量基线沿用 P7 批 4 之后的 111 文件 / 1,674 用例与 344 通过 / 1 忽略。
 
+### AI 加行/改行写到一半失败：就地回滚，不留孤儿行也不报假成功（AI 写行批）
+
+- 盘的是 P5 域清单第 4 条「`lib/ai-tools/write-rows.ts` 绕过 database store 的写入口」。逐项对完之后，绝大多数差异其实**不自伤**：回收站（trash）不靠 store 缓存、下次打开对话框自己 `loadTrash`，所以 AI 删行不进 trash 列表是自愈的；`rowDetail` 那条订阅观察不到，是因为 AI 只写当前这张表的格子；不弹 toast 是有意的——动作卡片本身就是提示。**真缺陷只有两条**，都在失败路径上：
+  · **① 写一半崩了留孤儿行**：`add_database_row` 先 `createRow` 再逐格 `setCell`，而 `coerceCell` 会给选择列补建选项（一次真实 IPC）。第 2 格的 IPC 抛错时，异常一路撞到 `write-dispatch.ts` 的 catch，返回的 `ok:false` **不带 undo**——卡片上没有撤销入口，于是那一行（连同第 1 格的数据）永久留在用户的表里；而且 `appInvalidateRelations` / `notifyDatabaseChanged` 写在循环**之后**，抛错时一个都没执行，正显示这张表的页面连刷都不刷。
+  · **② 字段名全认不出仍报成功**：模型给的 `cells` 若一个字段名都对不上，`written` 为空但走的是成功分支，用户看到的是一张「已新增一行」的卡片和表里多出来的空行。`update_database_row` 早就有「一格都没写成就算失败」的守卫，`add` 独缺。
+- 改法（只修这两条，**不碰层次、不改走 store**，这是点单划的范围）：失败路径就地回滚——加行崩了把刚建的行 `purgeRow` 掉（不是 `deleteRow`，凭空造的行没必要进回收站），改行崩了按已经记下的 `resets` 用 `setCellsMany` 把旧值盖回去；通知与关联缓存失效收进 `afterTableWrite`，成功、回滚、空写三条路都走它；`add` 补上与 `update` 同一条守卫（给了 cells 却一格没写成 = 失败，且把空行撤掉）。回滚自己也可能失败（比如连接已断），这种情况**如实点名**：新增 `ai.actionRowRollbackFailed` / `ai.actionCellsRollbackFailed` 两条中英文案拼进提示，而不是默默当成已回滚。
+- 证据是临时 mock 探针（`src/lib/ai-tools/probe-orphan.test.ts`，跑完即删，不碰用户库）：修前 4 条把两条缺陷钉成可观察事实——「第 2 格 IPC 崩 → 行已建、第 1 格已落库、`undo` 为 `undefined`、`notifyDatabaseChanged` 一次没调」，以及「字段名全认不出 → 仍建行、仍报 `ok:true`」，各配一条对照组（全部写成时有 undo 有通知；同样空写的 `update` 报的是失败）。修后同一探针转成 6 条断言**全绿**：加行失败把行 purge 掉且通知一次；回滚也崩时提示里出现「没能撤掉」那句；字段名全认不出不再报成功、空行被撤掉；**不带 cells 的占位加行仍然成功**（这条行为没改）；改行写一半失败按旧值盖回且通知一次；改行第一格就失败时什么都没写，既不盖回也不通知。
+- 落差如实记一条：这 6 条断言**没有转成常驻用例**（「补用例先停止」的令还生效），探针已删，所以下次有人重排这段 try/catch 不会有测试红。断言名与形状都在本节里，要转正随时可搬。
+- 本批只动三个文件（`write-rows.ts` + `zh.ts` + `en.ts`），Rust 侧零改动。验证链：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`format:check` exit 0、`vitest run` **111 文件 / 1,674 用例全绿**（条数不变——本批没加也没删用例）、`npm run build` ✓ 1m24s、`cargo test` **344 通过 / 1 忽略**。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
