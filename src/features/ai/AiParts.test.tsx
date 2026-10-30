@@ -22,7 +22,7 @@ const assets = vi.hoisted(() => ({
       }),
   ),
 }));
-vi.mock("@/lib/assets", () => ({ resolveAssetUrl: assets.resolveAssetUrl }));
+vi.mock("@/lib/assets/assets", () => ({ resolveAssetUrl: assets.resolveAssetUrl }));
 
 import { ImageThumb, QuickButton, RowAction } from "./AiParts";
 

@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import { Download, Eye, FolderInput, FolderOutput, RefreshCw, Trash2, Upload } from "lucide-react";
 import { invoke } from "@/lib/invoke";
-import { save, open } from "@/lib/ipc-dialog";
+import { save, open } from "@/lib/ipc/ipc-dialog";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { importMarkdownFolder, isRemoteFetchEnabled, setRemoteFetchEnabled } from "@/lib/import-folder";
-import { exportMarkdownFolder } from "@/lib/export-folder";
+import { importMarkdownFolder, isRemoteFetchEnabled, setRemoteFetchEnabled } from "@/lib/transfer/import-folder";
+import { exportMarkdownFolder } from "@/lib/transfer/export-folder";
 import { flushAllForClose } from "@/lib/close-flush";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
@@ -18,7 +18,7 @@ import {
   normalizeRetentionPolicy,
   RETENTION_LIMITS,
   type RetentionPolicy,
-} from "@/lib/retention";
+} from "@/lib/sync/retention";
 import { Section, formatBytes, timestamp, type AutoBackupInfo } from "./settings-parts";
 import type { MessageKey } from "@/lib/i18n";
 

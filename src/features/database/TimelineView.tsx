@@ -2,18 +2,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
-import { COND_TONE_CELL, toneOfIndex } from "@/lib/database-cond-format";
+import { COND_TONE_CELL, toneOfIndex } from "@/lib/database/database-cond-format";
 import { BulkEditDialogHost, ROW_SELECTED_RING, RowSelectMenu, useRowBulkEdit } from "./row-bulk-edit";
-import { applyFilters, sortRows } from "@/lib/database-query";
-import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
-import { defaultCalendarField, rowDateKey } from "@/lib/board-calendar";
-import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
+import { applyFilters, sortRows } from "@/lib/database/database-query";
+import { computeEvaluatedCells } from "@/lib/database/database-evaluated-cells";
+import { defaultCalendarField, rowDateKey } from "@/lib/database/board-calendar";
+import { formatCellValue, parseFieldOptions } from "@/lib/database/database-values";
 import { useRelationDbs } from "./use-database-data";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import { patchViewConfig, readViewConfig } from "@/lib/view-config";
+import { patchViewConfig, readViewConfig } from "@/lib/database/view-config";
 import {
   DAY_MS,
   autoScale,
@@ -24,7 +24,7 @@ import {
   pointerToDayMs,
   type Scale,
   type ScaleMode,
-} from "@/lib/timeline";
+} from "@/lib/database/timeline";
 import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
 import { RowDetailPanel } from "./RowDetail";
 import type { CellValue, DatabaseRow } from "@/types/database";

@@ -1,8 +1,8 @@
 import { aiErrorText } from "@/lib/ai";
-import { getAiEditor } from "@/lib/ai-editor";
+import { getAiEditor } from "@/lib/ai/ai-editor";
 import { runUndoPlan, runWriteAction } from "@/lib/ai-tools";
 import { invoke } from "@/lib/invoke";
-import { save } from "@/lib/ipc-dialog";
+import { save } from "@/lib/ipc/ipc-dialog";
 import { t } from "@/lib/i18n";
 import { toast } from "sonner";
 import { landAction } from "./edit-ops";

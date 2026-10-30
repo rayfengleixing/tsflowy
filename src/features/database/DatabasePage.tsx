@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { viewApi } from "@/lib/db";
+import { viewApi } from "@/lib/backend/db";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import { patchViewConfig, readViewConfig } from "@/lib/view-config";
+import { patchViewConfig, readViewConfig } from "@/lib/database/view-config";
 import { toast } from "sonner";
 import { bindDatabaseChanges, createDatabaseStore } from "@/stores/database";
 import { DatabaseStoreProvider } from "@/stores/database-context";

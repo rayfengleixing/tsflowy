@@ -1,5 +1,5 @@
 import { aiSessionList, type AiSessionRow } from "@/lib/ai";
-import { newId } from "@/lib/db";
+import { newId } from "@/lib/backend/db";
 import { logger } from "@/lib/logger";
 import { MAX_SESSIONS } from "./limits";
 import type { AiPersistActions } from "./persist";

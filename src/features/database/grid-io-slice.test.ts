@@ -51,10 +51,10 @@ const h = vi.hoisted(() => {
   };
 });
 
-vi.mock("@/lib/ipc-dialog", () => ({ save: h.save, open: h.open }));
+vi.mock("@/lib/ipc/ipc-dialog", () => ({ save: h.save, open: h.open }));
 vi.mock("@/lib/invoke", () => ({ invoke: h.invoke }));
 // 真的 `@/lib/db` 顺 invoke 走 auto-sync（那个模块加载时就读一次配置），切片只用 viewApi.create 与 newId
-vi.mock("@/lib/db", () => ({ viewApi: { create: h.viewCreate }, newId: h.newId }));
+vi.mock("@/lib/backend/db", () => ({ viewApi: { create: h.viewCreate }, newId: h.newId }));
 vi.mock("@/stores/workspace", () => ({
   useWorkspaceStore: {
     getState: () => ({

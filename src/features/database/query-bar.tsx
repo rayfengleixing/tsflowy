@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ArrowUpDown, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { countFilterLeaves } from "@/lib/database-query";
+import { countFilterLeaves } from "@/lib/database/database-query";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { useDbStore } from "@/stores/database-context";

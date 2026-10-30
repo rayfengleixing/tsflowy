@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { useAiStore, type AiActionRecord, type AiMessage } from "@/stores/ai";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { aiErrorText, estimateAiCost, formatAiCost } from "@/lib/ai";
-import { getAiEditor } from "@/lib/ai-editor";
+import { getAiEditor } from "@/lib/ai/ai-editor";
 import { t } from "@/lib/i18n";
 import { EditDiffDialog } from "./EditDiffDialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";

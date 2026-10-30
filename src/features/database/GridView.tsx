@@ -4,9 +4,9 @@ import { toast } from "sonner";
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import { useDbStore, useDbStoreApi } from "@/stores/database-context";
-import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
-import { MAX_GROUP_DEPTH, cellAt } from "@/lib/database-query";
-import type { AggregateFn } from "@/lib/database-aggregate";
+import { formatCellValue, parseFieldOptions } from "@/lib/database/database-values";
+import { MAX_GROUP_DEPTH, cellAt } from "@/lib/database/database-query";
+import type { AggregateFn } from "@/lib/database/database-aggregate";
 import { CsvImportDialog } from "./CsvImportDialog";
 import { RowTrashDialog } from "./RowTrashDialog";
 import { RowParentDialog } from "./RowParentDialog";
@@ -21,7 +21,7 @@ import {
   toggleAllRowsChecked as updateAllRowsChecked,
   type RowDropMode,
 } from "./grid-view-model";
-import { hierarchyLines, parentCandidates } from "@/lib/database-hierarchy";
+import { hierarchyLines, parentCandidates } from "@/lib/database/database-hierarchy";
 import { FieldOptionsEditor } from "./FieldOptionsEditor";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { AggregateMenu } from "./AggregateMenu";
@@ -49,7 +49,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import { patchViewConfig, readViewConfig } from "@/lib/view-config";
+import { patchViewConfig, readViewConfig } from "@/lib/database/view-config";
 import type { View } from "@/types/models";
 
 /** Grid 数据库视图（说明书 10-M4）：表头 32px / 行 32px / 单元格聚焦蓝框（6.6 节） */

@@ -1,11 +1,11 @@
-import { workspaceApi, viewApi } from "@/lib/db";
-import { databaseApi } from "@/lib/database";
-import { documentApi } from "@/lib/documents";
+import { workspaceApi, viewApi } from "@/lib/backend/db";
+import { databaseApi } from "@/lib/backend/database";
+import { documentApi } from "@/lib/doc/documents";
 import { logger } from "@/lib/logger";
 import { t } from "@/lib/i18n";
-import { trashDeadlineMs } from "@/lib/retention";
+import { trashDeadlineMs } from "@/lib/sync/retention";
 import { useSettingsStore } from "../settings";
-import { buildWelcomeDoc, welcomeDocTitle } from "@/lib/welcome-doc";
+import { buildWelcomeDoc, welcomeDocTitle } from "@/lib/doc/welcome-doc";
 import { patchTreeAndRestoreTabs } from "./tree";
 import { flushPendingUiPersist } from "./persistence";
 import type { WorkspaceGet, WorkspaceSliceCreator, WorkspaceState } from "./types";

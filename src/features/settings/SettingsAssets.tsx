@@ -4,7 +4,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { scanOrphanAssets, purgeOrphanAssets, type OrphanScan } from "@/lib/assets";
+import { scanOrphanAssets, purgeOrphanAssets, type OrphanScan } from "@/lib/assets/assets";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { Section, formatBytes } from "./settings-parts";

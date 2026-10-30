@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo } from "react";
-import { relationTarget, reverseRelationConfig, type RelationDb } from "@/lib/relation";
+import { relationTarget, reverseRelationConfig, type RelationDb } from "@/lib/database/relation";
 import { useRelationStore } from "@/stores/relation";
 import type { DatabaseField } from "@/types/database";
 

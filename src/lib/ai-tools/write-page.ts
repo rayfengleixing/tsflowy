@@ -2,9 +2,9 @@
 
 import type { JSONContent } from "@tiptap/core";
 import { appReload, appRenameView, appViewId, appWorkspaceId } from "../app-context";
-import { markdownToNodes } from "../ai-locate";
-import { viewApi } from "../db";
-import { documentApi } from "../documents";
+import { markdownToNodes } from "../ai/ai-locate";
+import { viewApi } from "../backend/db";
+import { documentApi } from "../doc/documents";
 import { t } from "../i18n";
 import { logger } from "../logger";
 import { resolvePage } from "./resolve-page";

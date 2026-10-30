@@ -8,7 +8,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { aggregateLabel, aggregateValue, aggregatesForType, type AggregateFn } from "@/lib/database-aggregate";
+import { aggregateLabel, aggregateValue, aggregatesForType, type AggregateFn } from "@/lib/database/database-aggregate";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import type { CellValue, DatabaseField } from "@/types/database";

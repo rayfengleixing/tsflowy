@@ -3,7 +3,7 @@ import { Hash } from "lucide-react";
 import { useEditorStore } from "@/stores/editor";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
-import { findNode } from "@/lib/tree";
+import { findNode } from "@/lib/doc/tree";
 
 const SIDEBAR_TAB_KEY = "tsflowy:ui:sidebar_tab";
 

@@ -1,18 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import type { DatabaseField, FieldOptions, SelectOption, StatusTone } from "@/types/database";
-import type { AggregateFn } from "@/lib/database-aggregate";
-import { aggregateLabel } from "@/lib/database-aggregate";
+import type { AggregateFn } from "@/lib/database/database-aggregate";
+import { aggregateLabel } from "@/lib/database/database-aggregate";
 import {
   isOptionBearing,
   newSelectOption,
   parseFieldOptions,
   STATUS_TONE_COLOR,
   STATUS_TONES,
-} from "@/lib/database-values";
-import { validateFormula, type FormulaSyntaxIssue } from "@/lib/database-formula";
-import { buildRelationPickerFields, relationTarget, reverseRelationSourceFields, rollupFnsFor } from "@/lib/relation";
-import { flattenTree } from "@/lib/tree";
+} from "@/lib/database/database-values";
+import { validateFormula, type FormulaSyntaxIssue } from "@/lib/database/database-formula";
+import {
+  buildRelationPickerFields,
+  relationTarget,
+  reverseRelationSourceFields,
+  rollupFnsFor,
+} from "@/lib/database/relation";
+import { flattenTree } from "@/lib/doc/tree";
 import { useDbStore } from "@/stores/database-context";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useRelationStore } from "@/stores/relation";

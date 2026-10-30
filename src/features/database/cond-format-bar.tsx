@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
 import { Palette } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { buildCondIndex, type CondFormatRule } from "@/lib/database-cond-format";
+import { buildCondIndex, type CondFormatRule } from "@/lib/database/database-cond-format";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
-import { patchViewConfig, readViewConfig } from "@/lib/view-config";
+import { patchViewConfig, readViewConfig } from "@/lib/database/view-config";
 import { useDbStore } from "@/stores/database-context";
 import { CondFormatDialog } from "./CondFormatDialog";
 import type { View } from "@/types/models";

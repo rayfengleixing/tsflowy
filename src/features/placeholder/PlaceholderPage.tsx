@@ -1,6 +1,6 @@
 import { layoutMeta, viewIcon } from "@/components/view-icon";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { findNode } from "@/lib/tree";
+import { findNode } from "@/lib/doc/tree";
 import { t } from "@/lib/i18n";
 
 /** 各布局占位页（M3 编辑器 / M4 Grid / M5 Board+Calendar 替换） */

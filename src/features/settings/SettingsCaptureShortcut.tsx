@@ -5,8 +5,8 @@ import {
   getCaptureShortcut,
   setCaptureShortcut,
   type CaptureShortcut,
-} from "@/lib/app-shell";
-import { eventToCombo, formatCombo, isBindableCombo } from "@/lib/shortcuts";
+} from "@/lib/desktop/app-shell";
+import { eventToCombo, formatCombo, isBindableCombo } from "@/lib/desktop/shortcuts";
 import { logger } from "@/lib/logger";
 import { t } from "@/lib/i18n";
 

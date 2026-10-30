@@ -31,7 +31,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { AttachmentCellEditor, CellEditorSlot, RelationCellEditor } from "./editors";
 import type { CellValue, DatabaseField, DatabaseRow, FieldType } from "@/types/database";
 import { useRelationStore } from "@/stores/relation";
-import type { RelationDb } from "@/lib/relation";
+import type { RelationDb } from "@/lib/database/relation";
 import { resetStores } from "@/test/store-reset";
 import { callsFor, open, queueOpenDialog, resetIpcMock, setIpcHandler, setIpcHandlers } from "@/test/tauri-mock";
 
@@ -40,9 +40,9 @@ vi.mock("@/lib/i18n", () => ({
 }));
 // 三条原生边界：命令通道、路径/URL、文件对话框。sonner 只留 error（失败提示的落点）。
 vi.mock("@/lib/invoke", async () => ({ invoke: (await import("@/test/tauri-mock")).invoke }));
-vi.mock("@/lib/ipc-core", async () => (await import("@/test/tauri-mock")).ipcCoreMock());
-vi.mock("@/lib/ipc-dialog", async () => (await import("@/test/tauri-mock")).ipcDialogMock());
-vi.mock("@/lib/ipc-shell", async () => (await import("@/test/tauri-mock")).ipcShellMock());
+vi.mock("@/lib/ipc/ipc-core", async () => (await import("@/test/tauri-mock")).ipcCoreMock());
+vi.mock("@/lib/ipc/ipc-dialog", async () => (await import("@/test/tauri-mock")).ipcDialogMock());
+vi.mock("@/lib/ipc/ipc-shell", async () => (await import("@/test/tauri-mock")).ipcShellMock());
 const toastError = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn() } }));
 

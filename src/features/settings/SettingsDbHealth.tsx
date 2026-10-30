@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { Download, RefreshCw, Stethoscope, Wrench } from "lucide-react";
 import { toast } from "sonner";
-import { save } from "@/lib/ipc-dialog";
+import { save } from "@/lib/ipc/ipc-dialog";
 import { invoke } from "@/lib/invoke";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { flushClientLogs } from "@/lib/client-log";
+import { flushClientLogs } from "@/lib/desktop/client-log";
 import { flushAllForClose } from "@/lib/close-flush";
 import {
   checkDbIntegrity,
@@ -14,7 +14,7 @@ import {
   REPAIR_ACTION_KEY,
   type DbRepairResult,
   type IntegrityReport,
-} from "@/lib/db-health";
+} from "@/lib/desktop/db-health";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { formatBytes, Section, timestamp } from "./settings-parts";

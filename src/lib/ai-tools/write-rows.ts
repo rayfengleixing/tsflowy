@@ -2,9 +2,9 @@
 // 差别只在改已有行要「先读旧值、撤销时按清单盖回去」。
 
 import { appInvalidateRelations } from "../app-context";
-import { databaseApi } from "../database";
-import { notifyDatabaseChanged } from "../database-changed";
-import { cellWriteTypeSafe } from "../database-values";
+import { databaseApi } from "../backend/database";
+import { notifyDatabaseChanged } from "../database/database-changed";
+import { cellWriteTypeSafe } from "../database/database-values";
 import { t } from "../i18n";
 import { coerceCell } from "./cell-coerce";
 import { resolvePage } from "./resolve-page";

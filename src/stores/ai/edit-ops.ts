@@ -1,7 +1,7 @@
 import type { AiEditAnchor, AiEditOp, AiWriteCall } from "@/lib/ai-edit";
 import { resolvePage, runWriteAction } from "@/lib/ai-tools";
-import { applyEditToDocJson, asDoc } from "@/lib/ai-locate";
-import { documentApi } from "@/lib/documents";
+import { applyEditToDocJson, asDoc } from "@/lib/ai/ai-locate";
+import { documentApi } from "@/lib/doc/documents";
 import { logger } from "@/lib/logger";
 import { t } from "@/lib/i18n";
 import type { JSONContent } from "@tiptap/core";

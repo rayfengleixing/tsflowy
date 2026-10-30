@@ -23,9 +23,9 @@ import {
   type FilterOp,
   type FilterSpec,
   type RelativeDateKey,
-} from "@/lib/database-query";
-import { parseFieldOptions, ratingMax } from "@/lib/database-values";
-import { relationRowLabel, relationTarget, searchRelationRows } from "@/lib/relation";
+} from "@/lib/database/database-query";
+import { parseFieldOptions, ratingMax } from "@/lib/database/database-values";
+import { relationRowLabel, relationTarget, searchRelationRows } from "@/lib/database/relation";
 import { useRelationDbs } from "./use-database-data";
 import { RelationChip } from "./cell-display";
 import { Button } from "@/components/ui/button";

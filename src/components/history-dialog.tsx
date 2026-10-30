@@ -4,8 +4,8 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { contentToDiffText, diffLines, visibleFlags, type DiffLine, type DiffResult } from "@/lib/doc-diff";
-import { documentApi, type SnapshotRow } from "@/lib/documents";
+import { contentToDiffText, diffLines, visibleFlags, type DiffLine, type DiffResult } from "@/lib/doc/doc-diff";
+import { documentApi, type SnapshotRow } from "@/lib/doc/documents";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { useWorkspaceStore } from "@/stores/workspace";

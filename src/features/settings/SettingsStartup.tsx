@@ -7,7 +7,7 @@ import {
   setAutostart,
   setCrashRestartEnabled,
   type AutostartState,
-} from "@/lib/app-shell";
+} from "@/lib/desktop/app-shell";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { Section } from "./settings-parts";

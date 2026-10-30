@@ -14,7 +14,7 @@ const h = vi.hoisted(() => ({
 vi.mock("@/lib/i18n", () => ({ t: (key: string) => key }));
 vi.mock("sonner", () => ({ toast: { error: h.toastError } }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn() } }));
-vi.mock("@/lib/db", () => ({ viewApi: { listByWorkspace: h.listByWorkspace } }));
+vi.mock("@/lib/backend/db", () => ({ viewApi: { listByWorkspace: h.listByWorkspace } }));
 vi.mock("@/stores/workspace", () => ({
   useWorkspaceStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({

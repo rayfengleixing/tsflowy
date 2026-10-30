@@ -12,7 +12,7 @@ interface FakeChannel {
 }
 const channels = vi.hoisted(() => [] as FakeChannel[]);
 
-vi.mock("@/lib/assets", () => ({ uploadImageBytes: uploadMock }));
+vi.mock("@/lib/assets/assets", () => ({ uploadImageBytes: uploadMock }));
 vi.mock("@tauri-apps/api/core", () => ({
   Channel: class {
     onmessage?: (ev: unknown) => void;

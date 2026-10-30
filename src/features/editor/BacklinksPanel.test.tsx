@@ -8,10 +8,10 @@ import userEvent from "@testing-library/user-event";
 
 import { BacklinksPanel } from "./BacklinksPanel";
 import { callsFor, resetIpcMock, setIpcHandlers } from "@/test/tauri-mock";
-import type { BacklinkRow } from "@/lib/mentions";
+import type { BacklinkRow } from "@/lib/doc/mentions";
 import type { View } from "@/types/models";
 
-vi.mock("@/lib/ipc-core", async () => (await import("@/test/tauri-mock")).ipcCoreMock());
+vi.mock("@/lib/ipc/ipc-core", async () => (await import("@/test/tauri-mock")).ipcCoreMock());
 // 只关心 key 与传入的变量：标题那个「被 N 个页面引用」要能读出 N
 vi.mock("@/lib/i18n", () => ({
   t: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key),

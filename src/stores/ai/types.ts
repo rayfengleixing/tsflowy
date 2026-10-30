@@ -5,7 +5,7 @@ import {
   type AiQuickActionDef,
   type AiUsage,
 } from "@/lib/ai";
-import { type AiEditRevert } from "@/lib/ai-editor";
+import { type AiEditRevert } from "@/lib/ai/ai-editor";
 import { type AiEditOp, type AiWriteCall } from "@/lib/ai-edit";
 import { type UndoPlan } from "@/lib/ai-tools";
 import type { StoreApi } from "zustand";

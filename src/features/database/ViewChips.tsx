@@ -7,7 +7,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { viewApi } from "@/lib/db";
+import { viewApi } from "@/lib/backend/db";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { cn } from "@/lib/utils";

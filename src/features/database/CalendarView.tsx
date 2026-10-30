@@ -11,11 +11,11 @@ import {
   useRowBulkEdit,
   type RowBulkEdit,
 } from "./row-bulk-edit";
-import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database-cond-format";
-import { applyFilters, sortRows } from "@/lib/database-query";
-import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
-import { buildCalendarMonth, cellValueForDate, defaultCalendarField, rowDateKey } from "@/lib/board-calendar";
-import { formatCellValue, isOptionBearing, parseFieldOptions } from "@/lib/database-values";
+import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database/database-cond-format";
+import { applyFilters, sortRows } from "@/lib/database/database-query";
+import { computeEvaluatedCells } from "@/lib/database/database-evaluated-cells";
+import { buildCalendarMonth, cellValueForDate, defaultCalendarField, rowDateKey } from "@/lib/database/board-calendar";
+import { formatCellValue, isOptionBearing, parseFieldOptions } from "@/lib/database/database-values";
 import { useRelationDbs } from "./use-database-data";
 import { Button } from "@/components/ui/button";
 import { SelectChips } from "./editors";
@@ -24,7 +24,7 @@ import { RowDetailPanel } from "./RowDetail";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import { patchViewConfig, readViewConfig } from "@/lib/view-config";
+import { patchViewConfig, readViewConfig } from "@/lib/database/view-config";
 import type { CellValue, DatabaseField } from "@/types/database";
 import type { View } from "@/types/models";
 

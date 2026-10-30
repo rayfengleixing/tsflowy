@@ -4,7 +4,7 @@ const syncNativeLang = vi.hoisted(() => vi.fn());
 
 // settings → app-shell → invoke → auto-sync → sonner：node 环境没有真实 DOM，装不上；
 // 壳层同步行为本身在 src/lib/app-shell.test.ts 里覆盖，这里只验调用点
-vi.mock("@/lib/app-shell", () => ({ syncNativeLang }));
+vi.mock("@/lib/desktop/app-shell", () => ({ syncNativeLang }));
 
 /** 最小 DOM/localStorage 桩（vitest environment=node）；仅覆盖 settings 模块实际用到的 API */
 const storage = new Map<string, string>();

@@ -1,4 +1,4 @@
-import { TIER_BODY_ONLY, titleTierFor } from "@/lib/search";
+import { TIER_BODY_ONLY, titleTierFor } from "@/lib/search/search";
 
 const MARK = "rounded-sm bg-brand-100 text-brand-600";
 

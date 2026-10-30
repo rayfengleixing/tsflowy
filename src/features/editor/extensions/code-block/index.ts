@@ -1,6 +1,6 @@
 import { CodeBlockLowlight } from "@tiptap/extension-code-block-lowlight";
 import { ReactNodeViewRenderer } from "@tiptap/react";
-import { lowlight } from "@/lib/code-highlight";
+import { lowlight } from "@/lib/render/code-highlight";
 import { CodeBlockNodeView } from "./component";
 
 // 自定义代码块：语法高亮 + 语言标识（双击改）+ 复制；工具栏与代码背景同色（统一）

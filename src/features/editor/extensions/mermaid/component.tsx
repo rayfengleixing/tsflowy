@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import { X } from "lucide-react";
 import { t } from "@/lib/i18n";
-import { renderMermaid } from "@/lib/mermaid-render";
+import { renderMermaid } from "@/lib/render/mermaid-render";
 
 // Mermaid NodeView：非编辑态渲染 SVG（双击切编辑）；编辑态仅编辑 textarea，退出时渲染草稿
 export function MermaidNodeView(props: ReactNodeViewProps<HTMLElement>) {

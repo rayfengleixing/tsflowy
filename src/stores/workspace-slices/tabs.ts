@@ -1,5 +1,5 @@
-import { viewApi } from "@/lib/db";
-import { documentApi } from "@/lib/documents";
+import { viewApi } from "@/lib/backend/db";
+import { documentApi } from "@/lib/doc/documents";
 import { logger } from "@/lib/logger";
 import { t } from "@/lib/i18n";
 import { useSettingsStore } from "../settings";
@@ -10,7 +10,7 @@ import {
   dailyNoteTitle,
   loadDailyNotesConfig,
   toDateKey,
-} from "@/lib/daily-notes";
+} from "@/lib/doc/daily-notes";
 import type { View } from "@/types/models";
 import { findInTree, syncSubpages } from "./tree";
 import { persistNow, pushClosedId, popReopenable } from "./persistence";

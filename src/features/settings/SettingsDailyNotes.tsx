@@ -4,7 +4,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { loadDailyNotesConfig, saveDailyNotesConfig, type DailyNotesConfig } from "@/lib/daily-notes";
+import { loadDailyNotesConfig, saveDailyNotesConfig, type DailyNotesConfig } from "@/lib/doc/daily-notes";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { Section, Row } from "./settings-parts";

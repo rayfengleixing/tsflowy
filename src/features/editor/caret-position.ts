@@ -1,5 +1,5 @@
 import type { Node as PMNode } from "@tiptap/pm/model";
-import type { CaretMark } from "@/lib/caret-memory";
+import type { CaretMark } from "@/lib/doc/caret-memory";
 
 /**
  * 光标位置 ↔ 记忆的换算。

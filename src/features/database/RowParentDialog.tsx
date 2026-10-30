@@ -3,7 +3,7 @@ import { CornerUpLeft } from "lucide-react";
 import type { DatabaseRow } from "@/types/database";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { MAX_HIERARCHY_LEVEL, parentCandidates } from "@/lib/database-hierarchy";
+import { MAX_HIERARCHY_LEVEL, parentCandidates } from "@/lib/database/database-hierarchy";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 

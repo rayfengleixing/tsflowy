@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { FolderInput, FolderOpen, RefreshCw } from "lucide-react";
 import { invoke } from "@/lib/invoke";
-import { open } from "@/lib/ipc-dialog";
+import { open } from "@/lib/ipc/ipc-dialog";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { detectDataDirRisk, isCloudManagedPath } from "@/lib/data-dir-risk";
+import { detectDataDirRisk, isCloudManagedPath } from "@/lib/desktop/data-dir-risk";
 import { flushAllForClose } from "@/lib/close-flush";
 import {
   onSyncProgress,
@@ -14,8 +14,8 @@ import {
   syncProgressPercent,
   syncStageLabel,
   type SyncProgress,
-} from "@/lib/sync-events";
-import { loadAutoSyncConfig, saveAutoSyncConfig, type AutoSyncConfig } from "@/lib/auto-sync";
+} from "@/lib/sync/sync-events";
+import { loadAutoSyncConfig, saveAutoSyncConfig, type AutoSyncConfig } from "@/lib/sync/auto-sync";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { cn } from "@/lib/utils";

@@ -35,8 +35,8 @@ import { AliasEditorDialog } from "@/components/alias-editor-dialog";
 import { MoveToSpaceDialog } from "@/components/move-to-space-dialog";
 import { HistoryDialog } from "@/components/history-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
-import type { DropZone } from "@/lib/tree";
-import { exportPage } from "@/lib/export-page";
+import type { DropZone } from "@/lib/doc/tree";
+import { exportPage } from "@/lib/transfer/export-page";
 import { isInsidePopup } from "@/lib/radix-popup";
 import { t } from "@/lib/i18n";
 

@@ -10,11 +10,11 @@ import type { Editor } from "@tiptap/core";
 import type { JSONContent } from "@tiptap/core";
 
 import { countReplaceableInDoc, replaceAllInDoc } from "@/features/editor/extensions/find-replace";
-import { asDoc } from "@/lib/ai-locate";
-import { documentApi } from "@/lib/documents";
+import { asDoc } from "@/lib/ai/ai-locate";
+import { documentApi } from "@/lib/doc/documents";
 import { invoke } from "@/lib/invoke";
 import { logger } from "@/lib/logger";
-import { replaceInDocContent, type ReplaceOptions } from "@/lib/text-replace";
+import { replaceInDocContent, type ReplaceOptions } from "@/lib/search/text-replace";
 import { getDocEditors } from "@/stores/editor";
 
 export interface ReplacePageReport {

@@ -2,10 +2,10 @@ import { useMemo } from "react";
 import { NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import { Files } from "lucide-react";
 import type { LayoutType } from "@/types/models";
-import { findNode } from "@/lib/tree";
+import { findNode } from "@/lib/doc/tree";
 import { viewIcon } from "@/components/view-icon";
 import { useWorkspaceStore } from "@/stores/workspace";
-import type { SubpageItem } from "@/lib/subpages";
+import type { SubpageItem } from "@/lib/doc/subpages";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 

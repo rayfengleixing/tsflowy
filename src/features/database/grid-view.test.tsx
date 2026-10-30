@@ -19,9 +19,9 @@ import {
 } from "@/test/tauri-mock";
 import type { View } from "@/types/models";
 
-vi.mock("@/lib/ipc-core", async () => (await import("@/test/tauri-mock")).ipcCoreMock());
-vi.mock("@/lib/ipc-dialog", async () => (await import("@/test/tauri-mock")).ipcDialogMock());
-vi.mock("@/lib/ipc-fs", async () => (await import("@/test/tauri-mock")).ipcFsMock());
+vi.mock("@/lib/ipc/ipc-core", async () => (await import("@/test/tauri-mock")).ipcCoreMock());
+vi.mock("@/lib/ipc/ipc-dialog", async () => (await import("@/test/tauri-mock")).ipcDialogMock());
+vi.mock("@/lib/ipc/ipc-fs", async () => (await import("@/test/tauri-mock")).ipcFsMock());
 
 const toastSuccess = vi.hoisted(() => vi.fn());
 const toastError = vi.hoisted(() => vi.fn());

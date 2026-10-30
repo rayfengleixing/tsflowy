@@ -664,6 +664,17 @@
 - **本批没有运行它**，所以「七个视图真把颜色渲染出来了」这条证据仍然欠着——X 批 1 那句「真机没跑」不作废，也不该被这次入库抵掉。要结案得另起一次真窗口跑，并在跑完后把断言数与结果补进本节。
 - 静态验证：本批零产品代码改动（只把已有脚本入库），`tsc` / 全量 `vitest` 与基线无关；`eslint` 对本脚本报「被 ignore 规则跳过」（`scripts/` 不在 lint 范围内），`prettier --check` 该文件干净。
 
+### 工程：`src/lib` 根上 75 个散文件归进 11 个目录，根上只剩 9 个跨域收口件（P6）
+
+- 纯 `git mv` + 改 import 路径，**零逻辑改动**。新目录：`ipc/`(5) `backend/`(2，`db.ts` 与 `database.ts` 合成一处) `render/`(3) `search/`(4) `sync/`(4) `desktop/`(7) `assets/`(2) `transfer/`(8，导出族 + 传输族 + frontmatter) `doc/`(12，页面树·文档·子页·提及·标签·任务元·词数·光标记忆·模板·欢迎页·diff·日记) `database/`(16，字段类型·值·求值·聚合·条件格式·查询·公式·层级·关联·视图配置·Board/Calendar/Timeline)；`ai-editor` / `ai-locate` / `ai-mention` 三个并入既有 `ai/`。既有 `i18n/`、`markdown/`、`ai-edit/`、`ai-tools/` 未动。
+- 根目录刻意留下 9 个跨域收口件：`app-context.ts`（P3 建的运行态注册表，塞进任何子目录都会让「谁都能读」变成「谁都得深路径」）、`i18n.ts`（`t()` 全仓消费）、`invoke.ts`、`logger.ts`、`utils.ts`、`close-flush.ts`、`escape-close.ts`、`radix-popup.ts`、`lazy.ts`。
+- 形制三条按拍板执行：**不加 barrel，消费方一律走深路径**（`@/lib/database/field-kinds`）；**源件与同层用例一起搬**（50 份用例跟着走）；卡片起点建议里的 `markdown.ts` 早在 2026-10-22 就已是目录模块，本批不动。
+- 规模与「纯移动」的证法：267 文件 = **116 个 rename**（69 个逐字节零内容改动 + 47 个改名带路径行）+ 151 个只改 import 的文件；`git diff HEAD -M` 的 969 条增删行逐行按形状分类，全部落在 import 语句 / `await import()` / `vi.mock()` / 注释里的路径字符串上，**没有一条是语句体**。唯一非纯路径改动：`@/lib/<目录>/` 变长后有三条 import 超过 `printWidth: 120`，被 prettier 拆成多行（`BoardView.tsx`、`FieldOptionsEditor.tsx`、`CommandPalette.tsx`），已用仓库自己的 `prettier --write` 修回并把 `format:check` 恢复成 exit 0——这三处重排不是行为变更，但必须报出来。
+- 行号与路径引用受影响处已更正：`lib/field-kinds.ts` → `lib/database/field-kinds.ts`（仍是字段类型判定唯一收口）、`lib/database-view.ts:7` 的 `EMBED_MAX_ROWS` → `lib/database/database-view.ts:7`、`lib/shortcuts.ts:258` 那条待在 lib 里的 Zustand store → `lib/desktop/shortcuts.ts:258`（位置搬了，怪味没变，另案）。
+- 九批逐批跑验证链，末态复跑：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`prettier --check`（本仓 `format:check` 的 glob）exit 0、全量 `vitest run` **111 文件 / 1,673 用例全绿**、`npm run build` ✓ 48.83s、`cargo test` **344 通过 / 1 忽略**（Rust 侧零改动，条数与基线一致）。P6-6 那次全量跑红过一条 `editors-io.test.tsx`，单跑 34 条全过、整仓复跑全绿，是本仓已知的并行抖动而非本批引入。
+- 本批不碰四条禁区（sync 整库 LWW、数据层零分页、恢复会话不还原 revert、`t()` 签名），只做 Windows 端无涉；`i18n/` 注册表模式一字未动。
+- **用户能感觉到的变化：没有。** 界面、数据、命令面一律不变，这是给后来人的目录账。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）

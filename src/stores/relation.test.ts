@@ -6,7 +6,7 @@ const api = vi.hoisted(() => ({
   loadCells: vi.fn(),
 }));
 
-vi.mock("@/lib/database", () => ({ databaseApi: api }));
+vi.mock("@/lib/backend/database", () => ({ databaseApi: api }));
 
 import { useRelationStore } from "@/stores/relation";
 

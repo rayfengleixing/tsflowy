@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { OptionChip } from "./cell-display";
 import { t, type MessageKey } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import { parseFieldOptions, ratingMax } from "@/lib/database-values";
+import { parseFieldOptions, ratingMax } from "@/lib/database/database-values";
 import {
   bulkEditable,
   bulkOpsFor,
@@ -18,7 +18,7 @@ import {
   type BulkOp,
   type BulkUpdate,
   type BulkValueKind,
-} from "@/lib/database-bulk-edit";
+} from "@/lib/database/database-bulk-edit";
 import { cn } from "@/lib/utils";
 import type { CellValue, DatabaseField, SelectOption } from "@/types/database";
 

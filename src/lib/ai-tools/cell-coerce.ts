@@ -1,9 +1,9 @@
 // 模型给的原始值 → 该字段类型真正能存的值：选项按名称匹配、缺了就地补建，日期走类型自己的归一。
 // 单独成文件是因为表写入与写入闸门（cellWriteTypeSafe）都依赖它，而它不属于任何一个动作。
 
-import { databaseApi } from "../database";
-import { newSelectOption, parseFieldOptions } from "../database-values";
-import { fieldKind } from "../field-kinds";
+import { databaseApi } from "../backend/database";
+import { newSelectOption, parseFieldOptions } from "../database/database-values";
+import { fieldKind } from "../database/field-kinds";
 import type { CellValue, DatabaseField } from "@/types/database";
 
 /** 模型给的任意 JSON 值 → 文本：对象走 JSON 形式，避免 String() 得到 [object Object] */

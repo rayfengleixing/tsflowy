@@ -6,7 +6,7 @@ import { useState, type MouseEvent as ReactMouseEvent, type RefObject } from "re
 import { CheckSquare, GripVertical, Square } from "lucide-react";
 import { toast } from "sonner";
 import type { DatabaseField } from "@/types/database";
-import type { SortSpec } from "@/lib/database-query";
+import type { SortSpec } from "@/lib/database/database-query";
 import { useDbStore, useDbStoreApi } from "@/stores/database-context";
 import { FieldMenu } from "./FieldMenu";
 import { AddFieldButton, RenameInput, needsFieldSettings } from "./grid-parts";

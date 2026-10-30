@@ -11,9 +11,9 @@ import { dialogCalls, queueOpenDialog, readDir, resetIpcMock, setFsDir } from "@
 import type { FieldType } from "@/types/database";
 
 // vi.mock 会被提到文件最前，工厂里用动态 import 取同一份替身实例
-vi.mock("@/lib/ipc-dialog", async () => (await import("@/test/tauri-mock")).ipcDialogMock());
-vi.mock("@/lib/ipc-fs", async () => (await import("@/test/tauri-mock")).ipcFsMock());
-vi.mock("@/lib/ipc-core", async () => (await import("@/test/tauri-mock")).ipcCoreMock());
+vi.mock("@/lib/ipc/ipc-dialog", async () => (await import("@/test/tauri-mock")).ipcDialogMock());
+vi.mock("@/lib/ipc/ipc-fs", async () => (await import("@/test/tauri-mock")).ipcFsMock());
+vi.mock("@/lib/ipc/ipc-core", async () => (await import("@/test/tauri-mock")).ipcCoreMock());
 // 文案替身：带变量时把变量拼进去，否则 matched/missing 的数量断言不到
 vi.mock("@/lib/i18n", () => ({
   t: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key),

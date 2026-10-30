@@ -1,7 +1,7 @@
 // 一次请求的三条出口：流式对话（Channel 逐段回调）、取消、单篇文档片段检索。
 // aiErrorText 把 invoke 抛出的任何东西（多数时候是 string）转成可展示文案。
 
-import { Channel } from "@/lib/ipc-core";
+import { Channel } from "@/lib/ipc/ipc-core";
 import { invoke } from "@/lib/invoke";
 import type { AiChatEvent, AiChatMessage, AiToolSpec } from "./types";
 

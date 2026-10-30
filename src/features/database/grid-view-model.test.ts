@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CellValue, DatabaseField, DatabaseRow, FieldType } from "@/types/database";
-import { UNGROUPED } from "@/lib/database-query";
+import { UNGROUPED } from "@/lib/database/database-query";
 import { t } from "@/lib/i18n";
 import {
   collapsedAncestorsOfRow,

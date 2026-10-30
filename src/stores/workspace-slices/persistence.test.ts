@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const viewApi = vi.hoisted(() => ({ getSetting: vi.fn(), setSetting: vi.fn() }));
-vi.mock("@/lib/db", () => ({ viewApi }));
+vi.mock("@/lib/backend/db", () => ({ viewApi }));
 
 import {
   CLOSED_STACK_LIMIT,

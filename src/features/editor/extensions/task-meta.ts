@@ -6,7 +6,7 @@
 import TaskItem from "@tiptap/extension-task-item";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import type { EditorState, Transaction } from "@tiptap/pm/state";
-import { dueState, normalizeAssignee, normalizeDue, taskMetaLabel, todayIso, type TaskMeta } from "@/lib/task-meta";
+import { dueState, normalizeAssignee, normalizeDue, taskMetaLabel, todayIso, type TaskMeta } from "@/lib/doc/task-meta";
 
 /** taskItem 节点 attrs → 归一后的元数据（坏数据一律归零，不猜） */
 export function taskMetaOfNode(node: PMNode): TaskMeta {

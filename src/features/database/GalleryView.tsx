@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
-import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database-cond-format";
+import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database/database-cond-format";
 import {
   BulkEditDialogHost,
   ROW_SELECTED_RING,
@@ -12,10 +12,10 @@ import {
   useRowBulkEdit,
   type RowBulkEdit,
 } from "./row-bulk-edit";
-import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
-import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
-import { attachmentRefs, formatCellValue, parseFieldOptions } from "@/lib/database-values";
-import { isImageFile } from "@/lib/assets";
+import { applyFilters, isCellEmpty, sortRows } from "@/lib/database/database-query";
+import { computeEvaluatedCells, rowCellsOf } from "@/lib/database/database-evaluated-cells";
+import { attachmentRefs, formatCellValue, parseFieldOptions } from "@/lib/database/database-values";
+import { isImageFile } from "@/lib/assets/assets";
 import { useRelationDbs } from "./use-database-data";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +32,7 @@ import { RowDetailPanel } from "./RowDetail";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import { patchViewConfig, readViewConfig } from "@/lib/view-config";
+import { patchViewConfig, readViewConfig } from "@/lib/database/view-config";
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import type { View } from "@/types/models";
 

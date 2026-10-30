@@ -1,4 +1,4 @@
-import { newId } from "@/lib/db";
+import { newId } from "@/lib/backend/db";
 import { type AiSessionRow, type AiImageAttachment } from "@/lib/ai";
 import { validateCall } from "@/lib/ai-edit";
 import { sanitizeUndoPlan } from "@/lib/ai-tools";

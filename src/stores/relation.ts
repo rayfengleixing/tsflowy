@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { bindAppActions } from "@/lib/app-context";
-import { databaseApi } from "@/lib/database";
-import type { RelationDb } from "@/lib/relation";
+import { databaseApi } from "@/lib/backend/database";
+import type { RelationDb } from "@/lib/database/relation";
 import { logger } from "@/lib/logger";
 
 // 关联字段的目标库缓存：按目标视图 id 存 fields/rows/cells 快照。

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { AlertTriangle, FolderOpen, RefreshCw, Upload, Wrench } from "lucide-react";
 import { invoke } from "@/lib/invoke";
-import { open } from "@/lib/ipc-dialog";
+import { open } from "@/lib/ipc/ipc-dialog";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";

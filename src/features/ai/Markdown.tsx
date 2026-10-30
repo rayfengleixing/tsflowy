@@ -2,24 +2,24 @@ import { type ReactNode, useEffect, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Element as HastElement, Root as HastRoot, RootContent } from "hast";
-import { openUrl } from "@/lib/ipc-shell";
+import { openUrl } from "@/lib/ipc/ipc-shell";
 import { FileText } from "lucide-react";
 import { toast } from "sonner";
 import "highlight.js/styles/github.css";
 import { aiErrorText } from "@/lib/ai";
 import { citationViewId, remarkAiCitations } from "./ai-citation";
 import { MATH_CLASS_BLOCK, MATH_CLASS_INLINE, remarkAiMath } from "./ai-math";
-import { openRowInView } from "@/lib/deep-link";
+import { openRowInView } from "@/lib/desktop/deep-link";
 import { t } from "@/lib/i18n";
-import { renderMermaid } from "@/lib/mermaid-render";
-import { renderTex } from "@/lib/katex-render";
+import { renderMermaid } from "@/lib/render/mermaid-render";
+import { renderTex } from "@/lib/render/katex-render";
 import { cn } from "@/lib/utils";
 
 // lowlight 与它的 common 语言集有几百 KB，和编辑器代码块共用同一份（lib/code-highlight）。
 // 静态引入会把这份体积拖进主包，改为答案里出现代码块时才加载并缓存。
-let lowlightPromise: Promise<(typeof import("@/lib/code-highlight"))["lowlight"]> | null = null;
+let lowlightPromise: Promise<(typeof import("@/lib/render/code-highlight"))["lowlight"]> | null = null;
 function getLowlight() {
-  return (lowlightPromise ??= import("@/lib/code-highlight").then((m) => m.lowlight));
+  return (lowlightPromise ??= import("@/lib/render/code-highlight").then((m) => m.lowlight));
 }
 
 /** hast 的 className 可能是字符串或数组，统一成空格串再判断 */

@@ -28,12 +28,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { MAX_HIERARCHY_LEVEL } from "@/lib/database-hierarchy";
+import { MAX_HIERARCHY_LEVEL } from "@/lib/database/database-hierarchy";
 import type { RowDropMode } from "./grid-view-model";
 import { ROW_FOCUS_CLASS } from "./rowFocus";
 import { CellDisplay } from "./grid-parts";
 import { CellEditorSlot } from "./editors";
-import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database-cond-format";
+import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database/database-cond-format";
 
 export interface GridRowContext {
   store: DatabaseState;

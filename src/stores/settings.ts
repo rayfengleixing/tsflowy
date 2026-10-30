@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { bindAppActions, bindAppReaders } from "@/lib/app-context";
-import { syncNativeLang } from "@/lib/app-shell";
+import { syncNativeLang } from "@/lib/desktop/app-shell";
 import { LANGUAGES, type LangCode } from "@/lib/i18n/languages";
 
 export type ThemeMode = "light" | "dark" | "system";

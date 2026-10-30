@@ -2,7 +2,7 @@
 // 匹配不到或有歧义一律返回 null，绝不猜——猜错改的是用户的数据。
 
 import { appTree } from "../app-context";
-import { flattenTree } from "../tree";
+import { flattenTree } from "../doc/tree";
 import { parseViewAliases, type ViewNode } from "@/types/models";
 
 /**

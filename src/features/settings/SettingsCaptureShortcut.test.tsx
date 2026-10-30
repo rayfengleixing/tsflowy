@@ -14,7 +14,7 @@ const h = vi.hoisted(() => ({
 vi.mock("@/lib/i18n", () => ({ t: (key: string) => key }));
 vi.mock("sonner", () => ({ toast: { error: h.toastError } }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn() } }));
-vi.mock("@/lib/app-shell", () => ({
+vi.mock("@/lib/desktop/app-shell", () => ({
   CAPTURE_SHORTCUT_DEFAULT: { enabled: true, ctrl: true, shift: false, alt: true, key: "t" },
   getCaptureShortcut: h.get,
   setCaptureShortcut: h.set,

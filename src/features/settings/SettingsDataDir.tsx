@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { FolderInput, FolderOpen, RefreshCw } from "lucide-react";
 import { invoke } from "@/lib/invoke";
-import { open } from "@/lib/ipc-dialog";
+import { open } from "@/lib/ipc/ipc-dialog";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { detectDataDirRisk } from "@/lib/data-dir-risk";
+import { detectDataDirRisk } from "@/lib/desktop/data-dir-risk";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { Section, RiskNotice, type DataDirInfo, type ChangeDataDirResult, type SyncInfo } from "./settings-parts";

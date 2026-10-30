@@ -1,6 +1,6 @@
-import { viewApi } from "@/lib/db";
+import { viewApi } from "@/lib/backend/db";
 import { logger } from "@/lib/logger";
-import { flattenTree } from "@/lib/tree";
+import { flattenTree } from "@/lib/doc/tree";
 import { parseViewTags } from "@/types/models";
 import {
   TAG_META_KEY,
@@ -11,7 +11,7 @@ import {
   renameTagPath,
   tagMatchesFilter,
   type TagColorMap,
-} from "@/lib/tags";
+} from "@/lib/doc/tags";
 import { patchTreeView } from "./tree";
 import type { WorkspaceSliceCreator, WorkspaceState } from "./types";
 

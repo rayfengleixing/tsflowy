@@ -9,7 +9,7 @@ import { SettingsDataDir } from "./SettingsDataDir";
 import { callsFor, resetIpcMock, setIpcHandlers } from "@/test/tauri-mock";
 
 // 全篇只 mock 这一个 IPC 模块（vi.mock 工厂里不能引顶层绑定，故用动态 import 取同一份替身实例）
-vi.mock("@/lib/ipc-core", async () => (await import("@/test/tauri-mock")).ipcCoreMock());
+vi.mock("@/lib/ipc/ipc-core", async () => (await import("@/test/tauri-mock")).ipcCoreMock());
 // 文案替身：断言用 key，切语言不影响这条用例要证的东西
 vi.mock("@/lib/i18n", () => ({ t: (key: string) => key }));
 

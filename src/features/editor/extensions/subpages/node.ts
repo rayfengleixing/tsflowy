@@ -1,6 +1,6 @@
 import { Node } from "@tiptap/core";
 import { ReactNodeViewRenderer } from "@tiptap/react";
-import type { SubpageItem } from "@/lib/subpages";
+import type { SubpageItem } from "@/lib/doc/subpages";
 import { SubpagesNodeView } from "./component";
 
 // 子页面双链块（见 lib/subpages.ts）：原子只读块，内容由父页面的子页面决定。

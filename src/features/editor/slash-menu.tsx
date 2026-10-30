@@ -35,11 +35,11 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useAiStore } from "@/stores/ai";
-import { open } from "@/lib/ipc-dialog";
+import { open } from "@/lib/ipc/ipc-dialog";
 import { invoke } from "@/lib/invoke";
 import { toast } from "sonner";
 import { t, type MessageKey } from "@/lib/i18n";
-import { pinyinInitials } from "@/lib/pinyin-initials";
+import { pinyinInitials } from "@/lib/search/pinyin-initials";
 import { logger } from "@/lib/logger";
 import { INSERT_DATABASE_VIEW_EVENT } from "./DatabaseViewPicker";
 import { INSERT_EMOJI_EVENT } from "./EmojiPickerDialog";

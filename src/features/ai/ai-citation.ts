@@ -4,7 +4,7 @@
 // 这里在 Markdown 的 text 节点上就地换成链接节点，代码块里的同样子串不受影响（只碰 text 节点）。
 import type { Root } from "mdast";
 import { appTree } from "@/lib/app-context";
-import { findNode } from "@/lib/tree";
+import { findNode } from "@/lib/doc/tree";
 import { t } from "@/lib/i18n";
 
 /**

@@ -1,9 +1,9 @@
 import { toast } from "sonner";
 import { aiCancel } from "@/lib/ai";
-import { getAiEditor } from "@/lib/ai-editor";
-import { newId } from "@/lib/db";
+import { getAiEditor } from "@/lib/ai/ai-editor";
+import { newId } from "@/lib/backend/db";
 import { t } from "@/lib/i18n";
-import { flattenTree } from "@/lib/tree";
+import { flattenTree } from "@/lib/doc/tree";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { QUICK_PROMPT_KEY } from "./prompts";
 import { createRunStream, type AiRunDeps } from "./run-stream";

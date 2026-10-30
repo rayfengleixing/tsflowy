@@ -1,12 +1,12 @@
 // IPC 替身：让组件测试只 mock 一个模块就能脱离 Tauri 运行
-// （命令与路径走 vi.mock("@/lib/ipc-core", () => ipcCoreMock())，事件侧 ipc-events，
+// （命令与路径走 vi.mock("@/lib/ipc/ipc-core", () => ipcCoreMock())，事件侧 ipc-events，
 // 对话框 ipc-dialog，文件系统 ipc-fs，系统侧（窗口/版本号/openUrl/更新/深链）ipc-shell）。
 //
 // 口径是保守的：命令没注册就抛错，而不是静默返回 undefined —— 漏注册应当在第一个 await 处炸出来，
 // 而不是让组件渲染成「数据恰好是空的」那种看着像通过的假象。
 import { vi } from "vitest";
 // 只用类型（type-only import 会被擦除），保证假目录树和真 DirEntry 形状对得上
-import type { DirEntry } from "@/lib/ipc-fs";
+import type { DirEntry } from "@/lib/ipc/ipc-fs";
 
 type IpcHandler = (args?: Record<string, unknown>) => unknown;
 

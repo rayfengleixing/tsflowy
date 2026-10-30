@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import Mention from "@tiptap/extension-mention";
 import { NodeViewWrapper, ReactNodeViewRenderer, type ReactNodeViewProps } from "@tiptap/react";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { resolveMentionName } from "@/lib/mentions";
+import { resolveMentionName } from "@/lib/doc/mentions";
 import { t } from "@/lib/i18n";
 
 // 渲染态 mention 节点视图：显示名按目标 id 从实时页面树解析（重命名立即反映），

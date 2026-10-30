@@ -1,11 +1,11 @@
 import type { Editor } from "@tiptap/react";
 import type { Node as ProseMirrorNode, NodeType } from "@tiptap/pm/model";
 import type { JSONContent } from "@tiptap/core";
-import { documentApi } from "@/lib/documents";
-import { flattenTree } from "@/lib/tree";
+import { documentApi } from "@/lib/doc/documents";
+import { flattenTree } from "@/lib/doc/tree";
 import { logger } from "@/lib/logger";
-import { viewApi } from "@/lib/db";
-import { upsertSubpagesNode, type SubpageItem } from "@/lib/subpages";
+import { viewApi } from "@/lib/backend/db";
+import { upsertSubpagesNode, type SubpageItem } from "@/lib/doc/subpages";
 import { getDocEditors } from "../editor";
 import type { WorkspaceGet } from "./types";
 

@@ -6,8 +6,8 @@
 // 因此改为在应用层包一层：所有业务模块从这里导入 invoke，包装函数在转发给真实 IPC 后
 // 通知 auto-sync「这是一次本机写入」。raw 通道在 @/lib/ipc-core（唯一引 @tauri-apps/api 的文件），
 // auto-sync 与 client-log 从那里取 —— 它们不经这里拦截，理由是循环 import，见 ipc-core.ts 头注。
-import { markLocalWrite } from "./auto-sync";
-import { invoke as rawInvoke } from "./ipc-core";
+import { markLocalWrite } from "./sync/auto-sync";
+import { invoke as rawInvoke } from "./ipc/ipc-core";
 
 export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const p = rawInvoke<T>(cmd, args);

@@ -43,12 +43,12 @@ const hl = vi.hoisted(() => ({
 vi.mock("@/lib/i18n", () => ({ t: (key: string) => key }));
 vi.mock("sonner", () => ({ toast: toaster }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn() } }));
-vi.mock("@/lib/katex-render", () => ({ renderTex: katex.renderTex }));
-vi.mock("@/lib/mermaid-render", () => ({ renderMermaid: mermaid.renderMermaid }));
-vi.mock("@/lib/ipc-shell", () => ({ openUrl: nav.openUrl }));
-vi.mock("@/lib/deep-link", () => ({ openRowInView: nav.openRowInView }));
+vi.mock("@/lib/render/katex-render", () => ({ renderTex: katex.renderTex }));
+vi.mock("@/lib/render/mermaid-render", () => ({ renderMermaid: mermaid.renderMermaid }));
+vi.mock("@/lib/ipc/ipc-shell", () => ({ openUrl: nav.openUrl }));
+vi.mock("@/lib/desktop/deep-link", () => ({ openRowInView: nav.openRowInView }));
 vi.mock("@/lib/ai", () => ({ aiErrorText: (e: unknown) => String(e) }));
-vi.mock("@/lib/code-highlight", () => ({
+vi.mock("@/lib/render/code-highlight", () => ({
   // 数的是「取了几次这个导出」，不是「工厂跑了几次」——vi.resetModules() 不重放 mock 工厂，
   // 而 `??= import(…).then((m) => m.lowlight)` 每份 Markdown 模块只可能取一次，正好是缓存的代理。
   get lowlight() {

@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
-import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database-cond-format";
+import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database/database-cond-format";
 import {
   BulkEditDialogHost,
   ROW_SELECTED_RING,
@@ -12,11 +12,16 @@ import {
   useRowBulkEdit,
   type RowBulkEdit,
 } from "./row-bulk-edit";
-import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
-import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
-import { NO_GROUP, cellValueForGroup, defaultBoardField, groupRowsForBoard } from "@/lib/board-calendar";
-import { formatCellValue, isOptionBearing, isSingleOptionKind, parseFieldOptions } from "@/lib/database-values";
-import { relationCellText, relationTarget, type RelationDb } from "@/lib/relation";
+import { applyFilters, isCellEmpty, sortRows } from "@/lib/database/database-query";
+import { computeEvaluatedCells } from "@/lib/database/database-evaluated-cells";
+import { NO_GROUP, cellValueForGroup, defaultBoardField, groupRowsForBoard } from "@/lib/database/board-calendar";
+import {
+  formatCellValue,
+  isOptionBearing,
+  isSingleOptionKind,
+  parseFieldOptions,
+} from "@/lib/database/database-values";
+import { relationCellText, relationTarget, type RelationDb } from "@/lib/database/relation";
 import { useRelationDbs } from "./use-database-data";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,13 +34,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SelectChips } from "./editors";
 import { AggregateMenu } from "./AggregateMenu";
-import { normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
+import { normalizeAggregate, type AggregateFn } from "@/lib/database/database-aggregate";
 import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
 import { RowDetailPanel } from "./RowDetail";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import { patchViewConfig, readViewConfig } from "@/lib/view-config";
+import { patchViewConfig, readViewConfig } from "@/lib/database/view-config";
 import type { CellValue, DatabaseField } from "@/types/database";
 import type { View } from "@/types/models";
 

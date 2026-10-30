@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Palette, Pencil, Tags, Trash2, X } from "lucide-react";
 import { parseViewTags } from "@/types/models";
-import { flattenTree } from "@/lib/tree";
-import { TAG_COLORS, buildTagTree, tagColor, tagTint, type TagTreeNode } from "@/lib/tags";
+import { flattenTree } from "@/lib/doc/tree";
+import { TAG_COLORS, buildTagTree, tagColor, tagTint, type TagTreeNode } from "@/lib/doc/tags";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { t } from "@/lib/i18n";

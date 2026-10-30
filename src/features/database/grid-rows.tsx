@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronRight, Plus } from "lucide-react";
 import type { CellValue, DatabaseField } from "@/types/database";
-import { aggregateValue, type AggregateFn } from "@/lib/database-aggregate";
+import { aggregateValue, type AggregateFn } from "@/lib/database/database-aggregate";
 import { t } from "@/lib/i18n";
 
 // GridView 表格里自包含的"行级"展示：占位行 / 分组标题行 / 分组小计行 / 新建行。

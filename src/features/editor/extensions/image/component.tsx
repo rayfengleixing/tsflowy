@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import { Maximize2, X } from "lucide-react";
-import { resolveAssetUrl } from "@/lib/assets";
+import { resolveAssetUrl } from "@/lib/assets/assets";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";

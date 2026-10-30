@@ -1,5 +1,5 @@
 import type { JSONContent } from "@tiptap/core";
-import { EMPTY_TASK_META, stripTaskMeta, type TaskMeta } from "../task-meta";
+import { EMPTY_TASK_META, stripTaskMeta, type TaskMeta } from "../doc/task-meta";
 
 // Markdown 粘贴转换（项目说明书 8.2/10-M3：粘贴 markdown 文本自动转成块）。
 // 纯函数：文本 → TipTap JSON，便于 Vitest 单测。

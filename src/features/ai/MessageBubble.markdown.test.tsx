@@ -24,10 +24,10 @@ const deps = vi.hoisted(() => ({
 // 真 Markdown 的异步出口与提示通道，形状在 Markdown.test.tsx 里钉，这里只挡掉 tauri 与外部包
 vi.mock("sonner", () => ({ toast: deps.toast }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn() } }));
-vi.mock("@/lib/katex-render", () => ({ renderTex: deps.renderTex }));
-vi.mock("@/lib/mermaid-render", () => ({ renderMermaid: deps.renderMermaid }));
-vi.mock("@/lib/ipc-shell", () => ({ openUrl: deps.openUrl }));
-vi.mock("@/lib/deep-link", () => ({ openRowInView: deps.openRowInView }));
+vi.mock("@/lib/render/katex-render", () => ({ renderTex: deps.renderTex }));
+vi.mock("@/lib/render/mermaid-render", () => ({ renderMermaid: deps.renderMermaid }));
+vi.mock("@/lib/ipc/ipc-shell", () => ({ openUrl: deps.openUrl }));
+vi.mock("@/lib/desktop/deep-link", () => ({ openRowInView: deps.openRowInView }));
 vi.mock("@/lib/ai", () => ({ aiErrorText: (e: unknown) => String(e) }));
 vi.mock("./AiParts", async () => {
   const React = await import("react");

@@ -7,18 +7,18 @@ import type {
   FieldOptions,
   FieldType,
 } from "@/types/database";
-import { databaseApi } from "@/lib/database";
-import { onDatabaseChanged } from "@/lib/database-changed";
-import { cellWriteTypeSafe, newSelectOption, parseFieldOptions, sameCellValue } from "@/lib/database-values";
-import { renameFormulaRef } from "@/lib/database-formula";
-import { newId, viewApi } from "@/lib/db";
+import { databaseApi } from "@/lib/backend/database";
+import { onDatabaseChanged } from "@/lib/database/database-changed";
+import { cellWriteTypeSafe, newSelectOption, parseFieldOptions, sameCellValue } from "@/lib/database/database-values";
+import { renameFormulaRef } from "@/lib/database/database-formula";
+import { newId, viewApi } from "@/lib/backend/db";
 import { useRelationStore } from "@/stores/relation";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
-import { pruneFiltersByFields, type FilterMode, type FilterNode, type SortSpec } from "@/lib/database-query";
-import { duplicateParentMap } from "@/lib/database-hierarchy";
-import { patchViewConfig, readViewConfig } from "@/lib/view-config";
+import { pruneFiltersByFields, type FilterMode, type FilterNode, type SortSpec } from "@/lib/database/database-query";
+import { duplicateParentMap } from "@/lib/database/database-hierarchy";
+import { patchViewConfig, readViewConfig } from "@/lib/database/view-config";
 import type { View } from "@/types/models";
 
 // 数据库视图的字段/行/单元格缓存（项目说明书 3 章 stores/database.ts）。

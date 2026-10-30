@@ -66,9 +66,9 @@ vi.mock("@/lib/ai", () => ({
   docSearchSnippets: M.docSearchSnippets,
   aiErrorText: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
-vi.mock("@/lib/ai-editor", () => ({ getAiEditor: M.getAiEditor, getAiEditorForView: M.getAiEditorForView }));
-vi.mock("@/lib/db", () => ({ newId: M.newId }));
-vi.mock("@/lib/documents", () => ({ documentApi: { get: M.documentGet, save: M.documentSave } }));
+vi.mock("@/lib/ai/ai-editor", () => ({ getAiEditor: M.getAiEditor, getAiEditorForView: M.getAiEditorForView }));
+vi.mock("@/lib/backend/db", () => ({ newId: M.newId }));
+vi.mock("@/lib/doc/documents", () => ({ documentApi: { get: M.documentGet, save: M.documentSave } }));
 // 工具执行层自带一堆库访问依赖，单测里只关心 store 怎么调度它
 vi.mock("@/lib/ai-tools", () => ({
   aiToolSpecs: () => [],
@@ -79,7 +79,7 @@ vi.mock("@/lib/ai-tools", () => ({
   // 逆操作计划是纯数据，形状校验由 ai-tools 自己的单测覆盖；这里原样放行
   sanitizeUndoPlan: (v: unknown) => v,
 }));
-vi.mock("@/lib/ai-locate", () => ({
+vi.mock("@/lib/ai/ai-locate", () => ({
   asDoc: (raw: unknown) => (Array.isArray(raw) ? { type: "doc", content: raw } : raw),
   applyEditToDocJson: M.applyEditToDocJson,
 }));

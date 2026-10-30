@@ -9,9 +9,9 @@ import {
 } from "@/components/ui/context-menu";
 import { useDbStore } from "@/stores/database-context";
 import { BulkEditDialog } from "./BulkEditDialog";
-import { cellAt } from "@/lib/database-query";
+import { cellAt } from "@/lib/database/database-query";
 import { t } from "@/lib/i18n";
-import type { BulkUpdate } from "@/lib/database-bulk-edit";
+import type { BulkUpdate } from "@/lib/database/database-bulk-edit";
 
 /** 选中态的可视反馈：不做常驻选区条，只在被选中的那一项上贴一圈 */
 export const ROW_SELECTED_RING = "z-10 ring-1 ring-inset ring-brand-500";

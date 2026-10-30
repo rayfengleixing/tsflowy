@@ -3,7 +3,7 @@ import { BookMarked, X } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { flattenTree } from "@/lib/tree";
+import { flattenTree } from "@/lib/doc/tree";
 import { parseViewAliases, type View } from "@/types/models";
 import { t } from "@/lib/i18n";
 

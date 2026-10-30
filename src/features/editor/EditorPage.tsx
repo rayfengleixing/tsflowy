@@ -6,7 +6,7 @@ import Highlight from "@tiptap/extension-highlight";
 import TextAlign from "@tiptap/extension-text-align";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Color from "@tiptap/extension-color";
-import { countWords, readingMinutes } from "@/lib/word-count";
+import { countWords, readingMinutes } from "@/lib/doc/word-count";
 import TaskList from "@tiptap/extension-task-list";
 // 任务行带「截止日期 / 负责人」两个自定义 attrs，chip 靠渲染属性显形（见 extensions/task-meta.ts）
 import { TaskItemWithMeta } from "./extensions/task-meta";
@@ -19,13 +19,13 @@ import { toast } from "sonner";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { registerDocEditor, useEditorStore } from "@/stores/editor";
 import { useSettingsStore } from "@/stores/settings";
-import { documentApi } from "@/lib/documents";
+import { documentApi } from "@/lib/doc/documents";
 import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown";
-import { pickImageExt, uploadImageBytes } from "@/lib/assets";
+import { pickImageExt, uploadImageBytes } from "@/lib/assets/assets";
 import { registerCloseFlush } from "@/lib/close-flush";
-import { readCaret, writeCaret, type CaretMark } from "@/lib/caret-memory";
+import { readCaret, writeCaret, type CaretMark } from "@/lib/doc/caret-memory";
 import { captureCaretMark, resolveCaretPos, CARET_LINE_RATIO, TYPEWRITER_RATIO } from "./caret-position";
-import { registerAiEditor, registerAiEditorForView } from "@/lib/ai-editor";
+import { registerAiEditor, registerAiEditorForView } from "@/lib/ai/ai-editor";
 import { onEscapeClose } from "@/lib/escape-close";
 import { t } from "@/lib/i18n";
 import {
@@ -36,8 +36,8 @@ import {
   EDITOR_SHORTCUT_IDS,
   DEFAULT_SHORTCUTS,
   type ShortcutId,
-} from "@/lib/shortcuts";
-import { flattenTree } from "@/lib/tree";
+} from "@/lib/desktop/shortcuts";
+import { flattenTree } from "@/lib/doc/tree";
 import { logger } from "@/lib/logger";
 import type { View } from "@/types/models";
 import { SlashMenu } from "./slash-menu";

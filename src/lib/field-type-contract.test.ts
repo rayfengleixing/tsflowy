@@ -11,8 +11,8 @@ import {
   isOptionBearing,
   parseFieldOptions,
   validateCellValue,
-} from "./database-values";
-import { fieldKind, isDateKind } from "./field-kinds";
+} from "./database/database-values";
+import { fieldKind, isDateKind } from "./database/field-kinds";
 
 interface Contract {
   types: { type: string; defaultOptions: unknown }[];

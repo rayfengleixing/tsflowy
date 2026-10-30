@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, Table2 } from "lucide-react";
 import { NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import type { DatabaseField } from "@/types/database";
-import type { RelationDb } from "@/lib/relation";
-import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
-import { relationCellText, relationTarget } from "@/lib/relation";
+import type { RelationDb } from "@/lib/database/relation";
+import { formatCellValue, parseFieldOptions } from "@/lib/database/database-values";
+import { relationCellText, relationTarget } from "@/lib/database/relation";
 import { useRelationStore } from "@/stores/relation";
-import { EMBED_MAX_ROWS, resolveDatabaseViewName } from "@/lib/database-view";
+import { EMBED_MAX_ROWS, resolveDatabaseViewName } from "@/lib/database/database-view";
 import { t } from "@/lib/i18n";
 import { useWorkspaceStore } from "@/stores/workspace";
 

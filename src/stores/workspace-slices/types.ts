@@ -1,6 +1,6 @@
 import type { StateCreator, StoreApi } from "zustand";
 import type { LayoutType, View, ViewNode, Workspace } from "@/types/models";
-import type { TagColorMap } from "@/lib/tags";
+import type { TagColorMap } from "@/lib/doc/tags";
 
 export type Route = "workspace" | "trash" | "search" | "settings";
 

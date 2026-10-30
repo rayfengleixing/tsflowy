@@ -3,7 +3,7 @@ import type { Editor } from "@tiptap/core";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { embeddableDatabaseViews } from "@/lib/database-view";
+import { embeddableDatabaseViews } from "@/lib/database/database-view";
 import { layoutMeta, viewIcon } from "@/components/view-icon";
 import { t } from "@/lib/i18n";
 

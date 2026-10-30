@@ -30,10 +30,10 @@ import {
 } from "@/components/ui/context-menu";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useAiStore } from "@/stores/ai";
-import { useShortcutsStore, formatCombo } from "@/lib/shortcuts";
+import { useShortcutsStore, formatCombo } from "@/lib/desktop/shortcuts";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import { exportPage, exportPageImage, printPage } from "@/lib/export-page";
+import { exportPage, exportPageImage, printPage } from "@/lib/transfer/export-page";
 import { flushAllForClose } from "@/lib/close-flush";
 import type { View } from "@/types/models";
 

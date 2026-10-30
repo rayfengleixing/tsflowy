@@ -5,13 +5,13 @@ import {
   CHAT_ONLY_SYSTEM_PROMPT,
   CTX_SCOPE_PAGE_ONLY_NOTE,
 } from "@/lib/ai-edit";
-import { getAiEditor } from "@/lib/ai-editor";
-import { parseMentions } from "@/lib/ai-mention";
+import { getAiEditor } from "@/lib/ai/ai-editor";
+import { parseMentions } from "@/lib/ai/ai-mention";
 import { estimateTokens, tailTokens } from "./tokens";
-import { documentApi } from "@/lib/documents";
+import { documentApi } from "@/lib/doc/documents";
 import { logger } from "@/lib/logger";
 import { jsonToMarkdown } from "@/lib/markdown";
-import { flattenTree } from "@/lib/tree";
+import { flattenTree } from "@/lib/doc/tree";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { parseViewAliases } from "@/types/models";
 import {

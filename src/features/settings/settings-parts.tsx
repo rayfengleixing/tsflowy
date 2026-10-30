@@ -12,11 +12,11 @@ import {
   findConflict,
   isBindableCombo,
   type ShortcutId,
-} from "@/lib/shortcuts";
+} from "@/lib/desktop/shortcuts";
 import { t, type MessageKey } from "@/lib/i18n";
 import type { AiProfile, AiQuickActionDef } from "@/lib/ai";
 import { cn } from "@/lib/utils";
-import type { DataDirRisk } from "@/lib/data-dir-risk";
+import type { DataDirRisk } from "@/lib/desktop/data-dir-risk";
 
 export const ACCENT_HEX: Record<AccentColor, string> = {
   blue: "#2563eb",

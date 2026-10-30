@@ -14,10 +14,10 @@ import {
   visibleRangeSelection,
   type DropZone,
   type VisibleTreeRow,
-} from "@/lib/tree";
+} from "@/lib/doc/tree";
 import { t } from "@/lib/i18n";
 import { isInsidePopup } from "@/lib/radix-popup";
-import { tagColor, tagTint } from "@/lib/tags";
+import { tagColor, tagTint } from "@/lib/doc/tags";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 

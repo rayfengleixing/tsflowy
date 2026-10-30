@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import { X } from "lucide-react";
 import { t } from "@/lib/i18n";
-import { renderTex } from "@/lib/katex-render";
+import { renderTex } from "@/lib/render/katex-render";
 
 // 公式 NodeView：非编辑态渲染 KaTeX；双击切编辑态（textarea 写 TeX，Ctrl+Enter 保存 / Esc 取消）
 export function MathNodeView(props: ReactNodeViewProps<HTMLElement>) {

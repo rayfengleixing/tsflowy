@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Schema, Node as PMNode } from "@tiptap/pm/model";
-import type { CaretMark } from "@/lib/caret-memory";
+import type { CaretMark } from "@/lib/doc/caret-memory";
 import { captureCaretMark, resolveCaretPos } from "./caret-position";
 
 // 位置换算是这块逻辑唯一容易错的地方：跨 mark、原子 inline、嵌套块、文档变短都得对上

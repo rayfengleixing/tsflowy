@@ -1,7 +1,7 @@
 // 数据库单元格的只读展示部件（选项 / 关联 / 附件胶囊与缩略图）。
 // 从 editors.tsx 原样搬出（无逻辑/样式改动），editors.tsx 再统一转出以保持对外导出 API 不变。
 import { useEffect, useState, type ReactNode } from "react";
-import { openUrl } from "@/lib/ipc-shell";
+import { openUrl } from "@/lib/ipc/ipc-shell";
 import { Check, File as FileIcon, Link2, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
 import type { CellValue, DatabaseField, FieldType, SelectOption } from "@/types/database";
@@ -12,17 +12,17 @@ import {
   isSingleOptionKind,
   parseFieldOptions,
   ratingMax,
-} from "@/lib/database-values";
-import { isImageFile, openAttachment, resolveAssetUrl } from "@/lib/assets";
-import { cellLinkHref, isLinkFieldType, type LinkFieldKind } from "@/lib/database-link";
+} from "@/lib/database/database-values";
+import { isImageFile, openAttachment, resolveAssetUrl } from "@/lib/assets/assets";
+import { cellLinkHref, isLinkFieldType, type LinkFieldKind } from "@/lib/database/database-link";
 import {
   relationRowIds,
   relationRowLabel,
   relationTarget,
   reverseRelationConfig,
   type RelationDb,
-} from "@/lib/relation";
-import { openRowInView } from "@/lib/deep-link";
+} from "@/lib/database/relation";
+import { openRowInView } from "@/lib/desktop/deep-link";
 import { useRelationStore } from "@/stores/relation";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";

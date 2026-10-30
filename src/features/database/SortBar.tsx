@@ -1,6 +1,6 @@
 import { ArrowDown, ArrowUp, Plus, Trash2, X } from "lucide-react";
 import type { DatabaseField } from "@/types/database";
-import type { SortSpec } from "@/lib/database-query";
+import type { SortSpec } from "@/lib/database/database-query";
 import { Button } from "@/components/ui/button";
 import { t } from "@/lib/i18n";
 

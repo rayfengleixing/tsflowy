@@ -1,6 +1,6 @@
 // 视觉输入：附件图片的白名单、上限、压缩与落盘。
 
-import { uploadImageBytes } from "@/lib/assets";
+import { uploadImageBytes } from "@/lib/assets/assets";
 
 /* ————— 视觉输入：图片附件 ————— */
 

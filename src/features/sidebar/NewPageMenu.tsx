@@ -13,7 +13,7 @@ import type { LayoutType } from "@/types/models";
 import { LAYOUTS } from "@/types/models";
 import { layoutMeta } from "@/components/view-icon";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { PAGE_TEMPLATES, type PageTemplateId } from "@/lib/page-templates";
+import { PAGE_TEMPLATES, type PageTemplateId } from "@/lib/doc/page-templates";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";

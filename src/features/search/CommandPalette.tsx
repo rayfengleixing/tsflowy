@@ -25,10 +25,17 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { useAiStore } from "@/stores/ai";
 import { useRowFocusStore } from "@/stores/row-focus";
 import { useSettingsStore } from "@/stores/settings";
-import { parseSearchQuery, searchApi, titleExcluded, titleTierFor, TIER_BODY_ONLY, type SearchHit } from "@/lib/search";
-import { clearSearchHistory, loadSearchHistory, pushSearchHistory } from "@/lib/search-history";
-import { viewApi } from "@/lib/db";
-import { flattenTree } from "@/lib/tree";
+import {
+  parseSearchQuery,
+  searchApi,
+  titleExcluded,
+  titleTierFor,
+  TIER_BODY_ONLY,
+  type SearchHit,
+} from "@/lib/search/search";
+import { clearSearchHistory, loadSearchHistory, pushSearchHistory } from "@/lib/search/search-history";
+import { viewApi } from "@/lib/backend/db";
+import { flattenTree } from "@/lib/doc/tree";
 import { viewIcon } from "@/components/view-icon";
 import type { View } from "@/types/models";
 import { t } from "@/lib/i18n";

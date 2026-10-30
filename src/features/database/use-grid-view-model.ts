@@ -3,9 +3,9 @@
 import { useMemo } from "react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
-import { computeEvaluatedCells } from "@/lib/database-evaluated-cells";
+import { computeEvaluatedCells } from "@/lib/database/database-evaluated-cells";
 import { logger } from "@/lib/logger";
-import type { AggregateFn } from "@/lib/database-aggregate";
+import type { AggregateFn } from "@/lib/database/database-aggregate";
 import {
   deriveGridCore,
   deriveGridModel,
@@ -16,7 +16,7 @@ import {
   type GridModel,
 } from "./grid-view-model";
 import { useRelationDbs } from "./use-database-data";
-import type { RelationDb } from "@/lib/relation";
+import type { RelationDb } from "@/lib/database/relation";
 
 export interface GridViewLocalState {
   groupFieldIds: string[];

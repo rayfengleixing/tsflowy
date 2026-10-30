@@ -11,7 +11,7 @@ import { failNextOpenUrl, openUrl, openedUrls, resetIpcMock } from "@/test/tauri
 import { resetStores } from "@/test/store-reset";
 
 // vi.mock 会被提到文件最前，工厂里用动态 import 取同一份替身实例
-vi.mock("@/lib/ipc-shell", async () => (await import("@/test/tauri-mock")).ipcShellMock());
+vi.mock("@/lib/ipc/ipc-shell", async () => (await import("@/test/tauri-mock")).ipcShellMock());
 vi.mock("@/lib/i18n", () => ({
   t: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
 }));

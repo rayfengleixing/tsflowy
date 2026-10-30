@@ -4,7 +4,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Input } from "@/components/ui/input";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { useSettingsStore } from "@/stores/settings";
-import { parseDateKey, shiftDateKey, shortDateKey, toDateKey, weekdayLabel } from "@/lib/daily-notes";
+import { parseDateKey, shiftDateKey, shortDateKey, toDateKey, weekdayLabel } from "@/lib/doc/daily-notes";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";

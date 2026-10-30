@@ -1,4 +1,4 @@
-import { formatCombo, useShortcutsStore, type ShortcutId } from "@/lib/shortcuts";
+import { formatCombo, useShortcutsStore, type ShortcutId } from "@/lib/desktop/shortcuts";
 import { t } from "@/lib/i18n";
 import { useSettingsStore } from "@/stores/settings";
 import { Section, Row } from "./settings-parts";

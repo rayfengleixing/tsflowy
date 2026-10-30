@@ -113,7 +113,7 @@ vi.mock("@/stores/workspace", async () => {
 });
 
 vi.mock("sonner", () => ({ toast: { success: h.toastSuccess, error: h.toastError } }));
-vi.mock("@/lib/ai-editor", () => ({ getAiEditor: () => h.bridge }));
+vi.mock("@/lib/ai/ai-editor", () => ({ getAiEditor: () => h.bridge }));
 // 真的 `@/lib/ai` 会顺着 invoke → auto-sync 拉到 Tauri 入口（那个模块加载时就读一次配置），
 // jsdom 里不需要那台机器：面板用到的是错误文案、金额估算与格式化，后两个的形状由 lib/ai.test.ts 钉
 vi.mock("@/lib/ai", () => ({

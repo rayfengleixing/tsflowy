@@ -1,12 +1,12 @@
 import { useRef, useState } from "react";
 import { DownloadCloud, RefreshCw } from "lucide-react";
-import { check, relaunch } from "@/lib/ipc-shell";
+import { check, relaunch } from "@/lib/ipc/ipc-shell";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import { autoUpdateCheckEnabled, setAutoUpdateCheckEnabled } from "@/lib/update-check";
+import { autoUpdateCheckEnabled, setAutoUpdateCheckEnabled } from "@/lib/desktop/update-check";
 import { cn } from "@/lib/utils";
 import { Section, updateErrorMessage } from "./settings-parts";
 

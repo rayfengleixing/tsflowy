@@ -1,15 +1,15 @@
 // Grid 视图的「数据进出」一簇：CSV / xlsx 导出、TSV 剪贴板粘贴、CSV 导入（建新表与追加到当前表）。
 // 这一簇只读渲染期的行/列/单元格与当前页 store，不产 JSX，也不持有自己的状态——
 // importPlan 的存在与否仍由 GridView 的 useState 管，切片只在每次渲染收到当次快照。
-import { save, open } from "@/lib/ipc-dialog";
+import { save, open } from "@/lib/ipc/ipc-dialog";
 import { invoke } from "@/lib/invoke";
 import { toast } from "sonner";
 import type { AttachmentRef, CellValue, DatabaseField, FieldType } from "@/types/database";
 import { isReadonlyType } from "@/types/database";
 import type { DatabaseState, DatabaseStore } from "@/stores/database";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { viewApi, newId } from "@/lib/db";
-import { isOptionBearing } from "@/lib/database-values";
+import { viewApi, newId } from "@/lib/backend/db";
+import { isOptionBearing } from "@/lib/database/database-values";
 import {
   buildCsvExport,
   buildSelectOptions,
@@ -21,8 +21,8 @@ import {
   parseTsv,
   resolveAttachmentNames,
   type PasteDeps,
-} from "@/lib/csv";
-import { buildXlsxSheet, exportFileName, resolveExportCells } from "@/lib/table-export";
+} from "@/lib/transfer/csv";
+import { buildXlsxSheet, exportFileName, resolveExportCells } from "@/lib/transfer/table-export";
 import { mapWithConcurrency } from "./grid-view-helpers";
 import type { CellGraph, GridModel } from "./grid-view-model";
 import type { UseGridViewModelResult } from "./use-grid-view-model";

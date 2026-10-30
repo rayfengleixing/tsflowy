@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import type { CellValue, DatabaseField } from "@/types/database";
 import { isReadonlyType, type FieldType } from "@/types/database";
 import { useDbStore } from "@/stores/database-context";
-import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
+import { formatCellValue, parseFieldOptions } from "@/lib/database/database-values";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";

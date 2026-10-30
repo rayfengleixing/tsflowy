@@ -2,16 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock 会被提到文件最前，工厂里不能引用顶层 import 的绑定，
 // 所以用动态 import 取替身：同一测试文件里模块是单例，工厂返回的与下面静态导入的是同一份。
-vi.mock("@/lib/ipc-core", async () => (await import("./tauri-mock")).ipcCoreMock());
-vi.mock("@/lib/ipc-events", async () => (await import("./tauri-mock")).ipcEventsMock());
-vi.mock("@/lib/ipc-dialog", async () => (await import("./tauri-mock")).ipcDialogMock());
-vi.mock("@/lib/ipc-fs", async () => (await import("./tauri-mock")).ipcFsMock());
-vi.mock("@/lib/ipc-shell", async () => (await import("./tauri-mock")).ipcShellMock());
+vi.mock("@/lib/ipc/ipc-core", async () => (await import("./tauri-mock")).ipcCoreMock());
+vi.mock("@/lib/ipc/ipc-events", async () => (await import("./tauri-mock")).ipcEventsMock());
+vi.mock("@/lib/ipc/ipc-dialog", async () => (await import("./tauri-mock")).ipcDialogMock());
+vi.mock("@/lib/ipc/ipc-fs", async () => (await import("./tauri-mock")).ipcFsMock());
+vi.mock("@/lib/ipc/ipc-shell", async () => (await import("./tauri-mock")).ipcShellMock());
 
 // 这个文件证明的是「替身本身可用」：命令按名字命中、没注册就抛、事件能被喂进真实消费者，
 // 对话框排队与假目录树也照同一口径（未登记就抛，别把空列表当成扫描通过）。
 // 替身分别顶掉 @/lib/ipc-core、ipc-events、ipc-dialog、ipc-fs、ipc-shell —— 全仓引 @tauri-apps 的五个入口。
-import { SYNC_DB_REPLACED_EVENT, SYNC_PROGRESS_EVENT, onSyncProgress, startSyncEvents } from "@/lib/sync-events";
+import { SYNC_DB_REPLACED_EVENT, SYNC_PROGRESS_EVENT, onSyncProgress, startSyncEvents } from "@/lib/sync/sync-events";
 import { aiChat, type AiChatEvent } from "@/lib/ai";
 import { bindFakeApp } from "./app-fakes";
 import { viewNode } from "./view-node";
@@ -69,7 +69,7 @@ describe("tauri-mock 的命令侧", () => {
   });
 
   it("路径与 asset URL 也走同一个替身", async () => {
-    const { getAppDataDir, resolveAssetUrl } = await import("@/lib/assets");
+    const { getAppDataDir, resolveAssetUrl } = await import("@/lib/assets/assets");
     expect(await getAppDataDir()).toBe("/mock/app-data");
     expect(await resolveAssetUrl("assets/a.png")).toBe("/mock/app-data/assets/a.png");
   });
@@ -123,7 +123,7 @@ describe("tauri-mock 的事件侧（真实消费者 sync-events）", () => {
   });
 
   it("监听器数量随 unlisten 回落（替身跟真事件同构）", async () => {
-    const { listen } = await import("@/lib/ipc-events");
+    const { listen } = await import("@/lib/ipc/ipc-events");
     const handler = vi.fn();
     const un = await listen("probe", handler);
     expect(listenerCount("probe")).toBe(1);
@@ -144,7 +144,7 @@ describe("tauri-mock 的对话框与文件侧", () => {
   });
 
   it("排队一次给一个结果，排空就按「用户取消」返回 null", async () => {
-    const { open, save } = await import("@/lib/ipc-dialog");
+    const { open, save } = await import("@/lib/ipc/ipc-dialog");
     queueOpenDialog("D:/attachments");
 
     expect(await open({ directory: true })).toBe("D:/attachments");
@@ -154,7 +154,7 @@ describe("tauri-mock 的对话框与文件侧", () => {
   });
 
   it("假目录树按登记命中，没登记的目录抛错而不是回空列表", async () => {
-    const { readDir, readTextFile } = await import("@/lib/ipc-fs");
+    const { readDir, readTextFile } = await import("@/lib/ipc/ipc-fs");
     setFsDir("D:/attachments", [
       { name: "a.png", isFile: true },
       { name: "sub", isDirectory: true },
@@ -167,13 +167,13 @@ describe("tauri-mock 的对话框与文件侧", () => {
   });
 
   it("writeTextFile 只记录，不碰真磁盘", async () => {
-    const { writeTextFile } = await import("@/lib/ipc-fs");
+    const { writeTextFile } = await import("@/lib/ipc/ipc-fs");
     await writeTextFile("D:\\out\\page.md", "# 标题");
     expect(fsWrites).toEqual([{ path: "D:/out/page.md", contents: "# 标题" }]);
   });
 
   it("join 替身把反斜杠统一成正斜杠，接缝不重复分隔符", async () => {
-    const { join } = await import("@/lib/ipc-core");
+    const { join } = await import("@/lib/ipc/ipc-core");
     expect(await join("D:\\attachments\\", "/sub/", "b.png")).toBe("D:/attachments/sub/b.png");
   });
 });
@@ -184,7 +184,7 @@ describe("tauri-mock 的系统侧（ipc-shell）", () => {
   });
 
   it("关窗请求交给处理器裁决：preventDefault 记下来，放行才走到 destroy", async () => {
-    const { getCurrentWindow } = await import("@/lib/ipc-shell");
+    const { getCurrentWindow } = await import("@/lib/ipc/ipc-shell");
     void getCurrentWindow().onCloseRequested(async (event) => {
       event.preventDefault();
       await windowDestroy();
@@ -208,7 +208,7 @@ describe("tauri-mock 的系统侧（ipc-shell）", () => {
   });
 
   it("更新：排队给版本就走完下载→安装并记账，没排队就抛", async () => {
-    const { check, relaunch } = await import("@/lib/ipc-shell");
+    const { check, relaunch } = await import("@/lib/ipc/ipc-shell");
     await expect(check()).rejects.toThrow(/queueUpdateCheck/);
 
     queueUpdateCheck("0.9.0");
@@ -223,7 +223,7 @@ describe("tauri-mock 的系统侧（ipc-shell）", () => {
   });
 
   it("真实消费者 setupDeepLink：热启动监听装上、冷启动 URL 被消费、注销后摘掉", async () => {
-    const { setupDeepLink } = await import("@/lib/deep-link");
+    const { setupDeepLink } = await import("@/lib/desktop/deep-link");
     queueDeepLinkStartup(["https://not-a-tsflowy-link"]);
 
     const dispose = await setupDeepLink();
@@ -238,7 +238,7 @@ describe("tauri-mock 的系统侧（ipc-shell）", () => {
   });
 
   it("getCurrent 失败只记日志，不拖累 onOpenUrl 那条腿", async () => {
-    const { setupDeepLink } = await import("@/lib/deep-link");
+    const { setupDeepLink } = await import("@/lib/desktop/deep-link");
     // 命中的 URL 会走排队跳转（读页面树 + 订阅 + openView），这里把运行态绑上再验 IPC 那条腿
     const app = bindFakeApp({ tree: [viewNode("v-1", "某页")] });
     failDeepLinkGetCurrent();

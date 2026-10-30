@@ -1,6 +1,6 @@
 import { aiSessionSave, type AiConfig } from "@/lib/ai";
-import { getAiEditor, getAiEditorForView } from "@/lib/ai-editor";
-import type { LocateFailure } from "@/lib/ai-locate";
+import { getAiEditor, getAiEditorForView } from "@/lib/ai/ai-editor";
+import type { LocateFailure } from "@/lib/ai/ai-locate";
 import type { MessageKey } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { useWorkspaceStore } from "@/stores/workspace";

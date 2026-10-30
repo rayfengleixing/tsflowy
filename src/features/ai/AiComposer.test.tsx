@@ -63,7 +63,7 @@ vi.mock("@/lib/ai", () => ({
   saveAiImageFile: ai.saveAiImageFile,
 }));
 
-vi.mock("@/lib/assets", () => ({
+vi.mock("@/lib/assets/assets", () => ({
   filesFromDataTransfer: (dt: DataTransfer | null) => Array.from(dt?.files ?? []),
   resolveAssetUrl: () => Promise.resolve("asset://stub"),
 }));

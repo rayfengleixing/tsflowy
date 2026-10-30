@@ -1,6 +1,6 @@
 import type { JSONContent } from "@tiptap/core";
 import { t } from "../i18n";
-import { encodeTaskMeta, taskMetaOf } from "../task-meta";
+import { encodeTaskMeta, taskMetaOf } from "../doc/task-meta";
 import { ATTACH_PREFIX, CALLOUT_COLORS, DB_TABLE_BEGIN, DB_TABLE_END, columnRatioOf } from "./parse";
 
 // ——————————————————————————————————————

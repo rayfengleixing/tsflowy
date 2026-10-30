@@ -3,11 +3,11 @@ import { CornerDownRight, Indent, Link2, Maximize2, Minimize2, Outdent, Plus, X 
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
 import { FIELD_TYPES, isReadonlyType, type FieldType } from "@/types/database";
 import { useDbStore } from "@/stores/database-context";
-import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
-import { cellAt } from "@/lib/database-query";
-import { MAX_HIERARCHY_LEVEL, hierarchyDepthOf } from "@/lib/database-hierarchy";
-import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
-import { rowPermalink } from "@/lib/deep-link";
+import { formatCellValue, parseFieldOptions } from "@/lib/database/database-values";
+import { cellAt } from "@/lib/database/database-query";
+import { MAX_HIERARCHY_LEVEL, hierarchyDepthOf } from "@/lib/database/database-hierarchy";
+import { computeEvaluatedCells, rowCellsOf } from "@/lib/database/database-evaluated-cells";
+import { rowPermalink } from "@/lib/desktop/deep-link";
 import { useRelationStore } from "@/stores/relation";
 import { cn } from "@/lib/utils";
 import type { View } from "@/types/models";

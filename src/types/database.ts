@@ -1,6 +1,6 @@
 // 与 migrations/001_init.sql 数据库三表对应（项目说明书 7.2 字段值编码）
 import type { LayoutType } from "./models";
-import type { AggregateFn } from "@/lib/database-aggregate";
+import type { AggregateFn } from "@/lib/database/database-aggregate";
 
 export type FieldType =
   | "text"

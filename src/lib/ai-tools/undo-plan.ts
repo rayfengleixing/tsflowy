@@ -2,9 +2,9 @@
 // sanitizeUndoPlan 是外部数据入口（字段逐个验类型），runUndoPlan 把计划执行掉并做界面刷新。
 
 import { appInvalidateRelations, appReload, appRenameView } from "../app-context";
-import { viewApi } from "../db";
-import { databaseApi } from "../database";
-import { notifyDatabaseChanged } from "../database-changed";
+import { viewApi } from "../backend/db";
+import { databaseApi } from "../backend/database";
+import { notifyDatabaseChanged } from "../database/database-changed";
 import { t } from "../i18n";
 import { logger } from "../logger";
 import type { CellValue } from "@/types/database";

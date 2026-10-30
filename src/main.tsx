@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import "./index.css";
-import { hydratePrefs } from "@/lib/prefs-mirror";
+import { hydratePrefs } from "@/lib/sync/prefs-mirror";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("未找到 #root 挂载点");

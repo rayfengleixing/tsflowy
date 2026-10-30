@@ -7,7 +7,7 @@ import { PageTree } from "./PageTree";
 import { TagPanel } from "./TagPanel";
 import { DocumentOutline, getSidebarTab, setSidebarTab, type SidebarTab } from "@/features/editor/Outline";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { useShortcutsStore, formatCombo } from "@/lib/shortcuts";
+import { useShortcutsStore, formatCombo } from "@/lib/desktop/shortcuts";
 import { t } from "@/lib/i18n";
 
 const MIN_WIDTH = 268;

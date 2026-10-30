@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const syncNativeLang = vi.hoisted(() => vi.fn());
 // settings → app-shell → invoke → auto-sync：这里只要语言订阅的形状，壳层副作用不真跑
-vi.mock("@/lib/app-shell", () => ({ syncNativeLang }));
+vi.mock("@/lib/desktop/app-shell", () => ({ syncNativeLang }));
 
 import { t, useLanguage } from "@/lib/i18n";
 import { resetStores } from "@/test/store-reset";

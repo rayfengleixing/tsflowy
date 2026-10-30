@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Settings2 } from "lucide-react";
-import { getVersion } from "@/lib/ipc-shell";
+import { getVersion } from "@/lib/ipc/ipc-shell";
 
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";

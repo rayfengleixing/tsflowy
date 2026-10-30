@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
-import { opsForType, type FilterOp } from "@/lib/database-query";
+import { opsForType, type FilterOp } from "@/lib/database/database-query";
 import {
   COND_TONES,
   COND_TONE_DOT,
@@ -12,7 +12,7 @@ import {
   newCondRule,
   type CondFormatRule,
   type CondScope,
-} from "@/lib/database-cond-format";
+} from "@/lib/database/database-cond-format";
 import { useRelationDbs } from "./use-database-data";
 import { FilterValueInput, NO_OPERAND_OPS } from "./FilterBar";
 import type { DatabaseField } from "@/types/database";

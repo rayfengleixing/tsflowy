@@ -1,5 +1,5 @@
 import { t } from "@/lib/i18n";
-import { EDITOR_SHORTCUT_IDS, GLOBAL_SHORTCUT_IDS, shortcutLabelKey, type ShortcutId } from "@/lib/shortcuts";
+import { EDITOR_SHORTCUT_IDS, GLOBAL_SHORTCUT_IDS, shortcutLabelKey, type ShortcutId } from "@/lib/desktop/shortcuts";
 import { Section, ResetAllShortcuts, ShortcutRecorder, type ShortcutGroup, type ShortcutItem } from "./settings-parts";
 import { SettingsCaptureShortcut } from "./SettingsCaptureShortcut";
 

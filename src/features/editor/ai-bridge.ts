@@ -4,7 +4,7 @@
 import { Slice, Fragment, Node as PMNode } from "@tiptap/pm/model";
 import type { Editor } from "@tiptap/core";
 import { looksLikeMarkdown, markdownToJson, textToBlocks } from "@/lib/markdown";
-import type { AiEditorBridge } from "@/lib/ai-editor";
+import type { AiEditorBridge } from "@/lib/ai/ai-editor";
 import { STRUCTURE_SYNC_META } from "./extensions/document-structure-lock";
 import { logger } from "@/lib/logger";
 import { t } from "@/lib/i18n";

@@ -5,8 +5,8 @@ import { toast } from "sonner";
 import { NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import { logger } from "@/lib/logger";
 import { t } from "@/lib/i18n";
-import { resolveAssetUrl } from "@/lib/assets";
-import { attachmentKindOf, type AttachmentKind } from "@/lib/attachment-kind";
+import { resolveAssetUrl } from "@/lib/assets/assets";
+import { attachmentKindOf, type AttachmentKind } from "@/lib/assets/attachment-kind";
 
 // 附件卡片：点文件名那行仍走 Rust 的 open_asset 交给系统默认程序（路径越权校验在 Rust 侧），
 // 图片 / 音频 / 视频 / PDF 另外长出一块预览。不用 window.open(assetUrl)：WebView 对非图片/媒体的

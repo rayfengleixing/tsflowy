@@ -1,7 +1,7 @@
 // AiPanel 与消息气泡共用的展示小件（从 AiPanel.tsx 原样搬出，无逻辑/样式改动）
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
-import { resolveAssetUrl } from "@/lib/assets";
+import { resolveAssetUrl } from "@/lib/assets/assets";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 

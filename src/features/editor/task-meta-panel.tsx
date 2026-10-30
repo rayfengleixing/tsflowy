@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import type { Editor } from "@tiptap/core";
 import { CalendarDays, ChevronDown, ChevronUp, UserRound, X } from "lucide-react";
 import { t } from "@/lib/i18n";
-import { todayIso, type TaskMeta } from "@/lib/task-meta";
+import { todayIso, type TaskMeta } from "@/lib/doc/task-meta";
 import { buildTaskMetaTr, taskItemPositions, taskMetaOfNode } from "./extensions/task-meta";
 import { IconBtn } from "./floating-menu";
 

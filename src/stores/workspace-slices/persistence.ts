@@ -1,6 +1,6 @@
-import { viewApi } from "@/lib/db";
+import { viewApi } from "@/lib/backend/db";
 import { logger } from "@/lib/logger";
-import { flattenTree } from "@/lib/tree";
+import { flattenTree } from "@/lib/doc/tree";
 import type { ViewNode } from "@/types/models";
 import type { WorkspaceGet } from "./types";
 

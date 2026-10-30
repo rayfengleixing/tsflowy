@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
-import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database-cond-format";
+import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database/database-cond-format";
 import {
   BulkEditDialogHost,
   ROW_SELECTED_RING,
@@ -12,9 +12,9 @@ import {
   useRowBulkEdit,
   type RowBulkEdit,
 } from "./row-bulk-edit";
-import { applyFilters, isCellEmpty, sortRows } from "@/lib/database-query";
-import { computeEvaluatedCells, rowCellsOf } from "@/lib/database-evaluated-cells";
-import { formatCellValue, parseFieldOptions } from "@/lib/database-values";
+import { applyFilters, isCellEmpty, sortRows } from "@/lib/database/database-query";
+import { computeEvaluatedCells, rowCellsOf } from "@/lib/database/database-evaluated-cells";
+import { formatCellValue, parseFieldOptions } from "@/lib/database/database-values";
 import { useRelationDbs } from "./use-database-data";
 import { Button } from "@/components/ui/button";
 import { CellReadValue } from "./cell-display";

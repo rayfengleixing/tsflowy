@@ -9,7 +9,7 @@
  *   所以新增日志只需走本入口，不要再用 console.*。
  */
 
-import { formatLogArgs, pushClientLog } from "./client-log";
+import { formatLogArgs, pushClientLog } from "./desktop/client-log";
 
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "off";
 

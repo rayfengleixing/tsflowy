@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link2, ChevronDown, ChevronUp } from "lucide-react";
 
-import { mentionsApi, type MentionRow } from "@/lib/mentions";
+import { mentionsApi, type MentionRow } from "@/lib/doc/mentions";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
 import type { View } from "@/types/models";

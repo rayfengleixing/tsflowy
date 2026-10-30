@@ -6,7 +6,7 @@ import { viewNode } from "@/test/view-node";
 
 const syncNativeLang = vi.hoisted(() => vi.fn());
 // settings → app-shell → invoke → auto-sync：node 环境没有真实 DOM，壳层行为本身在 lib/app-shell.test.ts 覆盖
-vi.mock("@/lib/app-shell", () => ({ syncNativeLang }));
+vi.mock("@/lib/desktop/app-shell", () => ({ syncNativeLang }));
 
 import {
   appInvalidateRelations,

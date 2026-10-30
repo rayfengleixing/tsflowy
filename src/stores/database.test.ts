@@ -20,13 +20,13 @@ const api = vi.hoisted(() => ({
 const toastError = vi.hoisted(() => vi.fn());
 const toastSuccess = vi.hoisted(() => vi.fn());
 
-vi.mock("@/lib/database", () => ({ databaseApi: api }));
-vi.mock("@/lib/view-config", () => ({ readViewConfig: () => ({}), patchViewConfig: vi.fn() }));
+vi.mock("@/lib/backend/database", () => ({ databaseApi: api }));
+vi.mock("@/lib/database/view-config", () => ({ readViewConfig: () => ({}), patchViewConfig: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { error: toastError, success: toastSuccess } }));
 
 import { bindDatabaseChanges, createDatabaseStore, useDatabaseStore } from "@/stores/database";
 import { useRelationStore } from "@/stores/relation";
-import { notifyDatabaseChanged } from "@/lib/database-changed";
+import { notifyDatabaseChanged } from "@/lib/database/database-changed";
 import type { DatabaseField, DatabaseRow, DatabaseTrashRow } from "@/types/database";
 import type { View } from "@/types/models";
 

@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/invoke", () => ({ invoke: h.invoke }));
-vi.mock("@/lib/documents", () => ({ documentApi: { get: h.docGet, save: h.docSave } }));
+vi.mock("@/lib/doc/documents", () => ({ documentApi: { get: h.docGet, save: h.docSave } }));
 vi.mock("@/stores/editor", () => ({ getDocEditors: h.getDocEditors }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn() } }));
 vi.mock("@/features/editor/extensions/find-replace", () => ({

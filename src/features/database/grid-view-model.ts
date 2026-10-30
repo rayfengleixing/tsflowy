@@ -8,7 +8,7 @@
 //   deriveGridCore  只跟数据/筛选/排序/分组字段走（排序与分组是 O(n log n)，勾一行不该重算）；
 //   deriveGridModel 再叠上纯交互状态（勾选、折叠、列汇总），只做线性遍历。
 import type { CellValue, DatabaseField, DatabaseRow } from "@/types/database";
-import { normalizeAggregate, type AggregateFn } from "@/lib/database-aggregate";
+import { normalizeAggregate, type AggregateFn } from "@/lib/database/database-aggregate";
 import {
   UNGROUPED,
   applyFilters,
@@ -19,9 +19,9 @@ import {
   type FilterNode,
   type GridGroupNode,
   type SortSpec,
-} from "@/lib/database-query";
+} from "@/lib/database/database-query";
 import { t } from "@/lib/i18n";
-import { hierarchyLines, parentCandidates } from "@/lib/database-hierarchy";
+import { hierarchyLines, parentCandidates } from "@/lib/database/database-hierarchy";
 import type { GridFlatLine } from "./grid-view-helpers";
 
 /** rowId → fieldId → 单元格值 */

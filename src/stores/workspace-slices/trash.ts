@@ -1,4 +1,4 @@
-import { viewApi } from "@/lib/db";
+import { viewApi } from "@/lib/backend/db";
 import { syncSubpages } from "./tree";
 import type { WorkspaceSliceCreator, WorkspaceState } from "./types";
 

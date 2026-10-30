@@ -36,10 +36,10 @@ const snippets = vi.hoisted(() => ({
   docSearchSnippets: vi.fn((_viewId: string, _query: string, _limit: number): Promise<string[]> => Promise.resolve([])),
 }));
 
-vi.mock("./database", () => ({ databaseApi: api }));
-vi.mock("./db", () => ({ viewApi: view }));
-vi.mock("./documents", () => ({ documentApi: docs }));
-vi.mock("./search", () => ({ searchApi: search }));
+vi.mock("./backend/database", () => ({ databaseApi: api }));
+vi.mock("./backend/db", () => ({ viewApi: view }));
+vi.mock("./doc/documents", () => ({ documentApi: docs }));
+vi.mock("./search/search", () => ({ searchApi: search }));
 vi.mock("./ai", () => ({ docSearchSnippets: snippets.docSearchSnippets }));
 
 import {
@@ -51,7 +51,7 @@ import {
   runWriteAction,
   sanitizeUndoPlan,
 } from "./ai-tools";
-import { onDatabaseChanged } from "./database-changed";
+import { onDatabaseChanged } from "./database/database-changed";
 import type { DatabaseField, FieldType, SelectOption } from "@/types/database";
 
 // 页面树、当前空间与写动作（刷树/改名/失效关联）都由 app-fakes 登记，用例不再 mock 任何 store
