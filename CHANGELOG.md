@@ -691,6 +691,14 @@
 - 一句仍未变的落差：这条链**依然没有 jsdom 组件用例**（「补用例先停止」的令还生效），X 批 1 写的「套件里对条件格式的断言只有纯逻辑那一份」不作废——本批收的是真机证据，不是测试覆盖。
 - 静态验证：本批只改 `scripts/*.mjs`（不在 Vite 依赖图里，也不在 lint 范围内），`npx prettier --check` 该文件 exit 0；零产品代码改动，所以 `tsc` / `lint` / 全量 `vitest` / `cargo` 未复跑，基线仍是 111 文件 1,673 用例与 344 通过 1 忽略。
 
+### AI 域五层第一次在真窗口里过了一遍取证（P7 批 2）
+
+- 新增 `scripts/cdp-ai-domain-smoke.mjs`（228 行，standalone，连 9222 的用法与条件格式那份同形）。它补的是 P5 收口后一直没还的一条：`run-stream.ts`（6a 切出）、`tokens.ts`（7 下沉）、`turn-registry.ts`（8 容器化）这三批纯移动只有逐字节比对 + 全量 vitest 绿，**AI 域从来没有真运行时证据**。
+- 证据四形状，全部只读（不发消息、不建会话、不存配置、不打外网）：① 12 个深路径 `import()` 真求值并核对导出面——`lib/ai`（含并入的 `ai-editor` / `ai-locate` / `ai-mention`）、`lib/ai-edit`、`lib/ai-tools`、`stores/ai`、`features/ai` 五层各有覆盖点；② 四条旧平路径（`/src/lib/ai.ts`、`/src/lib/ai-edit.ts`、`/src/lib/ai-tools.ts`、`/src/stores/ai.ts`）**必须解析不到**，反证没有留兼容垫片；③ 动作协议在真实运行时里**往返一次**——`buildEditSystemPrompt` 下发的正文里含「围栏 + 块标记 + 换行」的整行开栏，写出的动作块被 `extractEdit` 读回同一条 `op` 与 `content`，检索块被 `extractCalls` 读回 1 条；④ 只读 IPC 走 lib 的包装函数（`aiGetConfig` 回 27 个字段、`aiSessionList` 回数组、`aiUsageSummary` 回 `sessions` 数字），再 `openPanel` / `closePanel` 真开真关一次面板，钉住 stores→features 那层接缝（面板 13 个按钮，收尾恢复成关闭态）。
+- 结果：**连跑三遍逐字一致，42 条断言全绿 / 12 个模块 / `exceptions=0`**。`ai_session_list` 回 0 条是用户库里本来就没有 AI 会话，如实报，不当失败。
+- 两条工具坑记在这里（都栽过）：① 这类脚本是「模板字符串里再嵌一层 JS 源码」，围栏那串写成 `"\\`\\`\\`"` 会让外层模板被裸反引号**提前终止**，`node --check`当场`SyntaxError: missing ) after argument list`——正解是单层转义 `"\`\`\`"`；先跑 `node --check`再上窗口，别把工具自己的语法错登记成产品红灯。② 那三条「旧路径应当解析不到」的反证**必须在页面里`try/catch`接住**：让 rejected promise 一路抛到`Runtime.evaluate`，会喂进 `exceptionThrown` 收集器，于是反证伪装成「产品有未捕获异常」。
+- 静态验证：`node --check` exit 0、`npx prettier --check` 该文件 exit 0（先 `--write` 过）；`scripts/` 不在 lint 与 `format:check` 的 glob 内，本批零产品代码改动，`tsc` / `lint` / `vitest` / `cargo` 未复跑（基线仍是 111 文件 1,673 用例、344 通过 1 忽略）。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
