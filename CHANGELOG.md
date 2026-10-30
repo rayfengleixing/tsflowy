@@ -699,6 +699,14 @@
 - 两条工具坑记在这里（都栽过）：① 这类脚本是「模板字符串里再嵌一层 JS 源码」，围栏那串写成 `"\\`\\`\\`"` 会让外层模板被裸反引号**提前终止**，`node --check`当场`SyntaxError: missing ) after argument list`——正解是单层转义 `"\`\`\`"`；先跑 `node --check`再上窗口，别把工具自己的语法错登记成产品红灯。② 那三条「旧路径应当解析不到」的反证**必须在页面里`try/catch`接住**：让 rejected promise 一路抛到`Runtime.evaluate`，会喂进 `exceptionThrown` 收集器，于是反证伪装成「产品有未捕获异常」。
 - 静态验证：`node --check` exit 0、`npx prettier --check` 该文件 exit 0（先 `--write` 过）；`scripts/` 不在 lint 与 `format:check` 的 glob 内，本批零产品代码改动，`tsc` / `lint` / `vitest` / `cargo` 未复跑（基线仍是 111 文件 1,673 用例、344 通过 1 忽略）。
 
+### P6 那次搬家的真机证据从一次性探针变成可复跑的脚本（P7 批 3）
+
+- 新增 `scripts/cdp-lib-layout-smoke.mjs`：把 P6 收尾时那份临时探针（仓库外、跑完就没了）转成 standalone 脚本，与条件格式、右键批量那两份同形——自己连 9222、自己收异常、断言不过就退出非 0，后来人不需要问「上次是谁怎么跑的」。
+- 为什么纯 `git mv` 值得跑真窗口：`tsc` 只验类型图、`vitest` 只验 node/jsdom 解析，**浏览器打包图是第三条独立的路**（深路径拼错、大小写、目录 index 解析差异只在这里现形）。证据就三条：23 个搬家后的深路径 `import()` 逐条求值并核对导出面（11 个新目录各有覆盖点 + 刻意留根的 `app-context` / `i18n` + P6-2 并入 `ai/` 的三件）；4 条旧平路径**必须解析不到**（反证没留别名或残留把老路兜住，否则「搬家」是假的）；只读 IPC 四条 + 页面树渲染。
+- 结果：**连跑两遍逐字一致，58 条断言全绿 / 2 条 skip / `windowErrors=0` / `exceptions=0`**——`workspace_list` 2 个工作区、`doc_list_all` 92 篇文档、`get_prefs` 9 个键、`list_backups` 6 个档（只点列举，没触发导出），页面树 15 个 `[data-tree-row]`。两条 skip 照实留着：这次窗口停在文档页，没有「列表/看板」页签可点，而**「新建视图」点下去就是写库**，脚本不为凑绿去造数据。
+- 全程零写入：只打读取类命令，视图页签那条是纯切换。
+- 静态验证：`node --check` exit 0、`prettier --write` 后 `--check` 干净；零产品代码改动，`tsc` / `lint` / `vitest` / `cargo` 未复跑。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
