@@ -1,9 +1,7 @@
 // 从模型回复的文本里找指令代码块：扫描（含流式未闭合）、剥离、逐块解析，以及流式展示时把块藏住。
 // 从 lib/ai-edit.ts 原样搬出（逐行零改动）。
-import { CALL_BLOCK_TAG, EDIT_BLOCK_TAG, type AiCall } from "./types";
+import { CALL_BLOCK_TAG, EDIT_BLOCK_TAG, FENCE, type AiCall } from "./types";
 import { validateCall } from "./validate";
-
-const FENCE = "```";
 
 /** 提取结果：calls 为全部合法动作；malformed 表示「有指令块但没能解析」，界面应提示而不是展示裸 JSON */
 export interface ExtractCallsResult {

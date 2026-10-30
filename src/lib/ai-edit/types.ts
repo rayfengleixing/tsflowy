@@ -76,3 +76,9 @@ export const EDIT_BLOCK_TAG = "tsflowy-edit";
 
 /** 只读检索请求块的标记：模型输出它表示「先帮我查，我拿到结果再作答」 */
 export const CALL_BLOCK_TAG = "tsflowy-call";
+
+/**
+ * 指令代码块的围栏。与上面两个标记并排放：协议里「围栏 + 标记」是一个整体开栏，
+ * 分头写就会变成改围栏要三处找（extract 的私有常量、protocol 的两处转义反引号、用例里的字面量）。
+ */
+export const FENCE = "```";

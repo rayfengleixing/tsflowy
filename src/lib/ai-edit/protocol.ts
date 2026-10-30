@@ -1,6 +1,7 @@
 // 下发给模型的 system prompt：动作协议正文 + 当前文档上下文，外加三种上下文范围的补充说明。
-// 从 lib/ai-edit.ts 原样搬出（逐行零改动）。协议正文里嵌的是下面 types 的两个块标记，改标记等于改协议。
-import { CALL_BLOCK_TAG, EDIT_BLOCK_TAG } from "./types";
+// 从 lib/ai-edit.ts 原样搬出（P5 拆分时逐行零改动；P7 批把正文里四处写死的围栏换成 ${FENCE}，求值结果逐字节相同）。
+// 协议正文里嵌的是下面 types 的两个块标记与 lib/ai-edit/types.ts 的 FENCE，改它们等于改协议。
+import { CALL_BLOCK_TAG, EDIT_BLOCK_TAG, FENCE } from "./types";
 
 /** 文档上下文：随 system prompt 一并下发，让模型知道「改哪里」 */
 export interface AiEditContext {
@@ -17,9 +18,9 @@ const PROTOCOL = `你是 TsFlowy 笔记应用内置的助手，可以直接操�
 当用户要求你修改、重写、润色、续写、翻译、补充文档，或要求你创建页面、往数据库加记录时，
 除了正常作答，还必须在回复最后输出一个或多个动作指令代码块，格式严格如下：
 
-\`\`\`${EDIT_BLOCK_TAG}
+${FENCE}${EDIT_BLOCK_TAG}
 {"tool":"apply_edit","args":{"op":"replace_selection","summary":"一句话说明这次改了什么","content":"修改后的 Markdown 内容"}}
-\`\`\`
+${FENCE}
 
 tool 只能取：apply_edit（改文档）/ create_page（建页面，args: title, content?, parent_page?）/
 set_page_title（改页面标题，args: page, title）/ add_database_row（加表行，args: database, cells 字段名→值）/
@@ -41,9 +42,9 @@ create_page 的 parent_page、set_page_title 的 page、各表动作的 database
 需要更多信息时（全库搜索、浏览页面列表、读取某页正文、查看表结构、查询表数据），
 输出检索请求块，前端会执行并把结果反馈给你，然后你再作答：
 
-\`\`\`${CALL_BLOCK_TAG}
+${FENCE}${CALL_BLOCK_TAG}
 {"tool":"search_workspace","args":{"query":"关键词"}}
-\`\`\`
+${FENCE}
 
 tool 只能取：search_workspace（args: query）/ list_pages（无参数）/ get_page_content（args: page）/
 list_database_fields（args: database）/ query_database（args: database, 可选 limit；返回每行第一列是行 id）。

@@ -7,6 +7,7 @@ import {
   CHAT_ONLY_SYSTEM_PROMPT,
   CTX_SCOPE_PAGE_ONLY_NOTE,
   EDIT_BLOCK_TAG,
+  FENCE,
   extractCalls,
   extractEdit,
   hideEditBlock,
@@ -27,9 +28,9 @@ import type {
 } from "./index";
 
 /** 拼一个编辑指令代码块 */
-const block = (json: string) => "```" + EDIT_BLOCK_TAG + "\n" + json + "\n```";
+const block = (json: string) => FENCE + EDIT_BLOCK_TAG + "\n" + json + "\n" + FENCE;
 /** 拼一个只读检索请求块 */
-const call = (json: string) => "```" + CALL_BLOCK_TAG + "\n" + json + "\n```";
+const call = (json: string) => FENCE + CALL_BLOCK_TAG + "\n" + json + "\n" + FENCE;
 
 describe("extractEdit", () => {
   it("没有指令块时原样返回", () => {
@@ -90,7 +91,7 @@ describe("extractEdit", () => {
   });
 
   it("围栏未闭合也能提取（流式被截断）", () => {
-    const text = `开头\n${"```" + EDIT_BLOCK_TAG}\n{"op":"insert_at_cursor","content":"插入"}`;
+    const text = `开头\n${FENCE + EDIT_BLOCK_TAG}\n{"op":"insert_at_cursor","content":"插入"}`;
     const r = extractEdit(text);
     expect(r.edit).toEqual({ tool: "apply_edit", args: { op: "insert_at_cursor", summary: "", content: "插入" } });
     expect(r.display).toBe("开头");
@@ -163,7 +164,7 @@ describe("extractCalls", () => {
   });
 
   it("空块（流式只写到标记）报告 malformed 且不吞正文", () => {
-    const r = extractCalls(`答案\n\n${"```" + EDIT_BLOCK_TAG}`);
+    const r = extractCalls(`答案\n\n${FENCE + EDIT_BLOCK_TAG}`);
     expect(r.malformed).toBe(true);
     expect(r.calls).toHaveLength(0);
     expect(r.display).toBe("答案");
@@ -176,12 +177,12 @@ describe("hideEditBlock", () => {
   });
 
   it("流式过程中把半个指令块藏起来", () => {
-    const soFar = `说明文字\n${"```" + EDIT_BLOCK_TAG}\n{"op":"repl`;
+    const soFar = `说明文字\n${FENCE + EDIT_BLOCK_TAG}\n{"op":"repl`;
     expect(hideEditBlock(soFar)).toBe("说明文字\n");
   });
 
   it("检索请求块同样藏起来", () => {
-    const soFar = `说明文字\n${"```" + CALL_BLOCK_TAG}\n{"tool":"search_`;
+    const soFar = `说明文字\n${FENCE + CALL_BLOCK_TAG}\n{"tool":"search_`;
     expect(hideEditBlock(soFar)).toBe("说明文字\n");
   });
 });
@@ -193,8 +194,8 @@ describe("buildEditSystemPrompt", () => {
     expect(p).toContain("选中内容");
     expect(p).toContain("全文内容");
     // 断言整行开栏：协议正文若把标记接成硬编码假名（哪怕是真标记的前缀/扩展），模型就会输出前端不认的块
-    expect(p).toContain("```" + EDIT_BLOCK_TAG + "\n");
-    expect(p).toContain("```" + CALL_BLOCK_TAG + "\n");
+    expect(p).toContain(FENCE + EDIT_BLOCK_TAG + "\n");
+    expect(p).toContain(FENCE + CALL_BLOCK_TAG + "\n");
   });
 
   it("没有选区时提示改动目标，空标题有兜底", () => {
@@ -207,7 +208,7 @@ describe("buildEditSystemPrompt", () => {
 
 describe("protocol 层的其余导出", () => {
   it("没有可编辑文档时协议照常下发，只是没有当前页", () => {
-    expect(CHAT_ONLY_SYSTEM_PROMPT).toContain("```" + EDIT_BLOCK_TAG + "\n");
+    expect(CHAT_ONLY_SYSTEM_PROMPT).toContain(FENCE + EDIT_BLOCK_TAG + "\n");
     expect(CHAT_ONLY_SYSTEM_PROMPT).toContain("没有打开中的可编辑文档");
     expect(CHAT_ONLY_SYSTEM_PROMPT).not.toContain("标题：");
   });
@@ -237,6 +238,17 @@ describe("protocol 层的其余导出", () => {
   });
 });
 
+describe("协议字面量本身", () => {
+  // 围栏收进 types 之后，本文件的用例与 protocol / extract 引用的都是同一个 FENCE——
+  // 「写出来的块读不回来」这类结构漂移已经不可能发生，代价是值本身反而没人管了。
+  // 而旧会话 JSON 与用户已有配置里存的正是这三个字面量，动任何一个都是协议破坏性变更，所以钉死在这里。
+  it("围栏与两个块标记的字面值不变", () => {
+    expect(FENCE).toBe("```");
+    expect(EDIT_BLOCK_TAG).toBe("tsflowy-edit");
+    expect(CALL_BLOCK_TAG).toBe("tsflowy-call");
+  });
+});
+
 describe("ai-edit 的对外符号面", () => {
   // 拆成目录模块后 index.ts 手写 re-export：漏一行且当下没人用那个符号，tsc 也不会报
   const VALUE_EXPORTS = [
@@ -245,6 +257,7 @@ describe("ai-edit 的对外符号面", () => {
     "CHAT_ONLY_SYSTEM_PROMPT",
     "CTX_SCOPE_PAGE_ONLY_NOTE",
     "EDIT_BLOCK_TAG",
+    "FENCE",
     "RETRIEVAL_BLOCKED_BY_SCOPE_NOTE",
     "RETRIEVAL_TOOLS",
     "WRITE_TOOLS",
@@ -257,7 +270,7 @@ describe("ai-edit 的对外符号面", () => {
     "validateCall",
   ];
 
-  it("运行时的 15 个值导出一个不少（类型导出由下面的编译期引用验）", () => {
+  it("运行时的 16 个值导出一个不少（类型导出由下面的编译期引用验）", () => {
     expect(Object.keys(aiEditModule).sort()).toEqual([...VALUE_EXPORTS].sort());
   });
 

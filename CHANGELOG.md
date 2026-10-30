@@ -707,6 +707,15 @@
 - 全程零写入：只打读取类命令，视图页签那条是纯切换。
 - 静态验证：`node --check` exit 0、`prettier --write` 后 `--check` 干净；零产品代码改动，`tsc` / `lint` / `vitest` / `cargo` 未复跑。
 
+### 指令块的围栏收成一个常量，改围栏只有一处可改（P7 批 4）
+
+- 还的是 P5 域清单第 1 条：同一个三反引号围栏写死在**三处**——`lib/ai-edit/extract.ts` 里一句私有 `const FENCE = "\`\`\`"`、`protocol.ts` 正文里两处转义反引号（`\`\`\`${EDIT_BLOCK_TAG}`）、用例里的字面量。围栏与两个块标记（`tsflowy-edit`/`tsflowy-call`）在协议里是「围栏 + 标记」一个整体开栏，分头写就意味着改围栏要三处找齐，漏一处是静默的协议破坏。
+- 改法：`types.ts` 里与两个 tag 并排新增 `export const FENCE = "\`\`\`"`，`extract.ts`删掉私有常量改从`./types` 导入，`protocol.ts`四处开/闭栏换成`${FENCE}`，barrel 透出 `FENCE`（对外符号面 24 → 25，只多这一项），用例里 9 处字面量改用 `FENCE`拼块。**零行为变更**，这条不是宣称而是量出来的：用 esbuild 把`lib/ai-edit`打成临时 ESM bundle，改前/改后各 import 一次，对**所有含围栏的求值字符串**逐条取 SHA-256 比对（两份 system prompt、两段范围说明、4 组`buildEditSystemPrompt`、5 组含 `hideEditBlock`的往返），结果`ALL_STRINGS_IDENTICAL: true`。
+- 同源之后暴露出一处真空：全仓**没有任何用例钉住这三个字面量的值**，而旧会话与已存配置里的历史回复正是按它们解析的——改坏了不会有测试红，只在用户点「应用」时静默失效。补一条 `describe("协议字面量本身")`，断言 `FENCE === "\`\`\`"`、`EDIT_BLOCK_TAG === "tsflowy-edit"`、`CALL_BLOCK_TAG === "tsflowy-call"`；`src/lib/ai-edit` 用例数 27 → 28，全量 1,673 → 1,674。
+- 两条变异核验证明钉的是真值、也证明分叉会当场炸：① 把 `FENCE` 的字面值改成 `"~~~"` → **只有**那条新哨兵用例红（1 failed / 27 passed），说明它是这条协议破坏的唯一哨兵；② 在 `extract.ts` 里重新写死一句私有 `const FENCE = "~~~"`（正是本批消灭的那个形状）→ **14 条**用例红，往返、流式截断、剥离展示全塌。变异前后按字节读写、`finally` 还原，跑完与工作区逐字节相同。
+- 现状：整个 `lib/ai-edit/` 目录里字面三反引号只剩**两处**——`types.ts:84` 的定义与 `ai-edit.test.ts:246` 的哨兵断言，这正是要的形状。
+- 验证链：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`format:check` exit 0、`vitest run` **111 文件 / 1,674 用例全绿**、`npm run build` ✓ 53.09s、`cargo test` **344 通过 / 1 忽略**（Rust 侧零改动，条数与基线一致）。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
