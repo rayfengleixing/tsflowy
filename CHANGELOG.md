@@ -675,6 +675,12 @@
 - 本批不碰四条禁区（sync 整库 LWW、数据层零分页、恢复会话不还原 revert、`t()` 签名），只做 Windows 端无涉；`i18n/` 注册表模式一字未动。
 - **用户能感觉到的变化：没有。** 界面、数据、命令面一律不变，这是给后来人的目录账。
 
+### 工程：三份「源件已进目录、用例还留在根上」的尾巴归位（P6-10）
+
+- `src/lib/ai.test.ts` → `src/lib/ai/ai.test.ts`、`src/lib/ai-tools.test.ts` → `src/lib/ai-tools/ai-tools.test.ts`、`src/lib/ai-edit.test.ts` → `src/lib/ai-edit/ai-edit.test.ts`，跟着上一批刚归完的源件走；`from "./ai"` 那类引用改成 `./index`（barrel 就在同目录），`ai-tools.test.ts` 的 `./database/database-changed`、`./backend/db`、`./doc/documents`、`./search/search` 与 `vi.mock("./ai")` 共 6 处降级成 `../`，用例逻辑一字未动。
+- 仍留根三份是刻意的，不是漏搬：`use-language.test.tsx` 测的正是留在根上的 `i18n.ts`；`field-type-contract.test.ts` 对着 `contracts/field_type_contract.json` 与 Rust 侧核对字段类型契约；`release-manifest.test.ts` 钉的是 `package.json` / `tauri.conf.json` / `Cargo.toml` / `更新说明.md` 四处版本号一致——后两份没有对应的 lib 源件，属仓级契约用例。
+- 验证链：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`format:check` exit 0、这三份单跑 3 文件 / **84 用例**全过、全量 `vitest run` **111 文件 / 1,673 用例**全绿（文件数不变，只是换了位置）。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）

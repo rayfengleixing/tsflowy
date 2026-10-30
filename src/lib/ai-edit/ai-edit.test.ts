@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import * as aiEditModule from "./ai-edit";
+import * as aiEditModule from "./index";
 import {
   buildEditSystemPrompt,
   buildNoContextSystemPrompt,
@@ -13,7 +13,7 @@ import {
   RETRIEVAL_BLOCKED_BY_SCOPE_NOTE,
   RETRIEVAL_TOOLS,
   retrievalResultMessage,
-} from "./ai-edit";
+} from "./index";
 import type {
   AiCall,
   AiEditAnchor,
@@ -24,7 +24,7 @@ import type {
   RetrievalCall,
   RetrievalKind,
   WriteTool,
-} from "./ai-edit";
+} from "./index";
 
 /** 拼一个编辑指令代码块 */
 const block = (json: string) => "```" + EDIT_BLOCK_TAG + "\n" + json + "\n```";

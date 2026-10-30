@@ -23,7 +23,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
 }));
 
-import * as aiModule from "./ai";
+import * as aiModule from "./index";
 import {
   MAX_AI_IMAGE_BYTES,
   aiCancel,
@@ -45,7 +45,7 @@ import {
   type AiChatEvent,
   type AiSessionRow,
   type AiToolSpec,
-} from "./ai";
+} from "./index";
 
 /** 调完取最后一次 invoke 记录（tsconfig 的 lib 里没有 Array.prototype.at） */
 function lastCall(): [string, unknown] {
