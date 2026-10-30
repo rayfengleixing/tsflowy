@@ -716,6 +716,18 @@
 - 现状：整个 `lib/ai-edit/` 目录里字面三反引号只剩**两处**——`types.ts:84` 的定义与 `ai-edit.test.ts:246` 的哨兵断言，这正是要的形状。
 - 验证链：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`format:check` exit 0、`vitest run` **111 文件 / 1,674 用例全绿**、`npm run build` ✓ 53.09s、`cargo test` **344 通过 / 1 忽略**（Rust 侧零改动，条数与基线一致）。
 
+### 轮次登记的跨文件共享验过了：不新增用例，用三条变异把已有那条哨兵坐实（P7 批 5）
+
+- 待验的那条嫌疑：`stores/ai/index.ts` 在 `create` 里调一次 `createTurnRegistry()`，再把**同一个对象**按引用注入 `createRunSlice({ turn })` 与 `createStreamSlice({ cancelledTurns: turn.cancelled })`——`stop()` 往集合里写轮号、done 帧收尾时读那个集合，跨两个文件靠的是「共享引用」这一个隐含前提。有工厂在，将来完全可能被调用两次；本批问的是：**真断了，有没有测试会红？**
+- 答案是有一条，而且正好是那条专门为此写的：`stores/ai-stream.test.ts` 的「确认关闭时迟到的 done 仍不写数据：拦它的是轮次登记，不是 confirm_edit」。它把 `confirm_edit` 关掉，于是拦住自动落地的理由只剩「这一轮被用户停过」一个——另一条同形用例（确认开着）两条路都停在待确认，看不出共享有没有生效，这条才真正盯住那两个文件之间的那个 `Set`。
+- 三条变异，全部按字节读写、`finally` 还原、跑完与原文逐字节相同（`ai-stream.test.ts` 基线 38 用例全绿）：
+  · **T1** 把注入流式切片的那句换成 `cancelledTurns: new Set<number>()` → **只红 1 条**，红的就是那条哨兵（37 passed）；
+  · **T2** 更贴近将来真实错法的形状——`const turn = createTurnRegistry();` 之后再调一次 `createTurnRegistry()`，把第二份注进流式切片（run / stream 各拿一份登记）→ 同样**只红那 1 条**；
+  · **T3** 改坏写侧（`stop()` 不再 `turn.cancelled.add(turn.seq)`）→ 红 **4 条**：除哨兵外，agent 循环那三条边界用例（检索阶段点停止 / 停止后不再执行剩余检索 / 停止后立刻重新提问）全塌，且各等了 15 秒超时——旧循环不会在边界退出，正说明它读的是同一个集合。
+- 因此**本批不新增用例**（「补用例先停止」的令还生效，且再加一条结构断言 `streamDeps.cancelledTurns === runDeps.turn.cancelled` 需要把装配期内部暴露出来，换来的只是把同一件事再钉一遍）。T1 / T2 各只红一条是好事而不是坏事：那条哨兵是这条不变量的**唯一且充分**守卫，断在哪一条说得清。
+- 同批清掉两处仓外残留：P6 收尾那份一次性探针 `D:\Code\.p6-smoke-probe.js` 已由 `scripts/cdp-lib-layout-smoke.mjs`（e9fd77f）取代，删除；项目卡与 memory 里的引用、HEAD 与规模数字一并更正。
+- 验证链：**零产品代码改动**（变异全部还原），`src/stores/ai-stream.test.ts` 单跑 38 用例全绿，`git status` 干净；全量基线沿用 P7 批 4 之后的 111 文件 / 1,674 用例与 344 通过 / 1 忽略。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）
