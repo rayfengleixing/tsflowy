@@ -10,10 +10,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SCRATCH = "CDP-cond";
 const NOTE = "批注";
 const NAME = "名称";
-const TODAY = new Date().toISOString().slice(0, 10);
-/** 丙丁放到三天后：日历一格的行数 >3 才会折叠成 2 行 +「查看全部」（CalendarView.tsx:287），
- *  四行全塞今天会让丙丁根本不在 DOM 里，未命中行的底色参照物就没了。 */
-const LATER = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+const pad2 = (n) => String(n).padStart(2, "0");
+const NOW = new Date();
+/** 界面按本地日期渲染，取「今天」不能用 toISOString()（那是 UTC，月末/深夜会差一天）。 */
+const TODAY = `${NOW.getFullYear()}-${pad2(NOW.getMonth() + 1)}-${pad2(NOW.getDate())}`;
+/**
+ * 丙丁放到**当月另一格**，不是「三天后」：日历月视图只渲染当月格子
+ * （`lib/database/board-calendar.ts` 的 `buildCalendarMonth` 把越界格置成 `day:null`，
+ * 按日期分桶时越月的行连桶都进不了），所以 `+3 天` 这种写法每月最后三天必然把丙丁送出可视区，
+ * 症状是「找不到取色锚点」而不是「没上色」。换一格照样避开折叠阈值（一天 >3 行才折成 2 行 +「查看全部」，
+ * CalendarView.tsx:287），未命中行的底色参照物就还在 DOM 里。
+ */
+const LATER_DAY = NOW.getDate() <= 25 ? 25 : 5;
+const LATER = `${NOW.getFullYear()}-${pad2(NOW.getMonth() + 1)}-${pad2(LATER_DAY)}`;
 const HOT = "cdf-hot";
 const COLD = "cdf-cold";
 /** 顶栏那枚按钮按 title 精确认，别拿文案找：页签/标题上的按钮文本也可能含「条件格式」四个字

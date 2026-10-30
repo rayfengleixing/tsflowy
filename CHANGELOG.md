@@ -663,6 +663,7 @@
 - 脚本覆盖的缝与 X 批 1 的落差逐条对得上：顶栏按钮用 `title` 精确认（页签标题也含「条件格式」四个字，按文本正则点到的是标题按钮）、七视图的色调类名按 `COND_TONES` 同序取色点、落库侧直接读 `views.extra` 的 `condFormats` 不靠界面自证、只写自建沙箱表且收尾 `view_purge` 硬删。
 - **本批没有运行它**，所以「七个视图真把颜色渲染出来了」这条证据仍然欠着——X 批 1 那句「真机没跑」不作废，也不该被这次入库抵掉。要结案得另起一次真窗口跑，并在跑完后把断言数与结果补进本节。
 - 静态验证：本批零产品代码改动（只把已有脚本入库），`tsc` / 全量 `vitest` 与基线无关；`eslint` 对本脚本报「被 ignore 规则跳过」（`scripts/` 不在 lint 范围内），`prettier --check` 该文件干净。
+- **2026-10-30 已跑，结案**：真窗口连跑两遍一致，60 条断言全绿、`EXCEPTIONS(0)`、`views=7`、收尾 `leftover: none`。第一遍是红的，红在脚本自己的月份假设而不是产品——根因、修法与逐条证据见下面「条件格式那条真机欠账结案了（P7 批 1）」一节。
 
 ### 工程：`src/lib` 根上 75 个散文件归进 11 个目录，根上只剩 9 个跨域收口件（P6）
 
@@ -680,6 +681,15 @@
 - `src/lib/ai.test.ts` → `src/lib/ai/ai.test.ts`、`src/lib/ai-tools.test.ts` → `src/lib/ai-tools/ai-tools.test.ts`、`src/lib/ai-edit.test.ts` → `src/lib/ai-edit/ai-edit.test.ts`，跟着上一批刚归完的源件走；`from "./ai"` 那类引用改成 `./index`（barrel 就在同目录），`ai-tools.test.ts` 的 `./database/database-changed`、`./backend/db`、`./doc/documents`、`./search/search` 与 `vi.mock("./ai")` 共 6 处降级成 `../`，用例逻辑一字未动。
 - 仍留根三份是刻意的，不是漏搬：`use-language.test.tsx` 测的正是留在根上的 `i18n.ts`；`field-type-contract.test.ts` 对着 `contracts/field_type_contract.json` 与 Rust 侧核对字段类型契约；`release-manifest.test.ts` 钉的是 `package.json` / `tauri.conf.json` / `Cargo.toml` / `更新说明.md` 四处版本号一致——后两份没有对应的 lib 源件，属仓级契约用例。
 - 验证链：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`format:check` exit 0、这三份单跑 3 文件 / **84 用例**全过、全量 `vitest run` **111 文件 / 1,673 用例**全绿（文件数不变，只是换了位置）。
+
+### 条件格式那条真机欠账结案了——第一次跑就抓到脚本自己的月份假设错（P7 批 1）
+
+- 起了真窗口跑 9b7f20c 入库那份 `scripts/cdp-cond-format-smoke.mjs`（此前一次都没跑过，X 批 1 的「真机没跑」一直挂着）。**第一遍红在日历**：`ZCDP-calendar：四行在这个宿主里都找得到取色锚点` 这条断言失败，实拿是 `甲 toned=true found=true / 乙 true / 丙 false / 丁 false`——丙丁两行根本不在 DOM 里。沙箱照常收尾 `view_purge` 硬删干净（`leftover: none`），没在用户库里留脏数据。
+- 根因在**脚本的假设**，不在产品：它把「底色参照物」丙丁放到「今天 +3 天」，而且日期串是 `toISOString()` 切的（那是 UTC，与界面用的本地日期在月末/深夜会差一天）。日历视图是**月视图**，`lib/database/board-calendar.ts` 的 `buildCalendarMonth(year, month, …)` 只把当月 1 到月末的格子放进日期桶，越界的格子直接 `day: null`，于是排在别月的行连桶都进不去。合起来的结果是：每月最后三天跑这条脚本必红（今天 2026-10-30，+3 天落到 11-02）。界面表现不是缺陷——日历本就不渲染别月的行，这条脚本要的只是「未命中的行也在可视区里，好拿它当底色参照物」。
+- 修法两条，只动脚本，产品代码零改动：两条日期都留在**当月**（今天 + 当月另一格，`getDate() <= 25 ? 25 : 5`，既保证与今天不同格，也照样避开「一天 >3 行折成 2 行 + 查看全部」那条折叠阈值）；`TODAY` 改成本地年月日拼，不再走 UTC。原注释里那句「四行全塞今天会让丙丁不在 DOM 里」的理由仍然成立，只是它给的解法（+3 天）月末自己会失效，注释已改成写明月视图这条真约束。
+- 结案证据：连跑两遍**逐字一致**——60 条断言全绿、`EXCEPTIONS(0)`（`Runtime.exceptionThrown` 收集器全程零条）、`COND_FORMAT_SMOKE_PASS views=7`、收尾七个沙箱视图 `view_get` 全部取不到且 `leftover: none`。覆盖到的正是 X 批 1 那句没人证过的缝：表格 / 列表 / 画廊 / 看板 / 日历 / 时间线 / 表单**七个视图各自顶栏按钮都能开弹窗、规则各自落进本视图 `views.extra.condFormats`、角标跟到规则数、色调只落在命中行**，并且不是靠界面自证——落库侧直接读 `extra`，渲染侧既认 `COND_TONES` 同序的色调类名，也认 `getComputedStyle` 的实际底色（未命中行是 `rgba(0, 0, 0, 0)` 或 `rgb(255, 255, 255)`，命中行是 `oklch(...)`）。单元格档与整行档分得开：单元格档只铺在指定字段那一格、整行档压得过冻结序号格与主字段格自带的 `bg-white`。
+- 一句仍未变的落差：这条链**依然没有 jsdom 组件用例**（「补用例先停止」的令还生效），X 批 1 写的「套件里对条件格式的断言只有纯逻辑那一份」不作废——本批收的是真机证据，不是测试覆盖。
+- 静态验证：本批只改 `scripts/*.mjs`（不在 Vite 依赖图里，也不在 lint 范围内），`npx prettier --check` 该文件 exit 0；零产品代码改动，所以 `tsc` / `lint` / 全量 `vitest` / `cargo` 未复跑，基线仍是 111 文件 1,673 用例与 344 通过 1 忽略。
 
 ## v0.8.33（2026-10-20）
 
