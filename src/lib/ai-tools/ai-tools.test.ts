@@ -239,6 +239,109 @@ describe("AI 写动作的逆操作计划", () => {
   });
 });
 
+// 失败路径的六条（2026-10-30 AI 写行批）：这套动作绕开 stores/database 直接落 IPC，
+// 而失败卡片上没有撤销入口——回滚的活儿只能它自己干。改坏这段 try/catch 当场该红，
+// 所以钉的是「行撤没撤掉、格盖没盖回、界面通知几次」，不是提示文案的措辞。
+describe("AI 写行的失败路径不留孤儿", () => {
+  beforeEach(() => {
+    app.set({ tree: [tableNode], viewId: null });
+    api.listFields.mockResolvedValue([col("f1", "标题"), col("f2", "备注")]);
+    api.listRows.mockResolvedValue([{ id: "r1" }]);
+    api.loadCells.mockResolvedValue({});
+    api.createRow.mockResolvedValue({ id: "r-new" });
+    for (const fn of [api.setCell, api.setCellsMany, api.purgeRow]) fn.mockClear();
+    for (const fn of Object.values(app.actions)) fn.mockClear();
+  });
+
+  it("加行写到一半失败：把刚建的行 purge 掉，并且通知界面重取", async () => {
+    api.setCell.mockImplementationOnce(() => Promise.resolve());
+    api.setCell.mockImplementationOnce(() => Promise.reject(new Error("database is locked")));
+    const seen: string[][] = [];
+    const off = onDatabaseChanged((ids) => seen.push(ids));
+    const out = await runWriteAction({
+      tool: "add_database_row",
+      args: { database: "任务", cells: { 标题: "甲", 备注: "乙" } },
+    });
+    off();
+
+    expect(out.ok).toBe(false);
+    expect(out.detail).toContain("database is locked");
+    expect(api.createRow).toHaveBeenCalledWith("v1");
+    // 这行是本次动作凭空造的，就地彻底删掉（进回收站只是留一堆空行垃圾）
+    expect(api.purgeRow).toHaveBeenCalledWith("r-new");
+    expect(out.undo).toBeUndefined();
+    // 抛错时循环之后的失效与通知一次都不会执行，所以这两件必须在 catch 里补上
+    expect(seen).toEqual([["v1"]]);
+    expect(app.actions.invalidateRelations).toHaveBeenCalledWith(["v1"]);
+  });
+
+  it("回滚本身也崩了：如实点名「这行没能撤掉」，不假装已回滚", async () => {
+    api.setCell.mockImplementationOnce(() => Promise.resolve());
+    api.setCell.mockImplementationOnce(() => Promise.reject(new Error("disk I/O error")));
+    api.purgeRow.mockRejectedValueOnce(new Error("cannot purge"));
+    const out = await runWriteAction({
+      tool: "add_database_row",
+      args: { database: "任务", cells: { 标题: "甲", 备注: "乙" } },
+    });
+    expect(out.ok).toBe(false);
+    expect(out.detail).toContain("disk I/O error");
+    expect(out.detail).toContain("没能撤掉");
+  });
+
+  it("字段名全认不出：不报成功、把空行撤掉（与 update 的守卫一致）", async () => {
+    const seen: string[][] = [];
+    const off = onDatabaseChanged((ids) => seen.push(ids));
+    const out = await runWriteAction({
+      tool: "add_database_row",
+      args: { database: "任务", cells: { 不存在的字段: "x" } },
+    });
+    off();
+    expect(out.ok).toBe(false);
+    expect(out.detail).toContain("一格都没写成");
+    expect(api.purgeRow).toHaveBeenCalledWith("r-new");
+    expect(seen).toEqual([["v1"]]);
+  });
+
+  it("不带 cells 的占位加行仍然成功（上面那条守卫只在「给了 cells 却一格没写成」时生效）", async () => {
+    const out = await runWriteAction({ tool: "add_database_row", args: { database: "任务" } });
+    expect(out.ok).toBe(true);
+    expect(out.undo).toEqual({ kind: "purge_row", database: "v1", row_id: "r-new" });
+    expect(api.purgeRow).not.toHaveBeenCalled();
+  });
+
+  it("改行写到一半失败：已写的格子按旧值盖回去，界面收到一次通知", async () => {
+    api.loadCells.mockResolvedValue({ r1: { f1: "旧标题", f2: "旧备注" } });
+    api.setCell.mockImplementationOnce(() => Promise.resolve());
+    api.setCell.mockImplementationOnce(() => Promise.reject(new Error("database is locked")));
+    const seen: string[][] = [];
+    const off = onDatabaseChanged((ids) => seen.push(ids));
+    const out = await runWriteAction({
+      tool: "update_database_row",
+      args: { database: "任务", row: "r1", cells: { 标题: "新标题", 备注: "新备注" } },
+    });
+    off();
+    expect(out.ok).toBe(false);
+    // 盖回的是「已经写成那些格」的改前值，一条不多一条不少
+    expect(api.setCellsMany).toHaveBeenCalledWith([{ rowId: "r1", fieldId: "f1", value: "旧标题" }]);
+    expect(seen).toEqual([["v1"]]);
+  });
+
+  it("改行第一格就失败：什么都没写，不去盖回也不通知", async () => {
+    api.loadCells.mockResolvedValue({ r1: { f1: "旧标题" } });
+    api.setCell.mockImplementationOnce(() => Promise.reject(new Error("database is locked")));
+    const seen: string[][] = [];
+    const off = onDatabaseChanged((ids) => seen.push(ids));
+    const out = await runWriteAction({
+      tool: "update_database_row",
+      args: { database: "任务", row: "r1", cells: { 标题: "新标题" } },
+    });
+    off();
+    expect(out.ok).toBe(false);
+    expect(api.setCellsMany).not.toHaveBeenCalled();
+    expect(seen).toEqual([]);
+  });
+});
+
 describe("sanitizeUndoPlan", () => {
   it("认识的动作原样恢复", () => {
     expect(sanitizeUndoPlan({ kind: "purge_row", database: "v1", row_id: "r1" })).toEqual({

@@ -2,6 +2,12 @@
 // 差别只在改已有行要「先读旧值、撤销时按清单盖回去」。
 // 失败侧与页面类也不同：写一半崩了（补建选项或落格的 IPC 失败）就地回滚，不留孤儿——
 // 失败卡片上没有撤销入口，回滚的活儿不能交给用户。
+//
+// 这里刻意直接调 databaseApi、不经 stores/database（2026-10-30 逐条盘过，别再当未修的坑）：
+// 回收站不靠 store 缓存，下次打开对话框自己 loadTrash；rowDetail 那条订阅观察不到，因为只写当前这张表的格子；
+// 不弹 toast 是有意的，动作卡片本身就是提示。代价是把 store 写入口的三件事手工补上——
+// 类型闸门（cellWriteTypeSafe）、关联缓存失效、界面重取通知，缺一件就是给模型开旁路。
+// 改走 store 属行为变更（会带整表 reload 与用户侧 toast），要动需单独拍板。
 
 import { appInvalidateRelations } from "../app-context";
 import { databaseApi } from "../backend/database";
