@@ -643,6 +643,8 @@ export const zh = {
   "aggregate.unchecked": "未勾选",
   "aggregate.share": "占比",
   "aggregate.shareScope": "分母是当前筛选后的整张表：数字列比的是求和，其余列比的是已填写行数。",
+  "aggregate.subtotalField": "小计字段",
+  "aggregate.subtotalNone": "不做小计",
   "cond.title": "条件格式",
   "cond.desc": "满足条件的单元格或整行会上色；条件用的是筛选那套比较符，只看当前行的值。",
   "cond.add": "新增规则",

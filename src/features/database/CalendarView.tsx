@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
+import { AggregateMenu } from "./AggregateMenu";
+import { normalizeAggregate, type AggregateFn } from "@/lib/database/database-aggregate";
 import {
   BulkEditDialogHost,
   ROW_SELECTED_RING,
@@ -58,6 +60,11 @@ export function CalendarView({
   const [dragOverDate, setDragOverDate] = useState<string | null>(null);
   // 单日卡片折叠：超过 3 条只露前 2 张 + 「+N 更多」，避免密集日期把整周撑爆
   const [expandedDate, setExpandedDate] = useState<string | null>(null);
+  // 日格小计：字段选一个，函数所有日期共用（没选字段就没有小计，也没地方换函数）
+  const [subtotalFieldId, setSubtotalFieldId] = useState<string | null>(
+    () => readViewConfig(view).calendarSubtotalFieldId ?? null,
+  );
+  const [subtotalFn, setSubtotalFn] = useState<AggregateFn | undefined>(() => readViewConfig(view).calendarSubtotalFn);
 
   useEffect(() => {
     load(view).catch((e: unknown) => logger.error("calendar.load", e));
@@ -66,6 +73,20 @@ export function CalendarView({
   const changeDateField = (id: string | null) => {
     setDateFieldId(id);
     patchViewConfig(view, { calendarFieldId: id ?? "" });
+  };
+
+  const changeSubtotalField = (id: string | null) => {
+    setSubtotalFieldId(id);
+    patchViewConfig(view, { calendarSubtotalFieldId: id ?? "" });
+  };
+  const changeSubtotalFn = (fn: AggregateFn | undefined) => {
+    // 小计只有整屏一份，没有「这一格不显示」的说法：日格头选「不统计」就是把整件事关掉
+    if (!fn) {
+      changeSubtotalField(null);
+      return;
+    }
+    setSubtotalFn(fn);
+    patchViewConfig(view, { calendarSubtotalFn: fn });
   };
 
   // 初始化日期字段：第一个 date/created_at/last_edited_at
@@ -117,6 +138,22 @@ export function CalendarView({
     if (!dateField) return null;
     return buildCalendarMonth(year, month, displayRows, cells, dateField.id);
   }, [dateField, year, month, displayRows, cells]);
+
+  // 日格小计：字段按可见字段现找（被删/被隐藏就整件事消失），函数不在该类型候选里回落计数
+  const subtotalField = subtotalFieldId ? (visibleFields.find((f) => f.id === subtotalFieldId) ?? null) : null;
+  const subtotalFnEffective: AggregateFn | undefined = subtotalField
+    ? (normalizeAggregate(subtotalField.field_type, subtotalFn) ?? "count")
+    : undefined;
+  // 每日的行 id 收成一张稳定表：拖拽/展开单日引发的重渲染不该让整月 42 格汇总全部重算
+  const dayRowIds = useMemo(
+    () =>
+      new Map(
+        (cal?.days ?? [])
+          .filter((d): d is typeof d & { date: string } => d.date !== null)
+          .map((d) => [d.date, d.rows.map((r) => r.id)]),
+      ),
+    [cal],
+  );
 
   // 搜索命中定位：命中行的日期不在当前月份时先翻过去，翻完再由 useRowFocus 滚动
   const { scrollerRef, focusRowId } = useRowFocus(`${year}-${month}`);
@@ -204,6 +241,24 @@ export function CalendarView({
             >
               {dateFields.length === 0 && <option value="">{t("calendar.noField")}</option>}
               {dateFields.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 日格小计的字段（汇总函数在每格头上换） */}
+          <div className="flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700">
+            <span className="text-neutral-500">{t("aggregate.subtotalField")}:</span>
+            <select
+              className="bg-transparent text-xs outline-none"
+              aria-label={t("aggregate.subtotalField")}
+              value={subtotalField?.id ?? ""}
+              onChange={(e) => changeSubtotalField(e.target.value || null)}
+            >
+              <option value="">{t("aggregate.subtotalNone")}</option>
+              {visibleFields.map((f) => (
                 <option key={f.id} value={f.id}>
                   {f.name}
                 </option>
@@ -328,6 +383,18 @@ export function CalendarView({
                         >
                           {d.day}
                         </span>
+                      )}
+                      {date && subtotalField && subtotalFnEffective && d.rows.length > 0 && (
+                        <div className="ml-auto w-20 shrink-0" data-testid={"cal-subtotal-" + date}>
+                          <AggregateMenu
+                            field={subtotalField}
+                            fn={subtotalFnEffective}
+                            rowIds={dayRowIds.get(date) ?? []}
+                            cells={sortableCells}
+                            scopeRowIds={visibleRowIds}
+                            onPick={changeSubtotalFn}
+                          />
+                        </div>
                       )}
                       {date && (
                         <button

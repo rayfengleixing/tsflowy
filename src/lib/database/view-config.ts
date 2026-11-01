@@ -43,6 +43,12 @@ export interface ViewConfig {
   boardSubtotalFieldId?: string;
   /** 看板列头的小计函数：所有列共用一个，缺省按计数算 */
   boardSubtotalFn?: AggregateFn;
+  /** 日历日格小计取自哪个字段（不配即日格头不显示小计；函数整屏共用一份） */
+  calendarSubtotalFieldId?: string;
+  calendarSubtotalFn?: AggregateFn;
+  /** 列表顶栏汇总取自哪个字段（不配即只显示行数；函数全表共用一份） */
+  listSubtotalFieldId?: string;
+  listSubtotalFn?: AggregateFn;
   /** 看板卡片上额外展示的字段 id（按此顺序）；未配置沿用"前 3 个可见字段"启发式，空数组=只显示标题 */
   cardFieldIds?: string[];
   /** 画廊视图：封面图取自哪个附件字段 */
@@ -154,6 +160,12 @@ export function parseViewConfig(text: string | null | undefined): ViewConfig {
   if (typeof o.boardSubtotalFieldId === "string" && o.boardSubtotalFieldId)
     out.boardSubtotalFieldId = o.boardSubtotalFieldId;
   if (isAggregateFn(o.boardSubtotalFn)) out.boardSubtotalFn = o.boardSubtotalFn;
+  if (typeof o.calendarSubtotalFieldId === "string" && o.calendarSubtotalFieldId)
+    out.calendarSubtotalFieldId = o.calendarSubtotalFieldId;
+  if (isAggregateFn(o.calendarSubtotalFn)) out.calendarSubtotalFn = o.calendarSubtotalFn;
+  if (typeof o.listSubtotalFieldId === "string" && o.listSubtotalFieldId)
+    out.listSubtotalFieldId = o.listSubtotalFieldId;
+  if (isAggregateFn(o.listSubtotalFn)) out.listSubtotalFn = o.listSubtotalFn;
   const cardFieldIds = specArray<string>(o.cardFieldIds, isString);
   if (cardFieldIds) out.cardFieldIds = cardFieldIds;
   if (typeof o.activeViewId === "string" && o.activeViewId) out.activeViewId = o.activeViewId;
@@ -180,6 +192,10 @@ export function mergeViewConfig(text: string | null | undefined, patch: Partial<
   if (patch.condFormats !== undefined) next.condFormats = patch.condFormats;
   if (patch.boardSubtotalFieldId !== undefined) next.boardSubtotalFieldId = patch.boardSubtotalFieldId;
   if (patch.boardSubtotalFn !== undefined) next.boardSubtotalFn = patch.boardSubtotalFn;
+  if (patch.calendarSubtotalFieldId !== undefined) next.calendarSubtotalFieldId = patch.calendarSubtotalFieldId;
+  if (patch.calendarSubtotalFn !== undefined) next.calendarSubtotalFn = patch.calendarSubtotalFn;
+  if (patch.listSubtotalFieldId !== undefined) next.listSubtotalFieldId = patch.listSubtotalFieldId;
+  if (patch.listSubtotalFn !== undefined) next.listSubtotalFn = patch.listSubtotalFn;
   if (patch.cardFieldIds !== undefined) next.cardFieldIds = patch.cardFieldIds;
   if (patch.activeViewId !== undefined) next.activeViewId = patch.activeViewId;
   return JSON.stringify(next);

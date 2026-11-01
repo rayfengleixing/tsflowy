@@ -752,6 +752,17 @@
 - P5 域剩下的两条按点单**都不开工**、继续挂着：「IPC 契约变更轮」至今没有定义内容；`lib/desktop/shortcuts.ts:258` 的 store 层次归位属分层重构、需单独排期。
 - 验证链：`tsc` exit 0、`eslint --max-warnings=0` exit 0、`format:check` exit 0、`vitest run` **111 文件 / 1,680 用例全绿**、`npm run build` ✓ 1m46s、`cargo test` **344 通过 / 1 忽略**（Rust 侧零改动）；变异跑完 `git status` 只剩本批两个文件，还原逐字节相同。
 
+### 日历的日格和列表的顶栏也能算小计了（聚合宿主批）
+
+- 上一轮（2026-10-29 X 批 2）聚合小计只点单做到看板列头，日历/列表/画廊/时间线当时明确「这轮不留」。本批按 2026-11-01 的点单补其中**真有宿主的两处**：
+  · **日历**：顶栏多一个「小计字段」下拉，选定之后每个有行的日格右上角出现一块汇总，就地点击可换汇总函数（今天两行 2+4 → 求和 6.00、平均 3.00；另一格只填了一格，平均仍是 10.00）。
+  · **列表**：顶栏原来那个写死的行数换成同一块汇总——选了字段就是它的汇总，没选就还是行数，**一块地方只放一个数**，不并排摆两个数字。
+- 零新派生：`aggregateValue(fn, field, rowIds, cells, scopeRowIds)` 与 `aggregatesForType` / `normalizeAggregate` 本来就是纯函数（`database-aggregate.ts` 头部注释即「分组小计与全表汇总走同一条路径」），日历的每日行集更是现成的（`CalendarDay.rows` 早就分好桶），所以缺的从来是宿主位而不是依赖。汇总块两处都复用看板列头那个 `AggregateMenu`，「占比」的分母沿用整屏筛剩（`scopeRowIds`），不是每格自己除自己。
+- 口径跟看板对齐，不另立一套：**没配字段就没有小计**，配了字段但没选过函数按总行数回落且**回落不落库**；日格选「不统计」= 把字段撤掉（小计只有整屏一份，没有「这一格不显示」的说法）；**当天没有行就不挂一块 0**，免得整月空白格全是噪音。持久化按视图存进 `views.extra`，新增四把键 `calendarSubtotalFieldId` / `calendarSubtotalFn` / `listSubtotalFieldId` / `listSubtotalFn`，与 `boardSubtotal*` 同形制（撤掉写空串，读出来即未配置）。
+- 真机取证（`scripts/cdp-agg-subtotal-smoke.mjs`，CDP 真鼠标 + 原生 select change）：**25 条断言全绿**，沙箱表 `CDP-agg` 开跑先清、收尾 `view_purge` 硬删，`sandboxStillAlive` 为空。覆盖到：未配置时日格头/顶栏都没有汇总块 → 选字段后按该日行集出数 → 就地换求和与平均各自重算 → 两处字段与函数分别落进自己视图的 extra（**列表与日历互不串**）→ 整页刷新后仍是从库里读出来的那份 → 撤掉字段后汇总块消失、列表的行数回来了。实跑还纠正了两处脚本口径：数字列的求和/平均按**该字段自己的数字格式**渲染（两位小数 `6.00`），总行数是整数；`patchViewConfig` 有 400ms 防抖，读库要轮询到「值等于新的那个」——只等「键存在」会把旧值读成通过。
+- 落差如实记两条：① 画廊与时间线这轮仍不留宿主（它们没有分组概念，只能算全表一个数，与列表那块重复）；② 本批按点单**不补新用例**，接线本身没有测试钉住——聚合函数本身有 `database-aggregate.test.ts` 的纯函数用例，但「日历日格真渲染出这块汇总」「四把新键真读写」只有上面那个冒烟脚本作证据（`view-config.test.ts` 连既有的 `boardSubtotal*` 都没覆盖，新键沿用同一形制、同样零单测），CI 里没有 WebView2 会话、脚本不进 CI。
+- 验证链：`tsc --noEmit` exit 0、`eslint --max-warnings=0` exit 0、`format:check` exit 0、`vitest run` **111 文件 / 1,680 用例全绿**（条数不变——本批没加用例）、`npm run build` ✓ 59s、`cargo test` **344 通过 / 1 忽略**（Rust 侧零改动）。改动面：`ListView.tsx`、`CalendarView.tsx`、`view-config.ts`、`i18n/zh.ts`、`i18n/en.ts` 共 5 个文件 +145/−2 行，外加一个新冒烟脚本。
+
 ## v0.8.33（2026-10-20）
 
 ### 唤起主窗口的系统快捷键可以改了（批次11）

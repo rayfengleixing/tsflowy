@@ -1,9 +1,12 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ExternalLink, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useDbStore } from "@/stores/database-context";
 import { QueryButtons, QueryPanels, useQueryBar } from "./query-bar";
 import { CondFormatButton, CondFormatDialogHost, useCondFormat } from "./cond-format-bar";
+import { AggregateMenu } from "./AggregateMenu";
+import { normalizeAggregate, type AggregateFn } from "@/lib/database/database-aggregate";
+import { patchViewConfig, readViewConfig } from "@/lib/database/view-config";
 import { COND_TONE_CELL, toneOfIndex, type CondTone } from "@/lib/database/database-cond-format";
 import {
   BulkEditDialogHost,
@@ -83,6 +86,30 @@ export function ListView({
   // 批量改值：这一屏右键选中的行（表格视图有勾选列，列表没有）
   const bulk = useRowBulkEdit(visibleRowIds);
 
+  // 顶栏汇总：字段选一个，函数就地在那块上换（列表一行一条记录，只有全筛集这一档范围）
+  const [subtotalFieldId, setSubtotalFieldId] = useState<string | null>(
+    () => readViewConfig(view).listSubtotalFieldId ?? null,
+  );
+  const [subtotalFn, setSubtotalFn] = useState<AggregateFn | undefined>(() => readViewConfig(view).listSubtotalFn);
+  const changeSubtotalField = (id: string | null) => {
+    setSubtotalFieldId(id);
+    patchViewConfig(view, { listSubtotalFieldId: id ?? "" });
+  };
+  const changeSubtotalFn = (fn: AggregateFn | undefined) => {
+    // 「不统计」在这块没有意义：关掉汇总就是把字段撤掉，顶栏退回只显示行数
+    if (!fn) {
+      changeSubtotalField(null);
+      return;
+    }
+    setSubtotalFn(fn);
+    patchViewConfig(view, { listSubtotalFn: fn });
+  };
+  // 字段被删/被隐藏就整件事撤掉；函数不在该类型的候选里回落计数（与看板列头同一口径）
+  const subtotalField = subtotalFieldId ? (visibleFields.find((f) => f.id === subtotalFieldId) ?? null) : null;
+  const subtotalFnEffective: AggregateFn | undefined = subtotalField
+    ? (normalizeAggregate(subtotalField.field_type, subtotalFn) ?? "count")
+    : undefined;
+
   const { scrollerRef, focusRowId } = useRowFocus(displayRows.length);
 
   const addRow = async () => {
@@ -105,7 +132,36 @@ export function ListView({
         <div className="flex shrink-0 items-center gap-2">
           <QueryButtons bar={bar} />
           <CondFormatButton bar={cond} />
-          <span className="text-xs text-neutral-400">{displayRows.length}</span>
+          <div className="flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700">
+            <span className="text-neutral-500">{t("aggregate.subtotalField")}:</span>
+            <select
+              className="bg-transparent text-xs outline-none"
+              aria-label={t("aggregate.subtotalField")}
+              value={subtotalField?.id ?? ""}
+              onChange={(e) => changeSubtotalField(e.target.value || null)}
+            >
+              <option value="">{t("aggregate.subtotalNone")}</option>
+              {visibleFields.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          {/* 一块地方只放一个数：选了字段就是它的汇总，没选就还是行数 */}
+          {subtotalField && subtotalFnEffective ? (
+            <div className="w-28 rounded-md border border-neutral-300 bg-white">
+              <AggregateMenu
+                field={subtotalField}
+                fn={subtotalFnEffective}
+                rowIds={visibleRowIds}
+                cells={evaluated}
+                onPick={changeSubtotalFn}
+              />
+            </div>
+          ) : (
+            <span className="text-xs text-neutral-400">{displayRows.length}</span>
+          )}
           <Button variant="ghost" size="sm" onClick={() => void addRow()}>
             <Plus className="h-3.5 w-3.5" />
             {t("row.new")}

@@ -662,6 +662,8 @@ export const en: Record<MessageKey, string> = {
   "aggregate.share": "Share of total",
   "aggregate.shareScope":
     "The denominator is the whole filtered table: sums for number columns, filled rows for the rest.",
+  "aggregate.subtotalField": "Subtotal by",
+  "aggregate.subtotalNone": "No subtotal",
   "cond.title": "Conditional formatting",
   "cond.desc":
     "Matching cells or rows get coloured. Conditions use the same operators as filters and only look at the current row.",
