@@ -15,7 +15,7 @@ import {
   Unlink,
   Sparkles,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, isComposing } from "@/lib/utils";
 import { useAiStore } from "@/stores/ai";
 import { t, type MessageKey } from "@/lib/i18n";
 import { clampFloatToEditor, getEditorViewportRect } from "./float-clamp";
@@ -203,7 +203,7 @@ function LinkPopover(props: {
         aria-label={t("float.link")}
         className="h-7 w-56 rounded border-none bg-transparent px-2 text-[13px] outline-none placeholder:text-neutral-400"
         onKeyDown={(e) => {
-          if (e.key === "Enter") props.onSubmit(value.trim() || null);
+          if (e.key === "Enter" && !isComposing(e)) props.onSubmit(value.trim() || null);
           if (e.key === "Escape") props.onClose();
         }}
       />

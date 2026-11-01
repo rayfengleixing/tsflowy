@@ -376,7 +376,7 @@ function SlashMenuList(props: {
         setActive((a) => (a - 1 + items.length) % Math.max(items.length, 1));
         return true;
       }
-      if (event.key === "Enter" && items[active]) {
+      if (event.key === "Enter" && items[active] && !event.isComposing) {
         command(items[active]);
         return true;
       }

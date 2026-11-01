@@ -15,7 +15,7 @@ import { bestMentionScore, detectMentionQuery } from "@/lib/ai/ai-mention";
 import { flattenTree } from "@/lib/doc/tree";
 import { parseViewAliases } from "@/types/models";
 import { t } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
+import { cn, isComposing } from "@/lib/utils";
 import { ImageThumb, QuickButton } from "./AiParts";
 import { AI_IMAGE_ACCEPT } from "./ai-utils";
 
@@ -171,7 +171,7 @@ export function AiComposer({
         setMentionActive((i) => (i - 1 + mentionItems.length) % mentionItems.length);
         return;
       }
-      if (e.key === "Enter" || e.key === "Tab") {
+      if ((e.key === "Enter" || e.key === "Tab") && !isComposing(e)) {
         e.preventDefault();
         pickMention(mentionItems[mentionActive]?.name ?? mentionItems[0].name);
         return;
@@ -182,7 +182,7 @@ export function AiComposer({
         return;
       }
     }
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !isComposing(e)) {
       e.preventDefault();
       submit();
     }

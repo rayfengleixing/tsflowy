@@ -39,6 +39,7 @@ import { flattenTree } from "@/lib/doc/tree";
 import { viewIcon } from "@/components/view-icon";
 import type { View } from "@/types/models";
 import { t } from "@/lib/i18n";
+import { isComposing } from "@/lib/utils";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 
@@ -333,7 +334,7 @@ export function CommandPalette() {
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setActive((a) => (a - 1 + rows.length) % Math.max(rows.length, 1));
-    } else if (e.key === "Enter") {
+    } else if (e.key === "Enter" && !isComposing(e)) {
       e.preventDefault();
       if (rows.length > 0) runRow(rows[Math.min(active, rows.length - 1)]);
       else if (trimmed) {

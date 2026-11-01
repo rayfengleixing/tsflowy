@@ -7,6 +7,7 @@ import { flattenTree } from "@/lib/doc/tree";
 import { parseViewTags, type View } from "@/types/models";
 import { tagColor, tagTint, canonicalTagName } from "@/lib/doc/tags";
 import { t } from "@/lib/i18n";
+import { isComposing } from "@/lib/utils";
 
 interface TagEditorDialogProps {
   view: View | null;
@@ -86,7 +87,7 @@ export function TagEditorDialog({ view, open, onOpenChange }: TagEditorDialogPro
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === ",") {
+              if ((e.key === "Enter" || e.key === ",") && !isComposing(e)) {
                 e.preventDefault();
                 add(draft);
                 setDraft("");

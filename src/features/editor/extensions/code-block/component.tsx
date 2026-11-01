@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { NodeViewContent, NodeViewWrapper, type ReactNodeViewProps } from "@tiptap/react";
 import { t } from "@/lib/i18n";
+import { isComposing } from "@/lib/utils";
 import { logger } from "@/lib/logger";
 
 // 代码块 NodeView：右上角语言标识 + 复制按钮；内容经 lowlight 动态高亮（decoration）
@@ -44,7 +45,7 @@ export function CodeBlockNodeView(props: ReactNodeViewProps<HTMLElement>) {
             value={langDraft}
             onChange={(e) => setLangDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") commitLang();
+              if (e.key === "Enter" && !isComposing(e)) commitLang();
               if (e.key === "Escape") setEditingLang(false);
             }}
             onBlur={commitLang}

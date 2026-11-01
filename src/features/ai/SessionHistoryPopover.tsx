@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Archive, ArchiveRestore, PenLine, Search, Trash2 } from "lucide-react";
 import { useAiStore, visibleSessionWindow } from "@/stores/ai";
 import { t } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
+import { cn, isComposing } from "@/lib/utils";
 import { filterHistorySessions } from "./ai-utils";
 import { RowAction } from "./AiParts";
 
@@ -91,7 +91,7 @@ export function SessionHistoryPopover({ onClose, onRequestDelete }: SessionHisto
                     onChange={(e) => setRenameDraft(e.target.value)}
                     onBlur={() => commitRename(sess.id)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") commitRename(sess.id);
+                      if (e.key === "Enter" && !isComposing(e)) commitRename(sess.id);
                       else if (e.key === "Escape") setRenamingId(null);
                     }}
                     aria-label={t("ai.renameSessionField")}

@@ -16,6 +16,7 @@ import {
   type VisibleTreeRow,
 } from "@/lib/doc/tree";
 import { t } from "@/lib/i18n";
+import { isComposing } from "@/lib/utils";
 import { isInsidePopup } from "@/lib/radix-popup";
 import { tagColor, tagTint } from "@/lib/doc/tags";
 import { logger } from "@/lib/logger";
@@ -361,7 +362,7 @@ export function PageTree() {
 
   /** 树内键盘导航：↑↓/Home/End 移动焦点，Shift+方向键扩选，←→收起/展开，Enter 打开，Ctrl+A 全选，Del 批量删 */
   const onTreeKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (rows.length === 0 || e.nativeEvent.isComposing) return;
+    if (rows.length === 0 || isComposing(e)) return;
     const id = (e.target as HTMLElement).dataset.treeRow;
     if (!id) return; // 焦点在行内控件（图标/按钮）上时由控件自己处理
     const index = rows.findIndex((r) => r.node.id === id);

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import type { Editor } from "@tiptap/core";
 import { CalendarDays, ChevronDown, ChevronUp, UserRound, X } from "lucide-react";
 import { t } from "@/lib/i18n";
+import { isComposing } from "@/lib/utils";
 import { todayIso, type TaskMeta } from "@/lib/doc/task-meta";
 import { buildTaskMetaTr, taskItemPositions, taskMetaOfNode } from "./extensions/task-meta";
 import { IconBtn } from "./floating-menu";
@@ -104,7 +105,7 @@ export function TaskMetaPanel({ editor, listPos }: { editor: Editor; listPos: nu
           onChange={(e) => setAssignee(e.target.value)}
           onBlur={(e) => applyAssignee(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") {
+            if (e.key === "Enter" && !isComposing(e)) {
               e.preventDefault();
               applyAssignee(e.currentTarget.value);
               e.currentTarget.blur();

@@ -6,6 +6,7 @@ import { TAG_COLORS, buildTagTree, tagColor, tagTint, type TagTreeNode } from "@
 import { useWorkspaceStore } from "@/stores/workspace";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { t } from "@/lib/i18n";
+import { isComposing } from "@/lib/utils";
 
 interface TagPanelProps {
   /** 点标签开始过滤后回调：由侧边栏切回页面树 Tab 展示过滤结果 */
@@ -98,7 +99,7 @@ export function TagPanel({ onFilter }: TagPanelProps) {
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter") commitRename(path);
+                        if (e.key === "Enter" && !isComposing(e)) commitRename(path);
                         if (e.key === "Escape") setEditing(null);
                       }}
                     />

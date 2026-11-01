@@ -10,7 +10,7 @@ import {
   replaceAllMatches,
   setFindQuery,
 } from "./extensions/find-replace";
-import { cn } from "@/lib/utils";
+import { cn, isComposing } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 
 /** 文档内查找替换条（Ctrl+F 打开；Enter 下一个 / Shift+Enter 上一个 / Esc 关闭） */
@@ -123,7 +123,7 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") {
+            if (e.key === "Enter" && !isComposing(e)) {
               e.preventDefault();
               gotoFindMatch(editor, info.active + (e.shiftKey ? -1 : 1));
             }
@@ -230,7 +230,7 @@ export function FindReplaceBar(props: { editor: Editor; onClose: () => void }) {
             value={replacement}
             onChange={(e) => setReplacement(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") {
+              if (e.key === "Enter" && !isComposing(e)) {
                 e.preventDefault();
                 onReplace();
               }

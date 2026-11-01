@@ -9,12 +9,20 @@
 
 ## 未发布（v0.8.33 之后）
 
+### 输入法：组词期的 Enter 全站收口（文档编辑器 / 侧栏 / AI 面板 / 命令面板）
+
+- 上一条只覆盖数据库域，这一批把剩下的同形制处理器补完，15 个文件 18 处：AI 输入框的「Enter 发送、Shift+Enter 换行」与 @ 引用选中（`AiComposer.tsx:174`/`:185`）、会话历史重命名（`SessionHistoryPopover.tsx:94`）、命令面板回车跑选中结果或开搜索（`CommandPalette.tsx:336`）、查找替换的回车跳下一处与回车替换（`FindReplaceBar.tsx:126`/`:233`）、链接浮层回车确认（`floating-menu.tsx:206`）、任务负责人输入框（`task-meta-panel.tsx:107`）、斜杠菜单回车插入块与 @ 建议回车选人（`slash-menu.tsx:379`、`extensions/mention/suggestion.tsx:144`/`:174`）、代码块语言名（`extensions/code-block/component.tsx:47`）、标签与别名输入框的回车/逗号成词（`tag-editor-dialog.tsx:89`、`alias-editor-dialog.tsx:92`）、侧栏的标签重命名 / 空间新建与重命名 / 页面重命名（`TagPanel.tsx:101`、`SpaceSwitcher.tsx:122`/`:144`、`PageTreeItem.tsx:338`）。
+- 两种写法各有其位：React 合成事件统一走上一条新增的 `isComposing(e)`；ProseMirror 的 keymap 处理器拿到的是原生 `KeyboardEvent`，直接读 `event.isComposing`（斜杠菜单与 @ 建议各一处，那里的合成事件助手用不上）。页面树的键盘导航原本已经写了行内 `e.nativeEvent.isComposing`，换成同一个助手函数——判据一字未变，只是让这道闸在全仓只剩一个出处。
+- 仍未加闸的两类，口径与上一条一致：`type=number` 的框（同步设置里自动延迟与间隔两个秒数框）不产生组词；`Enter || " "` 是 div 上的键盘激活（标签页、页面树行、画廊卡片、时间线区块），不是文本提交。`Ctrl/Cmd+Enter` 提交公式与 Mermaid（`extensions/math/component.tsx:62`、`extensions/mermaid/component.tsx:75`）也没加——组合键在组词期按不出来。
+- 证据是临时探针 `src/features/database/probe-ime.test.tsx`（跑完即删，不转常驻用例）三条断言：组词期 Enter 不提交、非组词期同样一次 Enter 照常提交、jsdom 默认不带 `isComposing` 所以对照组成立。两条变异各只打红第一条——M1 去掉文本格的 `!isComposing(e)`，M2 把助手函数改成恒返 `false`（两批共 28 处站点因此同时失效，红仍只有那一条，说明它确实是唯一出处）；变异按字节读写、`finally` 还原，跑完 `git status` 里 `utils.ts` 与 `editors.tsx` 都不出现。验证链 tsc 0 / lint 0 / vitest 111 文件 1,680 用例全绿，条数不变。
+- 落差如实登记：探针钉住的只有数据库文本格一处。其余 17 处靠同一个助手函数与逐处同形制的条件式，没有逐处运行时证据——AI 输入框与斜杠菜单那两处要造 store 与编辑器夹具，成本另属一批。
+
 ### 输入法：拼音组词时的 Enter 不再被当成提交（数据库域）
 
 - 现象：在数据库里输入时，只要用中文/日文输入法组词到一半按下 Enter 想选中候选词，应用会把当时只拼了一半的字母串当成最终值——文本格直接落库、对话框直接创建、搜索框直接收起，用户看到的是「字还没选出来，串就没了」。
-- 改法：`src/lib/utils.ts` 新增 `isComposing(e)`（读 React 合成事件的原生 `isComposing`），数据库域 9 处「Enter = 提交/收起/创建」的处理器补上 `&& !isComposing(e)`：文本格（`editors.tsx:131`）、单选与多选筛选的搜索框（`:331`/`:434`）、关联建议（`:680`）、表头重命名（`grid-parts.tsx:32`）、新建字段对话框（`NewFieldDialog.tsx:55`）、字段选项编辑器（`FieldOptionsEditor.tsx:203`）、看板新分组（`BoardView.tsx:461`）、视图标签重命名（`ViewChips.tsx:126`）、行详情的字段名（`RowDetail.tsx:119`）。
+- 改法：`src/lib/utils.ts` 新增 `isComposing(e)`（读 React 合成事件的原生 `isComposing`），数据库域 10 处「Enter = 提交/收起/创建」的处理器补上 `&& !isComposing(e)`：文本格（`editors.tsx:131`）、单选与多选筛选的搜索框（`:331`/`:434`）、关联建议（`:680`）、表头重命名（`grid-parts.tsx:32`）、新建字段对话框（`NewFieldDialog.tsx:55`）、字段选项编辑器（`FieldOptionsEditor.tsx:203`）、看板新分组（`BoardView.tsx:461`）、视图标签重命名（`ViewChips.tsx:126`）、行详情的字段名（`RowDetail.tsx:119`）。
 - 刻意没加的三类：`type=number`（数字格 `editors.tsx:152`/`:204`）与 `type=date`/`datetime-local`（日期格 `:289`）在浏览器里根本不产生组词事件，加了是永远不成立的死代码；`Enter || " "` 那类是 div 上的键盘激活（画廊卡片、时间线区块），不是文本提交；Escape 分支不动——输入法组词期按 Escape 是「取消组词」，浏览器自己吃掉，不会走到这里。
-- 本批只覆盖数据库域。文档编辑器、AI 面板、命令面板、查找替换、页面树等还有约 21 处同形制的处理器，按每批不超过 25 文件的规模纪律另起一批。
+- 本批只覆盖数据库域；文档编辑器、AI 面板、命令面板、查找替换、页面树等其余 18 处同形制处理器由上一条那批补完（按每批不超过 25 文件的规模纪律分的两批）。
 - 证据口径：验证链 tsc 0 / lint 0 / prettier --check 0 / vitest 111 文件 1,680 用例全绿。这条行为没有新增常驻用例钉住（「补用例先停止」仍生效）；要钉可在 jsdom 里 `fireEvent.keyDown(el, { key: "Enter", isComposing: true })`，实测能送进 React 的合成事件。
 
 ### 工程：绕过统一入口的 IPC 调用收口，组件可以在 jsdom 里测

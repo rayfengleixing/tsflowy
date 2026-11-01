@@ -13,6 +13,7 @@ import { Check, ChevronsUpDown, Pencil, Plus, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { t } from "@/lib/i18n";
+import { isComposing } from "@/lib/utils";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 
@@ -119,7 +120,7 @@ export function SpaceSwitcher() {
             placeholder={t("sidebar.newSpace")}
             aria-label={t("sidebar.newSpace")}
             onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submitCreate()}
+            onKeyDown={(e) => e.key === "Enter" && !isComposing(e) && submitCreate()}
           />
           <DialogFooter>
             <Button variant="ghost" onClick={() => setCreating(false)}>
@@ -141,7 +142,7 @@ export function SpaceSwitcher() {
             value={renameName}
             aria-label={t("workspace.renameField")}
             onChange={(e) => setRenameName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submitRename()}
+            onKeyDown={(e) => e.key === "Enter" && !isComposing(e) && submitRename()}
           />
           <DialogFooter>
             <Button variant="ghost" onClick={() => setRenaming(false)}>

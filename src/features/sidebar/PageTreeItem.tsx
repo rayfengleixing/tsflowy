@@ -39,6 +39,7 @@ import type { DropZone } from "@/lib/doc/tree";
 import { exportPage } from "@/lib/transfer/export-page";
 import { isInsidePopup } from "@/lib/radix-popup";
 import { t } from "@/lib/i18n";
+import { isComposing } from "@/lib/utils";
 
 export interface DropHint {
   targetId: string;
@@ -335,7 +336,7 @@ export function PageTreeItem({
             onChange={(e) => setEditName(e.target.value)}
             onBlur={commitRename}
             onKeyDown={(e) => {
-              if (e.key === "Enter") void commitRename();
+              if (e.key === "Enter" && !isComposing(e)) void commitRename();
               if (e.key === "Escape") setEditing(false);
             }}
             onClick={(e) => e.stopPropagation()}
