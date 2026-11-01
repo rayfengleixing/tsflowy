@@ -24,3 +24,13 @@ export function sanitizeFileName(name: string): string {
 export function isComposing(e: { nativeEvent: { isComposing: boolean } }): boolean {
   return e.nativeEvent.isComposing;
 }
+
+/**
+ * 同一个判据的原生事件版：ProseMirror 的 keymap 处理器（斜杠菜单、@ 建议）拿到的是原生
+ * `KeyboardEvent`，那里用不上上面那个读 `nativeEvent` 的助手，只能直接读 `event.isComposing`。
+ * 判据一字未变，单独立一个导出只为让「组词期别当提交」在全仓只剩这两个出处——审计时把
+ * `from "@/lib/utils"` 的行滤掉，还读到 `.isComposing` 的地方就是漏闸。
+ */
+export function isComposingNative(e: { isComposing: boolean }): boolean {
+  return e.isComposing;
+}

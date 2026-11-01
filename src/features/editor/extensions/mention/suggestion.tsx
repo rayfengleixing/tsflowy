@@ -10,7 +10,7 @@ import { databaseApi } from "@/lib/backend/database";
 import { newSelectOption } from "@/lib/database/database-values";
 import { parseViewAliases, type View } from "@/types/models";
 import { t } from "@/lib/i18n";
-import { isComposing } from "@/lib/utils";
+import { isComposing, isComposingNative } from "@/lib/utils";
 import { logger } from "@/lib/logger";
 import { toast } from "sonner";
 
@@ -142,7 +142,7 @@ export function MentionList(props: MentionListProps) {
         setActive((a) => (a - 1 + allOptions.length) % len);
         return true;
       }
-      if (event.key === "Enter" && !event.isComposing) {
+      if (event.key === "Enter" && !isComposingNative(event)) {
         if (allOptions[active]) {
           handleSelect(allOptions[active]);
           return true;

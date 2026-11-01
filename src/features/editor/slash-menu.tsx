@@ -40,6 +40,7 @@ import { invoke } from "@/lib/invoke";
 import { toast } from "sonner";
 import { t, type MessageKey } from "@/lib/i18n";
 import { pinyinInitials } from "@/lib/search/pinyin-initials";
+import { isComposingNative } from "@/lib/utils";
 import { logger } from "@/lib/logger";
 import { INSERT_DATABASE_VIEW_EVENT } from "./DatabaseViewPicker";
 import { INSERT_EMOJI_EVENT } from "./EmojiPickerDialog";
@@ -376,7 +377,7 @@ function SlashMenuList(props: {
         setActive((a) => (a - 1 + items.length) % Math.max(items.length, 1));
         return true;
       }
-      if (event.key === "Enter" && items[active] && !event.isComposing) {
+      if (event.key === "Enter" && items[active] && !isComposingNative(event)) {
         command(items[active]);
         return true;
       }
