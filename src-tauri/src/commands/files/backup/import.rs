@@ -36,9 +36,14 @@ fn stash_config_copy(config_target: &Path, data_dir: &Path, suffix: &str) -> Res
         return Ok(());
     }
     let bak = data_dir.join(format!("{CONFIG_FILE_NAME}.bak-{suffix}"));
-    fs::copy(config_target, &bak)
-        .map(|_| ())
-        .map_err(|e| format!("backup config.json failed: {e}"))
+    match fs::copy(config_target, &bak) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            // 半截复制品会被后续的回滚当成「stash 过配置」，失败就地删掉
+            let _ = fs::remove_file(&bak);
+            Err(format!("backup config.json failed: {e}"))
+        }
+    }
 }
 
 /// 恢复主体：关库 → 校验/导入 → 重开。
@@ -84,19 +89,37 @@ pub(super) fn import_backup_into(
     // 按完整替换语义把它们挪走就等于"恢复完成后附件全没了"
     let scope = read_backup_scope(src);
 
-    // 备份现有数据（失败时统一回滚）
+    // 备份现有数据。三步里任何一步半途失败都只撤「确实动过的那部分」：
+    // rollback_import_stash 是「整套 stash 都在位」时的回撤，它按 Full 语义先 remove_dir_all(assets)
+    // 再把 assets.bak 改回原名——附件目录压根没挪走时，那一句删掉的正是用户还在用的目录。
+    // 而这里失败若直接返回，数据目录只剩 .bak、原名上没有库文件，随后的 db.reopen() 会静默建出一个空库。
     let suffix = timestamp_suffix();
     let db = data_dir.join(DB_FILE);
     let assets_dir = data_dir.join(ASSETS_DIR);
-    stash_current_db(&db, &suffix)?;
+    if let Err(e) = stash_current_db(&db, &suffix) {
+        return Err(unwind_failed_stash(data_dir, &suffix, false, e));
+    }
+    let mut assets_stashed = false;
     if scope == BackupScope::Full && assets_dir.is_dir() {
         let bak = data_dir.join(format!("{ASSETS_DIR}.bak-{suffix}"));
-        fs::rename(&assets_dir, &bak).map_err(|e| format!("backup assets failed: {e}"))?;
+        match fs::rename(&assets_dir, &bak) {
+            Ok(()) => assets_stashed = true,
+            Err(e) => {
+                return Err(unwind_failed_stash(
+                    data_dir,
+                    &suffix,
+                    false,
+                    format!("backup assets failed: {e}"),
+                ))
+            }
+        }
     }
     // 设置文件与 db/assets 同一时间戳分组：旧版本归档里没有 config.json，
     // stash 后解压也不会写回配置目录，等价于"这次不动设置"
     if scope == BackupScope::Full {
-        stash_config_copy(config_target, data_dir, &suffix)?;
+        if let Err(e) = stash_config_copy(config_target, data_dir, &suffix) {
+            return Err(unwind_failed_stash(data_dir, &suffix, assets_stashed, e));
+        }
     }
 
     // 解 zip；任何一步失败都回滚到导入前状态（含解压了一半的文件）
@@ -296,6 +319,52 @@ fn rollback_import_stash(data_dir: &Path, config_target: &Path, suffix: &str, sc
     } else {
         let _ = fs::remove_file(config_target);
     }
+}
+
+/// stash 半途失败的收尾：只把**确实挪动过的**东西放回原位（解压还没开始，没有半截文件要清），
+/// 并把「原数据到底还在不在原位」写进错误文案，给上层与用户看。
+/// 与 rollback_import_stash 的区别就是这条链路的要害：后者按整套 stash 都在位来撤，
+/// 附件目录没挪走时它那一句 `remove_dir_all(assets)` 删掉的是用户还在用的目录。
+fn unwind_failed_stash(
+    data_dir: &Path,
+    suffix: &str,
+    assets_stashed: bool,
+    reason: String,
+) -> String {
+    let db_back = restore_stashed_db(data_dir, suffix);
+    if assets_stashed {
+        let assets_dir = data_dir.join(ASSETS_DIR);
+        let bak = data_dir.join(format!("{ASSETS_DIR}.bak-{suffix}"));
+        if bak.is_dir() && !assets_dir.exists() {
+            let _ = fs::rename(&bak, &assets_dir);
+        }
+    }
+    // 复制了一半的配置备份留着，下一次回滚会误判成「stash 过配置」而把配置复制回去
+    let _ = fs::remove_file(data_dir.join(format!("{CONFIG_FILE_NAME}.bak-{suffix}")));
+    if db_back {
+        format!("{reason}；本次导入未生效，原有数据仍在原位")
+    } else {
+        format!("{reason}；本次导入未生效，但原库没能放回原位，还在 {DB_FILE}.bak-{suffix}，把它改回 {DB_FILE} 即可")
+    }
+}
+
+/// 把 stash 走的库（含已成功移走的 -wal/-shm）改回原名。只在解压之前用：那时原名上没有库文件，
+/// 改名不会覆盖任何东西。返回原库是否回到原位（没库可挪的情况也算「在原位」）。
+fn restore_stashed_db(data_dir: &Path, suffix: &str) -> bool {
+    let db = data_dir.join(DB_FILE);
+    if db.is_file() {
+        return true;
+    }
+    let bak = data_dir.join(format!("{DB_FILE}.bak-{suffix}"));
+    let moved_back = bak.is_file() && fs::rename(&bak, &db).is_ok();
+    for ext in ["-wal", "-shm"] {
+        let from = data_dir.join(format!("{DB_FILE}.bak-{suffix}{ext}"));
+        let to = data_dir.join(format!("{DB_FILE}{ext}"));
+        if from.is_file() && !to.exists() {
+            let _ = fs::rename(&from, &to);
+        }
+    }
+    moved_back
 }
 
 /// 把旧 db 的 -wal/-shm 改名到 .bak-{suffix} 同名后缀。
