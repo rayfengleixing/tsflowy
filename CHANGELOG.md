@@ -21,10 +21,11 @@
 
 - 这条落差在「不补任何用例」的点单下没法真正闭合，本批做的是**收窄**。修前全仓的组词闸门是一个助手函数加两处行内写法（ProseMirror 的 keymap 处理器拿到的是原生 `KeyboardEvent`，用不上读 `nativeEvent` 的那个助手）——写法不同源，就意味着「漏了一处」这件事只能靠人记。改法（`src/lib/utils.ts` 新增 `isComposingNative(e)`，`slash-menu.tsx:380` 与 `extensions/mention/suggestion.tsx:145` 换用它）之后，28 处站点全部落在这两个导出判据上，判据一字未变、零行为变更；审计漏闸变成一条机械检查：把 `from "@/lib/utils"` 的 import 行滤掉，源码里再读到 `.isComposing` 的地方就是漏闸——修前命中 2 处，修后 0 处。
 - 两个判据的参数形状互斥，接错在类型层就编译不过：合成事件是 `{ nativeEvent: { isComposing } }`，原生是 `{ isComposing }`，而 React 合成事件的类型上并没有 `isComposing` 这个字段。所以「这一处到底读没读对事件」不靠运行时证据也能立住，剩下的风险只有「这一处的提交行为在组词期真的被压住了吗」。
-- 「闸漏没漏」的另一半这次是实数而不是印象：临时审计脚本（跑完即删）把全仓 40 处 `key === "Enter"` 处理器逐个取条件体判类——**28 处已加闸，12 处未加闸，而 12 处全部落在此前登记的三类刻意不加里**：number/date 输入框 4 处（数字格 `editors.tsx:152`/`:204`、日期格 `:289`、同步设置两个秒数框 `SettingsSync.tsx:340`/`:367`）不产生组词；`Enter || " "` 的 div 键盘激活 5 处（`TabBar.tsx:123`、`PageTree.tsx:402`、画廊卡片 `GalleryView.tsx:309`、时间线 `TimelineView.tsx:455`/`:491`）不是文本提交；`Ctrl/Cmd+Enter` 2 处（公式 `extensions/math/component.tsx:62`、Mermaid `extensions/mermaid/component.tsx:75`）在组词期根本按不出来。「该加而没加」的站点数为 0。
+- 「闸漏没漏」的另一半这次是实数而不是印象：临时审计脚本（跑完即删）把全仓 40 处 `key === "Enter"` 处理器逐个取条件体判类——**28 处已加闸，12 处未加闸，而 12 处全部落在此前登记的三类刻意不加里**：number/date 输入框 5 处（数字格 `editors.tsx:152`/`:204`、日期格 `:289`、同步设置两个秒数框 `SettingsSync.tsx:340`/`:367`）不产生组词；`Enter || " "` 的 div 键盘激活 5 处（`TabBar.tsx:123`、`PageTree.tsx:402`、画廊卡片 `GalleryView.tsx:309`、时间线 `TimelineView.tsx:455`/`:491`）不是文本提交；`Ctrl/Cmd+Enter` 2 处（公式 `extensions/math/component.tsx:62`、Mermaid `extensions/mermaid/component.tsx:75`）在组词期根本按不出来。「该加而没加」的站点数为 0。
 - 落差（改述为接受风险，不作废）：逐处运行时证据仍只有数据库文本格那 1 处，其余 27 处靠「全仓只剩两个判据出处 + 40 处逐一对齐」这条结构保证，没有逐点过一遍。补它们要造 store 与 ProseMirror 编辑器夹具，且点单是「不补任何用例」。
 - 验证链：tsc 0 / lint `--max-warnings=0` 0 / prettier --check 0 / vitest 111 文件 1,680 用例全绿（首跑有一条红，随后两次全量与 database+lib 两目录单跑都没复现；两个调用点本来就没有用例引用，`utils.ts` 只新增导出、既有导出一字未改，判为并行抖动）。零行为变更、Rust 未动，故 build 与 cargo 按「末批统一跑」不在本批复跑。
 - 更正一条笔误：下面那节登记的「其余 17 处」不对——两批共 28 处加闸，探针只钉住文本格 1 处，未钉的是 27 处。项目卡同批已改。
+- 更正第二条笔误（第三条落差收尾时复量出来的）：上面那句把未加闸的 number/date 写成「4 处」，但它自己列的是五个位置（`:152`/`:204`/`:289` + `SettingsSync.tsx:340`/`:367`），而且 4 + 5 + 2 凑不出「12 处未加闸」。实数 **5 处**，三类合计 5 + 5 + 2 = 12、与 28 相加正好 40。复核口径（不用脚本也能重跑）：`grep -n 'key === "Enter"' src/features/database/editors.tsx` 命中 7 处 = 3 处未加闸（数字格两格 + 日期格）+ 4 处已加闸（文本格、单选与多选筛选搜索框、关联建议），`src/features/settings/SettingsSync.tsx` 2 处全未加闸。
 
 ### 附件单元格：不管从哪一路关闭，已经落盘的附件都留在格子里
 
