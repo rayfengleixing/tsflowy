@@ -9,6 +9,14 @@
 
 ## 未发布（v0.8.34 之后）
 
+### 发布 v0.8.34：Release 说明里「CI 转绿」那句撤回，改成实测口径
+
+- 打包与发布走的是 `D:\Code\打包规则.md`：四处版本号 0.8.33 → 0.8.34（含 `Cargo.lock` 里 `name = "tsflowy"` 那条）→ `npm run tauri:build`（cargo 9m13s + vite 1m9s，按预期在签名处报 `no private key`，exe 照常产出 6,457,989 字节）→ `signer sign --password=` 补签 → `gen-latest-json.mjs` → `gh release create v0.8.34` 三件套。核对：GitHub 服务端三个 sha256 与本地 `sha256sum` 逐一相同、`releases/latest` = `v0.8.34`、tag 指向发版提交 `63d00aa`、安装包下载地址 302→200 且 `Content-Length` 与本地字节数一致。
+- **写 Release 说明时夸了一条，已改回来**：初稿把工程质量写成「CI 转绿」。实测 `gh run list` 是**从 `7ae1280`（0.8.33 的发版提交，2026-10-20）起一直红到现在**，本版的 `63d00aa` 也红。红的不是业务：失败步只有 `Vitest`，报 `[vitest-pool]: Failed to start forks worker`，根因是 `node_modules/jsdom/node_modules/undici/lib/interceptor/decompress.js:78` 抛 `Cannot read properties of undefined (reading 'bind')`——jsdom 30.1.3 自带 undici 8.12.3，在 CI 的 **node v20.20.2**（`npm ci` 同期刷一屏 `EBADENGINE`）上加载不了，于是 26 个 jsdom 组件用例文件一个都没起跑（`Test Files 85 passed / Tests 1297 passed / Errors 26`，本机 Node 24 是 111 文件 1,680 用例全绿）。引入点是 `a3a8d94 引入 jsdom 组件测试基座`（2026-10-20 14:15），它和 `7ae1280` 同一天进 main，所以红正好从发版那次开始——**「CI 自 2026-10-16 起是绿的」这条旧口径作废**。
+- 改法：`更新说明.md` 的 v0.8.34 一节删掉「CI 转绿」，工程质量那三条换成实测得到的说法（巨型模块拆完业务代码最大是 `EditorPage.tsx` 906 行 / `GridView.tsx` 903 行，两份 i18n 字典属数据文件；发布链路的一致性由 `release-manifest.test.ts` 钉住）。安装包字节没变，所以只重生成 `latest.json`（notes 同源）并 `gh release edit --notes-file` 更新正文与那个资产。
+- 真要修 CI 是一行 workflow 的事（`.github/workflows/ci.yml` 的 `node-version: 20` → 22 或 24），属基础设施变更、且要推一次看回绿，**本批没动**，等单独点单。
+- 本批只改两份 markdown、零产品代码：`release-manifest.test.ts` 11 条通过（它是全仓唯一读这两份说明文件的用例，`grep -rn 'CHANGELOG.md?raw'` 无命中），tsc 0 / lint `--max-warnings=0` 0 / `format:check` 干净；全量 `vitest run` 111 文件 1,680 用例的实测全绿属于发版提交 `63d00aa`，本批未重跑——改的是说明文字，不动任何用例。
+
 ## v0.8.34（2026-11-01）
 
 ### 恢复备份：另两条半途失败分支各自有了注入证据
