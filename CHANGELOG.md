@@ -9,6 +9,14 @@
 
 ## 未发布（v0.8.33 之后）
 
+### 输入法：拼音组词时的 Enter 不再被当成提交（数据库域）
+
+- 现象：在数据库里输入时，只要用中文/日文输入法组词到一半按下 Enter 想选中候选词，应用会把当时只拼了一半的字母串当成最终值——文本格直接落库、对话框直接创建、搜索框直接收起，用户看到的是「字还没选出来，串就没了」。
+- 改法：`src/lib/utils.ts` 新增 `isComposing(e)`（读 React 合成事件的原生 `isComposing`），数据库域 9 处「Enter = 提交/收起/创建」的处理器补上 `&& !isComposing(e)`：文本格（`editors.tsx:131`）、单选与多选筛选的搜索框（`:331`/`:434`）、关联建议（`:680`）、表头重命名（`grid-parts.tsx:32`）、新建字段对话框（`NewFieldDialog.tsx:55`）、字段选项编辑器（`FieldOptionsEditor.tsx:203`）、看板新分组（`BoardView.tsx:461`）、视图标签重命名（`ViewChips.tsx:126`）、行详情的字段名（`RowDetail.tsx:119`）。
+- 刻意没加的三类：`type=number`（数字格 `editors.tsx:152`/`:204`）与 `type=date`/`datetime-local`（日期格 `:289`）在浏览器里根本不产生组词事件，加了是永远不成立的死代码；`Enter || " "` 那类是 div 上的键盘激活（画廊卡片、时间线区块），不是文本提交；Escape 分支不动——输入法组词期按 Escape 是「取消组词」，浏览器自己吃掉，不会走到这里。
+- 本批只覆盖数据库域。文档编辑器、AI 面板、命令面板、查找替换、页面树等还有约 21 处同形制的处理器，按每批不超过 25 文件的规模纪律另起一批。
+- 证据口径：验证链 tsc 0 / lint 0 / prettier --check 0 / vitest 111 文件 1,680 用例全绿。这条行为没有新增常驻用例钉住（「补用例先停止」仍生效）；要钉可在 jsdom 里 `fireEvent.keyDown(el, { key: "Enter", isComposing: true })`，实测能送进 React 的合成事件。
+
 ### 工程：绕过统一入口的 IPC 调用收口，组件可以在 jsdom 里测
 
 - 新增 `src/lib/ipc-core.ts`（唯一引 `@tauri-apps/api/core` 与 `api/path` 的文件）和 `src/lib/ipc-events.ts`（唯一引 `api/event` 的文件）：`ai.ts` 的 `Channel`、`assets.ts` 的 `convertFileSrc`/`appDataDir`/`join`、`CsvImportDialog.tsx` 的 `join`、`sync-events.ts` 的 `listen` 全部改从这两个入口导入。业务侧仍走 `@/lib/invoke`，`auto-sync` 与 `client-log` 仍拿不经拦截的 raw 通道（前者与 `invoke.ts` 互引会成环，后者经 `logger` 绕回 `auto-sync`），只是 import 源换成 `ipc-core`。

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import type { DatabaseField, FieldOptions, SelectOption, StatusTone } from "@/types/database";
+import { isComposing } from "@/lib/utils";
 import type { AggregateFn } from "@/lib/database/database-aggregate";
 import { aggregateLabel } from "@/lib/database/database-aggregate";
 import {
@@ -199,7 +200,7 @@ export function FieldOptionsEditor(props: {
                 value={optionName}
                 onChange={(e) => setOptionName(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") addOption();
+                  if (e.key === "Enter" && !isComposing(e)) addOption();
                 }}
               />
               <Button variant="outline" size="sm" onClick={addOption}>

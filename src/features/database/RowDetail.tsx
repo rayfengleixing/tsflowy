@@ -9,7 +9,7 @@ import { MAX_HIERARCHY_LEVEL, hierarchyDepthOf } from "@/lib/database/database-h
 import { computeEvaluatedCells, rowCellsOf } from "@/lib/database/database-evaluated-cells";
 import { rowPermalink } from "@/lib/desktop/deep-link";
 import { useRelationStore } from "@/stores/relation";
-import { cn } from "@/lib/utils";
+import { cn, isComposing } from "@/lib/utils";
 import type { View } from "@/types/models";
 import { EditorPage } from "@/features/editor/EditorPage";
 import { CellEditorSlot } from "./editors";
@@ -116,7 +116,7 @@ function RowPropertyField({
           onChange={(e) => setNameDraft(e.target.value)}
           onBlur={commitName}
           onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
+            if (e.key === "Enter" && !isComposing(e)) e.currentTarget.blur();
             if (e.key === "Escape") {
               setNameDraft(field.name);
               setNameEditing(false);

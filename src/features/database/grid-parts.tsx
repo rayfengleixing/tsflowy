@@ -5,7 +5,7 @@ import type { CellValue, DatabaseField } from "@/types/database";
 import { isReadonlyType, type FieldType } from "@/types/database";
 import { useDbStore } from "@/stores/database-context";
 import { formatCellValue, parseFieldOptions } from "@/lib/database/database-values";
-import { cn } from "@/lib/utils";
+import { cn, isComposing } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { NewFieldDialog } from "./NewFieldDialog";
@@ -29,7 +29,7 @@ export function RenameInput(props: { initial: string; onCommit: (name: string) =
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onKeyDown={(e) => {
-        if (e.key === "Enter") props.onCommit(draft);
+        if (e.key === "Enter" && !isComposing(e)) props.onCommit(draft);
         if (e.key === "Escape") props.onCancel();
       }}
       onBlur={() => props.onCommit(draft)}

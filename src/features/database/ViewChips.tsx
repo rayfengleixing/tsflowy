@@ -10,7 +10,7 @@ import {
 import { viewApi } from "@/lib/backend/db";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
-import { cn } from "@/lib/utils";
+import { cn, isComposing } from "@/lib/utils";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { DB_LAYOUTS, type DbLayout, type LayoutType, type View } from "@/types/models";
 
@@ -123,7 +123,7 @@ export function ViewChips({
                 onChange={(e) => setDraft(e.target.value)}
                 onBlur={() => void commitRename(view)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                  if (e.key === "Enter" && !isComposing(e)) (e.target as HTMLInputElement).blur();
                   if (e.key === "Escape") setRenaming(null);
                 }}
               />

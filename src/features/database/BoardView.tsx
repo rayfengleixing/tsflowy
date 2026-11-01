@@ -37,7 +37,7 @@ import { AggregateMenu } from "./AggregateMenu";
 import { normalizeAggregate, type AggregateFn } from "@/lib/database/database-aggregate";
 import { ROW_FOCUS_CLASS, useRowFocus } from "./rowFocus";
 import { RowDetailPanel } from "./RowDetail";
-import { cn } from "@/lib/utils";
+import { cn, isComposing } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { logger } from "@/lib/logger";
 import { patchViewConfig, readViewConfig } from "@/lib/database/view-config";
@@ -458,7 +458,7 @@ export function BoardView({
                     value={newGroupName}
                     onChange={(e) => setNewGroupName(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") void addGroup();
+                      if (e.key === "Enter" && !isComposing(e)) void addGroup();
                       if (e.key === "Escape") {
                         setNewGroupOpen(false);
                         setNewGroupName("");

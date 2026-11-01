@@ -4,6 +4,7 @@ import { FIELD_TYPES } from "@/types/database";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { t } from "@/lib/i18n";
+import { isComposing } from "@/lib/utils";
 
 /** 新建字段对话框（项目说明书 5.1：字段新增；输入名称 + 选择类型） */
 export function NewFieldDialog(props: {
@@ -51,7 +52,7 @@ export function NewFieldDialog(props: {
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void create();
+                if (e.key === "Enter" && !isComposing(e)) void create();
                 if (e.key === "Escape") onOpenChange(false);
               }}
             />

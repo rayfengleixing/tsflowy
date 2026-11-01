@@ -7,7 +7,7 @@ import { attachmentRefs, parseFieldOptions, ratingMax } from "@/lib/database/dat
 import { filesFromDataTransfer, openAttachment, pickAttachment, saveAttachmentFile } from "@/lib/assets/assets";
 import { relationRowIds, relationRowLabel, relationTarget, searchRelationRows } from "@/lib/database/relation";
 import { useRelationStore } from "@/stores/relation";
-import { cn } from "@/lib/utils";
+import { cn, isComposing } from "@/lib/utils";
 import { logger } from "@/lib/logger";
 import { t } from "@/lib/i18n";
 import { AttachmentThumb, OptionChip, RelationChip } from "./cell-display";
@@ -128,7 +128,7 @@ export function TextCellEditor({ field, value, onCommit, onCancel }: CellEditorP
       placeholder={field.field_type === "url" ? "https://…" : field.field_type === "email" ? "name@example.com" : ""}
       onChange={(e) => setDraft(e.target.value)}
       onKeyDown={(e) => {
-        if (e.key === "Enter") onCommit(draft.trim() === "" ? null : draft);
+        if (e.key === "Enter" && !isComposing(e)) onCommit(draft.trim() === "" ? null : draft);
         if (e.key === "Escape") onCancel();
       }}
       onBlur={() => onCommit(draft.trim() === "" ? null : draft)}
@@ -328,7 +328,7 @@ export function SelectCellEditor({ field, value, onCommit, onCancel, onAddOption
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") submitQuery();
+            if (e.key === "Enter" && !isComposing(e)) submitQuery();
             if (e.key === "Escape") onCancel();
           }}
         />
@@ -431,7 +431,7 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") submitQuery();
+            if (e.key === "Enter" && !isComposing(e)) submitQuery();
             if (e.key === "Escape") commit();
           }}
         />
@@ -677,7 +677,7 @@ export function RelationCellEditor({ field, value, onCommit, onCancel }: CellEdi
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && candidates[0]) {
+                  if (e.key === "Enter" && candidates[0] && !isComposing(e)) {
                     toggle(candidates[0].id);
                     setQuery("");
                   }
