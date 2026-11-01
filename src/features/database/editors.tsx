@@ -490,22 +490,53 @@ export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
   const [draft, setDraft] = useState<AttachmentRef[]>(() => attachmentRefs(value));
   const [busy, setBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  // draftRef 是 draft 的同步镜像：上传结果落进 state 之后，React 未必已经在这次点击之前重渲染完，
+  // 外部点击的 commit 若读渲染闭包里的 draft 就会把刚上传的那几个丢掉。
+  const draftRef = useRef(draft);
+  const inflight = useRef(0);
+  const commitWhenIdle = useRef(false);
 
-  const commit = () => onCommit(draft);
+  const mutate = (next: AttachmentRef[]) => {
+    draftRef.current = next;
+    setDraft(next);
+  };
 
-  const addFiles = async (files: File[]) => {
-    if (files.length === 0 || busy) return;
+  const commit = () => {
+    if (inflight.current > 0) {
+      // 还在传：等最后一个落地再提交，否则编辑器带着旧值关闭、上传结果成了孤儿文件
+      commitWhenIdle.current = true;
+      return;
+    }
+    onCommit(draftRef.current);
+  };
+
+  const runTracked = async (job: () => Promise<void>) => {
+    inflight.current += 1;
     setBusy(true);
     try {
-      const added: AttachmentRef[] = [];
-      for (const file of files) added.push(await saveAttachmentFile(file, t("field.attachmentPastedName")));
-      setDraft((prev) => [...prev, ...added]);
-    } catch (e) {
-      logger.error("attachment.upload", e);
-      toast.error(t("error.upload", { message: String(e) }));
+      await job();
     } finally {
+      inflight.current -= 1;
       setBusy(false);
+      if (inflight.current === 0 && commitWhenIdle.current) {
+        commitWhenIdle.current = false;
+        onCommit(draftRef.current);
+      }
     }
+  };
+
+  const addFiles = (files: File[]) => {
+    if (files.length === 0 || busy) return;
+    void runTracked(async () => {
+      try {
+        const added: AttachmentRef[] = [];
+        for (const file of files) added.push(await saveAttachmentFile(file, t("field.attachmentPastedName")));
+        mutate([...draftRef.current, ...added]);
+      } catch (e) {
+        logger.error("attachment.upload", e);
+        toast.error(t("error.upload", { message: String(e) }));
+      }
+    });
   };
 
   // 粘贴：编辑器只在该单元格处于编辑态时挂载，因此文档级监听等价于"只处理此单元格的粘贴"
@@ -514,24 +545,23 @@ export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
       const files = filesFromDataTransfer(e.clipboardData);
       if (files.length === 0) return;
       e.preventDefault();
-      void addFiles(files);
+      addFiles(files);
     };
     document.addEventListener("paste", onPaste);
     return () => document.removeEventListener("paste", onPaste);
   });
 
-  const add = async () => {
+  const add = () => {
     if (busy) return;
-    setBusy(true);
-    try {
-      const ref = await pickAttachment();
-      if (ref) setDraft((prev) => [...prev, ref]);
-    } catch (e) {
-      logger.error("attachment.upload", e);
-      toast.error(t("error.upload", { message: String(e) }));
-    } finally {
-      setBusy(false);
-    }
+    void runTracked(async () => {
+      try {
+        const ref = await pickAttachment();
+        if (ref) mutate([...draftRef.current, ref]);
+      } catch (e) {
+        logger.error("attachment.upload", e);
+        toast.error(t("error.upload", { message: String(e) }));
+      }
+    });
   };
 
   const open = async (path: string) => {
@@ -543,7 +573,7 @@ export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
     }
   };
 
-  const remove = (path: string) => setDraft((prev) => prev.filter((a) => a.path !== path));
+  const remove = (path: string) => mutate(draftRef.current.filter((a) => a.path !== path));
 
   return (
     <div className="absolute inset-0 z-10" onMouseDown={(e) => e.stopPropagation()}>
@@ -561,7 +591,7 @@ export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
         onDrop={(e) => {
           e.preventDefault();
           setDragOver(false);
-          void addFiles(filesFromDataTransfer(e.dataTransfer));
+          addFiles(filesFromDataTransfer(e.dataTransfer));
         }}
       >
         <button
@@ -569,7 +599,7 @@ export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
           disabled={busy}
           className="mb-1 flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-neutral-200 px-2 text-left text-[12px] text-neutral-600 hover:border-brand-500 hover:text-brand-600 disabled:opacity-60"
           onMouseDown={(e) => e.preventDefault()}
-          onClick={() => void add()}
+          onClick={add}
         >
           <Plus className="h-3.5 w-3.5" />
           {t("field.attachmentAdd")}
