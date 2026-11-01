@@ -484,7 +484,8 @@ export function MultiSelectCellEditor({ field, value, onCommit, onAddOption, onD
 /**
  * 附件（attachment）：三种添加方式——系统文件对话框选择、把文件拖进面板、直接粘贴（Ctrl+V）。
  * 后两种拿到的是 File，走 save_asset_bytes 存字节流，不依赖对话框路径白名单。
- * 与多选一致：改动先攒在本地 draft，outside-click / Esc 才落库。
+ * 与多选一致：改动先攒在本地 draft。关闭一律是「收」而不是「撤」：文件此刻已经落进 assets/，
+ * 撤销一次关闭等于把它留成没人引用的孤儿文件，所以这个编辑器不接 onCancel，Esc 也走提交。
  */
 export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
   const [draft, setDraft] = useState<AttachmentRef[]>(() => attachmentRefs(value));
@@ -495,10 +496,24 @@ export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
   const draftRef = useRef(draft);
   const inflight = useRef(0);
   const commitWhenIdle = useRef(false);
+  // dirtyRef：draft 相对挂载时的值动过没有。卸载 flush 只给动过的格子补一次提交，
+  // 否则「点开看一眼再切走」也会对格子发 setCell——多余的时间戳和同步变更。
+  const dirtyRef = useRef(false);
+  // committedRef：onCommit 一生只发一次。写值有三条入口（点外部、Esc、上传落地后的
+  // commitWhenIdle），而任何一条成功后宿主都会关掉编辑器、再撞上第四条卸载 flush；
+  // 少了这道闸，同一次改值会被写两遍。
+  const committedRef = useRef(false);
 
   const mutate = (next: AttachmentRef[]) => {
     draftRef.current = next;
+    dirtyRef.current = true;
     setDraft(next);
+  };
+
+  const deliver = () => {
+    if (committedRef.current) return;
+    committedRef.current = true;
+    onCommit(draftRef.current);
   };
 
   const commit = () => {
@@ -507,7 +522,7 @@ export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
       commitWhenIdle.current = true;
       return;
     }
-    onCommit(draftRef.current);
+    deliver();
   };
 
   const runTracked = async (job: () => Promise<void>) => {
@@ -520,7 +535,7 @@ export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
       setBusy(false);
       if (inflight.current === 0 && commitWhenIdle.current) {
         commitWhenIdle.current = false;
-        onCommit(draftRef.current);
+        commit();
       }
     }
   };
@@ -550,6 +565,34 @@ export function AttachmentCellEditor({ value, onCommit }: CellEditorProps) {
     document.addEventListener("paste", onPaste);
     return () => document.removeEventListener("paste", onPaste);
   });
+
+  // Esc：与点外部同一个口径——收，不撤。用文档级监听，因为面板里只有按钮和列表，
+  // 焦点还留在格子容器上，键事件冒泡不进编辑器子树（表格层的 onGridKeyDown 一见 editing 就 return）。
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      commit();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  });
+
+  // 卸载即收：Esc 和点外部之外，宿主自己关格子的那几条路（切格、切视图、关行详情、
+  // 点行首的「打开详情」按钮）原本会把刚上传的附件连着 draft 一起丢掉。
+  // 两种情况要补交：动过 draft（脏了就交），以及上传还在飞（此刻 draft 还干净，但结果落地时
+  // 已经没人接了——commit 会把它压进 commitWhenIdle，runTracked 的 finally 拿着同一批 ref，
+  // 卸载之后仍能把最后一个结果写回格子）。commitRef 只为让 cleanup 读到最新闭包里的 onCommit。
+  const commitRef = useRef(commit);
+  useEffect(() => {
+    commitRef.current = commit;
+  });
+  useEffect(
+    () => () => {
+      if (dirtyRef.current || inflight.current > 0) commitRef.current();
+    },
+    [],
+  );
 
   const add = () => {
     if (busy) return;
