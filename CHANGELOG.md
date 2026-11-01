@@ -7,7 +7,9 @@
 - 打包时这个文件随安装包分发（见 `src-tauri/tauri.conf.json` 的 `bundle.resources`），安装目录下的 `resources/CHANGELOG.md`。
 - 更早版本的发布说明在 GitHub Releases 上，与 `latest.json` 的 `notes` 同源。
 
-## 未发布（v0.8.33 之后）
+## 未发布（v0.8.34 之后）
+
+## v0.8.34（2026-11-01）
 
 ### 恢复备份：另两条半途失败分支各自有了注入证据
 
